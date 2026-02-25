@@ -61,6 +61,8 @@ TERMINAL_MIN_RANK = STATUS_RANK["CANCELLED"]
 # 允许的 REST 终态 override 偏移量（毫秒）
 ALLOWED_SKEW_MS = 5000  # 5秒
 
+TERMINAL_STATUSES = {"CANCELLED", "REJECTED", "FILLED", "EXPIRED"}
+
 
 # ==================== TTL Set 实现 ====================
 
@@ -172,6 +174,80 @@ class ShadowState:
         return None
 
 
+# ==================== PendingBuffer（新增）====================
+
+from collections import deque
+
+
+@dataclass
+class PendingItem:
+    """待处理项：存储无法 resolve cl_ord_id 的事件"""
+    kind: str  # "order" | "fill"
+    payload: object
+    first_seen_ts: float
+
+
+class PendingBuffer:
+    """
+    PendingBuffer：缓存"无法 resolve cl_ord_id"的事件。
+    - key: broker_order_id
+    - value: deque[PendingItem]
+    """
+
+    def __init__(self, ttl_s: int = 120, max_keys: int = 100_000, max_items_per_key: int = 200):
+        self.ttl_s = ttl_s
+        self.max_keys = max_keys
+        self.max_items_per_key = max_items_per_key
+        self._buf: dict[str, deque[PendingItem]] = {}
+        self._order: deque[str] = deque()
+
+    def add(self, broker_order_id: str, item: PendingItem) -> None:
+        """添加事件到 buffer"""
+        now = time.time()
+        self.cleanup(now)
+
+        if broker_order_id not in self._buf:
+            if len(self._buf) >= self.max_keys:
+                old = self._order.popleft()
+                self._buf.pop(old, None)
+            self._buf[broker_order_id] = deque()
+            self._order.append(broker_order_id)
+
+        dq = self._buf[broker_order_id]
+        if len(dq) >= self.max_items_per_key:
+            dq.popleft()
+        dq.append(item)
+
+    def pop_all(self, broker_order_id: str) -> list[PendingItem]:
+        """获取并移除所有与 broker_order_id 相关的项"""
+        dq = self._buf.pop(broker_order_id, None)
+        if dq is None:
+            return []
+        try:
+            self._order.remove(broker_order_id)
+        except ValueError:
+            pass
+        return list(dq)
+
+    def cleanup(self, now: float | None = None) -> None:
+        """清理过期项"""
+        now = now or time.time()
+        expired_keys = []
+        for k, dq in self._buf.items():
+            if dq and (now - dq[0].first_seen_ts) > self.ttl_s:
+                expired_keys.append(k)
+        for k in expired_keys:
+            self._buf.pop(k, None)
+            try:
+                self._order.remove(k)
+            except ValueError:
+                pass
+
+    def size(self) -> int:
+        """返回 buffer 大小"""
+        return len(self._buf)
+
+
 # ==================== 输入类型定义 ====================
 
 @dataclass
@@ -246,32 +322,37 @@ class ExecutionEvent:
 
 # ==================== CAS 核心算法 ====================
 
-def compute_exec_key(fill: RawFillUpdate) -> str:
+def compute_exec_key(fill: "RawFillUpdate") -> str:
     """
     计算成交键：用于去重。
-    使用 cl_ord_id + exec_id 组合确保唯一性。
+    优先使用 cl_ord_id + exec_id；若 exec_id 缺失，使用稳定哈希（不依赖 local_ts）。
     """
-    cl = fill.cl_ord_id or fill.broker_order_id or "unknown"
-    exec_id = fill.exec_id or f"no_exec_{fill.local_receive_ts_ms}"
-    return f"{cl}:{exec_id}"
+    cl = fill.cl_ord_id or (f"broker:{fill.broker_order_id}" if fill.broker_order_id else "unknown")
+    if fill.exec_id:
+        return f"{cl}:{fill.exec_id}"
+
+    # exec_id 缺失：用稳定哈希（避免 local_receive_ts 变化导致无法去重）
+    exch_ts = fill.exchange_event_ts_ms or 0
+    payload = f"{cl}|{fill.broker_order_id or ''}|{fill.fill_qty}|{fill.fill_price}|{exch_ts}|{fill.source}"
+    h = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return f"{cl}:noexec:{h}"
 
 
-def resolve_cl_ord_id(update: RawOrderUpdate, shadow: ShadowState) -> Optional[str]:
+def resolve_cl_ord_id(
+    update: Union["RawOrderUpdate", "RawFillUpdate"],
+    shadow: ShadowState
+) -> Optional[str]:
     """
     解析 client_order_id。
-
+    支持 RawOrderUpdate 和 RawFillUpdate 两种类型。
     如果 cl_ord_id 为空，尝试通过 broker_order_id 映射。
-    如果都找不到，返回 None（需要触发 REST 对齐）。
     """
-    if update.cl_ord_id:
+    if getattr(update, "cl_ord_id", None):
         return update.cl_ord_id
 
-    if update.broker_order_id:
-        cl_ord_id = shadow.orders_by_broker_id.get(update.broker_order_id)
-        if cl_ord_id:
-            return cl_ord_id
-        # 没有找到映射，返回 None
-        return None
+    broker_id = getattr(update, "broker_order_id", None)
+    if broker_id:
+        return shadow.orders_by_broker_id.get(broker_id)
 
     return None
 
@@ -284,58 +365,48 @@ def cas_apply_fill(
 ) -> List[ExecutionEvent]:
     """
     Execution CAS：成交去重逻辑。
-
     使用 exec_id 进行 900s TTL 去重。
+    不污染 order 的 last_exchange_ts_ms。
     """
     exec_key = compute_exec_key(fill)
-
-    # 去重检查
     if exec_key in vv.seen_exec_keys:
-        return []  # 重复成交，丢弃
-
-    # 记录已见过的成交键
+        return []
     vv.seen_exec_keys.add(exec_key)
 
-    # 获取订单
     order = shadow.get_by_cl_ord_id(cl_ord_id)
     if order is None:
-        # 订单不存在，创建一个新的影子订单
         order = shadow.add_order(cl_ord_id, fill.broker_order_id)
 
-    # 更新影子订单的持仓信息
     old_filled_qty = order.filled_qty
     order.filled_qty += fill.fill_qty
 
-    if fill.fill_price and order.avg_price:
-        # 计算新的加权平均价格
+    if order.avg_price is not None:
         total_value = (order.avg_price * old_filled_qty) + (fill.fill_price * fill.fill_qty)
         order.avg_price = total_value / order.filled_qty
-    elif fill.fill_price:
+    else:
         order.avg_price = fill.fill_price
 
-    # 更新版本向量
-    exch_ts = fill.exchange_event_ts_ms or fill.local_receive_ts_ms
-    vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, exch_ts)
+    # version vector: do not infer exchange ts into vv.last_exchange_ts_ms
+    if fill.exchange_event_ts_ms is not None:
+        vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, fill.exchange_event_ts_ms)
     vv.last_local_ts_ms = fill.local_receive_ts_ms
     vv.last_source = fill.source
 
-    # 发射成交事件
-    exchange_ts = fill.exchange_event_ts_ms or fill.local_receive_ts_ms
+    exchange_ts_out = fill.exchange_event_ts_ms or fill.local_receive_ts_ms
     ts_inferred = fill.exchange_event_ts_ms is None
 
-    event = ExecutionEvent(
+    ev = ExecutionEvent(
         cl_ord_id=cl_ord_id,
         broker_order_id=fill.broker_order_id,
-        exec_id=fill.exec_id or f"no_exec_{fill.local_receive_ts_ms}",
+        exec_id=fill.exec_id or exec_key.split(":")[-1],
         fill_qty=fill.fill_qty,
         fill_price=fill.fill_price,
-        exchange_ts_ms=exchange_ts,
+        exchange_ts_ms=exchange_ts_out,
         local_ts_ms=fill.local_receive_ts_ms,
         source=fill.source,
         ts_inferred=ts_inferred,
     )
-
-    return [event]
+    return [ev]
 
 
 def cas_apply_order(
@@ -352,83 +423,92 @@ def cas_apply_order(
     2. 如果 Rank 相同，仅当 exchange_ts 增加时才接受
     3. TERMINAL_MIN_RANK 之后严禁状态回滚
     4. REST 终态可以 override（用于纠偏）但不可造成回滚
+    5. exchange_ts 必须单调递增
+    6. filled_qty 数值必须单调递增
     """
-    # 计算新状态 rank
     new_rank = STATUS_RANK.get(update.status, 0)
     old_rank = vv.last_status_rank
 
-    # 获取交易所时间戳
-    exch_ts = update.exchange_event_ts_ms or 0
+    exch_ts = update.exchange_event_ts_ms
+    has_exch_ts = exch_ts is not None
 
-    # ====== 终态保护：不可回滚到终态之前 ======
-    if old_rank >= TERMINAL_MIN_RANK and new_rank < old_rank:
-        return []  # 回滚尝试，丢弃
-
-    # ====== 通用回滚保护：不可降低 Rank ======
-    if new_rank < old_rank:
-        return []  # Rank 降低，丢弃
-
-    # ====== 同 Rank 处理：仅当 exchange_ts 增加时接受 ======
-    if new_rank == old_rank:
-        # 如果是终态，不允许更新
-        if old_rank >= TERMINAL_MIN_RANK:
-            return []
-
-        # 检查时间戳是否增加
-        if exch_ts and exch_ts <= vv.last_exchange_ts_ms:
-            return []  # 时间戳未增加，丢弃
-        # 否则接受（可能是 filled_qty/avg_price 更精确）
-
-    # ====== 更高 Rank：检查是否是 stale REST ======
-    if new_rank > old_rank and update.source == "REST":
-        if exch_ts and vv.last_exchange_ts_ms and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms:
-            return []  # stale REST cache，丢弃
-
-    # ====== Finality Override：允许 REST 终态 override ======
-    # 如果是 REST/RECONCILE 的终态更新，且 finality_override=True，允许接受
-    if update.finality_override and update.source in ("REST", "RECONCILE"):
-        if new_rank >= TERMINAL_MIN_RANK and new_rank >= old_rank:
-            pass  # 允许
-        else:
-            pass  # 允许非终态的 finality override
-
-    # ====== 提交更新（CAS） ======
-    vv.last_status_rank = max(old_rank, new_rank)
-    vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, exch_ts)
-    vv.last_local_ts_ms = update.local_receive_ts_ms
-    vv.last_source = update.source
-
-    # 更新影子订单
     order = shadow.get_by_cl_ord_id(cl_ord_id)
     if order is None:
         order = shadow.add_order(cl_ord_id, update.broker_order_id)
+
+    # ---------- Finality override: ONLY for terminal statuses ----------
+    if update.finality_override and update.source in ("REST", "RECONCILE"):
+        if update.status not in TERMINAL_STATUSES:
+            return []
+        if new_rank < old_rank:
+            return []
+        accept_override = True
+    else:
+        accept_override = False
+
+    # ---------- Rank rollback protection ----------
+    if old_rank >= TERMINAL_MIN_RANK and new_rank < old_rank:
+        return []
+    if new_rank < old_rank:
+        return []
+
+    # ---------- Same-rank handling ----------
+    if new_rank == old_rank:
+        if old_rank >= TERMINAL_MIN_RANK:
+            return []
+
+        if not has_exch_ts:
+            if update.filled_qty is None:
+                return []
+            if update.filled_qty <= order.filled_qty:
+                return []
+
+        if has_exch_ts and vv.last_exchange_ts_ms and exch_ts <= vv.last_exchange_ts_ms:
+            return []
+
+    # ---------- Higher-rank stale REST protection ----------
+    if (new_rank > old_rank) and update.source == "REST" and (not accept_override):
+        if has_exch_ts and vv.last_exchange_ts_ms and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms:
+            return []
+
+    # ---------- Numeric monotonicity protection ----------
+    if update.filled_qty is not None and update.filled_qty < order.filled_qty:
+        return []
+
+    # ---------- Commit CAS ----------
+    vv.last_status_rank = max(old_rank, new_rank)
+
+    if has_exch_ts:
+        vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, exch_ts)
+    vv.last_local_ts_ms = update.local_receive_ts_ms
+    vv.last_source = update.source
 
     order.status = update.status
     if update.filled_qty is not None:
         order.filled_qty = update.filled_qty
     if update.avg_price is not None:
-        order.avg_price = update.avg_price
+        if (update.filled_qty is not None and update.filled_qty > Decimal("0")) or order.avg_price is None:
+            order.avg_price = update.avg_price
     if update.broker_order_id and not order.broker_order_id:
         order.broker_order_id = update.broker_order_id
         shadow.orders_by_broker_id[update.broker_order_id] = cl_ord_id
 
-    # 发射订单事件
-    exchange_ts = update.exchange_event_ts_ms or update.local_receive_ts_ms
+    exchange_ts_out = update.exchange_event_ts_ms or update.local_receive_ts_ms
     ts_inferred = update.exchange_event_ts_ms is None
 
     event = OrderEvent(
         cl_ord_id=cl_ord_id,
         broker_order_id=order.broker_order_id,
-        status=update.status,
+        status=order.status,
         filled_qty=order.filled_qty,
         avg_price=order.avg_price,
-        exchange_ts_ms=exchange_ts,
+        exchange_ts_ms=exchange_ts_out,
         local_ts_ms=update.local_receive_ts_ms,
         source=update.source,
         update_id=update.update_id,
         seq=update.seq,
         ts_inferred=ts_inferred,
-        is_reconciliation=update.source == "RECONCILE",
+        is_reconciliation=(update.source == "RECONCILE") or accept_override,
     )
 
     return [event]
@@ -443,17 +523,17 @@ class DeterministicApplier:
     使用分片锁实现并发安全。
     """
 
-    def __init__(self, partitions: int = 256):
-        """
-        初始化确定性应用器。
-
-        Args:
-            partitions: 分片数量，默认 256
-        """
+    def __init__(self, partitions: int = 256, pending_buffer_size: int = 10000):
         self._partitions = partitions
         self._locks = [asyncio.Lock() for _ in range(partitions)]
         self._vv: Dict[str, OrderVersionVector] = {}
         self._shadow = ShadowState()
+        self._pending = PendingBuffer(ttl_s=120, max_keys=100_000, max_items_per_key=200)
+        self._order_last_touch: Dict[str, float] = {}
+        self._retention_s_terminal = 3600
+        self._max_orders = 1_000_000
+        self._on_resync_callback = None
+        self._eviction_counter = 0
 
     def _lock_for(self, cl_ord_id: str) -> asyncio.Lock:
         """获取 cl_ord_id 对应的分片锁"""
@@ -462,59 +542,88 @@ class DeterministicApplier:
         return self._locks[idx]
 
     def _get_or_create_vv(self, cl_ord_id: str) -> OrderVersionVector:
-        """获取或创建版本向量"""
         if cl_ord_id not in self._vv:
             self._vv[cl_ord_id] = OrderVersionVector()
         return self._vv[cl_ord_id]
 
+    def set_resync_callback(self, callback) -> None:
+        self._on_resync_callback = callback
+
+    def _touch(self, cl: str) -> None:
+        self._order_last_touch[cl] = time.time()
+
+    def _evict_if_needed(self) -> None:
+        now = time.time()
+        to_del = []
+        for cl, order in self._shadow.orders_by_cl.items():
+            if order.status in TERMINAL_STATUSES:
+                last = self._order_last_touch.get(cl, now)
+                if now - last > self._retention_s_terminal:
+                    to_del.append(cl)
+        for cl in to_del:
+            o = self._shadow.orders_by_cl.pop(cl, None)
+            if o and o.broker_order_id:
+                self._shadow.orders_by_broker_id.pop(o.broker_order_id, None)
+            self._vv.pop(cl, None)
+            self._order_last_touch.pop(cl, None)
+        if len(self._shadow.orders_by_cl) > self._max_orders:
+            oldest = sorted(self._order_last_touch.items(), key=lambda x: x[1])[: (len(self._shadow.orders_by_cl) - self._max_orders)]
+            for cl, _ in oldest:
+                o = self._shadow.orders_by_cl.pop(cl, None)
+                if o and o.broker_order_id:
+                    self._shadow.orders_by_broker_id.pop(o.broker_order_id, None)
+                self._vv.pop(cl, None)
+                self._order_last_touch.pop(cl, None)
+
+    async def _flush_pending_async(self, broker_order_id: str) -> List:
+        out: List = []
+        items = self._pending.pop_all(broker_order_id)
+        for it in items:
+            if it.kind == "order":
+                out.extend(await self.apply_order_update(it.payload))
+            else:
+                out.extend(await self.apply_fill_update(it.payload))
+        return out
+
     async def apply_order_update(self, update: RawOrderUpdate) -> List[OrderEvent]:
-        """
-        应用订单更新。
-
-        Args:
-            update: 原始订单更新
-
-        Returns:
-            确定的 OrderEvent 列表（通常为空或一个元素）
-        """
-        # 解析 cl_ord_id
         cl_ord_id = resolve_cl_ord_id(update, self._shadow)
         if cl_ord_id is None:
-            # 无 cl_ord_id 映射，需要触发 REST 对齐
-            # 这里返回空列表，实际场景应触发对齐流程
+            if update.broker_order_id:
+                self._pending.add(update.broker_order_id, PendingItem("order", update, time.time()))
+            if self._on_resync_callback:
+                await self._on_resync_callback(f"unknown_order:{update.broker_order_id}")
             return []
-
-        # 获取分片锁
         async with self._lock_for(cl_ord_id):
-            # 确保版本向量存在
             vv = self._get_or_create_vv(cl_ord_id)
-
-            # 执行 CAS
-            return cas_apply_order(vv, self._shadow, cl_ord_id, update)
+            events = cas_apply_order(vv, self._shadow, cl_ord_id, update)
+            if events and update.broker_order_id:
+                self._shadow.orders_by_broker_id[update.broker_order_id] = cl_ord_id
+                self._touch(cl_ord_id)
+                events.extend(await self._flush_pending_async(update.broker_order_id))
+            self._eviction_counter += 1
+            if self._eviction_counter % 256 == 0:
+                self._evict_if_needed()
+            return events
 
     async def apply_fill_update(self, fill: RawFillUpdate) -> List[ExecutionEvent]:
-        """
-        应用成交更新。
-
-        Args:
-            fill: 原始成交更新
-
-        Returns:
-            确定的 ExecutionEvent 列表（通常为空或一个元素）
-        """
-        # 解析 cl_ord_id
         cl_ord_id = resolve_cl_ord_id(fill, self._shadow)
         if cl_ord_id is None:
-            # 无 cl_ord_id 映射，需要触发 REST 对齐
+            if fill.broker_order_id:
+                self._pending.add(fill.broker_order_id, PendingItem("fill", fill, time.time()))
+            if self._on_resync_callback:
+                await self._on_resync_callback(f"unknown_fill:{fill.broker_order_id}")
             return []
-
-        # 获取分片锁
         async with self._lock_for(cl_ord_id):
-            # 确保版本向量存在
             vv = self._get_or_create_vv(cl_ord_id)
-
-            # 执行 CAS（成交去重）
-            return cas_apply_fill(vv, self._shadow, cl_ord_id, fill)
+            events = cas_apply_fill(vv, self._shadow, cl_ord_id, fill)
+            if events and fill.broker_order_id:
+                self._shadow.orders_by_broker_id[fill.broker_order_id] = cl_ord_id
+                self._touch(cl_ord_id)
+                events.extend(await self._flush_pending_async(fill.broker_order_id))
+            self._eviction_counter += 1
+            if self._eviction_counter % 256 == 0:
+                self._evict_if_needed()
+            return events
 
     def get_shadow_order(self, cl_ord_id: str) -> Optional[ShadowOrder]:
         """获取影子订单"""
@@ -525,10 +634,13 @@ class DeterministicApplier:
         return self._vv.get(cl_ord_id)
 
     def get_all_orders(self) -> Dict[str, ShadowOrder]:
-        """获取所有影子订单"""
         return self._shadow.orders_by_cl.copy()
 
+    def get_pending_count(self) -> int:
+        return self._pending.size()
+
     def reset(self) -> None:
-        """重置状态（用于测试）"""
         self._vv.clear()
         self._shadow = ShadowState()
+        self._pending.clear()
+        self._order_last_touch.clear()
