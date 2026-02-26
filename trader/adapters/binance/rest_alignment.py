@@ -139,6 +139,20 @@ class RESTAlignmentCoordinator:
             self._last_alignment_ts = now
             return await self._do_alignment(reason, priority)
 
+    async def force_alignment_p0(self, reason: str) -> Optional[RestAlignmentSnapshot]:
+        """
+        强制 P0 对齐（永不跳过，受 rate budget/backoff 影响）
+
+        Args:
+            reason: 对齐原因
+
+        Returns:
+            RestAlignmentSnapshot 或 None
+        """
+        async with self._alignment_lock:
+            self._last_alignment_ts = time.time()
+            return await self._do_alignment(reason, Priority.P0)
+
     async def _do_alignment(
         self,
         reason: str,

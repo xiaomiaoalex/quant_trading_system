@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Dict, Optional, Any, List
 from datetime import datetime
 
+DEDUP_WINDOW_MS = 60000
+
 
 class RiskSeverity(Enum):
     """风险严重等级"""
@@ -71,7 +73,7 @@ class EnvironmentalRiskEvent:
     @staticmethod
     def generate_dedup_key(
         reason: str,
-        window_end_ms: int,
+        window_start_ms: int,
         account_id: str = "",
         venue: str = ""
     ) -> str:
@@ -80,14 +82,14 @@ class EnvironmentalRiskEvent:
 
         Args:
             reason: 风险原因
-            window_end_ms: 时间窗口结束时间戳（毫秒）
+            window_start_ms: 时间窗口开始时间戳（毫秒，固定边界）
             account_id: 账户 ID
             venue: 交易场所
 
         Returns:
             唯一的 dedup_key
         """
-        raw = f"{reason}:{window_end_ms}:{account_id}:{venue}"
+        raw = f"{reason}:{window_start_ms}:{account_id}:{venue}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     @staticmethod
@@ -109,7 +111,8 @@ class EnvironmentalRiskEvent:
         """
         reason = f"ENV_RISK:AdapterDegraded:{adapter_name}"
 
-        window_end_ms = int(time.time() * 1000) + 60000
+        now_ms = int(time.time() * 1000)
+        window_start_ms = (now_ms // DEDUP_WINDOW_MS) * DEDUP_WINDOW_MS
 
         severity = RiskSeverity.HIGH
         recommended = RecommendedLevel.L1_NO_NEW_POS
@@ -129,7 +132,7 @@ class EnvironmentalRiskEvent:
         return EnvironmentalRiskEvent(
             dedup_key=EnvironmentalRiskEvent.generate_dedup_key(
                 reason=reason,
-                window_end_ms=window_end_ms,
+                window_start_ms=window_start_ms,
                 account_id=health_data.get("account_id", ""),
                 venue=health_data.get("venue", "")
             ),

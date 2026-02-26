@@ -93,6 +93,14 @@ class RestRateBudget:
         with self._lock:
             self._refill()
 
+            now = time.time()
+            if self._state.is_degraded and self._state.degraded_until_ts > now:
+                if priority != Priority.P0:
+                    logger.warning(
+                        f"[RateBudget] Degraded to P0-only, rejecting priority {priority}"
+                    )
+                    return False
+
             if self._state.current_tokens >= cost:
                 self._state.current_tokens -= cost
                 logger.debug(
@@ -137,32 +145,31 @@ class RestRateBudget:
         处理 429 错误
 
         Args:
-            retry_after: 服务器返回的 Retry-After 秒数
+            retry_after: 服务器返回的 Retry-After 秒数（作为最小等待时间）
         """
         with self._lock:
             self._429_count += 1
             now = time.time()
             self._last_429_ts = now
 
-            old_refill_rate = self._state.refill_rate
+            min_wait = retry_after if retry_after and retry_after > 0 else self._config.cooldown_on_429
+            cooldown = max(min_wait, self._config.cooldown_on_429)
 
-            if retry_after and retry_after > 0:
-                self._state.refill_rate = max(
-                    self._config.min_refill_rate,
-                    self._state.refill_rate * 0.5
-                )
-            else:
-                self._state.refill_rate = max(
-                    self._config.min_refill_rate,
-                    self._state.refill_rate * self._config.degrade_refill_multiplier
-                )
+            old_refill_rate = self._state.refill_rate
+            self._state.refill_rate = max(
+                self._config.min_refill_rate,
+                self._state.refill_rate * self._config.degrade_refill_multiplier
+            )
 
             self._state.is_degraded = True
-            self._state.degraded_until_ts = now + self._config.cooldown_on_429
+            self._state.degraded_until_ts = now + cooldown
+
+            self.degrade_to_p0_only(cooldown_s=cooldown)
 
             logger.warning(
                 f"[RateBudget] 429 received: reducing refill_rate "
-                f"from {old_refill_rate:.2f} to {self._state.refill_rate:.2f}"
+                f"from {old_refill_rate:.2f} to {self._state.refill_rate:.2f}, "
+                f"degraded for {cooldown}s, P0-only mode enabled"
             )
 
     def on_418(self) -> None:

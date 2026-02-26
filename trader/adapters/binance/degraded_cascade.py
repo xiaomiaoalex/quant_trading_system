@@ -75,6 +75,11 @@ class DegradedCascadeController:
     1. 向 Control Plane 上报风险事件
     2. 触发 KillSwitch L1
     3. 如果 Control Plane 不可达，触发本地自保
+
+    使用队列+单worker模式保证：
+    - 不阻塞健康回调
+    - 有上限重试 + 真正退避
+    - Fail-closed 计时器
     """
 
     def __init__(
@@ -97,7 +102,7 @@ class DegradedCascadeController:
         self._state = CascadeState.NORMAL
         self._metrics = CascadeMetrics()
 
-        self._reported_dedup_keys: Set[str] = set()
+        self._reported_dedup_keys: Dict[str, float] = {}
         self._last_report_ts: Dict[str, float] = {}
 
         self._local_event_log = LocalEventLog()
@@ -107,6 +112,15 @@ class DegradedCascadeController:
 
         self._on_self_protection_callbacks: list = []
         self._on_recovery_callbacks: list = []
+
+        self._q: asyncio.Queue = asyncio.Queue()
+        self._worker_task: Optional[asyncio.Task] = None
+        self._stop_event = asyncio.Event()
+
+        self._unreachable_since_ms: Optional[int] = None
+        self._local_killswitch_active = False
+        self._cooldown_until_ms: Optional[int] = None
+        self._dedup_ttl_ms = 600000
 
     @property
     def state(self) -> CascadeState:
@@ -132,11 +146,108 @@ class DegradedCascadeController:
         """注册恢复回调"""
         self._on_recovery_callbacks.append(callback)
 
+    async def start(self) -> None:
+        """启动 worker 循环"""
+        if self._worker_task is None or self._worker_task.done():
+            self._stop_event.clear()
+            self._worker_task = asyncio.create_task(self._worker_loop())
+            logger.info("[Cascade] Worker loop started")
+
+    async def stop(self) -> None:
+        """停止 worker 循环"""
+        self._stop_event.set()
+        if self._worker_task and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[Cascade] Worker loop stopped")
+
     async def _ensure_http_client(self) -> aiohttp.ClientSession:
         """确保 HTTP 客户端存在"""
         if self._http_client is None or self._http_client.closed:
             self._http_client = aiohttp.ClientSession()
         return self._http_client
+
+    async def _worker_loop(self) -> None:
+        """Worker 循环：处理上报队列（去重、冷却、重试、退避、Fail-closed）"""
+        MAX_RETRIES = self._config.max_retries_per_event
+
+        while not self._stop_event.is_set():
+            try:
+                envelope = await asyncio.wait_for(
+                    self._q.get(),
+                    timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                continue
+
+            health = envelope["health"]
+            reason = envelope["reason"]
+
+            event = EnvironmentalRiskEvent.create_from_adapter_health(
+                adapter_name=self._adapter_name,
+                health_data={
+                    "public_stream_state": health.public_stream_state.value,
+                    "private_stream_state": health.private_stream_state.value,
+                    "rate_budget_state": health.rate_budget_state,
+                    "backoff_state": health.backoff_state,
+                    "metrics": health.metrics,
+                },
+                scope=RiskScope.GLOBAL
+            )
+
+            now_ms = int(time.time() * 1000)
+
+            if self._local_killswitch_active:
+                logger.debug("[Cascade] Local killswitch active, skipping report")
+                continue
+
+            if self._cooldown_until_ms and now_ms < self._cooldown_until_ms:
+                logger.debug("[Cascade] In cooldown period, skipping")
+                continue
+
+            if event.dedup_key in self._reported_dedup_keys:
+                last_ts = self._reported_dedup_keys.get(event.dedup_key, 0)
+                if now_ms - last_ts < self._dedup_ttl_ms:
+                    logger.debug(f"[Cascade] Dedup key still fresh: {event.dedup_key}")
+                    continue
+                else:
+                    del self._reported_dedup_keys[event.dedup_key]
+
+            self._local_event_log.add(event)
+            event.report_attempts = 0
+
+            for attempt in range(MAX_RETRIES):
+                risk_ok = await self._post_risk_event(event)
+                kill_ok = await self._post_killswitch(event)
+
+                if risk_ok and kill_ok:
+                    self._metrics.risk_events_reported += 1
+                    self._reported_dedup_keys[event.dedup_key] = now_ms
+                    self._last_report_ts["risk"] = time.time()
+                    event.is_reported = True
+                    self._unreachable_since_ms = None
+                    break
+
+                self._metrics.risk_events_failed += 1
+                event.report_attempts += 1
+
+                delay = self._backoff.next_delay("risk_event")
+                logger.warning(f"[Cascade] Report failed, retry {attempt + 1}/{MAX_RETRIES} in {delay}s")
+
+                await asyncio.sleep(delay)
+
+                now_ms = int(time.time() * 1000)
+                if self._unreachable_since_ms and (now_ms - self._unreachable_since_ms) >= self._config.self_protection_trigger_ms:
+                    await self._trigger_self_protection(Exception("Control plane unreachable > threshold"))
+                    self._local_killswitch_active = True
+                    break
+
+            if not event.is_reported and not self._local_killswitch_active:
+                if self._unreachable_since_ms is None:
+                    self._unreachable_since_ms = int(time.time() * 1000)
 
     async def on_adapter_health_changed(
         self,
@@ -144,7 +255,7 @@ class DegradedCascadeController:
         reason: str = ""
     ) -> None:
         """
-        处理适配器健康状态变化
+        处理适配器健康状态变化（非阻塞，只 enqueue）
 
         Args:
             health: 适配器健康报告
@@ -155,12 +266,24 @@ class DegradedCascadeController:
         elif health.overall_health == AdapterHealth.HEALTHY and self._state != CascadeState.NORMAL:
             await self._on_degraded_exit(health, reason)
 
+    def _enqueue_report(self, health: AdapterHealthReport, reason: str) -> None:
+        """将上报任务加入队列（非阻塞）"""
+        envelope = {
+            "health": health,
+            "reason": reason,
+            "enqueued_at": time.time()
+        }
+        try:
+            self._q.put_nowait(envelope)
+        except asyncio.QueueFull:
+            logger.warning("[Cascade] Queue full, dropping report")
+
     async def _on_degraded_enter(
         self,
         health: AdapterHealthReport,
         reason: str
     ) -> None:
-        """处理进入 DEGRADED 模式"""
+        """处理进入 DEGRADED 模式（使用队列上报）"""
         if self._state == CascadeState.DEGRADED:
             logger.debug(f"[Cascade] Already in DEGRADED state, skipping")
             return
@@ -170,18 +293,17 @@ class DegradedCascadeController:
         self._metrics.degraded_enter_count += 1
         self._metrics.last_degraded_ts = time.time()
 
-        try:
-            await self._report_to_control_plane(health, reason)
-        except Exception as e:
-            logger.error(f"[Cascade] Failed to report to control plane: {e}")
-            await self._trigger_self_protection(e)
+        cooldown_ms = 60000
+        self._cooldown_until_ms = int(time.time() * 1000) + cooldown_ms
+
+        self._enqueue_report(health, reason)
 
     async def _on_degraded_exit(
         self,
         health: AdapterHealthReport,
         reason: str
     ) -> None:
-        """处理退出 DEGRADED 模式"""
+        """处理退出 DEGRADED 模式（Anti-Flap：不清空 dedup）"""
         if self._state == CascadeState.NORMAL:
             return
 
@@ -189,8 +311,12 @@ class DegradedCascadeController:
         self._state = CascadeState.RECOVERING
         self._metrics.degraded_exit_count += 1
 
-        self._reported_dedup_keys.clear()
-        self._last_report_ts.clear()
+        now_ms = int(time.time() * 1000)
+        expired_keys = [k for k, ts in self._reported_dedup_keys.items() if now_ms - ts >= self._dedup_ttl_ms]
+        for k in expired_keys:
+            del self._reported_dedup_keys[k]
+
+        self._unreachable_since_ms = None
 
         await self._exit_self_protection()
 

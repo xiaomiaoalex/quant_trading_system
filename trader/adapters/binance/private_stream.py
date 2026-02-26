@@ -28,6 +28,7 @@ import websockets.client as ws_client
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM, StreamConfig, StreamState, StreamEvent
 )
+from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
 
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,10 @@ class PrivateStreamManager(BaseStreamFSM):
         self._ping_task: Optional[asyncio.Task] = None
         self._stale_check_task: Optional[asyncio.Task] = None
         self._listen_key_task: Optional[asyncio.Task] = None
+        self._recv_task: Optional[asyncio.Task] = None
+
+        self._reconnect_lock = asyncio.Lock()
+        self._is_aligning = False
 
     def register_order_handler(self, handler: Callable[[RawOrderUpdate], None]) -> None:
         """注册订单更新处理器"""
@@ -165,19 +170,23 @@ class PrivateStreamManager(BaseStreamFSM):
         if self._listen_key:
             await self._delete_listen_key()
 
-    async def force_resync(self, reason: str) -> None:
+    async def force_resync(self, reason: str) -> Optional[RestAlignmentSnapshot]:
         """
         强制 REST 对齐
 
         Args:
             reason: 对齐原因
+
+        Returns:
+            RestAlignmentSnapshot 或 None
         """
         logger.warning(f"[{self._name}] Force resync triggered: {reason}")
 
         if self._force_resync_callback:
-            await self._force_resync_callback(reason)
+            return await self._force_resync_callback(reason)
         else:
             logger.error(f"[{self._name}] No force_resync callback configured")
+            return None
 
     async def _create_listen_key(self) -> None:
         """创建 listenKey"""
@@ -212,12 +221,12 @@ class PrivateStreamManager(BaseStreamFSM):
                     self._listen_key_expiry_ts = time.time() + self._config.listen_key_ttl
                     logger.info(f"[{self._name}] ListenKey refreshed")
                 else:
-                    logger.warning(f"[{self._name}] ListenKey refresh failed: {resp.status}")
-                    await self._create_listen_key()
+                    logger.warning(f"[{self._name}] ListenKey refresh failed: {resp.status}, triggering reconnect")
+                    await self.reconnect()
 
         except Exception as e:
-            logger.warning(f"[{self._name}] ListenKey refresh error: {e}")
-            await self._create_listen_key()
+            logger.warning(f"[{self._name}] ListenKey refresh error: {e}, triggering reconnect")
+            await self.reconnect()
 
     async def _delete_listen_key(self) -> None:
         """删除 listenKey"""
@@ -294,55 +303,95 @@ class PrivateStreamManager(BaseStreamFSM):
         self._metrics.last_disconnect_ts = time.time()
 
     async def reconnect(self) -> None:
-        """重连"""
-        if self._check_reconnect_storm():
-            self._set_state(StreamState.DEGRADED)
-            await self._trigger_event(StreamEvent.ERROR, "Reconnect storm detected")
-            return
-
-        self._set_state(StreamState.RECONNECTING)
-        self._record_reconnect()
-
-        delay = self._config.reconnect_delay
-        while self._running and delay <= self._config.max_reconnect_delay:
-            try:
-                logger.info(f"[{self._name}] Reconnecting in {delay}s...")
-                await asyncio.sleep(delay)
-
-                await self._create_listen_key()
-                await self._connect()
-
-                await self.force_resync("ws_reconnect")
+        """重连（带互斥锁保护）"""
+        async with self._reconnect_lock:
+            if self._state in (StreamState.RECONNECTING, StreamState.ALIGNING):
+                logger.debug(f"[{self._name}] Reconnect already in progress, skipping")
                 return
 
-            except Exception as e:
-                logger.warning(f"[{self._name}] Reconnect failed: {e}")
-                delay *= 2
-                delay = min(delay, self._config.max_reconnect_delay)
+            if self._check_reconnect_storm():
+                self._set_state(StreamState.DEGRADED)
+                await self._trigger_event(StreamEvent.ERROR, "Reconnect storm detected")
+                return
 
-        self._set_state(StreamState.ERROR)
-        self._metrics.last_error = "Max reconnection attempts reached"
+            self._set_state(StreamState.RECONNECTING)
+            self._record_reconnect()
+
+            if self._recv_task and not self._recv_task.done():
+                self._recv_task.cancel()
+                try:
+                    await self._recv_task
+                except asyncio.CancelledError:
+                    pass
+                self._recv_task = None
+
+            delay = self._config.reconnect_delay
+            while self._running and delay <= self._config.max_reconnect_delay:
+                try:
+                    logger.info(f"[{self._name}] Reconnecting in {delay}s...")
+                    await asyncio.sleep(delay)
+
+                    await self._create_listen_key()
+                    await self._connect()
+
+                    self._set_state(StreamState.ALIGNING)
+                    self._is_aligning = True
+
+                    alignment_result = await self.force_resync("ws_reconnect")
+
+                    if alignment_result is not None:
+                        self._set_state(StreamState.CONNECTED)
+                        self._is_aligning = False
+                        self._recv_task = asyncio.create_task(self._receive_loop())
+                        return
+                    else:
+                        logger.warning(f"[{self._name}] Alignment failed, staying in ALIGNING")
+
+                except Exception as e:
+                    logger.warning(f"[{self._name}] Reconnect failed: {e}")
+                    delay *= 2
+                    delay = min(delay, self._config.max_reconnect_delay)
+
+            self._set_state(StreamState.ERROR)
+            self._metrics.last_error = "Max reconnection attempts reached"
 
     async def _receive_loop(self) -> None:
-        """接收消息循环"""
-        try:
-            async for message in self._ws:
-                if not self._running:
-                    break
+        """接收消息循环（带超时检测）"""
+        stale_timeout = self._config.stale_timeout
 
+        while self._running:
+            try:
+                message = await asyncio.wait_for(
+                    self._ws.recv(),
+                    timeout=stale_timeout
+                )
                 await self._handle_message(message)
 
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning(f"[{self._name}] Connection closed: {e}")
-            await self.reconnect()
+            except asyncio.TimeoutError:
+                logger.warning(f"[{self._name}] Receive timeout after {stale_timeout}s, triggering STALE")
+                self._set_state(StreamState.STALE_DATA)
+                self._metrics.stale_count += 1
+                await self._trigger_event(StreamEvent.STALE_DETECTED)
+                await self.reconnect()
+                break
 
-        except Exception as e:
-            logger.error(f"[{self._name}] Receive error: {e}")
-            self._metrics.last_error = str(e)
-            await self.reconnect()
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(f"[{self._name}] Connection closed: {e}")
+                await self.reconnect()
+                break
+
+            except Exception as e:
+                logger.error(f"[{self._name}] Receive error: {e}")
+                self._metrics.last_error = str(e)
+                await self.reconnect()
+                break
 
     async def _handle_message(self, message: str) -> None:
-        """处理接收到的消息"""
+        """处理接收到的消息（ALIGNING 状态下丢弃）"""
+        if self._is_aligning:
+            logger.debug(f"[{self._name}] Discarding message during ALIGNING state")
+            return
+
         try:
             data = json.loads(message)
             now = time.time()

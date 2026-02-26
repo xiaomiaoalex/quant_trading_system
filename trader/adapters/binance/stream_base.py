@@ -26,6 +26,7 @@ class StreamState(Enum):
     DEGRADED = "DEGRADED"
     DISCONNECTED = "DISCONNECTED"
     ERROR = "ERROR"
+    ALIGNING = "ALIGNING"  # 重连后等待 REST 对齐
 
 
 class StreamEvent(Enum):

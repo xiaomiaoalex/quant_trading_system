@@ -232,11 +232,14 @@ class BinanceConnector:
             except Exception as e:
                 logger.error(f"[BinanceConnector] Snapshot handler error: {e}")
 
-    async def _on_force_resync(self, reason: str) -> None:
+    async def _on_force_resync(self, reason: str) -> Optional[RestAlignmentSnapshot]:
         """处理强制对齐请求"""
         logger.info(f"[BinanceConnector] Force resync triggered: {reason}")
-        priority = Priority.P0
-        await self._rest_coordinator.force_alignment(reason, priority)
+        if reason == "ws_reconnect":
+            return await self._rest_coordinator.force_alignment_p0(reason)
+        else:
+            priority = Priority.P0
+            return await self._rest_coordinator.force_alignment(reason, priority)
 
     async def _health_check_loop(self) -> None:
         """健康检查循环"""
