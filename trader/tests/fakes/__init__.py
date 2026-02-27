@@ -7,7 +7,7 @@ Fakes - 测试用伪对象
 - FakeHTTPClient: 可脚本化返回序列
 """
 from trader.tests.fakes.fake_clock import FakeClock, ClockContext, IntervalTracker
-from trader.tests.fakes.fake_websocket import FakeWebSocket, WebSocketPair, WSMode, WSConfig
+from trader.tests.fakes.fake_websocket import FakeWebSocket, WebSocketPair, WSMode, WSConfig, PingPongScript, ConnectionClosedError
 from trader.tests.fakes.fake_http import (
     FakeHTTPClient, 
     FakeResponse, 
@@ -26,6 +26,8 @@ __all__ = [
     'WebSocketPair',
     'WSMode',
     'WSConfig',
+    'PingPongScript',
+    'ConnectionClosedError',
     'FakeHTTPClient',
     'FakeResponse',
     'ResponseScript',

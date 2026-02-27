@@ -5,11 +5,14 @@ Fake HTTP Client - 可脚本化返回序列
 """
 import asyncio
 import time
-from typing import Optional, Any, Dict, List, Callable
+from typing import Optional, Any, Dict, List, Callable, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock
 import asyncio
+
+if TYPE_CHECKING:
+    from trader.tests.fakes.fake_clock import FakeClock
 
 
 class HTTPResponseType(Enum):
@@ -42,7 +45,9 @@ class RequestRecord:
     url: str
     headers: Dict[str, str] = field(default_factory=dict)
     timestamp: float = 0.0
+    timestamp_ns: int = 0
     duration: float = 0.0
+    duration_ns: int = 0
 
 
 class ResponseScript:
@@ -123,9 +128,24 @@ class FakeHTTPClient:
     - 可脚本化返回序列
     - 记录调用次数、时间间隔
     - 支持断言"不会风暴"
+    - 支持注入 now_fn/clock 以实现时间可控
     """
     
-    def __init__(self):
+    def __init__(
+        self, 
+        now_fn: Optional[Callable[[], float]] = None,
+        now_fn_ns: Optional[Callable[[], int]] = None,
+        clock: Optional["FakeClock"] = None
+    ):
+        """
+        Args:
+            now_fn: 可选的时间函数，返回秒级时间戳。
+                   如果不提供，默认使用 time.perf_counter()
+            now_fn_ns: 可选的纳秒级时间函数。
+                      如果不提供，默认使用 time.perf_counter_ns()
+            clock: 可选的 FakeClock 实例。
+                  如果提供，将使用 clock.time 和 clock.time_ns
+        """
         self._scripts: Dict[str, ResponseScript] = {}
         self._lock = Lock()
         
@@ -138,6 +158,28 @@ class FakeHTTPClient:
         self._closed = False
         
         self._default_script = ResponseScript().add_ok()
+        
+        if clock is not None:
+            self._now_fn = lambda: clock.time
+            self._now_fn_ns = lambda: clock.time_ns
+        else:
+            self._now_fn = now_fn or time.perf_counter
+            self._now_fn_ns = now_fn_ns or time.perf_counter_ns
+    
+    def set_now_fn(self, now_fn: Callable[[], float], now_fn_ns: Optional[Callable[[], int]] = None) -> None:
+        """注入时间函数"""
+        self._now_fn = now_fn
+        self._now_fn_ns = now_fn_ns or now_fn_ns
+    
+    @property
+    def now(self) -> float:
+        """获取当前时间（使用注入的 now_fn）"""
+        return self._now_fn()
+    
+    @property
+    def now_ns(self) -> int:
+        """获取当前时间（纳秒）"""
+        return self._now_fn_ns()
     
     def add_script(self, pattern: str, script: ResponseScript) -> None:
         """添加 URL 模式对应的脚本"""
@@ -163,17 +205,19 @@ class FakeHTTPClient:
         headers: Optional[Dict] = None,
         **kwargs
     ) -> 'FakeResponse':
-        """发送请求"""
+        """发送请求 - 记录时间戳（使用注入的 now_fn）"""
         if self._closed:
             raise RuntimeError("Client is closed")
         
-        start_time = time.time()
+        start_time = self._now_fn()
+        start_time_ns = self._now_fn_ns()
         
         record = RequestRecord(
             method=method,
             url=url,
             headers=headers or {},
-            timestamp=start_time
+            timestamp=start_time,
+            timestamp_ns=start_time_ns
         )
         
         with self._lock:
@@ -184,8 +228,10 @@ class FakeHTTPClient:
         script = self._find_script(url)
         response = script.get_response(record)
         
-        duration = time.time() - start_time
+        duration = self._now_fn() - start_time
+        duration_ns = self._now_fn_ns() - start_time_ns
         record.duration = duration
+        record.duration_ns = duration_ns
         
         if response.error:
             with self._lock:
@@ -210,7 +256,7 @@ class FakeHTTPClient:
             return self._total_requests
     
     def get_request_interval_stats(self, pattern: Optional[str] = None) -> Dict[str, float]:
-        """获取请求间隔统计"""
+        """获取请求间隔统计（秒级）"""
         with self._lock:
             times = self._request_times
             if pattern:
@@ -227,6 +273,50 @@ class FakeHTTPClient:
                 "max": max(intervals),
                 "avg": sum(intervals) / len(intervals)
             }
+    
+    def get_request_interval_stats_ns(self, pattern: Optional[str] = None) -> Dict[str, int]:
+        """获取请求间隔统计（纳秒级）- 用于精确断言无风暴"""
+        with self._lock:
+            records = self._request_history
+            if pattern:
+                records = [r for r in self._request_history if pattern in r.url]
+            
+            if len(records) < 2:
+                return {"count": len(records), "min_ns": 0, "max_ns": 0, "avg_ns": 0}
+            
+            intervals_ns = [
+                records[i+1].timestamp_ns - records[i].timestamp_ns 
+                for i in range(len(records)-1)
+            ]
+            
+            return {
+                "count": len(records),
+                "min_ns": min(intervals_ns),
+                "max_ns": max(intervals_ns),
+                "avg_ns": sum(intervals_ns) // len(intervals_ns)
+            }
+    
+    def assert_no_request_storm(self, pattern: str, min_interval_ns: int) -> bool:
+        """
+        断言：请求间隔大于指定阈值（无风暴）
+        
+        Args:
+            pattern: URL 模式
+            min_interval_ns: 最小间隔（纳秒）
+            
+        Returns:
+            True if no storm detected
+            
+        Raises:
+            AssertionError: 如果检测到请求风暴
+        """
+        stats = self.get_request_interval_stats_ns(pattern)
+        if stats["min_ns"] < min_interval_ns:
+            raise AssertionError(
+                f"Request storm detected for {pattern}: "
+                f"min interval = {stats['min_ns']}ns < {min_interval_ns}ns"
+            )
+        return True
     
     def get_request_history(self, pattern: Optional[str] = None) -> List[RequestRecord]:
         """获取请求历史"""
