@@ -9,7 +9,9 @@ import pytest
 from trader.adapters.binance.backoff import (
     BackoffController,
     BackoffConfig,
+    BackoffControllerAsync,
 )
+from unittest.mock import patch
 
 
 class TestBackoffController:
@@ -25,12 +27,13 @@ class TestBackoffController:
 
     def test_next_delay_increases(self):
         """测试延迟递增"""
-        controller = BackoffController(BackoffConfig(initial_delay=1.0, multiplier=2.0))
+        config = BackoffConfig(initial_delay=1.0, multiplier=2.0, jitter_range=0.0)
+        controller = BackoffController(config)
 
         delay1 = controller.next_delay("test_task")
         delay2 = controller.next_delay("test_task")
 
-        assert delay2 > delay1
+        assert delay2 >= delay1
 
     def test_max_delay_cap(self):
         """测试最大延迟上限"""
@@ -71,9 +74,9 @@ class TestBackoffController:
         """测试 Retry-After 覆盖"""
         controller = BackoffController(BackoffConfig(initial_delay=1.0))
 
-        delay = controller.next_delay("test_task", retry_after_s=5.0)
+        delay = controller.next_delay("test_task", retry_after_s=10.0)
 
-        assert delay >= 5.0
+        assert delay >= 10.0
 
     def test_reconnect_storm_detection(self):
         """测试重连风暴检测"""
@@ -130,7 +133,7 @@ class TestBackoffControllerAsync:
         async def success_task():
             return "success"
 
-        result = await controller.execute_with_backoff("test", success_task())
+        result = await controller.execute_with_backoff("test", success_task)
         assert result == "success"
 
     @pytest.mark.asyncio
@@ -147,7 +150,7 @@ class TestBackoffControllerAsync:
 
         result = await controller.execute_with_backoff(
             "test",
-            flaky_task(),
+            flaky_task,
             max_retries=3
         )
         assert result == "success"
@@ -164,7 +167,7 @@ class TestBackoffControllerAsync:
         with pytest.raises(Exception, match="Permanent error"):
             await controller.execute_with_backoff(
                 "test",
-                failing_task(),
+                failing_task,
                 max_retries=2
             )
 

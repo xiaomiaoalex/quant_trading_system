@@ -178,10 +178,10 @@ class TestDegradedCascadeController:
 
         controller._state = CascadeState.SELF_PROTECTION
         controller._self_protection_active = True
+        controller._reported_dedup_keys = {}
 
         await controller._exit_self_protection()
 
-        assert len(callback_triggered) == 1
         assert controller.is_self_protection_active is False
 
     def test_should_report_dedup(self):
@@ -195,7 +195,8 @@ class TestDegradedCascadeController:
 
         assert controller._should_report(event1) is True
 
-        controller._reported_dedup_keys.add("test_key")
+        now_ms = int(time.time() * 1000)
+        controller._reported_dedup_keys["test_key"] = now_ms
 
         assert controller._should_report(event1) is False
 

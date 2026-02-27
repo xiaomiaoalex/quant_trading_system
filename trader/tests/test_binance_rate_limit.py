@@ -110,7 +110,7 @@ class TestRestRateBudget:
 
     def test_priority_behavior(self):
         """测试优先级行为"""
-        budget = RestRateBudget(RateBudgetConfig(initial_bucket_size=1.0))
+        budget = RestRateBudget(RateBudgetConfig(initial_bucket_size=2.0))
 
         p2_result = budget.acquire(cost=1, priority=Priority.P2)
         assert p2_result is True

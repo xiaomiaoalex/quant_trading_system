@@ -15,7 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
-from threading import Lock
+from threading import Lock, RLock  # <--- 增加 RLock
+
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,8 @@ class RestRateBudget:
             refill_rate=self._config.initial_refill_rate,
             bucket_size=self._config.initial_bucket_size,
         )
-        self._lock = Lock()
+        # 【关键修复】：将普通的 Lock() 改为可重入的 RLock()
+        self._lock = RLock()  
         self._429_count = 0
         self._last_429_ts = 0.0
 

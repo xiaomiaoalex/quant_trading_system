@@ -22,14 +22,14 @@ class TestEnvironmentalRiskEvent:
         """测试去重键生成"""
         key1 = EnvironmentalRiskEvent.generate_dedup_key(
             reason="test_reason",
-            window_end_ms=1609459200000,
+            window_start_ms=1609459200000,
             account_id="acc123",
             venue="binance"
         )
 
         key2 = EnvironmentalRiskEvent.generate_dedup_key(
             reason="test_reason",
-            window_end_ms=1609459200000,
+            window_start_ms=1609459200000,
             account_id="acc123",
             venue="binance"
         )
@@ -41,12 +41,12 @@ class TestEnvironmentalRiskEvent:
         """测试不同参数生成不同的去重键"""
         key1 = EnvironmentalRiskEvent.generate_dedup_key(
             reason="test_reason",
-            window_end_ms=1609459200000
+            window_start_ms=1609459200000
         )
 
         key2 = EnvironmentalRiskEvent.generate_dedup_key(
             reason="test_reason",
-            window_end_ms=1609459200001
+            window_start_ms=1609459200001
         )
 
         assert key1 != key2

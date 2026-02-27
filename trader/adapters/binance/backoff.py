@@ -15,7 +15,7 @@ import time
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, Optional
-from threading import Lock
+from threading import Lock, RLock # <--- 加上 RLock
 from collections import defaultdict
 
 
@@ -57,7 +57,7 @@ class BackoffController:
     def __init__(self, config: Optional[BackoffConfig] = None):
         self._config = config or BackoffConfig()
         self._task_states: Dict[str, TaskBackoffState] = {}
-        self._lock = Lock()
+        self._lock = RLock()
         self._total_reconnect_count = 0
         self._reconnect_timestamps: list = []
         self._reconnect_storm_threshold = 10  # 5分钟内10次重连视为风暴
@@ -117,8 +117,9 @@ class BackoffController:
                 f"[Backoff] Task {task_name}: delay={delay:.2f}s, "
                 f"next={state.current_delay:.2f}s, retries={state.retry_count}"
             )
-
-            return delay
+            # 【关键修复】：确保无论怎么抖动，绝对不能低于服务器强制要求的 retry_after_s
+            final_delay = max(delay, retry_after_s) if retry_after_s else delay
+            return final_delay
 
     def _apply_jitter(self, delay: float) -> float:
         """应用 Full Jitter"""
@@ -226,7 +227,7 @@ class BackoffControllerAsync:
     async def execute_with_backoff(
         self,
         task_name: str,
-        coro,
+        coro_or_func,
         retry_after_s: Optional[float] = None,
         max_retries: Optional[int] = None
     ):
@@ -235,7 +236,7 @@ class BackoffControllerAsync:
 
         Args:
             task_name: 任务名称
-            coro: 异步协程
+            coro_or_func: 异步协程或异步函数（可调用对象）
             retry_after_s: Retry-After 秒数
             max_retries: 最大重试次数
 
@@ -245,12 +246,18 @@ class BackoffControllerAsync:
         Raises:
             最后一次尝试的错误
         """
+        import inspect
         max_retries = max_retries or self._controller._config.max_retries
+
+        is_coroutine = inspect.iscoroutinefunction(coro_or_func)
 
         last_error = None
         for attempt in range(max_retries):
             try:
-                result = await coro
+                if is_coroutine:
+                    result = await coro_or_func()
+                else:
+                    result = await coro_or_func
                 self._controller.reset(task_name)
                 return result
             except Exception as e:
