@@ -88,6 +88,8 @@ class BinanceConnector:
         streams: Optional[List[str]] = None,
         config: Optional[BinanceConnectorConfig] = None
     ):
+        self._api_key = api_key
+        self._secret_key = secret_key
         self._config = config or BinanceConnectorConfig()
 
         self._credentials = BinanceCredentials(
@@ -105,9 +107,19 @@ class BinanceConnector:
         )
         self._public_manager = PublicStreamManager(config=public_config)
 
-        private_config = self._config.private_stream_config or PrivateStreamConfig(
-            testnet=self._config.testnet
-        )
+        if self._config.private_stream_config is not None:
+            private_config = self._config.private_stream_config
+        else:
+            if self._config.testnet:
+                private_config = PrivateStreamConfig(
+                    base_url="wss://testnet.binance.vision/ws",
+                    rest_url="https://testnet.binance.vision/api",
+                )
+            else:
+                private_config = PrivateStreamConfig(
+                    base_url="wss://stream.binance.com:9443/ws",
+                    rest_url="https://api.binance.com/api",
+                )
         self._private_manager = PrivateStreamManager(
             credentials=self._credentials,
             config=private_config

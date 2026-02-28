@@ -10,7 +10,7 @@ import uuid
 from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.api.models.schemas import (
     Strategy, StrategyRegisterRequest, StrategyVersion, StrategyVersionCreateRequest,
-    VersionedConfig, VersionedConfigUpsertRequest,
+    VersionedConfig, VersionedConfigUpsertRequest, RiskEventIngestRequest,
     Deployment, DeploymentCreateRequest,
     BacktestRequest, BacktestRun,
     OrderView, ExecutionView,
@@ -180,6 +180,12 @@ class RiskService:
         risk_data = request.model_dump()
         limits = self._storage.create_risk_limits(risk_data)
         return VersionedConfig(**limits)
+
+    def ingest_event(self, request: RiskEventIngestRequest) -> bool:
+        """Ingest risk event and return whether it is newly created"""
+        event_data = request.model_dump()
+        _, created = self._storage.ingest_risk_event(event_data)
+        return created
 
 
 class OrderService:

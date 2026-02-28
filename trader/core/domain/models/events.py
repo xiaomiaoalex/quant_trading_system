@@ -38,6 +38,7 @@ class EventType(Enum):
     POSITION_INCREASED = "POSITION_INCREASED"     # 加仓
     POSITION_DECREASED = "POSITION_DECREASED"     # 减仓
     POSITION_CLOSED = "POSITION_CLOSED"           # 平仓
+    POSITION_UPDATED = "POSITION_UPDATED"         # 持仓更新
 
     # 风控事件
     RISK_CHECK_PASSED = "RISK_CHECK_PASSED"      # 风控通过

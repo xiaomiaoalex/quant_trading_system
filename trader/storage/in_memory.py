@@ -26,6 +26,7 @@ class InMemoryStorage:
 
         # Risk limits
         self.risk_limits: List[Dict[str, Any]] = []
+        self.risk_events_by_key: Dict[str, Dict[str, Any]] = {}
 
         # Orders & Executions
         self.orders: Dict[str, Dict[str, Any]] = {}
@@ -234,6 +235,21 @@ class InMemoryStorage:
         if scope_limits:
             return scope_limits[-1]
         return None
+
+    def ingest_risk_event(self, event_data: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+        """Ingest risk event with dedup_key idempotency"""
+        dedup_key = event_data["dedup_key"]
+        existing = self.risk_events_by_key.get(dedup_key)
+        if existing is not None:
+            return existing, False
+
+        now = datetime.utcnow().isoformat() + "Z"
+        event = {
+            **event_data,
+            "ingested_at": now,
+        }
+        self.risk_events_by_key[dedup_key] = event
+        return event, True
 
     # ==================== Order Methods ====================
 

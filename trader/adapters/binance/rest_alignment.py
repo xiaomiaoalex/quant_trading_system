@@ -16,10 +16,11 @@ import time
 import hashlib
 import hmac
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable
+from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
 from urllib.parse import urlencode
 
-import aiohttp
+if TYPE_CHECKING:
+    import aiohttp
 
 from trader.adapters.binance.rate_limit import RestRateBudget, Priority, RateBudgetConfig
 from trader.adapters.binance.backoff import BackoffController, BackoffConfig
@@ -102,6 +103,7 @@ class RESTAlignmentCoordinator:
         if self._running:
             return
 
+        import aiohttp
         self._running = True
         self._session = aiohttp.ClientSession()
         logger.info("[RESTAlignment] Started")
@@ -255,16 +257,8 @@ class RESTAlignmentCoordinator:
     ) -> Any:
         """
         发送签名请求
-
-        Args:
-            method: HTTP 方法
-            endpoint: API 端点
-            params: 请求参数
-            priority: 请求优先级
-
-        Returns:
-            响应数据
         """
+        import aiohttp
         params = params or {}
 
         timestamp = int(time.time() * 1000)

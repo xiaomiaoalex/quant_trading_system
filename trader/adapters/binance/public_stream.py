@@ -14,10 +14,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable
+from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
 from urllib.parse import urlencode
 
-import aiohttp
+if TYPE_CHECKING:
+    import aiohttp
+
 import websockets
 import websockets.client as ws_client
 
@@ -90,6 +92,7 @@ class PublicStreamManager(BaseStreamFSM):
 
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
+        import aiohttp
         self._session = aiohttp.ClientSession()
         await self._connect()
 

@@ -4,9 +4,14 @@ Risk API Routes
 Risk limits management endpoints (versioned).
 """
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
-from trader.api.models.schemas import VersionedConfig, VersionedConfigUpsertRequest
+from trader.api.models.schemas import (
+    VersionedConfig,
+    VersionedConfigUpsertRequest,
+    RiskEventIngestRequest,
+    ActionResult,
+)
 from trader.services import RiskService
 
 router = APIRouter(tags=["Risk"])
@@ -32,3 +37,21 @@ async def set_risk_limits(request: VersionedConfigUpsertRequest):
     """
     service = RiskService()
     return service.set_limits(request)
+
+
+@router.post("/v1/risk/events", response_model=ActionResult)
+async def ingest_risk_event(request: RiskEventIngestRequest, response: Response):
+    """
+    Ingest risk event with dedup_key idempotency.
+
+    - Returns 201 when a new dedup_key is accepted.
+    - Returns 409 when dedup_key already exists (idempotent duplicate).
+    """
+    service = RiskService()
+    created = service.ingest_event(request)
+    if created:
+        response.status_code = 201
+        return ActionResult(ok=True, message="risk event accepted")
+
+    response.status_code = 409
+    return ActionResult(ok=True, message="risk event duplicate")

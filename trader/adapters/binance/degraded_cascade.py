@@ -14,10 +14,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Any, Callable, Awaitable, Set
+from typing import TYPE_CHECKING, Dict, Optional, Any, Callable, Awaitable, Set
 from enum import Enum
 
-import aiohttp
+if TYPE_CHECKING:
+    import aiohttp
 
 from trader.adapters.binance.environmental_risk import (
     EnvironmentalRiskEvent,
@@ -85,7 +86,7 @@ class DegradedCascadeController:
     def __init__(
         self,
         control_plane_base_url: str,
-        http_client: Optional[aiohttp.ClientSession] = None,
+        http_client: "Optional[aiohttp.ClientSession]" = None,
         backoff: Optional[BackoffController] = None,
         config: Optional[CascadeConfig] = None,
         adapter_name: str = "binance_adapter"
@@ -164,8 +165,9 @@ class DegradedCascadeController:
                 pass
             logger.info("[Cascade] Worker loop stopped")
 
-    async def _ensure_http_client(self) -> aiohttp.ClientSession:
+    async def _ensure_http_client(self) -> "aiohttp.ClientSession":
         """确保 HTTP 客户端存在"""
+        import aiohttp
         if self._http_client is None or self._http_client.closed:
             self._http_client = aiohttp.ClientSession()
         return self._http_client
@@ -386,10 +388,8 @@ class DegradedCascadeController:
     async def _post_risk_event(self, event: EnvironmentalRiskEvent) -> bool:
         """
         POST /v1/risk/events
-
-        Returns:
-            True if successful, False otherwise
         """
+        import aiohttp
         url = f"{self._config.control_plane_base_url}/v1/risk/events"
         payload = event.to_dict()
 
@@ -426,10 +426,8 @@ class DegradedCascadeController:
     async def _post_killswitch(self, event: EnvironmentalRiskEvent) -> bool:
         """
         POST /v1/killswitch
-
-        Returns:
-            True if successful, False otherwise
         """
+        import aiohttp
         url = f"{self._config.control_plane_base_url}/v1/killswitch"
         payload = {
             "scope": "GLOBAL",

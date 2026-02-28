@@ -202,6 +202,47 @@ class TestRiskEndpoints:
         data = response.json()
         assert data["version"] == 1
 
+    def test_ingest_risk_event_created(self):
+        """Test ingesting a new risk event"""
+        payload = {
+            "dedup_key": "risk-key-001",
+            "severity": "HIGH",
+            "reason": "ENV_RISK:AdapterDegraded:binance_adapter",
+            "metrics": {"private_stream_state": "DEGRADED"},
+            "recommended_level": 1,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+            "adapter_name": "binance_adapter",
+            "venue": "BINANCE",
+            "account_id": "acc_001",
+        }
+        response = self.client.post("/v1/risk/events", json=payload)
+        assert response.status_code == 201
+        data = response.json()
+        assert data["ok"] is True
+
+    def test_ingest_risk_event_duplicate(self):
+        """Test ingesting duplicate risk event by dedup_key"""
+        payload = {
+            "dedup_key": "risk-key-dup",
+            "severity": "HIGH",
+            "reason": "ENV_RISK:AdapterDegraded:binance_adapter",
+            "metrics": {"private_stream_state": "DEGRADED"},
+            "recommended_level": 1,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+            "adapter_name": "binance_adapter",
+            "venue": "BINANCE",
+            "account_id": "acc_001",
+        }
+        first = self.client.post("/v1/risk/events", json=payload)
+        assert first.status_code == 201
+
+        second = self.client.post("/v1/risk/events", json=payload)
+        assert second.status_code == 409
+        data = second.json()
+        assert data["ok"] is True
+
 
 class TestOrderEndpoints:
     """Test order API endpoints"""

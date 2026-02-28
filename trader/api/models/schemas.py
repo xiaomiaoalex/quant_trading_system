@@ -76,6 +76,20 @@ class VersionedConfigUpsertRequest(BaseModel):
     created_by: str
 
 
+class RiskEventIngestRequest(BaseModel):
+    """风险事件上报请求"""
+    dedup_key: str
+    severity: str
+    reason: str
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    recommended_level: int = Field(..., ge=0, le=3)
+    scope: str = Field(..., example="GLOBAL")
+    ts_ms: int
+    adapter_name: Optional[str] = None
+    venue: Optional[str] = None
+    account_id: Optional[str] = None
+
+
 # ==================== Deployment Models ====================
 
 class Deployment(BaseModel):

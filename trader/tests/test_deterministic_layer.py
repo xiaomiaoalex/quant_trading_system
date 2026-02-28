@@ -14,6 +14,7 @@ Unit Tests - Deterministic Layer
 8. 无 cl_ord_id 映射处理
 """
 import pytest
+import asyncio
 from decimal import Decimal
 from trader.core.application.deterministic_layer import (
     DeterministicApplier,

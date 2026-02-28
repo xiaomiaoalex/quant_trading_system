@@ -20,6 +20,7 @@ Order Version Deterministic Layer (CAS + ShadowState)
 import asyncio
 import time
 import fnvhash
+import hashlib
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -76,7 +77,7 @@ class TTLSet:
     def __init__(self, ttl_s: int = 900):
         self._ttl_s = ttl_s
         self._data: Dict[str, float] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def add(self, key: str) -> None:
         """添加元素"""
@@ -89,7 +90,7 @@ class TTLSet:
             expiry = self._data.get(key)
             if expiry is None:
                 return False
-            if time.time() > expiry:
+            if time.time() >= expiry:
                 # 已过期，清理
                 del self._data[key]
                 return False
@@ -247,6 +248,11 @@ class PendingBuffer:
         """返回 buffer 大小"""
         return len(self._buf)
 
+    def clear(self) -> None:
+        """清空 buffer"""
+        self._buf.clear()
+        self._order.clear()
+
 
 # ==================== 输入类型定义 ====================
 
@@ -327,7 +333,7 @@ def compute_exec_key(fill: "RawFillUpdate") -> str:
     计算成交键：用于去重。
     优先使用 cl_ord_id + exec_id；若 exec_id 缺失，使用稳定哈希（不依赖 local_ts）。
     """
-    cl = fill.cl_ord_id or (f"broker:{fill.broker_order_id}" if fill.broker_order_id else "unknown")
+    cl = fill.cl_ord_id or (fill.broker_order_id if fill.broker_order_id else "unknown")
     if fill.exec_id:
         return f"{cl}:{fill.exec_id}"
 

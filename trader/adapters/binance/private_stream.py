@@ -19,9 +19,11 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable, Awaitable
 
-import aiohttp
+if TYPE_CHECKING:
+    import aiohttp
+
 import websockets
 import websockets.client as ws_client
 
@@ -142,6 +144,7 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
+        import aiohttp
         self._session = aiohttp.ClientSession()
 
         await self._create_listen_key()
@@ -440,9 +443,21 @@ class PrivateStreamManager(BaseStreamFSM):
 
     def _parse_fill_update(self, data: Dict, exchange_ts: int) -> RawFillUpdate:
         """解析成交更新"""
+        raw_trade_id = data.get("t", 0)
+        trade_id = 0
+        if isinstance(raw_trade_id, int):
+            trade_id = raw_trade_id
+        else:
+            raw_text = str(raw_trade_id)
+            try:
+                trade_id = int(raw_text)
+            except ValueError:
+                digits = "".join(ch for ch in raw_text if ch.isdigit())
+                trade_id = int(digits) if digits else 0
+
         return RawFillUpdate(
             cl_ord_id=data.get("c"),
-            trade_id=int(data.get("t", 0)),
+            trade_id=trade_id,
             exec_type=data.get("x"),
             side=data.get("S"),
             price=float(data.get("p", 0)),
