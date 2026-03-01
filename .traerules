@@ -115,4 +115,10 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - 事件溯源 + 快照是必选，不允许“只靠内存状态”。
 - Runner 需要本地读模型缓存，API 层需要 WebSocket 推送（orders/pnl 至少两路）。
 
+## PullRequest Rules
+- 每完成一个任务，就创建一个 PullRequest。
+- 每个 PullRequest 必须包含：功能描述、变更点、测试用例、文档更新（如必要）。
+- 所有变更必须通过 CI 检查（代码质量、单测覆盖率、文档格式）。
+- 合并前必须由 Reviewer 审批通过。
+
 # End of rules
