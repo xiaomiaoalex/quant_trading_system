@@ -13,12 +13,14 @@ RiskEngine - 风险引擎
 2. In-trade（交易中）：订单超时、部分成交处理
 3. Post-trade（交易后）：异常检测、统计归因
 """
+from __future__ import annotations
+
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Any, Protocol
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 
 from trader.core.application.ports import BrokerPort
 from trader.core.domain.models.signal import Signal
@@ -33,6 +35,14 @@ class RiskLevel(Enum):
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
+
+
+class KillSwitchLevel(IntEnum):
+    """KillSwitch 级别定义"""
+    L0_NORMAL = 0
+    L1_NO_NEW_POSITIONS = 1
+    L2_CANCEL_ALL_AND_HALT = 2
+    L3_LIQUIDATE_AND_DISCONNECT = 3
 
 
 class RejectionReason(Enum):
@@ -96,6 +106,40 @@ class RiskConfig:
     trading_end_hour: int = 15                             # 交易结束时间（小时）
 
 
+class PreTradeRiskPlugin(Protocol):
+    """交易前风控插件接口"""
+
+    async def check(
+        self,
+        signal: Signal,
+        metrics: RiskMetrics,
+        engine: RiskEngine
+    ) -> Optional[RiskCheckResult]:
+        ...
+
+
+class InTradeRiskPlugin(Protocol):
+    """交易中风控插件接口"""
+
+    async def check(
+        self,
+        context: Dict[str, Any],
+        engine: RiskEngine
+    ) -> Optional[RiskCheckResult]:
+        ...
+
+
+class PostTradeRiskPlugin(Protocol):
+    """交易后风控插件接口"""
+
+    async def check(
+        self,
+        context: Dict[str, Any],
+        engine: RiskEngine
+    ) -> Optional[RiskCheckResult]:
+        ...
+
+
 class RiskEngine:
     """
     风险引擎
@@ -106,10 +150,16 @@ class RiskEngine:
     def __init__(
         self,
         broker: BrokerPort,
-        config: RiskConfig = None
+        config: RiskConfig = None,
+        pre_trade_plugins: Optional[List[PreTradeRiskPlugin]] = None,
+        in_trade_plugins: Optional[List[InTradeRiskPlugin]] = None,
+        post_trade_plugins: Optional[List[PostTradeRiskPlugin]] = None
     ):
         self._broker = broker
         self._config = config or RiskConfig()
+        self._pre_trade_plugins: List[PreTradeRiskPlugin] = list(pre_trade_plugins or [])
+        self._in_trade_plugins: List[InTradeRiskPlugin] = list(in_trade_plugins or [])
+        self._post_trade_plugins: List[PostTradeRiskPlugin] = list(post_trade_plugins or [])
 
         # 运行时状态
         self._daily_start_balance: Optional[Decimal] = None
@@ -122,6 +172,12 @@ class RiskEngine:
 
     async def check_signal(self, signal: Signal) -> RiskCheckResult:
         """
+        兼容入口：交易前风控检查
+        """
+        return await self.check_pre_trade(signal)
+
+    async def check_pre_trade(self, signal: Signal) -> RiskCheckResult:
+        """
         检查交易信号（交易前风控）
 
         这是最重要的风控入口。
@@ -131,44 +187,44 @@ class RiskEngine:
 
         # 1. 日亏损检查
         if metrics.daily_pnl_percent <= -self._config.max_daily_loss_percent:
-            return RiskCheckResult(
+            return self._with_killswitch_hint(RiskCheckResult(
                 passed=False,
                 risk_level=RiskLevel.CRITICAL,
                 rejection_reason=RejectionReason.DAILY_LOSS_LIMIT,
                 message=f"日亏损已达 {abs(metrics.daily_pnl_percent)}%，超过限制 {self._config.max_daily_loss_percent}%",
                 details={"daily_pnl_percent": str(metrics.daily_pnl_percent)}
-            )
+            ))
 
         # 2. 回撤检查
         if metrics.current_drawdown >= self._config.max_drawdown_percent:
-            return RiskCheckResult(
+            return self._with_killswitch_hint(RiskCheckResult(
                 passed=False,
                 risk_level=RiskLevel.CRITICAL,
                 rejection_reason=RejectionReason.MAX_DRAWDOWN,
                 message=f"回撤已达 {metrics.current_drawdown}%，超过限制 {self._config.max_drawdown_percent}%",
                 details={"current_drawdown": str(metrics.current_drawdown)}
-            )
+            ))
 
         # 3. 并发持仓数检查
         if metrics.open_positions_count >= self._config.max_positions:
             if signal.is_buy_signal():
-                return RiskCheckResult(
+                return self._with_killswitch_hint(RiskCheckResult(
                     passed=False,
                     risk_level=RiskLevel.HIGH,
                     rejection_reason=RejectionReason.MAX_POSITIONS,
                     message=f"当前持仓数 {metrics.open_positions_count} 已达上限 {self._config.max_positions}",
                     details={"open_positions_count": metrics.open_positions_count}
-                )
+                ))
 
         # 4. 订单频率检查
         if not self._check_order_rate():
-            return RiskCheckResult(
+            return self._with_killswitch_hint(RiskCheckResult(
                 passed=False,
                 risk_level=RiskLevel.MEDIUM,
                 rejection_reason=RejectionReason.MAX_ORDER_RATE,
                 message="订单频率超过限制",
                 details={"order_count": len(self._today_orders)}
-            )
+            ))
 
         # 5. 资金检查（对于买入信号）
         if signal.is_buy_signal():
@@ -176,7 +232,7 @@ class RiskEngine:
             required_amount = signal.price * signal.quantity
 
             if account.available_cash < required_amount:
-                return RiskCheckResult(
+                return self._with_killswitch_hint(RiskCheckResult(
                     passed=False,
                     risk_level=RiskLevel.MEDIUM,
                     rejection_reason=RejectionReason.INSUFFICIENT_BALANCE,
@@ -185,12 +241,12 @@ class RiskEngine:
                         "available": str(account.available_cash),
                         "required": str(required_amount)
                     }
-                )
+                ))
 
             # 检查最小订单金额
             order_value = signal.price * signal.quantity
             if order_value < self._config.min_order_value:
-                return RiskCheckResult(
+                return self._with_killswitch_hint(RiskCheckResult(
                     passed=False,
                     risk_level=RiskLevel.LOW,
                     rejection_reason=RejectionReason.INSUFFICIENT_BALANCE,
@@ -199,18 +255,22 @@ class RiskEngine:
                         "order_value": str(order_value),
                         "min_value": str(self._config.min_order_value)
                     }
-                )
+                ))
 
         # 6. 交易时段检查
         if not self._check_trading_hours():
-            return RiskCheckResult(
+            return self._with_killswitch_hint(RiskCheckResult(
                 passed=False,
                 risk_level=RiskLevel.HIGH,
                 rejection_reason=RejectionReason.TRADING_HOURS,
                 message="当前不在交易时段内",
-            )
+            ))
 
-        return RiskCheckResult(
+        plugin_result = await self._run_pre_trade_plugins(signal, metrics)
+        if plugin_result is not None:
+            return self._with_killswitch_hint(plugin_result)
+
+        return self._with_killswitch_hint(RiskCheckResult(
             passed=True,
             risk_level=RiskLevel.LOW,
             message="风控检查通过",
@@ -219,7 +279,35 @@ class RiskEngine:
                 "current_drawdown": str(metrics.current_drawdown),
                 "open_positions": metrics.open_positions_count
             }
-        )
+        ))
+
+    async def check_in_trade(self, context: Dict[str, Any]) -> RiskCheckResult:
+        """
+        交易中风控入口（默认通过，可由插件接管）
+        """
+        plugin_result = await self._run_in_trade_plugins(context)
+        if plugin_result is not None:
+            return self._with_killswitch_hint(plugin_result)
+        return self._with_killswitch_hint(RiskCheckResult(
+            passed=True,
+            risk_level=RiskLevel.LOW,
+            message="交易中风控检查通过",
+            details={}
+        ))
+
+    async def check_post_trade(self, context: Dict[str, Any]) -> RiskCheckResult:
+        """
+        交易后风控入口（默认通过，可由插件接管）
+        """
+        plugin_result = await self._run_post_trade_plugins(context)
+        if plugin_result is not None:
+            return self._with_killswitch_hint(plugin_result)
+        return self._with_killswitch_hint(RiskCheckResult(
+            passed=True,
+            risk_level=RiskLevel.LOW,
+            message="交易后风控检查通过",
+            details={}
+        ))
 
     # ==================== 辅助方法 ====================
 
@@ -276,6 +364,98 @@ class RiskEngine:
             today_order_count=len(self._today_orders),
             today_cancel_count=len(self._today_cancels)
         )
+
+    async def _run_pre_trade_plugins(
+        self,
+        signal: Signal,
+        metrics: RiskMetrics
+    ) -> Optional[RiskCheckResult]:
+        for plugin in self._pre_trade_plugins:
+            try:
+                result = await plugin.check(signal, metrics, self)
+            except Exception as exc:
+                logger.error(f"Pre-trade 风控插件异常: {exc}")
+                return RiskCheckResult(
+                    passed=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+                    message="Pre-trade 风控插件执行失败，已 Fail-Closed",
+                    details={"error": str(exc)}
+                )
+            if result is not None and not result.passed:
+                return result
+        return None
+
+    async def _run_in_trade_plugins(
+        self,
+        context: Dict[str, Any]
+    ) -> Optional[RiskCheckResult]:
+        for plugin in self._in_trade_plugins:
+            try:
+                result = await plugin.check(context, self)
+            except Exception as exc:
+                logger.error(f"In-trade 风控插件异常: {exc}")
+                return RiskCheckResult(
+                    passed=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+                    message="In-trade 风控插件执行失败，已 Fail-Closed",
+                    details={"error": str(exc)}
+                )
+            if result is not None and not result.passed:
+                return result
+        return None
+
+    async def _run_post_trade_plugins(
+        self,
+        context: Dict[str, Any]
+    ) -> Optional[RiskCheckResult]:
+        for plugin in self._post_trade_plugins:
+            try:
+                result = await plugin.check(context, self)
+            except Exception as exc:
+                logger.error(f"Post-trade 风控插件异常: {exc}")
+                return RiskCheckResult(
+                    passed=False,
+                    risk_level=RiskLevel.CRITICAL,
+                    rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+                    message="Post-trade 风控插件执行失败，已 Fail-Closed",
+                    details={"error": str(exc)}
+                )
+            if result is not None and not result.passed:
+                return result
+        return None
+
+    def _with_killswitch_hint(self, result: RiskCheckResult) -> RiskCheckResult:
+        enriched_details = dict(result.details)
+        enriched_details["recommended_killswitch_level"] = self.recommend_killswitch_level(result)
+        result.details = enriched_details
+        return result
+
+    def recommend_killswitch_level(self, result: RiskCheckResult) -> int:
+        """
+        根据风控结果给出 KillSwitch 建议级别。
+        """
+        if result.passed:
+            return int(KillSwitchLevel.L0_NORMAL)
+
+        if result.rejection_reason == RejectionReason.RISK_SYSTEM_ERROR:
+            return int(KillSwitchLevel.L3_LIQUIDATE_AND_DISCONNECT)
+
+        if result.rejection_reason in {
+            RejectionReason.DAILY_LOSS_LIMIT,
+            RejectionReason.MAX_DRAWDOWN,
+        }:
+            return int(KillSwitchLevel.L2_CANCEL_ALL_AND_HALT)
+
+        if result.rejection_reason in {
+            RejectionReason.MAX_POSITIONS,
+            RejectionReason.MAX_ORDER_RATE,
+            RejectionReason.TRADING_HOURS,
+        }:
+            return int(KillSwitchLevel.L1_NO_NEW_POSITIONS)
+
+        return int(KillSwitchLevel.L1_NO_NEW_POSITIONS)
 
     def _check_order_rate(self) -> bool:
         """检查订单频率"""
@@ -340,3 +520,15 @@ class RiskEngine:
     def get_config(self) -> RiskConfig:
         """获取当前风控配置"""
         return self._config
+
+    def register_pre_trade_plugin(self, plugin: PreTradeRiskPlugin) -> None:
+        """注册交易前风控插件"""
+        self._pre_trade_plugins.append(plugin)
+
+    def register_in_trade_plugin(self, plugin: InTradeRiskPlugin) -> None:
+        """注册交易中风控插件"""
+        self._in_trade_plugins.append(plugin)
+
+    def register_post_trade_plugin(self, plugin: PostTradeRiskPlugin) -> None:
+        """注册交易后风控插件"""
+        self._post_trade_plugins.append(plugin)
