@@ -347,6 +347,7 @@ class TestIntegration:
             await controller._report_to_control_plane(health, "test_reason")
 
             assert controller.metrics.risk_events_failed >= 1
+            assert controller.is_self_protection_active is True
         finally:
             await controller.close()
 
