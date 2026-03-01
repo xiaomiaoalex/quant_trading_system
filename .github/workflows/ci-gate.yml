@@ -1,10 +1,14 @@
 name: CI Gate
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   import-gate:
@@ -48,11 +52,11 @@ jobs:
 
       - name: Run P0 Tests
         run: |
-          python -m pytest -q trader/tests/test_binance_connector.py --tb=short || exit 1
-          python -m pytest -q trader/tests/test_binance_private_stream.py --tb=short || exit 1
-          python -m pytest -q trader/tests/test_binance_degraded_cascade.py --tb=short || exit 1
-          python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short || exit 1
-          python -m pytest -q trader/tests/test_hard_properties.py --tb=short || exit 1
+          python -m pytest -q trader/tests/test_binance_connector.py --tb=short
+          python -m pytest -q trader/tests/test_binance_private_stream.py --tb=short
+          python -m pytest -q trader/tests/test_binance_degraded_cascade.py --tb=short
+          python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short
+          python -m pytest -q trader/tests/test_hard_properties.py --tb=short
 
   control-gate:
     name: Control Gate
@@ -73,6 +77,6 @@ jobs:
 
       - name: Run Control Tests
         run: |
-          python -m pytest -q trader/tests/test_api_endpoints.py -k "risk and (invalid_payload or missing_required_fields)" --tb=short || exit 1
-          python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short || exit 1
-          python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short || exit 1
+          python -m pytest -q trader/tests/test_api_endpoints.py -k "risk and (invalid_payload or missing_required_fields)" --tb=short
+          python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short
+          python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short
