@@ -24,7 +24,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
           pip install -r trader/requirements-ci.txt
 
       - name: Import Gate Tests
@@ -47,7 +47,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
           pip install -r trader/requirements-ci.txt
 
       - name: Run P0 Tests
@@ -72,7 +72,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
           pip install -r trader/requirements-ci.txt
 
       - name: Run Control Tests
