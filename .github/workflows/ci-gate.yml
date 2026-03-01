@@ -80,3 +80,28 @@ jobs:
           python -m pytest -q trader/tests/test_api_endpoints.py -k "risk and (invalid_payload or missing_required_fields)" --tb=short
           python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short
           python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short
+
+  postgres-integration:
+    name: Postgres Integration Tests
+    runs-on: ubuntu-latest
+    needs: control-gate
+    if: ${{ secrets.POSTGRES_CONNECTION_STRING != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+          pip install asyncpg
+
+      - name: Run Postgres Tests
+        env:
+          POSTGRES_CONNECTION_STRING: ${{ secrets.POSTGRES_CONNECTION_STRING }}
+        run: |
+          python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
