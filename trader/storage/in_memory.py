@@ -4,7 +4,7 @@ Storage - In-memory storage implementation for the control plane
 Provides in-memory storage for strategies, deployments, orders, positions, etc.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 
@@ -54,7 +54,7 @@ class InMemoryStorage:
     def create_strategy(self, strategy_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new strategy"""
         strategy_id = strategy_data["strategy_id"]
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         strategy = {
             **strategy_data,
             "created_at": now,
@@ -80,7 +80,7 @@ class InMemoryStorage:
 
         versions = self.strategy_versions[strategy_id]
         version = version_data.get("version", len(versions) + 1)
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         version_entry = {
             **version_data,
@@ -111,7 +111,7 @@ class InMemoryStorage:
 
         params_list = self.strategy_params[strategy_id]
         version = len(params_list) + 1
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         params_entry = {
             "scope": params_data.get("scope", strategy_id),
@@ -136,7 +136,7 @@ class InMemoryStorage:
     def create_deployment(self, deployment_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new deployment"""
         deployment_id = deployment_data["deployment_id"]
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         deployment = {
             **deployment_data,
             "status": "STOPPED",
@@ -174,7 +174,7 @@ class InMemoryStorage:
         deployment = self.deployments.get(deployment_id)
         if deployment:
             deployment["status"] = status
-            deployment["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            deployment["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
         return deployment
 
     def update_deployment_params(self, deployment_id: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -182,7 +182,7 @@ class InMemoryStorage:
         deployment = self.deployments.get(deployment_id)
         if deployment:
             deployment["params_version"] = deployment.get("params_version", 0) + 1
-            deployment["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            deployment["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
         return deployment
 
     # ==================== Backtest Methods ====================
@@ -190,7 +190,7 @@ class InMemoryStorage:
     def create_backtest(self, backtest_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new backtest run"""
         run_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         backtest = {
             **backtest_data,
             "run_id": run_id,
@@ -217,7 +217,7 @@ class InMemoryStorage:
         """Create or update risk limits"""
         scope = risk_data.get("scope", "GLOBAL")
         version = len(self.risk_limits) + 1
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
 
         risk_entry = {
             "scope": scope,
@@ -243,7 +243,7 @@ class InMemoryStorage:
         if existing is not None:
             return existing, False
 
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         event = {
             **event_data,
             "ingested_at": now,
@@ -256,7 +256,7 @@ class InMemoryStorage:
     def create_order(self, order_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create an order"""
         cl_ord_id = order_data["cl_ord_id"]
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         order = {
             **order_data,
             "status": order_data.get("status", "NEW"),
@@ -331,7 +331,7 @@ class InMemoryStorage:
         key = f"{position_data.get('account_id')}:{position_data.get('venue')}:{position_data.get('instrument')}"
         position = {
             **position_data,
-            "updated_ts_ms": int(datetime.utcnow().timestamp() * 1000),
+            "updated_ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
         }
         self.positions[key] = position
         return position
@@ -371,7 +371,7 @@ class InMemoryStorage:
             "realized_pnl": str(total_realized),
             "unrealized_pnl": str(total_unrealized),
             "total_pnl": str(total_realized + total_unrealized),
-            "updated_ts_ms": int(datetime.utcnow().timestamp() * 1000),
+            "updated_ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
         }
 
     # ==================== Event Methods ====================
@@ -414,7 +414,7 @@ class InMemoryStorage:
         snapshot = {
             **snapshot_data,
             "snapshot_id": self._snapshot_counter,
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
         stream_key = snapshot.get("stream_key")
         self.snapshots[stream_key] = snapshot
@@ -428,7 +428,7 @@ class InMemoryStorage:
 
     def set_kill_switch(self, scope: str, level: int, reason: Optional[str], updated_by: str) -> Dict[str, Any]:
         """Set kill switch level"""
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat() + "Z"
         state = {
             "scope": scope,
             "level": level,
@@ -447,7 +447,7 @@ class InMemoryStorage:
                 "scope": scope,
                 "level": 0,
                 "reason": None,
-                "updated_at": datetime.utcnow().isoformat() + "Z",
+                "updated_at": datetime.now(timezone.utc).isoformat() + "Z",
                 "updated_by": "system",
             }
         return state
@@ -471,7 +471,7 @@ class InMemoryStorage:
             return {
                 "account_id": account_id,
                 "connected": broker.get("status") == "READY",
-                "last_heartbeat_ts_ms": int(datetime.utcnow().timestamp() * 1000),
+                "last_heartbeat_ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                 "last_error": None,
             }
         return None

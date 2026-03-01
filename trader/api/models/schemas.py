@@ -5,7 +5,7 @@ Based on OpenAPI 3.0.3 specification v0.2.0
 
 This module defines all request/response models for the API endpoints.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Literal
 from pydantic import BaseModel, Field
 
@@ -36,7 +36,7 @@ class StrategyRegisterRequest(BaseModel):
     strategy_id: str
     name: str
     description: Optional[str] = None
-    entrypoint: str = Field(..., example="strategies.mean_reversion:Strategy")
+    entrypoint: str = Field(..., json_schema_extra={"example": "strategies.mean_reversion:Strategy"})
     language: str = "python"
 
 
@@ -44,7 +44,7 @@ class StrategyVersion(BaseModel):
     """策略版本"""
     strategy_id: str
     version: int
-    code_ref: str = Field(..., example="git:abcd1234")
+    code_ref: str = Field(..., json_schema_extra={"example": "git:abcd1234"})
     requirements: Optional[Dict[str, Any]] = None
     param_schema: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
@@ -62,7 +62,7 @@ class StrategyVersionCreateRequest(BaseModel):
 
 class VersionedConfig(BaseModel):
     """版本化配置"""
-    scope: str = Field(..., example="GLOBAL")
+    scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     version: int
     config: Dict[str, Any]
     created_at: Optional[str] = None
@@ -83,7 +83,7 @@ class RiskEventIngestRequest(BaseModel):
     reason: str
     metrics: Dict[str, Any] = Field(default_factory=dict)
     recommended_level: int = Field(..., ge=0, le=3)
-    scope: str = Field(..., example="GLOBAL")
+    scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     ts_ms: int
     adapter_name: Optional[str] = None
     venue: Optional[str] = None
@@ -98,9 +98,9 @@ class Deployment(BaseModel):
     strategy_id: str
     version: int
     account_id: str
-    venue: str = Field(..., example="BINANCE")
+    venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     symbols: List[str]
-    status: str = Field(..., example="STOPPED")
+    status: str = Field(..., json_schema_extra={"example": "STOPPED"})
     params_version: Optional[int] = None
     risk_profile_id: Optional[str] = None
     created_at: Optional[str] = None
@@ -113,7 +113,7 @@ class DeploymentCreateRequest(BaseModel):
     strategy_id: str
     version: int
     account_id: str
-    venue: str = Field(..., example="BINANCE")
+    venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     symbols: List[str]
     params_version: Optional[int] = None
     risk_profile_id: Optional[str] = None
@@ -130,14 +130,14 @@ class BacktestRequest(BaseModel):
     symbols: List[str]
     start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
     end_ts_ms: int = Field(..., description="End timestamp in milliseconds")
-    venue: str = Field(..., example="BINANCE")
+    venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     requested_by: str
 
 
 class BacktestRun(BaseModel):
     """回测运行"""
     run_id: str
-    status: str = Field(..., example="RUNNING")
+    status: str = Field(..., json_schema_extra={"example": "RUNNING"})
     strategy_id: str
     version: int
     symbols: List[str]
@@ -245,7 +245,7 @@ class ReplayRequest(BaseModel):
 
 class KillSwitchState(BaseModel):
     """熔断状态"""
-    scope: str = Field(..., example="GLOBAL")
+    scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     level: int = Field(..., ge=0, le=3)
     reason: Optional[str] = None
     updated_at: Optional[str] = None
@@ -254,7 +254,7 @@ class KillSwitchState(BaseModel):
 
 class KillSwitchSetRequest(BaseModel):
     """设置熔断请求"""
-    scope: str = Field(..., example="GLOBAL")
+    scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     level: int = Field(..., ge=0, le=3)
     reason: Optional[str] = None
     updated_by: str
@@ -266,8 +266,8 @@ class BrokerAccount(BaseModel):
     """券商账户"""
     account_id: str
     venue: str
-    broker_type: str = Field(..., example="BINANCE")
-    status: str = Field(..., example="READY")
+    broker_type: str = Field(..., json_schema_extra={"example": "BINANCE"})
+    status: str = Field(..., json_schema_extra={"example": "READY"})
     capabilities: Optional[Dict[str, Any]] = None
 
 
@@ -284,4 +284,4 @@ class BrokerStatus(BaseModel):
 class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str = "ok"
-    time: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    time: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")

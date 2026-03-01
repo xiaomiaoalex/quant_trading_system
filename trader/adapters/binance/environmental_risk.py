@@ -12,7 +12,7 @@ import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 DEDUP_WINDOW_MS = 60000
 
@@ -60,7 +60,7 @@ class EnvironmentalRiskEvent:
     recommended_level: RecommendedLevel = RecommendedLevel.L1_NO_NEW_POS
 
     ts_ms: int = field(default_factory=lambda: int(time.time() * 1000))
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
 
     adapter_name: str = ""
     venue: str = ""

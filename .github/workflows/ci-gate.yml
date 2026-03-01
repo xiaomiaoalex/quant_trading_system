@@ -51,6 +51,8 @@ jobs:
           python -m pytest -q trader/tests/test_binance_connector.py --tb=short || exit 1
           python -m pytest -q trader/tests/test_binance_private_stream.py --tb=short || exit 1
           python -m pytest -q trader/tests/test_binance_degraded_cascade.py --tb=short || exit 1
+          python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short || exit 1
+          python -m pytest -q trader/tests/test_hard_properties.py --tb=short || exit 1
 
   control-gate:
     name: Control Gate
