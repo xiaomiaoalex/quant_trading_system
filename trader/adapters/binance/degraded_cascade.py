@@ -360,7 +360,7 @@ class DegradedCascadeController:
 
         if risk_event_success and killswitch_success:
             self._metrics.risk_events_reported += 1
-            self._reported_dedup_keys.add(event.dedup_key)
+            self._reported_dedup_keys[event.dedup_key] = time.time()
             self._last_report_ts["risk"] = time.time()
             event.is_reported = True
         else:

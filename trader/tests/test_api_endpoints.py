@@ -243,6 +243,27 @@ class TestRiskEndpoints:
         data = second.json()
         assert data["ok"] is True
 
+    def test_ingest_risk_event_invalid_payload(self):
+        """Test ingesting risk event with invalid severity"""
+        payload = {
+            "dedup_key": "test-key",
+            "severity": "INVALID_SEVERITY",
+            "reason": "test",
+            "recommended_level": 1,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+        }
+        response = self.client.post("/v1/risk/events", json=payload)
+        assert response.status_code == 422
+
+    def test_ingest_risk_event_missing_required_fields(self):
+        """Test ingesting risk event with missing required fields"""
+        payload = {
+            "dedup_key": "test-key",
+        }
+        response = self.client.post("/v1/risk/events", json=payload)
+        assert response.status_code == 422
+
 
 class TestOrderEndpoints:
     """Test order API endpoints"""

@@ -13,8 +13,9 @@ from trader.adapters.binance.degraded_cascade import (
     CascadeMetrics,
     CascadeState,
 )
-from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport
+from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport, StreamState
 from trader.adapters.binance.environmental_risk import (
+    EnvironmentalRiskEvent,
     RiskSeverity,
     RiskScope,
     RecommendedLevel,
@@ -311,6 +312,74 @@ class TestIntegration:
         await controller._trigger_self_protection()
 
         assert controller.can_cancel_order() is True
+
+    @pytest.mark.asyncio
+    async def test_control_plane_failure_triggers_local_killswitch(self):
+        """测试控制面不可达时触发本地锁死"""
+        controller = DegradedCascadeController(
+            control_plane_base_url="http://localhost:8080",
+            config=CascadeConfig(
+                control_plane_base_url="http://localhost:8080",
+                max_retries_per_event=1,
+                self_protection_trigger_ms=100
+            )
+        )
+
+        try:
+            original_post = controller._post_risk_event
+            async def mock_post(event):
+                return False
+            controller._post_risk_event = mock_post
+
+            health = AdapterHealthReport(
+                public_stream_state=StreamState.CONNECTED,
+                private_stream_state=StreamState.DEGRADED,
+                public_stream_healthy=True,
+                private_stream_healthy=False,
+                rest_alignment_healthy=True,
+                rate_budget_state={},
+                backoff_state={},
+                overall_health=AdapterHealth.DEGRADED,
+                last_update_ts=time.time(),
+                metrics={}
+            )
+
+            await controller._report_to_control_plane(health, "test_reason")
+
+            assert controller.metrics.risk_events_failed >= 1
+        finally:
+            await controller.close()
+
+    @pytest.mark.asyncio
+    async def test_recovery_no_report_storm(self):
+        """测试恢复后不产生上报风暴（dedup 生效）"""
+        controller = DegradedCascadeController(
+            control_plane_base_url="http://localhost:8080",
+            config=CascadeConfig(
+                control_plane_base_url="http://localhost:8080",
+                min_report_interval_ms=1000
+            )
+        )
+
+        dedup_key = "dedup_test_key"
+
+        should_report_1 = controller._should_report(EnvironmentalRiskEvent(
+            dedup_key=dedup_key,
+            severity=RiskSeverity.HIGH,
+            reason="test",
+            scope=RiskScope.GLOBAL
+        ))
+        assert should_report_1 is True
+
+        controller._reported_dedup_keys[dedup_key] = time.time()
+
+        should_report_2 = controller._should_report(EnvironmentalRiskEvent(
+            dedup_key=dedup_key,
+            severity=RiskSeverity.HIGH,
+            reason="test",
+            scope=RiskScope.GLOBAL
+        ))
+        assert should_report_2 is False
 
 
 import time

@@ -6,7 +6,7 @@ Based on OpenAPI 3.0.3 specification v0.2.0
 This module defines all request/response models for the API endpoints.
 """
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from pydantic import BaseModel, Field
 
 
@@ -79,7 +79,7 @@ class VersionedConfigUpsertRequest(BaseModel):
 class RiskEventIngestRequest(BaseModel):
     """风险事件上报请求"""
     dedup_key: str
-    severity: str
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
     reason: str
     metrics: Dict[str, Any] = Field(default_factory=dict)
     recommended_level: int = Field(..., ge=0, le=3)
