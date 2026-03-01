@@ -264,6 +264,68 @@ class TestRiskEndpoints:
         response = self.client.post("/v1/risk/events", json=payload)
         assert response.status_code == 422
 
+    def test_risk_event_upgrade_idempotency(self):
+        """Test that same dedup_key does not trigger duplicate upgrade"""
+        payload = {
+            "dedup_key": "idempotency-test-key",
+            "severity": "HIGH",
+            "reason": "Test upgrade idempotency",
+            "metrics": {},
+            "recommended_level": 2,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+            "adapter_name": "test_adapter",
+        }
+        
+        first = self.client.post("/v1/risk/events", json=payload)
+        assert first.status_code == 201
+        
+        killswitch_response = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert killswitch_response.status_code == 200
+        assert killswitch_response.json()["level"] == 2
+        
+        second = self.client.post("/v1/risk/events", json=payload)
+        assert second.status_code == 409
+        
+        killswitch_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert killswitch_after.json()["level"] == 2
+
+    def test_risk_event_no_downgrade(self):
+        """Test that lower recommended_level does not cause downgrade"""
+        high_payload = {
+            "dedup_key": "high-level-key",
+            "severity": "CRITICAL",
+            "reason": "Test no downgrade",
+            "metrics": {},
+            "recommended_level": 3,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+            "adapter_name": "test_adapter",
+        }
+        
+        response = self.client.post("/v1/risk/events", json=high_payload)
+        assert response.status_code == 201
+        
+        killswitch_after_high = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert killswitch_after_high.json()["level"] == 3
+        
+        low_payload = {
+            "dedup_key": "low-level-key",
+            "severity": "LOW",
+            "reason": "Should not downgrade",
+            "metrics": {},
+            "recommended_level": 1,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000001000,
+            "adapter_name": "test_adapter",
+        }
+        
+        response = self.client.post("/v1/risk/events", json=low_payload)
+        assert response.status_code == 201
+        
+        killswitch_after_low = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert killswitch_after_low.json()["level"] == 3
+
 
 class TestOrderEndpoints:
     """Test order API endpoints"""
