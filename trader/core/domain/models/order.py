@@ -15,7 +15,7 @@ Order - 订单领域模型
 - 状态转换必须通过事件记录，确保可审计和回放
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any, List
@@ -103,7 +103,7 @@ class Order:
 
         # 生成客户端订单ID（如果未提供）
         if not self.client_order_id:
-            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
             object.__setattr__(self, 'client_order_id',
                             f"{self.strategy_name}_{timestamp}_{uuid.uuid4().hex[:8]}")
 
@@ -163,8 +163,8 @@ class Order:
         if self.status != OrderStatus.PENDING:
             raise ValueError(f"订单状态错误：{self.status}")
         self.status = OrderStatus.SUBMITTED
-        self.submitted_at = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
+        self.submitted_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
 
     def fill(self, fill_quantity: Decimal, fill_price: Decimal) -> None:
         """
@@ -187,11 +187,11 @@ class Order:
         # 更新状态
         if self.filled_quantity >= self.quantity:
             self.status = OrderStatus.FILLED
-            self.filled_at = datetime.utcnow()
+            self.filled_at = datetime.now(timezone.utc)
         else:
             self.status = OrderStatus.PARTIALLY_FILLED
 
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def reject(self, reason: str) -> None:
         """拒绝订单"""
@@ -199,14 +199,14 @@ class Order:
             raise ValueError(f"订单已终态，无法拒绝: {self.status}")
         self.status = OrderStatus.REJECTED
         self.error_message = reason
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def cancel(self) -> None:
         """撤销订单"""
         if self.is_terminal():
             raise ValueError(f"订单已终态，无法撤销: {self.status}")
         self.status = OrderStatus.CANCELLED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def __repr__(self) -> str:
         return (f"Order({self.client_order_id}, {self.symbol}, "

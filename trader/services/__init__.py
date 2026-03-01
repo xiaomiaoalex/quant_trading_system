@@ -4,7 +4,7 @@ Services - Business logic layer for the control plane
 Provides service classes that implement business logic for each API domain.
 """
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from trader.storage.in_memory import get_storage, InMemoryStorage
@@ -223,7 +223,7 @@ class OrderService:
         order = self._storage.get_order(cl_ord_id)
         if order:
             order["status"] = "CANCELLED"
-            order["updated_ts_ms"] = int(datetime.utcnow().timestamp() * 1000)
+            order["updated_ts_ms"] = int(datetime.now(timezone.utc).timestamp() * 1000)
             return ActionResult(ok=True, message=f"Order {cl_ord_id} cancellation requested")
         return ActionResult(ok=False, message=f"Order {cl_ord_id} not found")
 

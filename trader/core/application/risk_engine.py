@@ -15,7 +15,7 @@ RiskEngine - 风险引擎
 """
 import logging
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from dataclasses import dataclass, field
 from enum import Enum
@@ -279,7 +279,7 @@ class RiskEngine:
 
     def _check_order_rate(self) -> bool:
         """检查订单频率"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(minutes=1)
 
         # 清理过期记录
@@ -289,7 +289,7 @@ class RiskEngine:
 
     def _check_trading_hours(self) -> bool:
         """检查交易时段"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # A股时段：9:30-11:30, 13:00-15:00（简化处理）
         hour = now.hour
 
@@ -301,7 +301,7 @@ class RiskEngine:
 
     async def _cleanup_daily_data(self):
         """清理跨日数据"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 每天重置
         if self._last_reset is None or now.date() > self._last_reset.date():
@@ -317,11 +317,11 @@ class RiskEngine:
 
     def record_order(self):
         """记录订单（用于频率统计）"""
-        self._today_orders.append(datetime.utcnow())
+        self._today_orders.append(datetime.now(timezone.utc))
 
     def record_cancel(self):
         """记录撤单（用于撤单率统计）"""
-        self._today_cancels.append(datetime.utcnow())
+        self._today_cancels.append(datetime.now(timezone.utc))
 
     def get_cancel_rate(self) -> float:
         """计算撤单率"""

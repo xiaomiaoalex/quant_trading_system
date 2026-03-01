@@ -17,7 +17,7 @@ FakeBroker - 模拟券商适配器
 import asyncio
 import random
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from dataclasses import dataclass, field
 
@@ -111,7 +111,7 @@ class FakeBroker(BrokerPort):
             raise ConnectionError("Broker not connected")
 
         # 生成订单ID
-        broker_order_id = f"fake_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+        broker_order_id = f"fake_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
 
         # 检查重复订单
         if client_order_id and client_order_id in self._orders:
@@ -152,7 +152,7 @@ class FakeBroker(BrokerPort):
             "filled_quantity": 0.0,
             "average_price": 0.0,
             "status": "SUBMITTED",
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
 
         self._orders[order_data["client_order_id"]] = order_data

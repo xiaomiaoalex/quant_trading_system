@@ -152,6 +152,7 @@ class FakeWebSocket:
         self._ping_waiter: Optional[asyncio.Future] = None
         
         self._hang_future: Optional[asyncio.Future] = None
+        self._hang_released = False
         
         self._ping_pong_script = PingPongScript()
         
@@ -234,6 +235,7 @@ class FakeWebSocket:
         用于手动解除 recv() 的 HANG 阻塞。
         禁止测试直接访问 _hang_future。
         """
+        self._hang_released = True
         if self._hang_future and not self._hang_future.done():
             self._hang_future.set_result(None)
     
@@ -261,13 +263,20 @@ class FakeWebSocket:
         mode = self._config.mode
         
         if mode == WSMode.HANG or self._config.hang_on_recv:
+            if self._hang_released:
+                if self._config.hang_raises_on_release:
+                    raise ConnectionClosedError(1006, "Connection hung")
+                return None
+            
             loop = asyncio.get_running_loop()
             if self._hang_future is None or self._hang_future.done():
                 self._hang_future = loop.create_future()
             try:
-                await self._hang_future
+                await asyncio.shield(self._hang_future)
             except asyncio.CancelledError:
-                raise ConnectionClosedError(1006, "Connection hang cancelled")
+                if self._hang_future.cancelled():
+                    self._hang_future = loop.create_future()
+                raise
             
             if self._config.hang_raises_on_release:
                 raise ConnectionClosedError(1006, "Connection hung")

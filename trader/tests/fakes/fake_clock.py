@@ -175,6 +175,7 @@ class ClockContext:
         self._original_time = None
         self._original_time_ns = None
         self._original_sleep = None
+        self._real_asyncio_sleep = None
         
     def __enter__(self):
         import asyncio
@@ -182,6 +183,8 @@ class ClockContext:
         self._original_time = time.time
         self._original_time_ns = time.time_ns
         self._original_sleep = asyncio.sleep
+        
+        self._real_asyncio_sleep = asyncio.sleep
         
         time.time = lambda: self._clock.time
         time.time_ns = lambda: self._clock.time_ns
@@ -192,6 +195,10 @@ class ClockContext:
         asyncio.sleep = patched_sleep
         
         return self._clock
+    
+    def real_sleep(self, seconds: float):
+        """提供真正的 asyncio.sleep（不被 patch）"""
+        return self._real_asyncio_sleep(seconds)
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         import time

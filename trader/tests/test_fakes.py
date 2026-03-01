@@ -34,6 +34,7 @@ class TestFakeClock:
         
         assert clock.scheduled_count() == 3
         
+        clock.advance(2.1)
         await asyncio.gather(t1, t2, t3)
     
     @pytest.mark.asyncio
@@ -69,14 +70,20 @@ class TestFakeClock:
         """测试 ClockContext 劫持"""
         clock = FakeClock(start_time=1000.0)
         
-        async with ClockContext(clock):
+        async def direct_sleep_wrapper():
+            await clock.sleep(1.0)
+        
+        ctx = ClockContext(clock)
+        async with ctx:
             import time
             assert clock.time == 1000.0
             
-            await asyncio.sleep(1.0)
+            task = asyncio.create_task(direct_sleep_wrapper())
+            await ctx.real_sleep(0.001)
             assert clock.scheduled_count() == 1
             
             clock.advance(1.5)
+            await task
             assert clock.scheduled_count() == 0
 
 

@@ -9,7 +9,7 @@ Position - 持仓领域模型
 - 两者的差异就是需要对齐的地方
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, Dict, Any
 import uuid
@@ -85,7 +85,7 @@ class Position:
             self.unrealized_pnl = (current_price - self.avg_price) * self.quantity
         else:
             self.unrealized_pnl = Decimal("0")
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def open(self, quantity: Decimal, price: Decimal) -> None:
         """
@@ -102,13 +102,13 @@ class Position:
             # 新开仓
             self.quantity = quantity
             self.avg_price = price
-            self.opened_at = datetime.utcnow()
+            self.opened_at = datetime.now(timezone.utc)
         else:
             # 加仓
             self.add(quantity, price)
 
         self.update_price(price)
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def add(self, add_quantity: Decimal, add_price: Decimal) -> None:
         """加仓"""
@@ -119,7 +119,7 @@ class Position:
         total_cost = self.cost_basis + (add_quantity * add_price)
         self.quantity += add_quantity
         self.avg_price = total_cost / self.quantity if self.quantity > 0 else Decimal("0")
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
 
     def reduce(self, reduce_quantity: Decimal, reduce_price: Decimal) -> Decimal:
         """
@@ -154,7 +154,7 @@ class Position:
             self.avg_price = Decimal("0")
             self.unrealized_pnl = Decimal("0")
 
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         return realized
 
     def close(self, price: Decimal) -> Decimal:
