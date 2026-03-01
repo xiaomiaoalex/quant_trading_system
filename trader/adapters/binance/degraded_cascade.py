@@ -426,17 +426,23 @@ class DegradedCascadeController:
     async def _post_killswitch(self, event: EnvironmentalRiskEvent) -> bool:
         """
         POST /v1/killswitch
+        
+        使用 event.recommended_level 作为 KillSwitch 级别。
+        与控制面的 Fail-Closed 行为保持一致。
         """
         import aiohttp
         url = f"{self._config.control_plane_base_url}/v1/killswitch"
+        
+        recommended_lvl = event.recommended_level.value if isinstance(event.recommended_level, RecommendedLevel) else int(event.recommended_level)
+        
         payload = {
             "scope": "GLOBAL",
-            "level": 1,
+            "level": recommended_lvl,
             "reason": event.reason,
             "updated_by": f"adapter:{self._adapter_name}"
         }
 
-        logger.info(f"[Cascade] Posting killswitch L1")
+        logger.info(f"[Cascade] Posting killswitch L{recommended_lvl}")
 
         try:
             client = await self._ensure_http_client()

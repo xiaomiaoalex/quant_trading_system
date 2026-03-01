@@ -31,3 +31,11 @@ class RiskService:
         event_data = request.model_dump()
         _, created = self._storage.ingest_risk_event(event_data)
         return created
+
+    def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
+        """Get upgrade record by key"""
+        return self._storage.get_upgrade_record(upgrade_key)
+
+    def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
+        """Record an upgrade action for idempotency"""
+        self._storage.record_upgrade(upgrade_key, upgrade_data)
