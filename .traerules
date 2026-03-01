@@ -100,7 +100,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 
 4) **Observability**
    - 每条外部消息必须携带 meta：local_receive_ts_ms、exchange_event_ts_ms、seq/update_id、source、out_of_order、gap_detected。
-   - 关键状态迁移必须打结构化日志，并有可追踪 trace_id。
+   - 关键状态迁移必须打结构化日志，并有可追踪 trace_id\stream_key\schema_version 等冻结字段
 
 5) **Output Discipline**
    - 当收到具体 Coding Package 任务：不要复述需求，不要写大段空话。
@@ -116,9 +116,15 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - Runner 需要本地读模型缓存，API 层需要 WebSocket 推送（orders/pnl 至少两路）。
 
 ## PullRequest Rules
-- 每完成一个任务，就创建一个 PullRequest。
+- 每完成一个任务，需要创建一个 PullRequest描述
 - 每个 PullRequest 必须包含：功能描述、变更点、测试用例、文档更新（如必要）。
 - 所有变更必须通过 CI 检查（代码质量、单测覆盖率、文档格式）。
-- 合并前必须由 Reviewer 审批通过。
+- 规范对齐 (必须执行)：修改 docs/quant_trading_system 开发项目架构及技术规范.md：
+
+- 将文档顶部的 版本号 递增一个修订位（例如从 v2.0.0 改为 v2.0.1）。
+
+- 在 10.4 Spec Changelog 表格首行插入新记录：日期为今日，版本为新版本号，摘要需精准描述本次改动，变更人为开发者。
+
+- 提交信息：使用规范格式，如 feat(core): [描述] & bump spec to v2.x.x。
 
 # End of rules
