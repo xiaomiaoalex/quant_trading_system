@@ -97,12 +97,25 @@ class InMemoryEventStore:
         self._index.clear()
 
 
-class InMemoryStorage(StoragePort):
+class CoreInMemoryStorage(StoragePort):
     """
-    内存存储实现
-
-    用于开发和测试。
-    实现完整的StoragePort接口。
+    Core In-Memory Storage - 核心内存存储 (Event Sourcing Domain)
+    ==============================================================
+    
+    职责边界：
+    - 用于事件溯源（Event Sourcing）架构
+    - 存储领域事件（Domain Events）、订单（Orders）、持仓（Positions）
+    - 实现 StoragePort 接口
+    
+    禁止跨用规则：
+    - 禁止用于控制面（Control Plane）数据存储
+    - 禁止存储策略（Strategy）、部署（Deployment）、风控规则等控制面实体
+    - 控制面数据应使用 ControlPlaneInMemoryStorage
+    
+    用途：
+    - 核心交易引擎的内存存储
+    - 开发和测试环境
+    - 需要事件回放能力的场景
     """
 
     def __init__(self):
@@ -168,3 +181,6 @@ class InMemoryStorage(StoragePort):
 
     async def get_all_positions(self) -> List:
         return list(self._positions.values())
+
+
+InMemoryStorage = CoreInMemoryStorage

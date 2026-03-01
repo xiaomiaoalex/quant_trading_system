@@ -9,8 +9,27 @@ from typing import Dict, List, Optional, Any
 from decimal import Decimal
 
 
-class InMemoryStorage:
-    """In-memory storage for all control plane data"""
+class ControlPlaneInMemoryStorage:
+    """
+    Control Plane In-Memory Storage - 控制面内存存储
+    ================================================
+    
+    职责边界：
+    - 用于控制面（Control Plane）数据存储
+    - 存储策略（Strategy）、部署（Deployment）、风控规则（Risk Limits）
+    - 存储订单视图（OrderView）、持仓视图（PositionView）、PnL
+    - 存储事件（Event）、快照（Snapshot）、熔断状态（KillSwitch）
+    
+    禁止跨用规则：
+    - 禁止用于事件溯源（Event Sourcing）领域存储
+    - 禁止存储原始领域事件（Domain Events）
+    - 核心交易引擎数据应使用 CoreInMemoryStorage
+    
+    用途：
+    - 控制面 API 的内存存储
+    - 策略管理、部署管理
+    - 风控规则、订单查询、持仓查询
+    """
 
     def __init__(self):
         # Strategies
@@ -478,19 +497,22 @@ class InMemoryStorage:
 
 
 # Global storage instance
-_storage: Optional[InMemoryStorage] = None
+_storage: Optional[ControlPlaneInMemoryStorage] = None
 
 
-def get_storage() -> InMemoryStorage:
+def get_storage() -> ControlPlaneInMemoryStorage:
     """Get the global storage instance"""
     global _storage
     if _storage is None:
-        _storage = InMemoryStorage()
+        _storage = ControlPlaneInMemoryStorage()
     return _storage
 
 
-def reset_storage() -> InMemoryStorage:
+def reset_storage() -> ControlPlaneInMemoryStorage:
     """Reset the storage (for testing)"""
     global _storage
-    _storage = InMemoryStorage()
+    _storage = ControlPlaneInMemoryStorage()
     return _storage
+
+
+InMemoryStorage = ControlPlaneInMemoryStorage
