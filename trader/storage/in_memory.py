@@ -46,6 +46,7 @@ class ControlPlaneInMemoryStorage:
         # Risk limits
         self.risk_limits: List[Dict[str, Any]] = []
         self.risk_events_by_key: Dict[str, Dict[str, Any]] = {}
+        self.upgrade_records: Dict[str, Dict[str, Any]] = {}
 
         # Orders & Executions
         self.orders: Dict[str, Dict[str, Any]] = {}
@@ -269,6 +270,18 @@ class ControlPlaneInMemoryStorage:
         }
         self.risk_events_by_key[dedup_key] = event
         return event, True
+
+    def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
+        """Get upgrade record by key"""
+        return self.upgrade_records.get(upgrade_key)
+
+    def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
+        """Record an upgrade action for idempotency"""
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        self.upgrade_records[upgrade_key] = {
+            **upgrade_data,
+            "recorded_at": now,
+        }
 
     # ==================== Order Methods ====================
 
