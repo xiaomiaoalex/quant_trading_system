@@ -28,6 +28,7 @@ from trader.api.models.schemas import (
     VersionedConfigUpsertRequest,
     RiskEventIngestRequest,
     ActionResult,
+    KillSwitchSetRequest,
 )
 from trader.services import RiskService, KillSwitchService
 
@@ -84,12 +85,12 @@ async def ingest_risk_event(request: RiskEventIngestRequest, response: Response)
             
             if existing_upgrade is None:
                 killswitch_service.set_state(
-                    type('KillSwitchSetRequest', (), {
-                        'scope': request.scope,
-                        'level': request.recommended_level,
-                        'reason': f"Risk event upgrade: {request.reason}",
-                        'updated_by': f"risk_event:{request.dedup_key}"
-                    })()
+                    KillSwitchSetRequest(
+                        scope=request.scope,
+                        level=request.recommended_level,
+                        reason=f"Risk event upgrade: {request.reason}",
+                        updated_by=f"risk_event:{request.dedup_key}"
+                    )
                 )
                 service.record_upgrade(upgrade_key, {
                     "scope": request.scope,
