@@ -11,7 +11,7 @@ from trader.storage.in_memory import reset_storage
 
 
 class TestHealthEndpoint:
-    """Test health check endpoint"""
+    """Test health check endpoints"""
 
     def setup_method(self):
         """Setup for each test"""
@@ -25,6 +25,109 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] == "ok"
         assert "time" in data
+        time_str = data["time"]
+        assert "+00:00" not in time_str, f"Time should use 'Z' instead of '+00:00': {time_str}"
+        assert time_str.endswith("Z"), f"Time should end with Z: {time_str}"
+
+    def test_liveness_check(self):
+        """Test liveness probe returns 200"""
+        response = self.client.get("/health/live")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert "time" in data
+
+    def test_readiness_check(self):
+        """Test readiness probe returns 200"""
+        response = self.client.get("/health/ready")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] in ["ok", "degraded"]
+        assert "time" in data
+        assert "checks" in data
+
+    def test_dependency_check(self):
+        """Test dependency probe returns detailed status"""
+        response = self.client.get("/health/dependency")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] in ["ok", "degraded"]
+        assert "time" in data
+        assert "checks" in data
+        assert "dependencies" in data
+        assert "postgresql" in data["checks"]
+        assert "storage" in data["checks"]
+
+    def test_dependency_check_structure(self):
+        """Test dependency check returns proper JSON structure"""
+        response = self.client.get("/health/dependency")
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert "postgresql" in data["dependencies"]
+        assert "storage" in data["dependencies"]
+        
+        postgresql = data["dependencies"]["postgresql"]
+        assert "status" in postgresql
+        assert "message" in postgresql
+        
+        storage = data["dependencies"]["storage"]
+        assert "status" in storage
+        assert "message" in storage
+
+    def test_dependency_check_postgresql_not_configured(self):
+        """Test dependency check when PostgreSQL is not configured"""
+        response = self.client.get("/health/dependency")
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert "postgresql" in data["checks"]
+        pg_status = data["checks"]["postgresql"]["status"]
+        assert pg_status in ["not_configured", "degraded", "unhealthy"]
+        
+        overall_status = data["status"]
+        if pg_status in ["degraded", "unhealthy"]:
+            assert overall_status == "degraded"
+
+    def test_readiness_check_storage_failure(self):
+        """Test readiness check when storage throws exception"""
+        from trader.api.routes import health as health_module
+        
+        original_check = health_module._check_storage_health
+        
+        def failing_check():
+            from trader.api.models.schemas import ComponentHealth
+            return ComponentHealth(
+                status="unhealthy",
+                message="Simulated storage failure"
+            )
+        
+        health_module._check_storage_health = failing_check
+        
+        try:
+            response = self.client.get("/health/ready")
+            assert response.status_code == 200
+            data = response.json()
+            
+            assert data["status"] == "degraded"
+            assert "storage" in data["checks"]
+            assert data["checks"]["storage"]["status"] == "unhealthy"
+        finally:
+            health_module._check_storage_health = original_check
+
+    def test_utc_time_format(self):
+        """Test UTC time format is RFC3339 compliant"""
+        response = self.client.get("/health/live")
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert "time" in data
+        time_str = data["time"]
+        
+        if "+00:00" in time_str:
+            assert False, f"Time should use 'Z' instead of '+00:00': {time_str}"
+        
+        assert time_str.endswith("Z"), f"Time should end with Z: {time_str}"
 
 
 class TestStrategyEndpoints:

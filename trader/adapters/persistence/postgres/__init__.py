@@ -24,10 +24,14 @@ Usage:
     await storage.connect()
 """
 import os
-from typing import List, Optional, Dict, Any
+import asyncio
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import json
+
+if TYPE_CHECKING:
+    import asyncpg
 
 try:
     import asyncpg
@@ -346,3 +350,106 @@ def is_postgres_available() -> bool:
         and os.getenv("POSTGRES_DB") 
         and os.getenv("POSTGRES_USER")
     )
+
+
+_pool_cache: Optional["asyncpg.Pool"] = None
+_pool_config_hash: Optional[str] = None
+
+
+def _get_pool_config_hash() -> str:
+    """Generate a hash of the current pool configuration"""
+    connection_string = os.getenv("POSTGRES_CONNECTION_STRING", "")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    database = os.getenv("POSTGRES_DB", "trading")
+    user = os.getenv("POSTGRES_USER", "trader")
+    return f"{connection_string}:{host}:{port}:{database}:{user}"
+
+
+async def _get_pool(timeout: float = 2.0) -> Optional["asyncpg.Pool"]:
+    """Get or create a cached connection pool"""
+    global _pool_cache, _pool_config_hash
+    
+    current_hash = _get_pool_config_hash()
+    
+    if _pool_cache is not None and _pool_config_hash == current_hash:
+        try:
+            await _pool_cache.fetchval("SELECT 1")
+            return _pool_cache
+        except Exception:
+            _pool_cache = None
+    
+    connection_string = os.getenv("POSTGRES_CONNECTION_STRING")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    database = os.getenv("POSTGRES_DB", "trading")
+    user = os.getenv("POSTGRES_USER", "trader")
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    
+    conn_args = {"min_size": 1, "max_size": 2}
+    if connection_string:
+        conn_args["dsn"] = connection_string
+    else:
+        conn_args["host"] = host
+        conn_args["port"] = int(port)
+        conn_args["database"] = database
+        conn_args["user"] = user
+        if password:
+            conn_args["password"] = password
+    
+    try:
+        _pool_cache = await asyncpg.create_pool(**conn_args)
+        _pool_config_hash = current_hash
+        return _pool_cache
+    except Exception:
+        _pool_cache = None
+        _pool_config_hash = None
+        return None
+
+
+async def close_pool() -> None:
+    """Close the cached connection pool"""
+    global _pool_cache, _pool_config_hash
+    if _pool_cache is not None:
+        await _pool_cache.close()
+        _pool_cache = None
+        _pool_config_hash = None
+
+
+async def check_postgres_connection(timeout: float = 2.0) -> tuple[bool, str]:
+    """
+    Check if PostgreSQL is actually reachable.
+    
+    Performs an actual connection test with a short timeout.
+    Uses a cached connection pool for efficiency.
+    
+    Args:
+        timeout: Connection timeout in seconds (default 2.0)
+        
+    Returns:
+        Tuple of (is_reachable, message)
+    """
+    if not ASYNCPG_AVAILABLE:
+        return False, "asyncpg not installed"
+    
+    if not is_postgres_available():
+        return False, "PostgreSQL not configured"
+    
+    try:
+        pool = await _get_pool(timeout)
+        if pool is None:
+            return False, "Failed to create connection pool"
+        
+        async with pool.acquire(timeout=timeout) as conn:
+            result = await conn.fetchval("SELECT 1")
+            if result == 1:
+                return True, "Connection successful"
+            return False, "Unexpected response"
+    except asyncio.TimeoutError:
+        return False, f"Connection timeout ({timeout}s)"
+    except ConnectionRefusedError:
+        return False, "Connection refused"
+    except OSError as e:
+        return False, f"Network error: {str(e)}"
+    except Exception as e:
+        return False, f"Connection failed: {str(e)}"

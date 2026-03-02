@@ -281,7 +281,33 @@ class BrokerStatus(BaseModel):
 
 # ==================== Health Models ====================
 
+def _utc_time() -> str:
+    """Get current UTC time in ISO format (RFC3339 compliant)"""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str = "ok"
-    time: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat() + "Z")
+    time: str = Field(default_factory=_utc_time)
+
+
+class ComponentHealth(BaseModel):
+    """组件健康状态"""
+    status: str = "healthy"
+    message: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+
+class DependencyStatus(BaseModel):
+    """依赖项状态"""
+    postgresql: ComponentHealth
+    storage: ComponentHealth
+
+
+class HealthCheckResponse(BaseModel):
+    """三级健康检查响应"""
+    status: str = "ok"
+    time: str = Field(default_factory=_utc_time)
+    checks: Dict[str, ComponentHealth] = Field(default_factory=dict)
+    dependencies: Optional[DependencyStatus] = None
