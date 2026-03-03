@@ -448,6 +448,9 @@ class PostgreSQLStorage:
         """
         Save an upgrade record for idempotency.
         
+        Note: This method is kept for backward compatibility but uses DO NOTHING
+        to maintain the "first write only" idempotency principle.
+        
         Args:
             upgrade_key: Unique upgrade key
             upgrade_data: Dictionary containing:
@@ -468,12 +471,7 @@ class PostgreSQLStorage:
                 """
                 INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (upgrade_key) DO UPDATE SET
-                    scope = EXCLUDED.scope,
-                    level = EXCLUDED.level,
-                    reason = EXCLUDED.reason,
-                    dedup_key = EXCLUDED.dedup_key,
-                    recorded_at = EXCLUDED.recorded_at
+                ON CONFLICT (upgrade_key) DO NOTHING
                 """,
                 upgrade_key, scope, level, reason, dedup_key, recorded_at,
             )
@@ -508,6 +506,38 @@ class PostgreSQLStorage:
                 recorded_at=row["recorded_at"],
             )
         return None
+
+    async def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
+        """
+        Try to record an upgrade action. Returns True if first write, False if already exists.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing:
+                - scope: Risk scope
+                - level: Target level
+                - reason: Upgrade reason
+                - dedup_key: Related dedup key
+                
+        Returns:
+            True if this is the first time recording this upgrade_key, False if already exists
+        """
+        scope = upgrade_data.get("scope", "GLOBAL")
+        level = upgrade_data.get("level", 0)
+        reason = upgrade_data.get("reason", "")
+        dedup_key = upgrade_data.get("dedup_key", "")
+        recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
+        
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (upgrade_key) DO NOTHING
+                """,
+                upgrade_key, scope, level, reason, dedup_key, recorded_at,
+            )
+            return result == 1
 
     async def clear(self) -> None:
         """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""

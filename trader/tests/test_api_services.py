@@ -5,6 +5,7 @@ Tests for business logic services.
 """
 import pytest
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
 from trader.storage.in_memory import InMemoryStorage, reset_storage
 from trader.services import (
@@ -265,6 +266,77 @@ class TestRiskService:
         limits = self.service.get_limits("GLOBAL")
         assert limits is not None
         assert limits.version == 1
+
+    @pytest.mark.asyncio
+    async def test_try_record_upgrade_first_write(self):
+        """Test try_record_upgrade returns True for first write"""
+        upgrade_key = "upgrade:test:1:dedup_001"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 1,
+            "reason": "Test upgrade",
+            "dedup_key": "dedup_001",
+        }
+        
+        result = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result is True
+        
+        record = await self.service.get_upgrade_record(upgrade_key)
+        assert record is not None
+        assert record["scope"] == "TEST"
+        assert record["level"] == 1
+
+    @pytest.mark.asyncio
+    async def test_try_record_upgrade_duplicate(self):
+        """Test try_record_upgrade returns False for duplicate"""
+        upgrade_key = "upgrade:test:1:dedup_002"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 1,
+            "reason": "Test upgrade",
+            "dedup_key": "dedup_002",
+        }
+        
+        result1 = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result1 is True
+        
+        result2 = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result2 is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_upgrade_idempotency(self):
+        """Test concurrent upgrades only trigger once"""
+        from trader.services.killswitch import KillSwitchService
+        
+        upgrade_key = "upgrade:test:2:dedup_003"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 2,
+            "reason": "Concurrent test",
+            "dedup_key": "dedup_003",
+        }
+        
+        killswitch_service = KillSwitchService()
+        killswitch_service.set_state = AsyncMock()
+        
+        async def try_upgrade_and_set():
+            is_first = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+            if is_first:
+                await killswitch_service.set_state(KillSwitchSetRequest(
+                    scope="TEST",
+                    level=2,
+                    reason="test",
+                    updated_by="test"
+                ))
+        
+        import asyncio
+        await asyncio.gather(
+            try_upgrade_and_set(),
+            try_upgrade_and_set(),
+            try_upgrade_and_set(),
+        )
+        
+        assert killswitch_service.set_state.call_count == 1
 
 
 class TestOrderService:

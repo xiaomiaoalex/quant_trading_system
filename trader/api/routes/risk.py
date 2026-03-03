@@ -81,9 +81,14 @@ async def ingest_risk_event(request: RiskEventIngestRequest, response: Response)
         
         if request.recommended_level > current_level:
             upgrade_key = f"upgrade:{request.scope}:{request.recommended_level}:{request.dedup_key}"
-            existing_upgrade = await service.get_upgrade_record(upgrade_key)
+            is_first_upgrade = await service.try_record_upgrade(upgrade_key, {
+                "scope": request.scope,
+                "level": request.recommended_level,
+                "reason": request.reason,
+                "dedup_key": request.dedup_key,
+            })
             
-            if existing_upgrade is None:
+            if is_first_upgrade:
                 killswitch_service.set_state(
                     KillSwitchSetRequest(
                         scope=request.scope,
@@ -92,12 +97,6 @@ async def ingest_risk_event(request: RiskEventIngestRequest, response: Response)
                         updated_by=f"risk_event:{request.dedup_key}"
                     )
                 )
-                await service.record_upgrade(upgrade_key, {
-                    "scope": request.scope,
-                    "level": request.recommended_level,
-                    "reason": request.reason,
-                    "dedup_key": request.dedup_key,
-                })
     
     if created:
         response.status_code = 201
