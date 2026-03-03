@@ -14,7 +14,7 @@ Note:
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.adapters.persistence.postgres import (
@@ -198,6 +198,78 @@ class RiskEventRepository:
                 logger.warning(f"PostgreSQL try_record_upgrade failed: {e}, falling back to in-memory")
         
         return self._memory_storage.try_record_upgrade(upgrade_key, upgrade_data)
+
+    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int,
+                                            reason: str, dedup_key: str) -> Tuple[bool, bool]:
+        """
+        Atomically record upgrade and side-effect intent in a single transaction.
+        
+        Returns:
+            Tuple of (is_first_upgrade, is_first_effect)
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.try_record_upgrade_with_effect(
+                    upgrade_key, scope, level, reason, dedup_key
+                )
+            except Exception as e:
+                logger.warning(f"PostgreSQL try_record_upgrade_with_effect failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.try_record_upgrade_with_effect(
+            upgrade_key, scope, level, reason, dedup_key
+        )
+
+    async def mark_effect_applied(self, upgrade_key: str) -> None:
+        """Mark side-effect as successfully applied"""
+        if await self._ensure_postgres():
+            try:
+                await self._postgres_storage.mark_effect_applied(upgrade_key)
+                return
+            except Exception as e:
+                logger.warning(f"PostgreSQL mark_effect_applied failed: {e}, falling back to in-memory")
+        
+        self._memory_storage.mark_effect_applied(upgrade_key)
+
+    async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
+        """Mark side-effect as failed with error message"""
+        if await self._ensure_postgres():
+            try:
+                await self._postgres_storage.mark_effect_failed(upgrade_key, error)
+                return
+            except Exception as e:
+                logger.warning(f"PostgreSQL mark_effect_failed failed: {e}, falling back to in-memory")
+        
+        self._memory_storage.mark_effect_failed(upgrade_key, error)
+
+    async def get_pending_effects(self) -> List[Dict[str, Any]]:
+        """Get all pending or failed effects for recovery"""
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.get_pending_effects()
+            except Exception as e:
+                logger.warning(f"PostgreSQL get_pending_effects failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.get_pending_effects()
+
+    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
+                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+        """
+        Atomically ingest risk event and record upgrade with effect.
+        
+        Returns:
+            Tuple of (event_id, created, is_first_upgrade, is_first_effect)
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.ingest_event_with_upgrade(
+                    event_data, upgrade_key, upgrade_level
+                )
+            except Exception as e:
+                logger.warning(f"PostgreSQL ingest_event_with_upgrade failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.ingest_event_with_upgrade(
+            event_data, upgrade_key, upgrade_level
+        )
 
 
 _repository_instance: Optional[RiskEventRepository] = None

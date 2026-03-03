@@ -151,4 +151,34 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
   - 在 `13) 变更记录（Spec Changelog）` 表格首行插入新记录：日期为今日，版本为新版本号，摘要需精准描述本次改动，变更人为开发者。
   - 提交信息使用规范格式，如 `feat(core): [描述] & bump spec to v3.x.x`。
 
+
+## 双 AI 协作协议 (MCP 非对称模式)
+
+### 1. 架构师角色 (左侧 Codex) - 通过 Shell 执行
+- **身份定位**：你是首席架构师，由于当前环境限制，你无法直接看到 MCP 图标，必须通过执行 Python 脚本来操作。
+- **核心指令**：
+    - 当用户要求“开启任务/Assign Task”时：完成设计后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_assign_task` 逻辑。
+    - 当用户要求“审查/Finalize”时：分析代码后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_finalize` 逻辑。
+- **强制要求**：执行脚本前，确保在 `.venv` 虚拟环境下或指定完整 Python 路径。
+
+### 2. 工程师角色 (右侧 MiniMax) - 通过原生 MCP 工具
+- **身份定位**：你是资深开发，你拥有名为 `Dual_AI_Communicator` 的原生 MCP 工具权限（绿色小扳手图标）。
+- **核心指令**：
+    - **严禁手动执行 `python mcp_bridge.py`**，你应直接调用原生工具列表中对应的 Function。
+    - **启动任务**：优先调用 `read_mission_state` 获取架构师留下的指令。
+    - **提交工作**：开发并自测完成后，直接调用 `engineer_submit_work`。
+- **交互规范**：调用工具后，向用户汇报当前的 `mission_id` 和任务状态。
+
+#### 🛑 工程师操作红线 (MiniMax 专属)
+
+1. 严禁创建“一次性中间脚本”：禁止为了调用 Dual_AI_Communicator 的工具函数而创建任何临时的、非项目业务逻辑所需的 Python 文件（例如用于提交、读取状态或初始化的胶水代码,如 `submit_work.py`, `test_mcp.py` 等）来调用 MCP 工具。
+2. **工具调用规范**：对于状态流转、分支切换、任务读取，**必须且仅允许**直接点击 IDE 提供的 `Dual_AI_Communicator` 原生工具图标进行调用。
+3. **消除手动确认**：如果你创建了临时文件，Trae 会强制要求人类手动批准删除。为了保持工作流丝滑，你应直接利用 `Dual_AI_Communicator` 的原生 Function，禁止产生任何需要人类“批准删除”的垃圾文件。
+4. **失败回退**：如果原生工具调用失败，应直接在对话框向人类报告错误详情，严禁尝试通过编写新脚本来“修复”工具链路。
+5. **业务代码不受限**：此禁令仅针对“工具调用过程”。对于实现量化交易系统功能所需的正式 Python 模块（如 adapters、services、storage 等目录下的代码），必须按需正常编写和修改。
+6.**调用路径强制**：所有的状态同步（Assign/Submit/Finalize）必须直接通过 IDE 提供的原生MCP工具图标触发。
+
+### 3. 协作流程状态机
+- 任务启动: [Codex Shell] -> 状态存入 JSON -> [MiniMax 原生工具] 感知。
+- 任务提交: [MiniMax 原生工具] -> 状态更新 JSON -> [Codex Shell] 读取 Review。
 # End of rules

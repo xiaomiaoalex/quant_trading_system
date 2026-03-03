@@ -555,6 +555,7 @@ POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading
 
 | 日期 | 版本 | 变更摘要 |
 |------|------|----------|
+| 2026-03-03 | v3.0.8 | Sprint 3 (Task10.3-C): 原子语义与故障恢复 - 新增 `risk_upgrade_effects` 表作为恢复锚点（status: PENDING/APPLIED/FAILED）；新增 `try_record_upgrade_with_effect` 事务方法在同一事务内写入 upgrade 和 effect intent；新增 `mark_effect_applied/mark_effect_failed/get_pending_effects` 恢复接口；新增断点测试验证幂等性 |
 | 2026-03-03 | v3.0.7 | Sprint 2 (Task10.3-B): 升级幂等持久化 - 新增 `try_record_upgrade` 原子接口（首次 True/重复 False），PostgreSQL 使用 `INSERT ... ON CONFLICT DO NOTHING`，InMemory 回退提供同等语义；升级流程以 `try_record_upgrade` 返回值为门闩控制副作用执行；新增并发测试验证幂等性 |
 | 2026-03-03 | v3.0.7 | Sprint 1: risk_events 持久化（含 dedup_key 唯一约束），RiskService 桥接到持久层；修复包：幂等返回一致性（重复返回已有 event_id）、PG/内存语义一致性（完整保存事件快照）；命名规范对齐：统一 `upgrade_records` -> `risk_upgrades` |
 | 2026-03-03 | v3.0.5 | Sprint 1: 实现 risk_events PostgreSQL 持久化（含 dedup_key 唯一约束），RiskService 桥接到持久层（保留回退机制），确保 POST /v1/risk/events 语义不变（201 新建 / 409 重复） |

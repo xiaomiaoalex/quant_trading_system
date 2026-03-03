@@ -1,63 +1,37 @@
 {
-    "current_version": "v3.0.7",
-    "sprint": "Sprint 2",
-    "task_id": "Task10.3-B",
-    "status": "APPROVED_FOR_PUSH",
+    "current_version": "v3.0.8",
+    "sprint": "Sprint 3",
+    "task_id": "Task10.3-C",
+    "status": "DEVELOPING",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "【Sprint 2 Review 结论：APPROVED_FOR_PUSH】\n审核通过：\n1) 本地 PR 就绪包完整（功能描述、变更点、测试结果、风险回滚、PR 标题/描述草稿齐备）。\n2) 幂等语义达标：upgrade_key 首写门闩 + PostgreSQL DO NOTHING + InMemory 同语义。\n3) 规范对齐达标：版本已到 v3.0.7，Changelog 已补 Sprint 2 记录，MCP 元数据已同步。\n4) 本地测试复核通过：risk endpoints 8 passed；api_endpoints+api_services 64 passed；postgres_storage 19 skipped（无 asyncpg/PG 环境，符合说明）。\n\n允许进入手工提交流程（按既定流程由用户手工 push/创建 PR）。",
-    "engineer_report": "## Sprint 2 (Task10.3-B) 最终修复提交\n\n### 架构师反馈修复项\n\n1. **规范 Changelog 修正**\n   - 新增 Sprint 2 (Task10.3-B) 准确变更摘要\n   - 版本号 v3.0.7\n\n2. **MCP 版本元数据**\n   - current_version 已更新为 v3.0.7\n\n3. **PR 就绪包完善**\n   - 已补充 PR 标题与描述草稿\n\n### 通过项\n- 升级幂等代码路径满足（save_upgrade_record/try_record_upgrade 均 DO NOTHING）\n- 本地测试通过\n- 分支: feature/task10-3-b\n",
+    "architect_instruction": "",
+    "engineer_report": "## Sprint 3 (Task10.3-C) 修复完成\n\n### 修复内容\n1. 修复 PostgreSQL 运行时错误: level -> upgrade_level\n2. 新增 /v1/risk/recover 端点测试\n\n### 测试结果\n- 72 passed (API regression)\n- 8 passed (risk API)",
     "pr_readiness_package": {
-        "branch": "feature/task10-3-b",
+        "branch": "feature/task10-3-c",
         "target": "main",
         "status": "ready",
-        "pr_title": "feat: Sprint 2 - 升级幂等持久化 (Task10.3-B)",
-        "pr_description": "## 功能\n- 新增 `try_record_upgrade` 原子接口（首次 True/重复 False）\n- PostgreSQL 使用 `INSERT ... ON CONFLICT DO NOTHING`\n- InMemory 回退提供同等语义\n- 升级流程以 `try_record_upgrade` 返回值为门闩控制副作用\n\n## 变更点\n- `trader/adapters/persistence/postgres/__init__.py`\n- `trader/adapters/persistence/risk_repository.py`\n- `trader/storage/in_memory.py`\n- `trader/services/risk.py`\n- `trader/api/routes/risk.py`\n- `trader/tests/test_api_services.py`\n\n## 测试\n- risk API: 8 passed\n- API regression: 64 passed\n- PostgreSQL: 19 skipped (无环境)\n\n## 风险\n- 依赖 asyncpg 包，回退到 InMemoryStorage\n\n## 回滚\n```\ngit checkout main && git pull origin main\n```\n",
         "changes": [
             {
-                "file": "trader/adapters/persistence/postgres/__init__.py",
+                "file": "postgres/__init__.py",
                 "type": "modify",
-                "description": "save_upgrade_record 改为 ON CONFLICT DO NOTHING"
+                "description": "修复 level 变量为 upgrade_level"
             },
             {
-                "file": "trader/adapters/persistence/risk_repository.py",
+                "file": "test_api_endpoints.py",
                 "type": "modify",
-                "description": "新增 try_record_upgrade 方法"
-            },
-            {
-                "file": "trader/storage/in_memory.py",
-                "type": "modify",
-                "description": "新增 try_record_upgrade 方法"
-            },
-            {
-                "file": "trader/services/risk.py",
-                "type": "modify",
-                "description": "RiskService 新增 try_record_upgrade 方法"
-            },
-            {
-                "file": "trader/api/routes/risk.py",
-                "type": "modify",
-                "description": "升级流程以 try_record_upgrade 为门闩"
-            },
-            {
-                "file": "trader/tests/test_api_services.py",
-                "type": "modify",
-                "description": "新增 3 个幂等测试用例"
-            },
-            {
-                "file": "quant_trading_system v3.0.7-个人开发者版 技术规范.md",
-                "type": "modify",
-                "description": "版本号更新为 v3.0.7，Changelog 更新"
+                "description": "新增 /v1/risk/recover 端点测试"
             }
         ],
         "test_results": {
-            "risk_api": "8 passed",
-            "api_regression": "64 passed",
-            "postgres": "19 skipped (expected: no asyncpg/PG environment)"
+            "api_regression": "72 passed",
+            "risk_api": "8 passed"
         },
-        "risks": [],
-        "rollback": "git checkout main && git pull origin main"
+        "risks": [
+            "PostgreSQL 无测试环境"
+        ],
+        "rollback": "git checkout main"
     },
-    "last_update": "2026-03-03 13:09:03.522817"
+    "last_update": "2026-03-03T08:43:25Z"
 }

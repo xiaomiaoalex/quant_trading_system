@@ -429,6 +429,33 @@ class TestRiskEndpoints:
         killswitch_after_low = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after_low.json()["level"] == 3
 
+    def test_recover_pending_effects(self):
+        """Test recovery endpoint scans and recovers pending effects"""
+        high_payload = {
+            "dedup_key": "recover-test-key",
+            "severity": "HIGH",
+            "reason": "Test recovery",
+            "metrics": {},
+            "recommended_level": 2,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000001000,
+            "adapter_name": "test_adapter",
+        }
+        
+        response = self.client.post("/v1/risk/events", json=high_payload)
+        assert response.status_code == 201
+        
+        state_before = self.client.get("/v1/killswitch?scope=GLOBAL")
+        level_before = state_before.json()["level"]
+        
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        
+        state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert state_after.json()["level"] == level_before
+
 
 class TestOrderEndpoints:
     """Test order API endpoints"""

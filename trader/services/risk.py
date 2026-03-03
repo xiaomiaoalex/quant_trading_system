@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List
 
 from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.api.models.schemas import (
@@ -58,3 +58,37 @@ class RiskService:
             True if this is the first time recording this upgrade_key, False if already exists
         """
         return await self._risk_repo.try_record_upgrade(upgrade_key, upgrade_data)
+
+    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int,
+                                             reason: str, dedup_key: str) -> Tuple[bool, bool]:
+        """
+        Atomically record upgrade and side-effect intent.
+        
+        Returns:
+            Tuple of (is_first_upgrade, is_first_effect)
+        """
+        return await self._risk_repo.try_record_upgrade_with_effect(
+            upgrade_key, scope, level, reason, dedup_key
+        )
+
+    async def mark_effect_applied(self, upgrade_key: str) -> None:
+        """Mark side-effect as successfully applied"""
+        await self._risk_repo.mark_effect_applied(upgrade_key)
+
+    async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
+        """Mark side-effect as failed"""
+        await self._risk_repo.mark_effect_failed(upgrade_key, error)
+
+    async def get_pending_effects(self) -> List[Dict[str, Any]]:
+        """Get all pending or failed effects for recovery"""
+        return await self._risk_repo.get_pending_effects()
+
+    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
+                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+        """
+        Atomically ingest risk event and record upgrade with effect.
+        
+        Returns:
+            Tuple of (event_id, created, is_first_upgrade, is_first_effect)
+        """
+        return await self._risk_repo.ingest_event_with_upgrade(event_data, upgrade_key, upgrade_level)
