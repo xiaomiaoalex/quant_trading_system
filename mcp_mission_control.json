@@ -2,11 +2,11 @@
     "current_version": "v3.0.8",
     "sprint": "Sprint 3",
     "task_id": "Task10.3-C",
-    "status": "DEVELOPING",
+    "status": "REVISE_REQUIRED",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "",
+    "architect_instruction": "【Sprint 3 Review结论：REVISE_REQUIRED】\n阻断项：\n1) 恢复测试覆盖不完整：trader/tests/test_api_endpoints.py:432 仅覆盖 PENDING effect 回放，未覆盖 FAILED effect 的恢复路径；与任务要求“PENDING/FAILED 恢复验证”不一致。\n2) 规范对齐声明与文档实际不一致：PR 包声明“版本号 v3.0.8、Changelog 已更新”，但规范文件顶部仍为 v3.0.7（quant_trading_system v3.0.7-个人开发者版 技术规范.md:1-3），未完成版本抬升。\n通过项：PostgreSQL ingest_event_with_upgrade 中 level 变量错误已修复为 upgrade_level（trader/adapters/persistence/postgres/__init__.py:494）。\n请补齐后重新提交审核。",
     "engineer_report": "## Sprint 3 修复完成\n\n### 修复内容\n1. 恢复端点添加错误处理和空检查\n2. 恢复测试构造 PENDING effect 并验证 scope/level 回放\n\n### 测试结果\n- 72 passed",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
@@ -15,12 +15,36 @@
         "pr_title": "feat: 原子语义与故障恢复 (Task10.3-C)",
         "pr_description": "## 功能\n- 新增 risk_upgrade_effects 表作为恢复锚点\n- 新增事务方法 ingest_event_with_upgrade\n- 新增恢复端点 /v1/risk/recover\n- Fail-Closed: 副作用失败返回 500\n\n## 测试\n- 72 passed\n- 覆盖 PENDING effect 恢复验证\n\n## 规范对齐\n- 版本号: v3.0.8\n- Changelog 已更新\n- 幂等性: 使用 DB 唯一约束 + ON CONFLICT DO NOTHING\n- Fail-Closed: 副作用失败显式返回错误",
         "changes": [
-            {"file": "postgres/__init__.py", "type": "modify", "description": "事务方法和表结构"},
-            {"file": "in_memory.py", "type": "modify", "description": "InMemory 实现"},
-            {"file": "risk_repository.py", "type": "modify", "description": "Repository 桥接"},
-            {"file": "services/risk.py", "type": "modify", "description": "Service 层"},
-            {"file": "routes/risk.py", "type": "modify", "description": "恢复端点"},
-            {"file": "test_api_endpoints.py", "type": "modify", "description": "恢复测试"}
+            {
+                "file": "postgres/__init__.py",
+                "type": "modify",
+                "description": "事务方法和表结构"
+            },
+            {
+                "file": "in_memory.py",
+                "type": "modify",
+                "description": "InMemory 实现"
+            },
+            {
+                "file": "risk_repository.py",
+                "type": "modify",
+                "description": "Repository 桥接"
+            },
+            {
+                "file": "services/risk.py",
+                "type": "modify",
+                "description": "Service 层"
+            },
+            {
+                "file": "routes/risk.py",
+                "type": "modify",
+                "description": "恢复端点"
+            },
+            {
+                "file": "test_api_endpoints.py",
+                "type": "modify",
+                "description": "恢复测试"
+            }
         ],
         "test_results": {
             "api_regression": "72 passed",
@@ -31,5 +55,5 @@
         ],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-03T09:30:00Z"
+    "last_update": "2026-03-03T09:29:10Z"
 }
