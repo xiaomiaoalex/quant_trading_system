@@ -1,6 +1,6 @@
-# quant_trading_system v3.0.7-个人开发者版 技术规范
+# quant_trading_system v3.0.8-个人开发者版 技术规范
 > 角色：个人开发者 / 架构师（AI 辅助研发）  
-> 版本：v3.0.7（基于 v3.0.5 修订）  
+> 版本：v3.0.8（基于 v3.0.7 修订）  
 > 核心战略：轻量核心，AI 友好，多交易所扩展，不重复造轮子，细节落地  
 > 核心原则：五平面隔离进化（Core / Adapter / Persistence / Policy / Insight）保持不变  
 > 关键裁定：AI 只做大脑与治理，不触碰 Core 确定性执行路径（Core AI-clean）  
