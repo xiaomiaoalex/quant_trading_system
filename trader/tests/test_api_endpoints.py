@@ -429,6 +429,54 @@ class TestRiskEndpoints:
         killswitch_after_low = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after_low.json()["level"] == 3
 
+    def test_recover_pending_effects(self):
+        """Test recovery endpoint replays PENDING effects with correct scope/level"""
+        import asyncio
+        from trader.services.risk import RiskService
+        from trader.storage.in_memory import reset_storage
+        
+        reset_storage()
+        service = RiskService()
+        
+        upgrade_key = "test_recovery_key"
+        asyncio.run(service.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "Test recovery", "dedup_recovery"
+        ))
+        
+        state_before = self.client.get("/v1/killswitch?scope=GLOBAL")
+        level_before = state_before.json()["level"]
+        
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        
+        state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert state_after.json()["level"] == 2
+
+    def test_recover_failed_effects(self):
+        """Test recovery endpoint replays FAILED effects with correct scope/level"""
+        import asyncio
+        from trader.services.risk import RiskService
+        from trader.storage.in_memory import reset_storage
+        
+        reset_storage()
+        service = RiskService()
+        
+        upgrade_key = "test_failed_recovery_key"
+        asyncio.run(service.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 3, "Test failed recovery", "dedup_failed"
+        ))
+        asyncio.run(service.mark_effect_failed(upgrade_key, "Simulated failure"))
+        
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        
+        state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert state_after.json()["level"] == 3
+
 
 class TestOrderEndpoints:
     """Test order API endpoints"""

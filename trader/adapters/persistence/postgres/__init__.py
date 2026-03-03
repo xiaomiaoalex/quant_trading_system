@@ -25,7 +25,7 @@ Usage:
 """
 import os
 import asyncio
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import json
@@ -221,6 +221,18 @@ class PostgreSQLStorage:
                 )
             """)
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS risk_upgrade_effects (
+                    upgrade_key VARCHAR(512) PRIMARY KEY,
+                    scope VARCHAR(255) NOT NULL,
+                    level INTEGER NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+                )
+            """)
+
     async def append_event(self, event) -> str:
         """
         Append an event to the event log
@@ -412,6 +424,79 @@ class PostgreSQLStorage:
                 return existing.event_id, False
             return event_id, False
 
+    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
+                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+        """
+        Atomically ingest risk event and record upgrade with effect in a single transaction.
+        
+        This implements: BEGIN -> dedup -> upgrade record -> side-effect intent -> COMMIT
+        
+        Args:
+            event_data: Dictionary containing full event data
+            upgrade_key: The upgrade key
+            upgrade_level: Target level for upgrade
+            
+        Returns:
+            Tuple of (event_id, created, is_first_upgrade, is_first_effect)
+            - event_id: The event ID (None if duplicate)
+            - created: True if new event was created
+            - is_first_upgrade: True if this is first time recording this upgrade
+            - is_first_effect: True if this is first time recording this effect
+        """
+        import uuid
+        from asyncpg import UniqueViolationError
+        
+        event_id = event_data.get("event_id") or str(uuid.uuid4())
+        dedup_key = event_data["dedup_key"]
+        scope = event_data.get("scope", "GLOBAL")
+        reason = event_data.get("reason", "")
+        recommended_level = event_data.get("recommended_level", 0)
+        ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
+        data = json.dumps(event_data)
+        
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                created = False
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        """,
+                        event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                    )
+                    created = True
+                except UniqueViolationError:
+                    existing = await conn.fetchrow(
+                        "SELECT event_id FROM risk_events WHERE dedup_key = $1",
+                        dedup_key,
+                    )
+                    if existing:
+                        event_id = existing["event_id"]
+                    created = False
+                
+                result_upgrade = await conn.execute(
+                    """
+                    INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                    VALUES ($1, $2, $3, $4, $5, NOW())
+                    ON CONFLICT (upgrade_key) DO NOTHING
+                    """,
+                    upgrade_key, scope, upgrade_level, reason, dedup_key,
+                )
+                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                
+                result_effect = await conn.execute(
+                    """
+                    INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
+                    VALUES ($1, $2, $3, 'PENDING', 1, NOW())
+                    ON CONFLICT (upgrade_key) DO NOTHING
+                    """,
+                    upgrade_key, scope, upgrade_level,
+                )
+                is_first_effect = result_effect != "INSERT 0 0"
+                
+                return event_id, created, is_first_upgrade, is_first_effect
+
     async def get_risk_event(self, dedup_key: str) -> Optional[StoredRiskEvent]:
         """
         Get a risk event by dedup_key.
@@ -537,7 +622,7 @@ class PostgreSQLStorage:
                 """,
                 upgrade_key, scope, level, reason, dedup_key, recorded_at,
             )
-            return result == 1
+            return result != "INSERT 0 0"
 
     async def clear(self) -> None:
         """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""
@@ -546,6 +631,78 @@ class PostgreSQLStorage:
             await conn.execute("DELETE FROM snapshots")
             await conn.execute("DELETE FROM risk_events")
             await conn.execute("DELETE FROM risk_upgrades")
+            await conn.execute("DELETE FROM risk_upgrade_effects")
+
+    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int, 
+                                            reason: str, dedup_key: str) -> Tuple[bool, bool]:
+        """
+        Atomically record upgrade and side-effect intent in a single transaction.
+        
+        Returns:
+            Tuple of (is_first_upgrade, is_first_effect)
+            - is_first_upgrade: True if this is the first time recording this upgrade_key
+            - is_first_effect: True if this is the first time recording this effect
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                result_upgrade = await conn.execute(
+                    """
+                    INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                    VALUES ($1, $2, $3, $4, $5, NOW())
+                    ON CONFLICT (upgrade_key) DO NOTHING
+                    """,
+                    upgrade_key, scope, level, reason, dedup_key,
+                )
+                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                
+                result_effect = await conn.execute(
+                    """
+                    INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
+                    VALUES ($1, $2, $3, 'PENDING', 1, NOW())
+                    ON CONFLICT (upgrade_key) DO NOTHING
+                    """,
+                    upgrade_key, scope, level,
+                )
+                is_first_effect = result_effect != "INSERT 0 0"
+                
+                return is_first_upgrade, is_first_effect
+
+    async def mark_effect_applied(self, upgrade_key: str) -> None:
+        """Mark side-effect as successfully applied"""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE risk_upgrade_effects 
+                SET status = 'APPLIED', updated_at = NOW()
+                WHERE upgrade_key = $1
+                """,
+                upgrade_key,
+            )
+
+    async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
+        """Mark side-effect as failed with error message"""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE risk_upgrade_effects 
+                SET status = 'FAILED', last_error = $2, attempts = attempts + 1, updated_at = NOW()
+                WHERE upgrade_key = $1
+                """,
+                upgrade_key, error,
+            )
+
+    async def get_pending_effects(self) -> List[Dict[str, Any]]:
+        """Get all pending or failed effects for recovery"""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT upgrade_key, scope, level, status, attempts, last_error, updated_at
+                FROM risk_upgrade_effects
+                WHERE status IN ('PENDING', 'FAILED')
+                ORDER BY updated_at
+                """
+            )
+            return [dict(row) for row in rows]
 
 
 def is_postgres_available() -> bool:
