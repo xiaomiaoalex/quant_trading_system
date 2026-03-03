@@ -2,12 +2,17 @@
     "current_version": "v3.0.6",
     "sprint": "Sprint 2",
     "task_id": "Task10.3-B",
-    "status": "IDLE",
+    "status": "READY",
     "completed_milestones": [
-        "Task10.3-A: Risk Events Persistence"
+        "Task10.3-A: Risk Events Persistence",
+        "Sprint 1 Fix Package: Idempotency Return Consistency + PG/Memory Semantic Consistency"
     ],
     "architect_instruction": "请开始 Sprint 2 任务：实现 risk_upgrades 表及其 repository 接口，确保升级 key 唯一约束。",
-    "engineer_report": "",
-    "pr_readiness_package": null,
-    "last_update": "2026-03-03 10:10:25.065141"
+    "engineer_report": "Sprint 1 已完成并合并：\n- risk_events PostgreSQL 持久化（含 dedup_key 唯一约束）\n- RiskEventRepository 持久化桥接（PostgreSQL 优先，回退到内存）\n- 修复包：幂等返回一致性（重复返回已有 event_id）\n- 修复包：PG/内存语义一致性（完整保存事件快照）\n- 升级规范到 v3.0.6\n- PR 已合并",
+    "pr_readiness_package": {
+        "branch": "feature/task10-3-persistence-idempotency",
+        "merged": true,
+        "merge_commit": "待用户手动确认"
+    },
+    "last_update": "2026-03-03 10:30:00.000000"
 }
