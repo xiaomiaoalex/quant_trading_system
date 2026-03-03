@@ -306,3 +306,160 @@ class TestPostgresStorageSchema:
             assert storage._database == "testdb"
             assert storage._user == "testuser"
             assert storage._password == "testpass"
+
+
+@skip_if_no_postgres
+class TestRiskEventsPersistence:
+    """Test risk_events and upgrade_records persistence"""
+
+    @pytest.fixture
+    async def storage(self):
+        """Create storage instance"""
+        storage = PostgreSQLStorage()
+        await storage.connect()
+        await storage.clear()
+        yield storage
+        if storage.is_connected:
+            await storage.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_save_and_get_risk_event(self, storage):
+        """Test saving and retrieving risk event"""
+        event_data = {
+            "event_id": "risk-evt-001",
+            "dedup_key": "dedup-key-001",
+            "scope": "GLOBAL",
+            "reason": "Test risk event",
+            "recommended_level": 1,
+            "data": {"test": "data"},
+        }
+        
+        event_id, created = await storage.save_risk_event(event_data)
+        assert created is True
+        assert event_id == "risk-evt-001"
+        
+        stored = await storage.get_risk_event("dedup-key-001")
+        assert stored is not None
+        assert stored.dedup_key == "dedup-key-001"
+        assert stored.scope == "GLOBAL"
+        assert stored.recommended_level == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_risk_event(self, storage):
+        """Test duplicate risk event returns False for created with same event_id"""
+        event_data = {
+            "event_id": "risk-evt-002",
+            "dedup_key": "dedup-key-002",
+            "scope": "GLOBAL",
+            "reason": "Test duplicate",
+            "recommended_level": 2,
+            "data": {},
+        }
+        
+        event_id_1, created_1 = await storage.save_risk_event(event_data)
+        assert created_1 is True
+        assert event_id_1 == "risk-evt-002"
+        
+        event_id_2, created_2 = await storage.save_risk_event(event_data)
+        assert created_2 is False
+        assert event_id_2 == event_id_1, "Duplicate should return existing event_id"
+
+    @pytest.mark.asyncio
+    async def test_save_and_get_upgrade_record(self, storage):
+        """Test saving and retrieving upgrade record"""
+        upgrade_key = "upgrade:GLOBAL:2:dedup-key-003"
+        upgrade_data = {
+            "scope": "GLOBAL",
+            "level": 2,
+            "reason": "Test upgrade",
+            "dedup_key": "dedup-key-003",
+        }
+        
+        await storage.save_upgrade_record(upgrade_key, upgrade_data)
+        
+        stored = await storage.get_upgrade_record(upgrade_key)
+        assert stored is not None
+        assert stored.upgrade_key == upgrade_key
+        assert stored.scope == "GLOBAL"
+        assert stored.level == 2
+        assert stored.dedup_key == "dedup-key-003"
+
+    @pytest.mark.asyncio
+    async def test_risk_event_full_data_preservation(self, storage):
+        """Test that severity/metrics/adapter_name fields are preserved in full event data"""
+        event_data = {
+            "dedup_key": "dedup-key-full-001",
+            "scope": "GLOBAL",
+            "reason": "ENV_RISK:AdapterDegraded:binance_adapter",
+            "severity": "HIGH",
+            "metrics": {"private_stream_state": "DEGRADED"},
+            "recommended_level": 1,
+            "adapter_name": "binance_adapter",
+            "venue": "BINANCE",
+            "account_id": "acc_001",
+            "ts_ms": 1700000000000,
+        }
+        
+        event_id, created = await storage.save_risk_event(event_data)
+        assert created is True
+        
+        stored = await storage.get_risk_event("dedup-key-full-001")
+        assert stored is not None
+        assert stored.data.get("severity") == "HIGH"
+        assert stored.data.get("metrics") == {"private_stream_state": "DEGRADED"}
+        assert stored.data.get("adapter_name") == "binance_adapter"
+        assert stored.data.get("venue") == "BINANCE"
+        assert stored.data.get("account_id") == "acc_001"
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_risk_event(self, storage):
+        """Test getting non-existent risk event returns None"""
+        stored = await storage.get_risk_event("nonexistent-key")
+        assert stored is None
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_upgrade_record(self, storage):
+        """Test getting non-existent upgrade record returns None"""
+        stored = await storage.get_upgrade_record("nonexistent-upgrade-key")
+        assert stored is None
+
+
+@skip_if_no_asyncpg
+class TestStoredRiskEventDataclass:
+    """Test StoredRiskEvent and StoredUpgradeRecord dataclasses"""
+
+    def test_stored_risk_event_creation(self):
+        """Test creating StoredRiskEvent"""
+        from trader.adapters.persistence.postgres import StoredRiskEvent
+        from datetime import datetime, timezone
+        
+        event = StoredRiskEvent(
+            event_id="evt-001",
+            dedup_key="key-001",
+            scope="GLOBAL",
+            reason="Test",
+            recommended_level=1,
+            ingested_at=datetime.now(timezone.utc),
+            data={"test": "data"},
+        )
+        
+        assert event.event_id == "evt-001"
+        assert event.dedup_key == "key-001"
+        assert event.recommended_level == 1
+
+    def test_stored_upgrade_record_creation(self):
+        """Test creating StoredUpgradeRecord"""
+        from trader.adapters.persistence.postgres import StoredUpgradeRecord
+        from datetime import datetime, timezone
+        
+        record = StoredUpgradeRecord(
+            upgrade_key="upgrade-001",
+            scope="GLOBAL",
+            level=2,
+            reason="Test upgrade",
+            dedup_key="key-001",
+            recorded_at=datetime.now(timezone.utc),
+        )
+        
+        assert record.upgrade_key == "upgrade-001"
+        assert record.level == 2
