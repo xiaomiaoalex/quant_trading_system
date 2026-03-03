@@ -283,6 +283,26 @@ class ControlPlaneInMemoryStorage:
             "recorded_at": now,
         }
 
+    def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
+        """
+        Try to record an upgrade action. Returns True if first write, False if already exists.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing upgrade data
+            
+        Returns:
+            True if this is the first time recording this upgrade_key, False if already exists
+        """
+        if upgrade_key in self.risk_upgrades:
+            return False
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        self.risk_upgrades[upgrade_key] = {
+            **upgrade_data,
+            "recorded_at": now,
+        }
+        return True
+
     # ==================== Order Methods ====================
 
     def create_order(self, order_data: Dict[str, Any]) -> Dict[str, Any]:

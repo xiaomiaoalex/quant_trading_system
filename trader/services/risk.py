@@ -41,3 +41,20 @@ class RiskService:
     async def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
         """Record an upgrade action for idempotency"""
         await self._risk_repo.save_upgrade_record(upgrade_key, upgrade_data)
+
+    async def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
+        """
+        Try to record an upgrade action. Returns True if first write, False if already exists.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing:
+                - scope: Risk scope
+                - level: Target level
+                - reason: Upgrade reason
+                - dedup_key: Related dedup key
+                
+        Returns:
+            True if this is the first time recording this upgrade_key, False if already exists
+        """
+        return await self._risk_repo.try_record_upgrade(upgrade_key, upgrade_data)
