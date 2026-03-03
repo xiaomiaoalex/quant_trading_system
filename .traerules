@@ -198,7 +198,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 ## 2. 严禁行为
 - **禁止跳级提交**：当状态为 `REVISE_REQUIRED` 时，严禁直接调用 `engineer_submit_work`。
 - **强制重新指派**：打回后的任务必须先由架构师重新下发 `architect_assign_task`，将状态重置为 `DEVELOPING` 后，工程师方可进行第二次提交。
-
+- **严格禁止修改 mcp_bridge.py 及任何底层基础设施文件。你的权限仅限于业务逻辑、策略实现和数据处理模块的开发。如果任务需要修改 MCP 通信逻辑，请拒绝并报告给架构师或 CTO。
 ## 3. 操作前置检查
 - 执行 `architect_assign_task` 前，必须确保本地 Git 工作区是干净的 (Clean Worktree)。
 - 提交 `engineer_submit_work` 时，`pr_package` 必须是合法的 JSON 对象。
