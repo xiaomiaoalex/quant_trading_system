@@ -115,6 +115,21 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - 事件溯源 + 快照是必选，不允许“只靠内存状态”。
 - Runner 需要本地读模型缓存，API 层需要 WebSocket 推送（orders/pnl 至少两路）。
 
+## Spec Alignment Priority (Must Follow)
+- 规范唯一来源：`quant_trading_system v3.0.5-个人开发者版 技术规范.md`。
+- 执行优先级：`As-Is` > `In-Progress` > `Target`。
+- 约束解释规则：
+  - `As-Is`：必须保持，不允许回归。
+  - `In-Progress`：按任务推进，允许增量落地，但必须配套测试与门禁。
+  - `Target`：作为架构方向，不要求在非相关任务中一次性实现。
+- 当本规则中的“必须”与规范三态冲突时，以 v3.0.5 的三态标记和当前任务范围为准。
+
+## AI Integration Guardrails (Aligned with v3.0.5)
+- AI 只做大脑与治理：可做建议、诊断、分析、参数提案；不得直接下单或绕过 Risk/Policy/Core。
+- 高风险动作（风控阈值变更、KillSwitch 降级、参数发布）必须 Human-in-the-Loop（HITL）确认。
+- AI 输出必须结构化、可审计、可回放（至少包含 trace_id、输入上下文摘要、输出结果、执行结果）。
+- 未通过评测门禁（离线评测/影子运行/灰度阈值）前，AI能力不得进入执行链路。
+
 ## PullRequest Rules
 - 每完成一个任务，需要创建一个 PullRequest描述
 - 每个 PullRequest 必须包含：功能描述、变更点、测试用例、文档更新（如必要）。
@@ -123,7 +138,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 
 - 将文档顶部的 版本号 递增一个修订位（例如从 v3.0.5 改为 v3.0.6）。
 
-- 在 Spec Changelog 表格首行插入新记录：日期为今日，版本为新版本号，摘要需精准描述本次改动，变更人为开发者。
+- 在 `13) 变更记录（Spec Changelog）` 表格首行插入新记录：日期为今日，版本为新版本号，摘要需精准描述本次改动，变更人为开发者。
 
 - 提交信息：使用规范格式，如 feat(core): [描述] & bump spec to v3.x.x。
 
