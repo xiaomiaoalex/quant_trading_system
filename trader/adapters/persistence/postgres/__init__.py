@@ -211,7 +211,7 @@ class PostgreSQLStorage:
             """)
             
             await conn.execute("""
-                CREATE TABLE IF NOT EXISTS upgrade_records (
+                CREATE TABLE IF NOT EXISTS risk_upgrades (
                     upgrade_key VARCHAR(512) PRIMARY KEY,
                     scope VARCHAR(255) NOT NULL,
                     level INTEGER NOT NULL,
@@ -466,7 +466,7 @@ class PostgreSQLStorage:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO upgrade_records (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (upgrade_key) DO UPDATE SET
                     scope = EXCLUDED.scope,
@@ -492,7 +492,7 @@ class PostgreSQLStorage:
             row = await conn.fetchrow(
                 """
                 SELECT upgrade_key, scope, level, reason, dedup_key, recorded_at
-                FROM upgrade_records
+                FROM risk_upgrades
                 WHERE upgrade_key = $1
                 """,
                 upgrade_key,
@@ -510,12 +510,12 @@ class PostgreSQLStorage:
         return None
 
     async def clear(self) -> None:
-        """Clear all events, snapshots, risk_events and upgrade_records (for testing)"""
+        """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""
         async with self._pool.acquire() as conn:
             await conn.execute("DELETE FROM event_log")
             await conn.execute("DELETE FROM snapshots")
             await conn.execute("DELETE FROM risk_events")
-            await conn.execute("DELETE FROM upgrade_records")
+            await conn.execute("DELETE FROM risk_upgrades")
 
 
 def is_postgres_available() -> bool:

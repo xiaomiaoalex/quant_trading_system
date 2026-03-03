@@ -33,7 +33,12 @@
    - event_log（append-only）是第一性数据；读模型由投影生成；快照用于加速恢复。
 
 ---
+## Git Execution Guardrails (Strictly Forbidden)
+1) **禁止环境篡改**：绝对禁止执行 `git init`、`git push`、`git clone` 或任何修改/删除 `.git` 目录的命令。
+2) **权限白名单**：你的 Git 权限仅限于只读和本地暂存区操作：`git status`、`git diff`、`git add`、`git commit`、`git log`、`git branch`、`git checkout`。
+3) **Fail-Closed 原则（物理环境版）**：当遇到 `fatal: not a git repository`、`detached HEAD` 或其他严重的 Git 环境报错时，**必须立即停止一切操作**。严禁自作主张尝试“修复”环境，必须立刻向人类发出最高级别的警报。
 
+---
 ## Architecture Boundaries (Must Respect)
 你必须严格遵守以下边界，禁止越界耦合：
 

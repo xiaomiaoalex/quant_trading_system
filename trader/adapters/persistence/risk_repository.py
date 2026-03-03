@@ -1,7 +1,7 @@
 """
 Risk Events Repository - 风险事件持久化仓库
 =============================================
-负责 risk_events 和 upgrade_records 的持久化。
+负责 risk_events 和 risk_upgrades 的持久化。
 
 特点：
 - 优先使用 PostgreSQL 进行持久化
@@ -33,7 +33,7 @@ class RiskEventRepository:
     
     职责：
     - 管理 risk_events 的持久化
-    - 管理 upgrade_records 的持久化
+    - 管理 risk_upgrades 的持久化
     - 提供幂等性保证（dedup_key 唯一约束）
     - PostgreSQL 不可用时自动回退到 InMemoryStorage
     """
@@ -143,7 +143,7 @@ class RiskEventRepository:
                 logger.warning(f"PostgreSQL save_upgrade_record failed: {e}, falling back to in-memory")
         
         now = datetime.now(timezone.utc).isoformat() + "Z"
-        self._memory_storage.upgrade_records[upgrade_key] = {
+        self._memory_storage.risk_upgrades[upgrade_key] = {
             **upgrade_data,
             "recorded_at": now,
         }
@@ -173,7 +173,7 @@ class RiskEventRepository:
             except Exception as e:
                 logger.warning(f"PostgreSQL get_upgrade_record failed: {e}, falling back to in-memory")
         
-        return self._memory_storage.upgrade_records.get(upgrade_key)
+        return self._memory_storage.risk_upgrades.get(upgrade_key)
 
 
 _repository_instance: Optional[RiskEventRepository] = None

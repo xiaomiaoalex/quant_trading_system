@@ -410,7 +410,7 @@ class AbstractExchangeAdapter(ABC):
 5. CI Gate 基线固化
 
 ### 9.2 进行中（In Progress）
-1. Task10.3：`upgrade_records` 内存 -> PostgreSQL 迁移  
+1. Task10.3：`risk_upgrades` 内存 -> PostgreSQL 迁移  
 2. 补齐 `risk_events/risk_upgrades` 持久化契约  
 3. 新增“重启后幂等”测试并并入 CI
 
@@ -555,7 +555,7 @@ POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading
 
 | 日期 | 版本 | 变更摘要 |
 |------|------|----------|
-| 2026-03-03 | v3.0.6 | Sprint 1: risk_events 持久化（含 dedup_key 唯一约束），RiskService 桥接到持久层；修复包：幂等返回一致性（重复返回已有 event_id）、PG/内存语义一致性（完整保存事件快照） |
+| 2026-03-03 | v3.0.6 | Sprint 1: risk_events 持久化（含 dedup_key 唯一约束），RiskService 桥接到持久层；修复包：幂等返回一致性（重复返回已有 event_id）、PG/内存语义一致性（完整保存事件快照）；命名规范对齐：统一 `upgrade_records` -> `risk_upgrades` |
 | 2026-03-03 | v3.0.5 | Sprint 1: 实现 risk_events PostgreSQL 持久化（含 dedup_key 唯一约束），RiskService 桥接到持久层（保留回退机制），确保 POST /v1/risk/events 语义不变（201 新建 / 409 重复） |
 | 2026-03-02 | v3.0.5 | 全文新增 As-Is/In-Progress/Target 三态标记；新增 Task10.3 事务时序与失败恢复矩阵 |
 | 2026-03-02 | v3.0.5 | 新增“AI接入战略与框架选型”章节，明确 AI 边界、场景、框架选型、HITL 审批与评测门禁 |

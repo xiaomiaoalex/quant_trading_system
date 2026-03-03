@@ -310,7 +310,7 @@ class TestPostgresStorageSchema:
 
 @skip_if_no_postgres
 class TestRiskEventsPersistence:
-    """Test risk_events and upgrade_records persistence"""
+    """Test risk_events and risk_upgrades persistence"""
 
     @pytest.fixture
     async def storage(self):
