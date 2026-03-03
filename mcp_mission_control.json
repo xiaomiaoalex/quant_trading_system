@@ -1,0 +1,13 @@
+{
+    "current_version": "v3.0.6",
+    "sprint": "Sprint 2",
+    "task_id": "Task10.3-B",
+    "status": "IDLE",
+    "completed_milestones": [
+        "Task10.3-A: Risk Events Persistence"
+    ],
+    "architect_instruction": "请开始 Sprint 2 任务：实现 risk_upgrades 表及其 repository 接口，确保升级 key 唯一约束。",
+    "engineer_report": "",
+    "pr_readiness_package": null,
+    "last_update": "2026-03-03 10:10:25.065141"
+}

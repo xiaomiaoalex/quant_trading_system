@@ -64,6 +64,29 @@ class StoredSnapshot:
     state: Dict[str, Any]
 
 
+@dataclass
+class StoredRiskEvent:
+    """Stored risk event representation"""
+    event_id: str
+    dedup_key: str
+    scope: str
+    reason: str
+    recommended_level: int
+    ingested_at: datetime
+    data: Dict[str, Any]
+
+
+@dataclass
+class StoredUpgradeRecord:
+    """Stored upgrade record representation"""
+    upgrade_key: str
+    scope: str
+    level: int
+    reason: str
+    dedup_key: str
+    recorded_at: datetime
+
+
 class PostgreSQLStorage:
     """
     PostgreSQL Storage for Event Sourcing
@@ -168,6 +191,34 @@ class PostgreSQLStorage:
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_snapshots_stream_key 
                 ON snapshots(stream_key)
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS risk_events (
+                    event_id VARCHAR(255) PRIMARY KEY,
+                    dedup_key VARCHAR(512) NOT NULL UNIQUE,
+                    scope VARCHAR(255) NOT NULL,
+                    reason VARCHAR(512) NOT NULL,
+                    recommended_level INTEGER NOT NULL,
+                    ingested_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    data JSONB NOT NULL DEFAULT '{}'
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_risk_events_dedup_key 
+                ON risk_events(dedup_key)
+            """)
+            
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS upgrade_records (
+                    upgrade_key VARCHAR(512) PRIMARY KEY,
+                    scope VARCHAR(255) NOT NULL,
+                    level INTEGER NOT NULL,
+                    reason VARCHAR(512) NOT NULL,
+                    dedup_key VARCHAR(512) NOT NULL,
+                    recorded_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
             """)
 
     async def append_event(self, event) -> str:
@@ -324,11 +375,147 @@ class PostgreSQLStorage:
             )
         return None
 
+    async def save_risk_event(self, event_data: Dict[str, Any]) -> tuple[str, bool]:
+        """
+        Save a risk event with deduplication.
+        
+        Uses dedup_key unique constraint to ensure idempotency.
+        
+        Args:
+            event_data: Dictionary containing full event data (from model_dump)
+                
+        Returns:
+            Tuple of (event_id, created) where created is True if new, False if duplicate
+        """
+        import uuid
+        event_id = event_data.get("event_id") or str(uuid.uuid4())
+        dedup_key = event_data["dedup_key"]
+        scope = event_data.get("scope", "GLOBAL")
+        reason = event_data.get("reason", "")
+        recommended_level = event_data.get("recommended_level", 0)
+        ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
+        data = json.dumps(event_data)
+        
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                )
+            return event_id, True
+        except asyncpg.UniqueViolationError:
+            existing = await self.get_risk_event(dedup_key)
+            if existing:
+                return existing.event_id, False
+            return event_id, False
+
+    async def get_risk_event(self, dedup_key: str) -> Optional[StoredRiskEvent]:
+        """
+        Get a risk event by dedup_key.
+        
+        Args:
+            dedup_key: The deduplication key
+            
+        Returns:
+            StoredRiskEvent or None if not found
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT event_id, dedup_key, scope, reason, recommended_level, ingested_at, data
+                FROM risk_events
+                WHERE dedup_key = $1
+                """,
+                dedup_key,
+            )
+            
+        if row:
+            return StoredRiskEvent(
+                event_id=row["event_id"],
+                dedup_key=row["dedup_key"],
+                scope=row["scope"],
+                reason=row["reason"],
+                recommended_level=row["recommended_level"],
+                ingested_at=row["ingested_at"],
+                data=row["data"],
+            )
+        return None
+
+    async def save_upgrade_record(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
+        """
+        Save an upgrade record for idempotency.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing:
+                - scope: Risk scope
+                - level: Target level
+                - reason: Upgrade reason
+                - dedup_key: Related dedup key
+                - recorded_at: Recording timestamp
+        """
+        scope = upgrade_data.get("scope", "GLOBAL")
+        level = upgrade_data.get("level", 0)
+        reason = upgrade_data.get("reason", "")
+        dedup_key = upgrade_data.get("dedup_key", "")
+        recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
+        
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO upgrade_records (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (upgrade_key) DO UPDATE SET
+                    scope = EXCLUDED.scope,
+                    level = EXCLUDED.level,
+                    reason = EXCLUDED.reason,
+                    dedup_key = EXCLUDED.dedup_key,
+                    recorded_at = EXCLUDED.recorded_at
+                """,
+                upgrade_key, scope, level, reason, dedup_key, recorded_at,
+            )
+
+    async def get_upgrade_record(self, upgrade_key: str) -> Optional[StoredUpgradeRecord]:
+        """
+        Get an upgrade record by upgrade_key.
+        
+        Args:
+            upgrade_key: The upgrade key
+            
+        Returns:
+            StoredUpgradeRecord or None if not found
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT upgrade_key, scope, level, reason, dedup_key, recorded_at
+                FROM upgrade_records
+                WHERE upgrade_key = $1
+                """,
+                upgrade_key,
+            )
+            
+        if row:
+            return StoredUpgradeRecord(
+                upgrade_key=row["upgrade_key"],
+                scope=row["scope"],
+                level=row["level"],
+                reason=row["reason"],
+                dedup_key=row["dedup_key"],
+                recorded_at=row["recorded_at"],
+            )
+        return None
+
     async def clear(self) -> None:
-        """Clear all events and snapshots (for testing)"""
+        """Clear all events, snapshots, risk_events and upgrade_records (for testing)"""
         async with self._pool.acquire() as conn:
             await conn.execute("DELETE FROM event_log")
             await conn.execute("DELETE FROM snapshots")
+            await conn.execute("DELETE FROM risk_events")
+            await conn.execute("DELETE FROM upgrade_records")
 
 
 def is_postgres_available() -> bool:

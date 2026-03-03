@@ -5,6 +5,7 @@ from trader.api.models.schemas import (
     VersionedConfig, VersionedConfigUpsertRequest,
     RiskEventIngestRequest,
 )
+from trader.adapters.persistence.risk_repository import get_risk_event_repository
 
 
 class RiskService:
@@ -12,6 +13,7 @@ class RiskService:
 
     def __init__(self, storage: Optional[InMemoryStorage] = None):
         self._storage = storage or get_storage()
+        self._risk_repo = get_risk_event_repository()
 
     def get_limits(self, scope: str = "GLOBAL") -> Optional[VersionedConfig]:
         """Get latest risk limits"""
@@ -26,16 +28,16 @@ class RiskService:
         limits = self._storage.create_risk_limits(risk_data)
         return VersionedConfig(**limits)
 
-    def ingest_event(self, request: RiskEventIngestRequest) -> bool:
+    async def ingest_event(self, request: RiskEventIngestRequest) -> bool:
         """Ingest risk event and return whether it is newly created"""
         event_data = request.model_dump()
-        _, created = self._storage.ingest_risk_event(event_data)
+        _, created = await self._risk_repo.save_risk_event(event_data)
         return created
 
-    def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
+    async def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
         """Get upgrade record by key"""
-        return self._storage.get_upgrade_record(upgrade_key)
+        return await self._risk_repo.get_upgrade_record(upgrade_key)
 
-    def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
+    async def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
         """Record an upgrade action for idempotency"""
-        self._storage.record_upgrade(upgrade_key, upgrade_data)
+        await self._risk_repo.save_upgrade_record(upgrade_key, upgrade_data)
