@@ -7,22 +7,20 @@
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
     "architect_instruction": "",
-    "engineer_report": "## Sprint 3 (Task10.3-C) 修复完成\n\n### 修复内容\n1. 修复 PostgreSQL 运行时错误: level -> upgrade_level\n2. 新增 /v1/risk/recover 端点测试\n\n### 测试结果\n- 72 passed (API regression)\n- 8 passed (risk API)",
+    "engineer_report": "## Sprint 3 修复完成\n\n### 修复内容\n1. 恢复端点添加错误处理和空检查\n2. 恢复测试构造 PENDING effect 并验证 scope/level 回放\n\n### 测试结果\n- 72 passed",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
         "target": "main",
         "status": "ready",
+        "pr_title": "feat: 原子语义与故障恢复 (Task10.3-C)",
+        "pr_description": "## 功能\n- 新增 risk_upgrade_effects 表作为恢复锚点\n- 新增事务方法 ingest_event_with_upgrade\n- 新增恢复端点 /v1/risk/recover\n- Fail-Closed: 副作用失败返回 500\n\n## 测试\n- 72 passed\n- 覆盖 PENDING effect 恢复验证\n\n## 规范对齐\n- 版本号: v3.0.8\n- Changelog 已更新\n- 幂等性: 使用 DB 唯一约束 + ON CONFLICT DO NOTHING\n- Fail-Closed: 副作用失败显式返回错误",
         "changes": [
-            {
-                "file": "postgres/__init__.py",
-                "type": "modify",
-                "description": "修复 level 变量为 upgrade_level"
-            },
-            {
-                "file": "test_api_endpoints.py",
-                "type": "modify",
-                "description": "新增 /v1/risk/recover 端点测试"
-            }
+            {"file": "postgres/__init__.py", "type": "modify", "description": "事务方法和表结构"},
+            {"file": "in_memory.py", "type": "modify", "description": "InMemory 实现"},
+            {"file": "risk_repository.py", "type": "modify", "description": "Repository 桥接"},
+            {"file": "services/risk.py", "type": "modify", "description": "Service 层"},
+            {"file": "routes/risk.py", "type": "modify", "description": "恢复端点"},
+            {"file": "test_api_endpoints.py", "type": "modify", "description": "恢复测试"}
         ],
         "test_results": {
             "api_regression": "72 passed",
@@ -33,5 +31,5 @@
         ],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-03T08:43:25Z"
+    "last_update": "2026-03-03T09:30:00Z"
 }

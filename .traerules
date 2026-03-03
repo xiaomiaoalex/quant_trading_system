@@ -181,4 +181,31 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 ### 3. 协作流程状态机
 - 任务启动: [Codex Shell] -> 状态存入 JSON -> [MiniMax 原生工具] 感知。
 - 任务提交: [MiniMax 原生工具] -> 状态更新 JSON -> [Codex Shell] 读取 Review。
+
+
+
+# Dual_AI_Communicator 状态机指令约束 (Strict FSM)
+
+任何涉及任务开发与审核的操作必须严格遵守 `mcp_bridge.py` 定义的状态机逻辑。
+
+## 1. 核心状态流转图
+- IDLE -> DEVELOPING (通过 architect_assign_task)
+- DEVELOPING -> REVIEW_PENDING (通过 engineer_submit_work)
+- REVIEW_PENDING -> APPROVED_FOR_PUSH (通过 architect_finalize, approved=True)
+- REVIEW_PENDING -> REVISE_REQUIRED (通过 architect_finalize, approved=False)
+- REVISE_REQUIRED -> DEVELOPING (必须重新通过 architect_assign_task 激活)
+
+## 2. 严禁行为
+- **禁止跳级提交**：当状态为 `REVISE_REQUIRED` 时，严禁直接调用 `engineer_submit_work`。
+- **强制重新指派**：打回后的任务必须先由架构师重新下发 `architect_assign_task`，将状态重置为 `DEVELOPING` 后，工程师方可进行第二次提交。
+
+## 3. 操作前置检查
+- 执行 `architect_assign_task` 前，必须确保本地 Git 工作区是干净的 (Clean Worktree)。
+- 提交 `engineer_submit_work` 时，`pr_package` 必须是合法的 JSON 对象。
+
+
+# 核心约束：任务控制文件保护
+- 【绝对禁止】手动编辑 `mcp_mission_control.json`。该文件仅允许通过特定的工具函数（如 `update_mission_state`）进行自动化修改。
+- 【绝对禁止】AI 代理为了规避状态锁定（REVISE_REQUIRED/PENDING）而手动篡改 JSON 内容。
+- 【操作规范】若遇到状态锁定或超时，AI 必须向用户报告错误并请求人工干预，禁止尝试“自我修复”控制文件。
 # End of rules
