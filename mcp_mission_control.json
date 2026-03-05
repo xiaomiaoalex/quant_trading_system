@@ -2,11 +2,12 @@
     "current_version": "v3.0.8",
     "sprint": "Sprint 3",
     "task_id": "Task10.3-C",
-    "status": "APPROVED_FOR_PUSH",
+    "active_branch": "feature/task10-3-c",
+    "status": "DEVELOPING",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "【Sprint 3 Review结论：APPROVED_FOR_PUSH】\n结论：本轮阻断项已关闭。\n1) /v1/risk/recover 已补充 FAILED effect 恢复测试，并验证 scope/level 回放。\n2) 规范文档已对齐到 v3.0.8，Changelog 首行记录存在且与声明一致。\n3) 本地 PR 就绪包包含功能描述、变更点、测试结果、风险与回滚、PR 标题与描述。\n残余风险：PostgreSQL 实际环境回归仍缺，建议合并前在可用 PG 环境补跑一轮恢复链路。",
+    "architect_instruction": "【Task10.3-D】PostgreSQL 实环境恢复链路回归补齐\n1) 在可用 PostgreSQL 环境下补充 /v1/risk/recover 的端到端回归（覆盖 PENDING 与 FAILED effect）。\n2) 验证 risk_upgrade_effects 在 PG 路径的状态迁移：PENDING/FAILED -> APPLIED。\n3) 补充最小可复现测试说明（环境变量、初始化步骤、执行命令）。\n4) 提交本地 PR 就绪包：功能描述、变更点、测试结果、风险与回滚、PR 标题与描述草稿。",
     "engineer_report": "## Sprint 3 R4 修复完成\n\n### 修复内容\n1. 添加 FAILED effect 恢复测试\n2. 更新规范文档版本到 v3.0.8\n3. 测试门禁通过\n\n### 测试结果\n- 73 passed",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
@@ -35,5 +36,5 @@
         ],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-03T09:44:30Z"
+    "last_update": "2026-03-03T12:06:56Z"
 }

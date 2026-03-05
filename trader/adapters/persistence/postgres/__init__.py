@@ -25,6 +25,7 @@ Usage:
 """
 import os
 import asyncio
+import uuid
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -233,6 +234,11 @@ class PostgreSQLStorage:
                 )
             """)
 
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_risk_upgrade_effects_status 
+                ON risk_upgrade_effects(status)
+            """)
+
     async def append_event(self, event) -> str:
         """
         Append an event to the event log
@@ -399,7 +405,6 @@ class PostgreSQLStorage:
         Returns:
             Tuple of (event_id, created) where created is True if new, False if duplicate
         """
-        import uuid
         event_id = event_data.get("event_id") or str(uuid.uuid4())
         dedup_key = event_data["dedup_key"]
         scope = event_data.get("scope", "GLOBAL")
@@ -443,7 +448,6 @@ class PostgreSQLStorage:
             - is_first_upgrade: True if this is first time recording this upgrade
             - is_first_effect: True if this is first time recording this effect
         """
-        import uuid
         from asyncpg import UniqueViolationError
         
         event_id = event_data.get("event_id") or str(uuid.uuid4())
