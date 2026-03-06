@@ -110,6 +110,67 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
 @contextmanager
 def _with_file_lock(lockfile_path: str):
     os.makedirs(os.path.dirname(lockfile_path) or ".", exist_ok=True)
+
+    def _fallback_lock_path(lp_path: str) -> str:
+        return f"{lp_path}.fallback"
+
+    def _try_acquire_platform_lock(lock_file) -> tuple[bool, bool]:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True, True
+        except ImportError:
+            return False, False
+        except (OSError, BlockingIOError):
+            return False, True
+
+    def _try_acquire_fallback_lock(lp_path: str) -> bool:
+        fallback_lock = _fallback_lock_path(lp_path)
+        try:
+            fd = os.open(fallback_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(f"{os.getpid()} {time.time()}")
+            return True
+        except FileExistsError:
+            try:
+                age = time.time() - os.path.getmtime(fallback_lock)
+                if age > LOCK_TIMEOUT_SEC:
+                    os.remove(fallback_lock)
+            except OSError:
+                pass
+            return False
+        except OSError:
+            return False
+
+    def _release_platform_lock(lock_file) -> None:
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _release_fallback_lock(lp_path: str) -> None:
+        try:
+            os.remove(_fallback_lock_path(lp_path))
+        except OSError:
+            pass
+
+    use_fallback = False
+    platform_supported = True
+
     with open(lockfile_path, "a+b") as lock_file:
         if os.path.getsize(lockfile_path) == 0:
             lock_file.write(b"0")
@@ -119,42 +180,32 @@ def _with_file_lock(lockfile_path: str):
         locked = False
 
         while time.monotonic() < deadline:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked, platform_supported = _try_acquire_platform_lock(lock_file)
+            if locked:
                 locked = True
                 break
-            except (OSError, BlockingIOError):
-                time.sleep(LOCK_RETRY_INTERVAL_SEC)
+            if not platform_supported:
+                break
+            time.sleep(LOCK_RETRY_INTERVAL_SEC)
 
         if not locked:
-            raise TimeoutError(
-                f"❌ [MISSION_CONTROL] 无法获得文件锁 ({lockfile_path})。\n"
-                "⚠️ 请勿手动编辑 mcp_mission_control.json。\n"
-                "👉 请稍后重试或检查是否有并发 MCP 进程占用。"
-            )
+            if not platform_supported and _try_acquire_fallback_lock(lockfile_path):
+                use_fallback = True
+                locked = True
+            else:
+                raise TimeoutError(
+                    f"❌ [MISSION_CONTROL] 无法获得文件锁 ({lockfile_path})。\n"
+                    "⚠️ 请勿手动编辑 mcp_mission_control.json。\n"
+                    "👉 请稍后重试或检查是否有并发 MCP 进程占用。"
+                )
 
         try:
             yield
         finally:
-            lock_file.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                try:
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
+            if use_fallback:
+                _release_fallback_lock(lockfile_path)
             else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                _release_platform_lock(lock_file)
 
 
 def _atomic_write_json(path: str, data: dict[str, Any]) -> None:

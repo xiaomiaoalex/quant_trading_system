@@ -25,6 +25,7 @@ Usage:
 """
 import os
 import asyncio
+import logging
 import uuid
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime, timezone
@@ -40,6 +41,8 @@ try:
 except ImportError:
     ASYNCPG_AVAILABLE = False
     asyncpg = None
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -487,26 +490,37 @@ class PostgreSQLStorage:
                     if existing:
                         event_id = existing["event_id"]
                     created = False
+                except Exception as e:
+                    logger.exception("Risk event insert failed")
+                    raise
                 
-                result_upgrade = await conn.execute(
-                    """
-                    INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
-                    VALUES ($1, $2, $3, $4, $5, NOW())
-                    ON CONFLICT (upgrade_key) DO NOTHING
-                    """,
-                    upgrade_key, scope, upgrade_level, reason, dedup_key,
-                )
-                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                try:
+                    result_upgrade = await conn.execute(
+                        """
+                        INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        ON CONFLICT (upgrade_key) DO NOTHING
+                        """,
+                        upgrade_key, scope, upgrade_level, reason, dedup_key,
+                    )
+                    is_first_upgrade = result_upgrade != "INSERT 0 0"
+                except Exception as e:
+                    logger.exception("Upgrade record insert failed")
+                    raise
                 
-                result_effect = await conn.execute(
-                    """
-                    INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
-                    VALUES ($1, $2, $3, 'PENDING', 1, NOW())
-                    ON CONFLICT (upgrade_key) DO NOTHING
-                    """,
-                    upgrade_key, scope, upgrade_level,
-                )
-                is_first_effect = result_effect != "INSERT 0 0"
+                try:
+                    result_effect = await conn.execute(
+                        """
+                        INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
+                        VALUES ($1, $2, $3, 'PENDING', 1, NOW())
+                        ON CONFLICT (upgrade_key) DO NOTHING
+                        """,
+                        upgrade_key, scope, upgrade_level,
+                    )
+                    is_first_effect = result_effect != "INSERT 0 0"
+                except Exception as e:
+                    logger.exception("Effect record insert failed")
+                    raise
                 
                 return event_id, created, is_first_upgrade, is_first_effect
 
