@@ -85,8 +85,11 @@ class TestPostgreSQLStorage:
     async def storage(self):
         """Create storage instance"""
         storage = PostgreSQLStorage()
+        await storage.connect()
+        await storage.clear()
         yield storage
         if storage.is_connected:
+            await storage.clear()
             await storage.disconnect()
 
     @pytest.mark.asyncio

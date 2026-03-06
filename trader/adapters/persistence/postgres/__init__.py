@@ -131,6 +131,15 @@ class PostgreSQLStorage:
         """Check if storage is connected"""
         return self._connected
 
+    @staticmethod
+    def _decode_json_field(value: Any) -> Dict[str, Any]:
+        """Normalize JSON/JSONB payloads from asyncpg into dicts."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return json.loads(value)
+        return {}
+
     async def connect(self) -> None:
         """Connect to PostgreSQL"""
         if self._connection_string:
@@ -317,8 +326,8 @@ class PostgreSQLStorage:
                 aggregate_id=row["aggregate_id"],
                 aggregate_type=row["aggregate_type"],
                 timestamp=row["timestamp"],
-                data=row["data"],
-                metadata=row["metadata"],
+                data=self._decode_json_field(row["data"]),
+                metadata=self._decode_json_field(row["metadata"]),
             )
             for row in rows
         ]
@@ -389,7 +398,7 @@ class PostgreSQLStorage:
                 aggregate_id=row["aggregate_id"],
                 aggregate_type=row["aggregate_type"],
                 timestamp=row["timestamp"],
-                state=row["state"],
+                state=self._decode_json_field(row["state"]),
             )
         return None
 
@@ -456,7 +465,7 @@ class PostgreSQLStorage:
         reason = event_data.get("reason", "")
         recommended_level = event_data.get("recommended_level", 0)
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
-        data = json.dumps(event_data)
+        data = event_data
         
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -529,7 +538,7 @@ class PostgreSQLStorage:
                 reason=row["reason"],
                 recommended_level=row["recommended_level"],
                 ingested_at=row["ingested_at"],
-                data=row["data"],
+                data=self._decode_json_field(row["data"]),
             )
         return None
 
