@@ -1,7 +1,14 @@
 import json
 import os
+import sys
 from datetime import datetime
 import subprocess
+
+# 1. 引入 FastMCP 框架
+from mcp.server.fastmcp import FastMCP
+
+# 2. 实例化 MCP 服务器
+mcp = FastMCP("Dual_AI_Communicator")
 
 # 告示板文件的路径
 DB_FILE = "mcp_mission_control.json"
@@ -16,15 +23,15 @@ def check_git_health():
     return True, "Git 环境健康"
 
 def init_db():
-    """初始化 MCP 桥接器，默认进入 Sprint 2 状态"""
+    """初始化 MCP 桥接器，生成一张干净的空白状态板"""
     if not os.path.exists(DB_FILE):
         initial_data = {
             "current_version": "v3.0.6", 
-            "sprint": "Sprint 2", 
-            "task_id": "Task10.3-B", 
+            "sprint": "待定", 
+            "task_id": "UNASSIGNED", 
             "status": "IDLE",
-            "completed_milestones": ["Task10.3-A: Risk Events Persistence"], 
-            "architect_instruction": "请开始 Sprint 2 任务：实现 risk_upgrades 表及其 repository 接口，确保升级 key 唯一约束。",
+            "completed_milestones": [], 
+            "architect_instruction": "系统已初始化，处于空闲(IDLE)状态，等待架构师下发新任务。",
             "engineer_report": "",
             "pr_readiness_package": None,
             "last_update": str(datetime.now())
@@ -32,16 +39,17 @@ def init_db():
         with open(DB_FILE, 'w', encoding='utf-8') as f:
             json.dump(initial_data, f, ensure_ascii=False, indent=4)
 
-def read_mission_state():
+@mcp.tool()
+def read_mission_state() -> dict:
     """供工程师/架构师调用：读取当前的任务全貌和状态"""
     if os.path.exists(DB_FILE):
         with open(DB_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {"error": "任务控制文件不存在，请先让系统初始化。"}
 
-def architect_assign_task(task_desc):
+@mcp.tool()
+def architect_assign_task(task_desc: str) -> str:
     """供首席架构师调用：发布具体开发指令，并安全地自动创建/切换分支"""
-    
     # 1. 先检查 Git 健康度（物理防线）
     is_healthy, health_msg = check_git_health()
     if not is_healthy:
@@ -60,13 +68,13 @@ def architect_assign_task(task_desc):
     branch_name = f"feature/{safe_task_id}"
     
     try:
-        # 尝试创建并切换到新分支
+        # 尝试从 main 分支创建并切换到新分支，防止分支堆叠污染
         result = subprocess.run(
-            ["git", "checkout", "-b", branch_name], 
+            ["git", "checkout", "-b", branch_name, "main"], 
             capture_output=True, text=True
         )
         if result.returncode == 0:
-            branch_msg = f"\n🌿 Git 辅助：已安全为您创建并切换到新分支 [{branch_name}]。"
+            branch_msg = f"\n🌿 Git 辅助：已安全从 main 分支为您创建并切换到新分支 [{branch_name}]。"
         elif "already exists" in result.stderr:
             # 如果分支已存在，尝试直接切换过去
             subprocess.run(["git", "checkout", branch_name], capture_output=True)
@@ -86,16 +94,29 @@ def architect_assign_task(task_desc):
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
         
-    # 5. 返回给 AI 的结果（AI 会把这个结果展示给你看）
     return "✅ 指令已送达工程师，状态切换至：开发中。" + branch_msg
 
-def engineer_submit_work(report, pr_package):
-    """供首席工程师调用：提交成果和 PR 就绪包"""
-    # 【核心防御点】：AI 提交工作前，强制检查 Git 健康度
+@mcp.tool()
+def engineer_submit_work(report: str, pr_package: str, new_version: str = None) -> str:
+    """供首席工程师调用：提交成果和 PR 就绪包，并支持同步规范版本号"""
+    # 1. 物理防线：检查 Git 健康度
     is_healthy, msg = check_git_health()
     if not is_healthy:
         return msg  # 阻断执行，直接向 AI 抛出严重警告
 
+    # 2. 核心防线：强校验工作区状态，防止“未 commit 就 submit”
+    try:
+        status_check = subprocess.run(
+            ["git", "status", "--porcelain"], 
+            capture_output=True, text=True, cwd=os.getcwd()
+        )
+        if status_check.stdout.strip():
+            # stdout 有输出，说明有 M (Modified), A (Added), ?? (Untracked) 的文件
+            return "❌ 拒绝流转状态：检测到工作区存在未 Commit 的代码！请工程师务必先执行 `git add` 和 `git commit` 将代码入库，然后再重新调用此工具提交成果。"
+    except Exception as e:
+        return f"❌ Git 状态校验执行异常: {str(e)}"
+
+    # 3. 校验通过，允许更新告示板
     with open(DB_FILE, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
@@ -104,11 +125,17 @@ def engineer_submit_work(report, pr_package):
     data["pr_readiness_package"] = pr_package 
     data["last_update"] = str(datetime.now())
     
+    # 4. 同步规范版本号
+    if new_version:
+        data["current_version"] = new_version
+    
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
-    return "✅ 成果已提交，PR 就绪包已存档，等待架构师 Review"
+        
+    return f"✅ 成果已提交，PR 就绪包已存档，当前系统版本已同步为 {data.get('current_version', '未知')}，等待架构师 Review。"
 
-def architect_finalize(feedback, approved=False):
+@mcp.tool()
+def architect_finalize(feedback: str, approved: bool = False) -> str:
     """供首席架构师调用：最终代码 Review 裁定"""
     with open(DB_FILE, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -127,4 +154,14 @@ def architect_finalize(feedback, approved=False):
 
 if __name__ == "__main__":
     init_db()
-    print("MCP 桥接服务器已就绪，当前进入 Sprint 2 (Task10.3-B) 状态，已开启 Git 物理防线。")
+    
+    # 动态读取真实的任务状态，避免硬编码污染
+    with open(DB_FILE, 'r', encoding='utf-8') as f:
+        current_data = json.load(f)
+    
+    # 将日志重定向到 stderr，防止污染 stdout 中的 JSON-RPC 通信
+    msg = f"MCP 桥接服务器已就绪。当前任务: {current_data.get('task_id')}，状态: {current_data.get('status')}。"
+    print(msg, file=sys.stderr)
+    
+    # 启动 MCP 服务器的事件循环
+    mcp.run(transport='stdio')
