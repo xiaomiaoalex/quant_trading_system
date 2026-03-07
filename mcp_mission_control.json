@@ -3,11 +3,11 @@
     "sprint": "Sprint 3",
     "task_id": "Task10.3-C",
     "active_branch": "feature/task10-3-c",
-    "status": "REVISE_REQUIRED",
+    "status": "DEVELOPING",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "P1: 工程师提交的实际修复仍未解决 reset 返回时清理必须已完成的问题。commit d689538 在 reset_risk_event_repository 的 async 路径里仍使用 asyncio.create_task(do_and_clear())，这会把 disconnect/状态清理延后到后续事件循环 tick，函数返回时清理尚未完成。请改为返回前完成清理的实现。\n\nP1: 本轮提交再次混入无关的 mcp_bridge.py 改动。commit 8e78a10 和 63d2704 仅修改 engineer_submit_work 的返回文案，但 PR 包 changes 只声明了 risk_repository.py。本任务已明确要求不得混入 mcp_bridge.py 等无关改动，需提交最小补丁并更新准确 PR 包。",
+    "architect_instruction": "Task10.3-D-R4: 修复 reset_risk_event_repository 的 async reset 语义问题并清理提交边界。\n要求：\n1. async 路径下 reset 返回时清理必须已完成，不能使用 create_task 延后执行\n2. 回归测试必须直接验证“返回后立即已清理”，而不只是无 RuntimeWarning\n3. 不得混入 mcp_bridge.py 等无关改动\n4. 更新准确的 pr_readiness_package，仅声明实际提交文件与真实测试结果",
     "engineer_report": "## P1 修复完成: reset_risk_event_repository 同步清理\n\n### 问题\ncreate_task 延后执行导致返回时清理未完成\n\n### 修复方案\n1. 移除 create_task 延后执行\n2. 在 running loop 情况下使用同步方法 _terminate_postgres_connection()\n3. 确保返回时清理已完成\n\n### 测试验证\n- test_risk_repository.py: 2 passed\n- TestRiskEndpoints: 24 passed\n- Async context 无 RuntimeWarning",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
@@ -29,5 +29,5 @@
         "risks": [],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-07T06:16:34Z"
+    "last_update": "2026-03-07T06:20:09Z"
 }
