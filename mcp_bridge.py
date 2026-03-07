@@ -319,17 +319,25 @@ def _extract_task_id(task_desc: str) -> str | None:
     return f"Task{matched[4:]}"
 
 
-def _run_git_checkout(branch_name: str) -> tuple[bool, str]:
+def _run_git_checkout(
+    branch_name: str,
+    *,
+    base_branch: str = "main",
+    create_from_base: bool = False,
+) -> tuple[bool, str]:
     try:
-        create = subprocess.run(
-            ["git", "checkout", "-b", branch_name],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=10,
-        )
-        if create.returncode == 0:
-            return True, f"🌿 已自动创建并切换到新分支 [{branch_name}]。"
+        create_err = ""
+        if create_from_base:
+            create = subprocess.run(
+                ["git", "checkout", "-b", branch_name, base_branch],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+                timeout=10,
+            )
+            if create.returncode == 0:
+                return True, f"🌿 已自动从 [{base_branch}] 创建并切换到新分支 [{branch_name}]。"
+            create_err = (create.stderr or create.stdout or "").strip()
 
         switch = subprocess.run(
             ["git", "checkout", branch_name],
@@ -341,9 +349,8 @@ def _run_git_checkout(branch_name: str) -> tuple[bool, str]:
         if switch.returncode == 0:
             return True, f"🌿 已自动切换到现有分支 [{branch_name}]。"
 
-        err_create = (create.stderr or create.stdout or "").strip()
         err_switch = (switch.stderr or switch.stdout or "").strip()
-        return False, f"Git 辅助异常。create: {err_create}; switch: {err_switch}"
+        return False, f"Git 辅助异常。create: {create_err}; switch: {err_switch}"
     except subprocess.TimeoutExpired:
         return False, "Git checkout 超时，请检查仓库状态后重试。"
     except Exception as e:
@@ -428,14 +435,18 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
             if not can_transit:
                 return f"❌ {transition_msg}"
 
+            current_task_id = state.get("task_id", "UNASSIGNED")
             next_task_id = task_id.strip() if isinstance(task_id, str) else ""
             if next_task_id:
                 normalized_task_id = next_task_id
             else:
-                normalized_task_id = _extract_task_id(task_desc) or state.get("task_id", "UNASSIGNED")
+                normalized_task_id = _extract_task_id(task_desc) or current_task_id
 
             branch_name = _safe_branch_name(normalized_task_id)
-            git_ok, git_msg = _run_git_checkout(branch_name)
+            git_ok, git_msg = _run_git_checkout(
+                branch_name,
+                create_from_base=state["status"] == "IDLE" or normalized_task_id != current_task_id,
+            )
             if not git_ok:
                 return f"❌ {git_msg}"
 
