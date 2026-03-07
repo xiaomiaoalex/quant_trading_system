@@ -475,8 +475,8 @@ class PostgreSQLStorage:
                 async def _execute_step(step_name: str, operation):
                     try:
                         return await operation()
-                    except Exception:
-                        logger.exception("%s failed", step_name)
+                    except (asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                        logger.exception("%s failed [%s]", step_name, exc.__class__.__name__)
                         raise
 
                 created = False
@@ -500,34 +500,34 @@ class PostgreSQLStorage:
                     if existing:
                         event_id = existing["event_id"]
                     created = False
-                except Exception:
-                    raise
                 
-                result_upgrade = await _execute_step(
+                upgrade_marker = await _execute_step(
                     "Upgrade record insert",
-                    lambda: conn.execute(
+                    lambda: conn.fetchval(
                         """
                         INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                         VALUES ($1, $2, $3, $4, $5, NOW())
                         ON CONFLICT (upgrade_key) DO NOTHING
+                        RETURNING 1
                         """,
                         upgrade_key, scope, upgrade_level, reason, dedup_key,
                     ),
                 )
-                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                is_first_upgrade = upgrade_marker is not None
                 
-                result_effect = await _execute_step(
+                effect_marker = await _execute_step(
                     "Effect record insert",
-                    lambda: conn.execute(
+                    lambda: conn.fetchval(
                         """
                         INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
                         VALUES ($1, $2, $3, 'PENDING', 1, NOW())
                         ON CONFLICT (upgrade_key) DO NOTHING
+                        RETURNING 1
                         """,
                         upgrade_key, scope, upgrade_level,
                     )
                 )
-                is_first_effect = result_effect != "INSERT 0 0"
+                is_first_effect = effect_marker is not None
                 
                 return event_id, created, is_first_upgrade, is_first_effect
 
@@ -648,15 +648,16 @@ class PostgreSQLStorage:
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
         
         async with self._pool.acquire() as conn:
-            result = await conn.execute(
+            marker = await conn.fetchval(
                 """
                 INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (upgrade_key) DO NOTHING
+                RETURNING 1
                 """,
                 upgrade_key, scope, level, reason, dedup_key, recorded_at,
             )
-            return result != "INSERT 0 0"
+            return marker is not None
 
     async def clear(self) -> None:
         """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""
@@ -679,25 +680,27 @@ class PostgreSQLStorage:
         """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                result_upgrade = await conn.execute(
+                upgrade_marker = await conn.fetchval(
                     """
                     INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                     VALUES ($1, $2, $3, $4, $5, NOW())
                     ON CONFLICT (upgrade_key) DO NOTHING
+                    RETURNING 1
                     """,
                     upgrade_key, scope, level, reason, dedup_key,
                 )
-                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                is_first_upgrade = upgrade_marker is not None
                 
-                result_effect = await conn.execute(
+                effect_marker = await conn.fetchval(
                     """
                     INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
                     VALUES ($1, $2, $3, 'PENDING', 1, NOW())
                     ON CONFLICT (upgrade_key) DO NOTHING
+                    RETURNING 1
                     """,
                     upgrade_key, scope, level,
                 )
-                is_first_effect = result_effect != "INSERT 0 0"
+                is_first_effect = effect_marker is not None
                 
                 return is_first_upgrade, is_first_effect
 
