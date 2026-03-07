@@ -212,3 +212,5 @@ Thumbs.db
 *.tmp
 *~
 
+mcp_mission_control.json
+*.lock
