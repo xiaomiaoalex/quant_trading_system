@@ -58,8 +58,27 @@ class RiskEventRepository:
                         pool.terminate()
                     except Exception as terminate_error:
                         logger.debug(f"Failed to terminate PostgreSQL pool during reset: {terminate_error}")
+        self._clear_postgres_state()
+
+    def _terminate_postgres_connection(self) -> None:
+        """Synchronously terminate cached PostgreSQL storage for async-context resets."""
+        if self._postgres_storage is not None:
+            pool = getattr(self._postgres_storage, "_pool", None)
+            if pool is not None:
+                try:
+                    pool.terminate()
+                except Exception as e:
+                    logger.debug(f"Failed to terminate PostgreSQL pool during sync reset: {e}")
+            self._postgres_storage._pool = None
+            self._postgres_storage._connected = False
+        self._clear_postgres_state()
+
+    def _clear_postgres_state(self) -> None:
+        """Clear repository PostgreSQL state after disconnect/terminate."""
         self._postgres_storage = None
         self._use_postgres = False
+        self._loop = None
+        self._init_lock = None
 
     async def _ensure_postgres(self) -> bool:
         """确保 PostgreSQL 可用"""
@@ -311,14 +330,37 @@ def get_risk_event_repository() -> RiskEventRepository:
 
 
 def reset_risk_event_repository() -> None:
-    """重置全局 RiskEventRepository 实例"""
+    """重置全局 RiskEventRepository 实例
+    
+    支持在 async 和 sync 上下文中安全调用。
+    确保返回时清理已完成。
+    """
     global _repository_instance
-    if _repository_instance is not None and _repository_instance._postgres_storage is not None:
+    if _repository_instance is None:
+        return
+    
+    repo = _repository_instance
+    
+    if repo._postgres_storage is not None:
         try:
-            asyncio.run(_repository_instance._reset_postgres_connection())
+            asyncio.get_running_loop()
+            in_async_context = True
         except RuntimeError:
-            _repository_instance._postgres_storage = None
-            _repository_instance._use_postgres = False
-            _repository_instance._loop = None
-            _repository_instance._init_lock = None
+            in_async_context = False
+        
+        if in_async_context:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    repo._terminate_postgres_connection()
+                else:
+                    loop.run_until_complete(repo._reset_postgres_connection())
+            except Exception:
+                repo._terminate_postgres_connection()
+        else:
+            try:
+                asyncio.run(repo._reset_postgres_connection())
+            except RuntimeError:
+                repo._terminate_postgres_connection()
+    
     _repository_instance = None
