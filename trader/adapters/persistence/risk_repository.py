@@ -1,7 +1,7 @@
 """
 Risk Events Repository - 风险事件持久化仓库
 =============================================
-负责 risk_events 和 upgrade_records 的持久化。
+负责 risk_events 和 risk_upgrades 的持久化。
 
 特点：
 - 优先使用 PostgreSQL 进行持久化
@@ -14,7 +14,7 @@ Note:
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 
 from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.adapters.persistence.postgres import (
@@ -33,7 +33,7 @@ class RiskEventRepository:
     
     职责：
     - 管理 risk_events 的持久化
-    - 管理 upgrade_records 的持久化
+    - 管理 risk_upgrades 的持久化
     - 提供幂等性保证（dedup_key 唯一约束）
     - PostgreSQL 不可用时自动回退到 InMemoryStorage
     """
@@ -42,13 +42,59 @@ class RiskEventRepository:
         self._memory_storage = storage or get_storage()
         self._postgres_storage: Optional[PostgreSQLStorage] = None
         self._use_postgres = False
-        self._init_lock = asyncio.Lock()
+        self._init_lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    async def _reset_postgres_connection(self) -> None:
+        """Reset cached PostgreSQL storage when loop/context changes."""
+        if self._postgres_storage is not None:
+            try:
+                await self._postgres_storage.disconnect()
+            except Exception as e:
+                logger.debug(f"Failed to disconnect PostgreSQL storage during reset: {e}")
+                pool = getattr(self._postgres_storage, "_pool", None)
+                if pool is not None:
+                    try:
+                        pool.terminate()
+                    except Exception as terminate_error:
+                        logger.debug(f"Failed to terminate PostgreSQL pool during reset: {terminate_error}")
+        self._clear_postgres_state()
+
+    def _terminate_postgres_connection(self) -> None:
+        """Synchronously terminate cached PostgreSQL storage for async-context resets."""
+        if self._postgres_storage is not None:
+            pool = getattr(self._postgres_storage, "_pool", None)
+            if pool is not None:
+                try:
+                    pool.terminate()
+                except Exception as e:
+                    logger.debug(f"Failed to terminate PostgreSQL pool during sync reset: {e}")
+            self._postgres_storage._pool = None
+            self._postgres_storage._connected = False
+        self._clear_postgres_state()
+
+    def _clear_postgres_state(self) -> None:
+        """Clear repository PostgreSQL state after disconnect/terminate."""
+        self._postgres_storage = None
+        self._use_postgres = False
+        self._loop = None
+        self._init_lock = None
 
     async def _ensure_postgres(self) -> bool:
         """确保 PostgreSQL 可用"""
+        current_loop = asyncio.get_running_loop()
+
+        if self._loop is not current_loop:
+            await self._reset_postgres_connection()
+            self._loop = current_loop
+            self._init_lock = asyncio.Lock()
+
         if self._use_postgres and self._postgres_storage is not None:
             return True
-        
+
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+
         async with self._init_lock:
             if self._use_postgres and self._postgres_storage is not None:
                 return True
@@ -143,7 +189,7 @@ class RiskEventRepository:
                 logger.warning(f"PostgreSQL save_upgrade_record failed: {e}, falling back to in-memory")
         
         now = datetime.now(timezone.utc).isoformat() + "Z"
-        self._memory_storage.upgrade_records[upgrade_key] = {
+        self._memory_storage.risk_upgrades[upgrade_key] = {
             **upgrade_data,
             "recorded_at": now,
         }
@@ -173,7 +219,103 @@ class RiskEventRepository:
             except Exception as e:
                 logger.warning(f"PostgreSQL get_upgrade_record failed: {e}, falling back to in-memory")
         
-        return self._memory_storage.upgrade_records.get(upgrade_key)
+        return self._memory_storage.risk_upgrades.get(upgrade_key)
+
+    async def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
+        """
+        Try to record an upgrade action. Returns True if first write, False if already exists.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing:
+                - scope: Risk scope
+                - level: Target level
+                - reason: Upgrade reason
+                - dedup_key: Related dedup key
+                
+        Returns:
+            True if this is the first time recording this upgrade_key, False if already exists
+        """
+        if await self._ensure_postgres():
+            try:
+                result = await self._postgres_storage.try_record_upgrade(upgrade_key, upgrade_data)
+                return result
+            except Exception as e:
+                logger.warning(f"PostgreSQL try_record_upgrade failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.try_record_upgrade(upgrade_key, upgrade_data)
+
+    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int,
+                                            reason: str, dedup_key: str) -> Tuple[bool, bool]:
+        """
+        Atomically record upgrade and side-effect intent in a single transaction.
+        
+        Returns:
+            Tuple of (is_first_upgrade, is_first_effect)
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.try_record_upgrade_with_effect(
+                    upgrade_key, scope, level, reason, dedup_key
+                )
+            except Exception as e:
+                logger.warning(f"PostgreSQL try_record_upgrade_with_effect failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.try_record_upgrade_with_effect(
+            upgrade_key, scope, level, reason, dedup_key
+        )
+
+    async def mark_effect_applied(self, upgrade_key: str) -> None:
+        """Mark side-effect as successfully applied"""
+        if await self._ensure_postgres():
+            try:
+                await self._postgres_storage.mark_effect_applied(upgrade_key)
+                return
+            except Exception as e:
+                logger.warning(f"PostgreSQL mark_effect_applied failed: {e}, falling back to in-memory")
+        
+        self._memory_storage.mark_effect_applied(upgrade_key)
+
+    async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
+        """Mark side-effect as failed with error message"""
+        if await self._ensure_postgres():
+            try:
+                await self._postgres_storage.mark_effect_failed(upgrade_key, error)
+                return
+            except Exception as e:
+                logger.warning(f"PostgreSQL mark_effect_failed failed: {e}, falling back to in-memory")
+        
+        self._memory_storage.mark_effect_failed(upgrade_key, error)
+
+    async def get_pending_effects(self) -> List[Dict[str, Any]]:
+        """Get all pending or failed effects for recovery"""
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.get_pending_effects()
+            except Exception as e:
+                logger.warning(f"PostgreSQL get_pending_effects failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.get_pending_effects()
+
+    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
+                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+        """
+        Atomically ingest risk event and record upgrade with effect.
+        
+        Returns:
+            Tuple of (event_id, created, is_first_upgrade, is_first_effect)
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_storage.ingest_event_with_upgrade(
+                    event_data, upgrade_key, upgrade_level
+                )
+            except Exception as e:
+                logger.warning(f"PostgreSQL ingest_event_with_upgrade failed: {e}, falling back to in-memory")
+        
+        return self._memory_storage.ingest_event_with_upgrade(
+            event_data, upgrade_key, upgrade_level
+        )
 
 
 _repository_instance: Optional[RiskEventRepository] = None
@@ -188,6 +330,37 @@ def get_risk_event_repository() -> RiskEventRepository:
 
 
 def reset_risk_event_repository() -> None:
-    """重置全局 RiskEventRepository 实例"""
+    """重置全局 RiskEventRepository 实例
+    
+    支持在 async 和 sync 上下文中安全调用。
+    确保返回时清理已完成。
+    """
     global _repository_instance
+    if _repository_instance is None:
+        return
+    
+    repo = _repository_instance
+    
+    if repo._postgres_storage is not None:
+        try:
+            asyncio.get_running_loop()
+            in_async_context = True
+        except RuntimeError:
+            in_async_context = False
+        
+        if in_async_context:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    repo._terminate_postgres_connection()
+                else:
+                    loop.run_until_complete(repo._reset_postgres_connection())
+            except Exception:
+                repo._terminate_postgres_connection()
+        else:
+            try:
+                asyncio.run(repo._reset_postgres_connection())
+            except RuntimeError:
+                repo._terminate_postgres_connection()
+    
     _repository_instance = None

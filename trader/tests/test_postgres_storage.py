@@ -85,8 +85,11 @@ class TestPostgreSQLStorage:
     async def storage(self):
         """Create storage instance"""
         storage = PostgreSQLStorage()
+        await storage.connect()
+        await storage.clear()
         yield storage
         if storage.is_connected:
+            await storage.clear()
             await storage.disconnect()
 
     @pytest.mark.asyncio
@@ -310,7 +313,7 @@ class TestPostgresStorageSchema:
 
 @skip_if_no_postgres
 class TestRiskEventsPersistence:
-    """Test risk_events and upgrade_records persistence"""
+    """Test risk_events and risk_upgrades persistence"""
 
     @pytest.fixture
     async def storage(self):
@@ -412,6 +415,41 @@ class TestRiskEventsPersistence:
         assert stored.data.get("account_id") == "acc_001"
 
     @pytest.mark.asyncio
+    async def test_ingest_event_with_upgrade_preserves_full_event_data(self, storage):
+        """Transactional ingest path should serialize risk_events.data consistently."""
+        event_data = {
+            "dedup_key": "dedup-key-ingest-full-001",
+            "scope": "GLOBAL",
+            "reason": "ENV_RISK:AdapterDegraded:binance_adapter",
+            "severity": "HIGH",
+            "metrics": {"private_stream_state": "DEGRADED"},
+            "recommended_level": 1,
+            "adapter_name": "binance_adapter",
+            "venue": "BINANCE",
+            "account_id": "acc_001",
+            "ts_ms": 1700000000000,
+        }
+
+        event_id, created, is_first_upgrade, is_first_effect = await storage.ingest_event_with_upgrade(
+            event_data,
+            "upgrade:GLOBAL:1:dedup-key-ingest-full-001",
+            1,
+        )
+
+        assert event_id is not None
+        assert created is True
+        assert is_first_upgrade is True
+        assert is_first_effect is True
+
+        stored = await storage.get_risk_event("dedup-key-ingest-full-001")
+        assert stored is not None
+        assert stored.data.get("severity") == "HIGH"
+        assert stored.data.get("metrics") == {"private_stream_state": "DEGRADED"}
+        assert stored.data.get("adapter_name") == "binance_adapter"
+        assert stored.data.get("venue") == "BINANCE"
+        assert stored.data.get("account_id") == "acc_001"
+
+    @pytest.mark.asyncio
     async def test_get_nonexistent_risk_event(self, storage):
         """Test getting non-existent risk event returns None"""
         stored = await storage.get_risk_event("nonexistent-key")
@@ -422,6 +460,44 @@ class TestRiskEventsPersistence:
         """Test getting non-existent upgrade record returns None"""
         stored = await storage.get_upgrade_record("nonexistent-upgrade-key")
         assert stored is None
+
+    @pytest.mark.asyncio
+    async def test_risk_upgrade_effects_upgrade_key_is_effectively_unique(self, storage):
+        """PRIMARY KEY on upgrade_key must prevent duplicate effect intents."""
+        upgrade_key = "upgrade:GLOBAL:2:dedup-key-unique"
+
+        first_upgrade, first_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "first", "dedup-key-unique"
+        )
+        assert first_upgrade is True
+        assert first_effect is True
+
+        second_upgrade, second_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "first", "dedup-key-unique"
+        )
+        assert second_upgrade is False
+        assert second_effect is False
+
+        pending = await storage.get_pending_effects()
+        matching = [effect for effect in pending if effect["upgrade_key"] == upgrade_key]
+        assert len(matching) == 1
+
+    @pytest.mark.asyncio
+    async def test_risk_upgrade_effects_has_updated_at_index(self, storage):
+        """Recovery query should have an index backing ORDER BY updated_at."""
+        async with storage._pool.acquire() as conn:
+            index_def = await conn.fetchval(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND tablename = 'risk_upgrade_effects'
+                  AND indexname = 'idx_risk_upgrade_effects_updated_at'
+                """
+            )
+
+        assert index_def is not None
+        assert "updated_at" in index_def
 
 
 @skip_if_no_asyncpg

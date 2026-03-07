@@ -212,3 +212,9 @@ Thumbs.db
 *.tmp
 *~
 
+
+
+.mcp_bridge_test_tmp/
+.mcp_smoke_*/
+tmp*/
+*.tmp

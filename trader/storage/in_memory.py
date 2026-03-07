@@ -5,7 +5,7 @@ Provides in-memory storage for strategies, deployments, orders, positions, etc.
 """
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
 
 
@@ -46,7 +46,8 @@ class ControlPlaneInMemoryStorage:
         # Risk limits
         self.risk_limits: List[Dict[str, Any]] = []
         self.risk_events_by_key: Dict[str, Dict[str, Any]] = {}
-        self.upgrade_records: Dict[str, Dict[str, Any]] = {}
+        self.risk_upgrades: Dict[str, Dict[str, Any]] = {}
+        self.risk_upgrade_effects: Dict[str, Dict[str, Any]] = {}
 
         # Orders & Executions
         self.orders: Dict[str, Dict[str, Any]] = {}
@@ -273,15 +274,151 @@ class ControlPlaneInMemoryStorage:
 
     def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
         """Get upgrade record by key"""
-        return self.upgrade_records.get(upgrade_key)
+        return self.risk_upgrades.get(upgrade_key)
 
     def record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
         """Record an upgrade action for idempotency"""
         now = datetime.now(timezone.utc).isoformat() + "Z"
-        self.upgrade_records[upgrade_key] = {
+        self.risk_upgrades[upgrade_key] = {
             **upgrade_data,
             "recorded_at": now,
         }
+
+    def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
+        """
+        Try to record an upgrade action. Returns True if first write, False if already exists.
+        
+        Args:
+            upgrade_key: Unique upgrade key
+            upgrade_data: Dictionary containing upgrade data
+            
+        Returns:
+            True if this is the first time recording this upgrade_key, False if already exists
+        """
+        if upgrade_key in self.risk_upgrades:
+            return False
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        self.risk_upgrades[upgrade_key] = {
+            **upgrade_data,
+            "recorded_at": now,
+        }
+        return True
+
+    def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int,
+                                        reason: str, dedup_key: str) -> Tuple[bool, bool]:
+        """
+        Atomically record upgrade and side-effect intent.
+        
+        Returns:
+            Tuple of (is_first_upgrade, is_first_effect)
+        """
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        
+        is_first_upgrade = upgrade_key not in self.risk_upgrades
+        if is_first_upgrade:
+            self.risk_upgrades[upgrade_key] = {
+                "scope": scope,
+                "level": level,
+                "reason": reason,
+                "dedup_key": dedup_key,
+                "recorded_at": now,
+            }
+        
+        is_first_effect = upgrade_key not in self.risk_upgrade_effects
+        if is_first_effect:
+            self.risk_upgrade_effects[upgrade_key] = {
+                "scope": scope,
+                "level": level,
+                "status": "PENDING",
+                "attempts": 1,
+                "last_error": None,
+                "updated_at": now,
+            }
+        
+        return is_first_upgrade, is_first_effect
+
+    def mark_effect_applied(self, upgrade_key: str) -> None:
+        """Mark side-effect as successfully applied"""
+        if upgrade_key in self.risk_upgrade_effects:
+            self.risk_upgrade_effects[upgrade_key]["status"] = "APPLIED"
+            self.risk_upgrade_effects[upgrade_key]["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+
+    def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
+        """Mark side-effect as failed with error message"""
+        if upgrade_key in self.risk_upgrade_effects:
+            self.risk_upgrade_effects[upgrade_key]["status"] = "FAILED"
+            self.risk_upgrade_effects[upgrade_key]["last_error"] = error
+            self.risk_upgrade_effects[upgrade_key]["attempts"] = self.risk_upgrade_effects[upgrade_key].get("attempts", 0) + 1
+            self.risk_upgrade_effects[upgrade_key]["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+
+    def get_pending_effects(self) -> List[Dict[str, Any]]:
+        """Get all pending or failed effects for recovery"""
+        return [
+            {**effect, "upgrade_key": key}
+            for key, effect in self.risk_upgrade_effects.items()
+            if effect.get("status") in ("PENDING", "FAILED")
+        ]
+
+    def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
+                                  upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+        """
+        Atomically ingest risk event and record upgrade with effect.
+        
+        This implements: BEGIN -> dedup -> upgrade record -> side-effect intent -> COMMIT
+        
+        Args:
+            event_data: Dictionary containing full event data
+            upgrade_key: The upgrade key
+            upgrade_level: Target level for upgrade
+            
+        Returns:
+            Tuple of (event_id, created, is_first_upgrade, is_first_effect)
+        """
+        event_id = event_data.get("event_id") or str(uuid.uuid4())
+        dedup_key = event_data["dedup_key"]
+        scope = event_data.get("scope", "GLOBAL")
+        reason = event_data.get("reason", "")
+        
+        created = False
+        if dedup_key not in self.risk_events_by_key:
+            now = datetime.now(timezone.utc).isoformat() + "Z"
+            self.risk_events_by_key[dedup_key] = {
+                "event_id": event_id,
+                "dedup_key": dedup_key,
+                "scope": scope,
+                "reason": reason,
+                "recommended_level": event_data.get("recommended_level", 0),
+                "ingested_at": now,
+                "data": event_data,
+            }
+            created = True
+        else:
+            event_id = self.risk_events_by_key[dedup_key]["event_id"]
+        
+        is_first_upgrade = upgrade_key not in self.risk_upgrades
+        if is_first_upgrade:
+            now = datetime.now(timezone.utc).isoformat() + "Z"
+            self.risk_upgrades[upgrade_key] = {
+                "scope": scope,
+                "level": upgrade_level,
+                "reason": reason,
+                "dedup_key": dedup_key,
+                "recorded_at": now,
+            }
+        
+        is_first_effect = upgrade_key not in self.risk_upgrade_effects
+        if is_first_effect:
+            now = datetime.now(timezone.utc).isoformat() + "Z"
+            self.risk_upgrade_effects[upgrade_key] = {
+                "scope": scope,
+                "level": upgrade_level,
+                "status": "PENDING",
+                "attempts": 1,
+                "last_error": None,
+                "updated_at": now,
+            }
+        
+        return event_id, created, is_first_upgrade, is_first_effect
 
     # ==================== Order Methods ====================
 
