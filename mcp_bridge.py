@@ -326,6 +326,7 @@ def _run_git_checkout(
     create_from_base: bool = False,
 ) -> tuple[bool, str]:
     try:
+        create_err = ""
         if create_from_base:
             create = subprocess.run(
                 ["git", "checkout", "-b", branch_name, base_branch],
@@ -336,8 +337,7 @@ def _run_git_checkout(
             )
             if create.returncode == 0:
                 return True, f"🌿 已自动从 [{base_branch}] 创建并切换到新分支 [{branch_name}]。"
-        else:
-            create = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+            create_err = (create.stderr or create.stdout or "").strip()
 
         switch = subprocess.run(
             ["git", "checkout", branch_name],
@@ -349,9 +349,8 @@ def _run_git_checkout(
         if switch.returncode == 0:
             return True, f"🌿 已自动切换到现有分支 [{branch_name}]。"
 
-        err_create = (create.stderr or create.stdout or "").strip()
         err_switch = (switch.stderr or switch.stdout or "").strip()
-        return False, f"Git 辅助异常。create: {err_create}; switch: {err_switch}"
+        return False, f"Git 辅助异常。create: {create_err}; switch: {err_switch}"
     except subprocess.TimeoutExpired:
         return False, "Git checkout 超时，请检查仓库状态后重试。"
     except Exception as e:
