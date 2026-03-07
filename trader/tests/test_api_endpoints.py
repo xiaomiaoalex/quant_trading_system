@@ -9,8 +9,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from trader.api.main import app
+from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
 from trader.storage.in_memory import reset_storage
+
+
+async def _clear_postgres_risk_state() -> None:
+    if not is_postgres_available():
+        return
+    storage = PostgreSQLStorage()
+    await storage.connect()
+    try:
+        await storage.clear()
+    finally:
+        await storage.disconnect()
+        await close_pool()
 
 
 class TestHealthEndpoint:
@@ -21,6 +34,7 @@ class TestHealthEndpoint:
         self.client = TestClient(app)
         reset_storage()
         reset_risk_event_repository()
+        asyncio.run(_clear_postgres_risk_state())
 
     def test_health_check(self):
         """Test health check returns 200"""
@@ -290,6 +304,8 @@ class TestRiskEndpoints:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_risk_event_repository()
+        asyncio.run(_clear_postgres_risk_state())
 
     def test_get_risk_limits_default(self):
         """Test getting default risk limits"""

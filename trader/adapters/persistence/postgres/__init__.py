@@ -145,8 +145,9 @@ class PostgreSQLStorage:
 
     async def connect(self) -> None:
         """Connect to PostgreSQL"""
+        pool_kwargs = {"min_size": 1, "max_size": 2}
         if self._connection_string:
-            self._pool = await asyncpg.create_pool(self._connection_string)
+            self._pool = await asyncpg.create_pool(self._connection_string, **pool_kwargs)
         else:
             self._pool = await asyncpg.create_pool(
                 host=self._host,
@@ -154,6 +155,7 @@ class PostgreSQLStorage:
                 database=self._database,
                 user=self._user,
                 password=self._password,
+                **pool_kwargs,
             )
         await self._initialize_schema()
         self._connected = True
@@ -465,8 +467,6 @@ class PostgreSQLStorage:
             - is_first_upgrade: True if this is first time recording this upgrade
             - is_first_effect: True if this is first time recording this effect
         """
-        from asyncpg import UniqueViolationError
-        
         event_id = event_data.get("event_id") or str(uuid.uuid4())
         dedup_key = event_data["dedup_key"]
         scope = event_data.get("scope", "GLOBAL")
@@ -477,34 +477,42 @@ class PostgreSQLStorage:
         
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                async def _execute_step(step_name: str, operation):
+                async def _execute_step(step_name: str, operation, **context: Any):
                     try:
                         return await operation()
                     except (asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
-                        logger.exception("%s failed [%s]", step_name, exc.__class__.__name__)
+                        logger.exception(
+                            "%s failed [%s] context=%s",
+                            step_name,
+                            exc.__class__.__name__,
+                            context,
+                        )
                         raise
 
-                created = False
-                try:
-                    await _execute_step(
-                        "Risk event insert",
-                        lambda: conn.execute(
-                            """
-                            INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            """,
-                            event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
-                        ),
-                    )
-                    created = True
-                except UniqueViolationError:
+                event_marker = await _execute_step(
+                    "Risk event insert",
+                    lambda: conn.fetchval(
+                        """
+                        INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (dedup_key) DO NOTHING
+                        RETURNING event_id
+                        """,
+                        event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                    ),
+                    event_id=event_id,
+                    dedup_key=dedup_key,
+                    scope=scope,
+                    recommended_level=recommended_level,
+                )
+                created = event_marker is not None
+                if not created:
                     existing = await conn.fetchrow(
                         "SELECT event_id FROM risk_events WHERE dedup_key = $1",
                         dedup_key,
                     )
                     if existing:
                         event_id = existing["event_id"]
-                    created = False
                 
                 upgrade_marker = await _execute_step(
                     "Upgrade record insert",
@@ -517,6 +525,10 @@ class PostgreSQLStorage:
                         """,
                         upgrade_key, scope, upgrade_level, reason, dedup_key,
                     ),
+                    upgrade_key=upgrade_key,
+                    dedup_key=dedup_key,
+                    scope=scope,
+                    upgrade_level=upgrade_level,
                 )
                 is_first_upgrade = upgrade_marker is not None
                 
@@ -530,7 +542,10 @@ class PostgreSQLStorage:
                         RETURNING 1
                         """,
                         upgrade_key, scope, upgrade_level,
-                    )
+                    ),
+                    upgrade_key=upgrade_key,
+                    scope=scope,
+                    upgrade_level=upgrade_level,
                 )
                 is_first_effect = effect_marker is not None
                 
@@ -827,9 +842,16 @@ async def close_pool() -> None:
     """Close the cached connection pool"""
     global _pool_cache, _pool_config_hash
     if _pool_cache is not None:
-        await _pool_cache.close()
+        pool = _pool_cache
         _pool_cache = None
         _pool_config_hash = None
+        try:
+            await pool.close()
+        except Exception:
+            try:
+                pool.terminate()
+            except Exception:
+                pass
 
 
 async def check_postgres_connection(timeout: float = 2.0) -> tuple[bool, str]:
