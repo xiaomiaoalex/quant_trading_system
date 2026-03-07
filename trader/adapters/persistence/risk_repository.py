@@ -333,6 +333,7 @@ def reset_risk_event_repository() -> None:
     """重置全局 RiskEventRepository 实例
     
     支持在 async 和 sync 上下文中安全调用。
+    确保返回时清理已完成。
     """
     global _repository_instance
     if _repository_instance is None:
@@ -351,11 +352,7 @@ def reset_risk_event_repository() -> None:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    async def do_and_clear():
-                        await repo._reset_postgres_connection()
-                        repo._postgres_storage = None
-                        repo._use_postgres = False
-                    asyncio.create_task(do_and_clear())
+                    repo._terminate_postgres_connection()
                 else:
                     loop.run_until_complete(repo._reset_postgres_connection())
             except Exception:

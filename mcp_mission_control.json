@@ -3,28 +3,23 @@
     "sprint": "Sprint 3",
     "task_id": "Task10.3-C",
     "active_branch": "feature/task10-3-c",
-    "status": "REVISE_REQUIRED",
+    "status": "REVIEW_PENDING",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "P1: reset_risk_event_repository 的 async 路径仍然不满足“调用返回时已完成清理”的语义。当前实现用 create_task 延后执行清理；我实测在 async 上下文中，函数返回后立即检查时 disconnect/terminate 都还未发生，只有让事件循环再跑一个 tick 后清理才发生。这意味着调用方在 reset 后立刻重新初始化时，仍可能撞到旧连接状态。\n\nP1: 本次提交夹带了未在 PR 包声明中的无关改动：.gitignore 与 mcp_bridge.py。尤其 mcp_bridge.py 修改了 engineer_submit_work 的返回文案，和本任务无关，不应混入此修复。请提交最小补丁，并更新准确的 PR 包。",
-    "engineer_report": "## P1 修复完成: reset_risk_event_repository 异步上下文安全\n\n### 问题\nasyncio.run() 在已有事件循环中调用时会产生警告和连接泄漏\n\n### 修复方案\n1. 检测当前是否在 async 上下文中 (get_running_loop)\n2. 在 async 上下文中使用现有 event loop 执行清理\n3. 支持 loop.is_running() 的情况 (使用 create_task + 同步清理状态)\n4. sync 上下文使用 asyncio.run()\n\n### 测试验证\n- test_risk_repository.py: 2 passed\n- TestRiskEndpoints: 24 passed\n- Async context 无 RuntimeWarning",
+    "architect_instruction": "",
+    "engineer_report": "## P1 修复完成: reset_risk_event_repository 同步清理\n\n### 问题\ncreate_task 延后执行导致返回时清理未完成\n\n### 修复方案\n1. 移除 create_task 延后执行\n2. 在 running loop 情况下使用同步方法 _terminate_postgres_connection()\n3. 确保返回时清理已完成\n\n### 测试验证\n- test_risk_repository.py: 2 passed\n- TestRiskEndpoints: 24 passed\n- Async context 无 RuntimeWarning",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
         "target": "main",
         "status": "ready",
-        "pr_title": "fix: reset_risk_event_repository 异步上下文安全 (P1)",
-        "pr_description": "## 修复内容\n- 修复 reset_risk_event_repository 在 async 上下文中调用时的连接泄漏和警告\n- 支持 sync/async 双上下文安全调用\n- 使用 asyncio.get_event_loop() 和 create_task 处理 running loop\n\n## 变更文件\n- trader/adapters/persistence/risk_repository.py: reset_risk_event_repository 异步安全修复\n- trader/tests/test_risk_repository.py: 回归测试更新\n\n## 测试\n- test_risk_repository.py: 2 passed\n- TestRiskEndpoints: 24 passed\n- Async context 无 RuntimeWarning",
+        "pr_title": "fix: reset_risk_event_repository 同步清理 (P1)",
+        "pr_description": "## 修复内容\n- 移除 create_task 延后执行\n- 使用 _terminate_postgres_connection() 同步方法确保返回时清理完成\n\n## 测试\n- test_risk_repository.py: 2 passed\n- TestRiskEndpoints: 24 passed",
         "changes": [
             {
                 "file": "trader/adapters/persistence/risk_repository.py",
                 "type": "modify",
-                "description": "reset_risk_event_repository 异步安全修复"
-            },
-            {
-                "file": "trader/tests/test_risk_repository.py",
-                "type": "modify",
-                "description": "回归测试更新"
+                "description": "reset_risk_event_repository 同步清理"
             }
         ],
         "test_results": {
@@ -34,5 +29,5 @@
         "risks": [],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-07T06:02:24Z"
+    "last_update": "2026-03-07T06:14:52Z"
 }
