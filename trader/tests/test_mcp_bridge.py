@@ -68,6 +68,7 @@ def temp_git_repo(monkeypatch: pytest.MonkeyPatch) -> Path:
     (repo_dir / "README.md").write_text("init\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo_dir, check=True)
 
     monkeypatch.setattr(mcp_bridge, "PROJECT_ROOT", str(repo_dir))
     try:
@@ -126,6 +127,31 @@ def test_architect_assign_task_auto_updates_task_id_and_branch_from_description(
         ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
     ).stdout.strip()
     assert branch == "feature/task10-3-e"
+
+
+def test_architect_assign_task_new_task_branches_from_main_not_current_head(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    subprocess.run(["git", "checkout", "-b", "feature/task10-3-c"], cwd=temp_git_repo, check=True)
+    (temp_git_repo / "polluted.txt").write_text("polluted\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=temp_git_repo, check=True)
+    subprocess.run(["git", "commit", "-m", "polluted task branch"], cwd=temp_git_repo, check=True)
+
+    _write_state(mission_file, _base_state("APPROVED_FOR_PUSH"))
+
+    msg = mcp_bridge.architect_assign_task("Task10.3-E: clean branch mission")
+    assert msg.startswith("✅")
+    assert "从 [main] 创建并切换到新分支" in msg
+
+    state = _read_state(mission_file)
+    assert state["task_id"] == "Task10.3-E"
+    assert state["active_branch"] == "feature/task10-3-e"
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert branch == "feature/task10-3-e"
+    assert not (temp_git_repo / "polluted.txt").exists()
 
 
 def test_architect_assign_task_explicit_task_id_overrides_description(
