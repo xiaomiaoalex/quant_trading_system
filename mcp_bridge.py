@@ -412,7 +412,7 @@ def read_mission_state() -> str:
 
 
 @mcp.tool()
-def architect_assign_task(task_desc: str) -> str:
+def architect_assign_task(task_desc: str, task_id: str = "") -> str:
     """发布开发任务并切换到任务分支。"""
     is_healthy, health_msg = check_git_health()
     if not is_healthy:
@@ -428,13 +428,18 @@ def architect_assign_task(task_desc: str) -> str:
             if not can_transit:
                 return f"❌ {transition_msg}"
 
-            task_id = _extract_task_id(task_desc) or state.get("task_id", "UNASSIGNED")
-            branch_name = _safe_branch_name(task_id)
+            next_task_id = task_id.strip() if isinstance(task_id, str) else ""
+            if next_task_id:
+                normalized_task_id = next_task_id
+            else:
+                normalized_task_id = _extract_task_id(task_desc) or state.get("task_id", "UNASSIGNED")
+
+            branch_name = _safe_branch_name(normalized_task_id)
             git_ok, git_msg = _run_git_checkout(branch_name)
             if not git_ok:
                 return f"❌ {git_msg}"
 
-            state["task_id"] = task_id
+            state["task_id"] = normalized_task_id
             state["status"] = "DEVELOPING"
             state["active_branch"] = branch_name
             state["architect_instruction"] = task_desc

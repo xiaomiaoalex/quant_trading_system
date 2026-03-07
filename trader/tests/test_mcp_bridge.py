@@ -128,6 +128,26 @@ def test_architect_assign_task_auto_updates_task_id_and_branch_from_description(
     assert branch == "feature/task10-3-e"
 
 
+def test_architect_assign_task_explicit_task_id_overrides_description(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    _write_state(mission_file, _base_state("APPROVED_FOR_PUSH"))
+
+    msg = mcp_bridge.architect_assign_task("next stage mission", task_id="Task10.3-F")
+    assert msg.startswith("✅")
+
+    state = _read_state(mission_file)
+    assert state["status"] == "DEVELOPING"
+    assert state["task_id"] == "Task10.3-F"
+    assert state["active_branch"] == "feature/task10-3-f"
+    assert state["architect_instruction"] == "next stage mission"
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert branch == "feature/task10-3-f"
+
+
 def test_architect_assign_task_git_failure_does_not_mutate_state(
     mission_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
