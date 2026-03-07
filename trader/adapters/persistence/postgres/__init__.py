@@ -473,7 +473,7 @@ class PostgreSQLStorage:
         reason = event_data.get("reason", "")
         recommended_level = event_data.get("recommended_level", 0)
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
-        data = event_data
+        data = json.dumps(event_data)
         
         async with self._pool.acquire() as conn:
             async with conn.transaction():
