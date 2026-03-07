@@ -3,10 +3,13 @@ Unit Tests - Services Layer
 ==========================
 Tests for business logic services.
 """
+import asyncio
+
 import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
+from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.storage.in_memory import InMemoryStorage, reset_storage
 from trader.services import (
     StrategyService,
@@ -31,6 +34,18 @@ from trader.api.models.schemas import (
     ReplayRequest,
     KillSwitchSetRequest,
 )
+
+
+async def _clear_postgres_risk_state() -> None:
+    if not is_postgres_available():
+        return
+    storage = PostgreSQLStorage()
+    await storage.connect()
+    try:
+        await storage.clear()
+    finally:
+        await storage.disconnect()
+        await close_pool()
 
 
 class TestStrategyService:
@@ -243,6 +258,7 @@ class TestRiskService:
         from trader.adapters.persistence.risk_repository import reset_risk_event_repository
         reset_risk_event_repository()
         self.storage = reset_storage()
+        asyncio.run(_clear_postgres_risk_state())
         self.service = RiskService(self.storage)
 
     def test_set_limits(self):

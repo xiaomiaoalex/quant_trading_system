@@ -20,6 +20,8 @@ Risk limits management endpoints (versioned).
 - recommended_level <= 当前级别：保持不降级（Fail-Closed）
 - 同一 dedup_key 不重复触发升级（幂等保护）
 """
+import asyncio
+import logging
 from typing import Optional
 from fastapi import APIRouter, Query, Response
 
@@ -33,6 +35,17 @@ from trader.api.models.schemas import (
 from trader.services import RiskService, KillSwitchService
 
 router = APIRouter(tags=["Risk"])
+logger = logging.getLogger(__name__)
+EFFECT_STATUS_TIMEOUT_SEC = 2.0
+
+
+def _killswitch_matches(current_state, expected_state) -> bool:
+    return (
+        current_state.scope == expected_state.scope
+        and current_state.level == expected_state.level
+        and current_state.reason == expected_state.reason
+        and current_state.updated_by == expected_state.updated_by
+    )
 
 
 async def _apply_killswitch_effect(
@@ -56,6 +69,13 @@ async def _apply_killswitch_effect(
 
     try:
         if previous_state.level < level:
+            logger.info(
+                "Applying KillSwitch effect upgrade_key=%s scope=%s from_level=%s to_level=%s",
+                upgrade_key,
+                scope,
+                previous_state.level,
+                level,
+            )
             killswitch_service.set_state(
                 KillSwitchSetRequest(
                     scope=scope,
@@ -65,26 +85,103 @@ async def _apply_killswitch_effect(
                 )
             )
             killswitch_changed = True
+        else:
+            logger.info(
+                "KillSwitch effect already satisfied upgrade_key=%s scope=%s current_level=%s target_level=%s",
+                upgrade_key,
+                scope,
+                previous_state.level,
+                level,
+            )
 
-        await service.mark_effect_applied(upgrade_key)
+        await asyncio.wait_for(service.mark_effect_applied(upgrade_key), timeout=EFFECT_STATUS_TIMEOUT_SEC)
         return True, None
     except Exception as exc:
         compensation_error: str | None = None
         if killswitch_changed:
+            current_state = killswitch_service.get_state(scope)
             try:
-                killswitch_service.set_state(
-                    KillSwitchSetRequest(
-                        scope=previous_state.scope,
-                        level=previous_state.level,
-                        reason=previous_state.reason,
-                        updated_by=previous_state.updated_by,
+                if _killswitch_matches(current_state, previous_state):
+                    logger.info(
+                        "KillSwitch compensation already converged upgrade_key=%s scope=%s restored_level=%s",
+                        upgrade_key,
+                        scope,
+                        previous_state.level,
                     )
-                )
+                else:
+                    logger.warning(
+                        "Reverting KillSwitch effect upgrade_key=%s scope=%s from_level=%s to_level=%s after error=%s",
+                        upgrade_key,
+                        scope,
+                        current_state.level,
+                        previous_state.level,
+                        exc,
+                    )
+                    killswitch_service.set_state(
+                        KillSwitchSetRequest(
+                            scope=previous_state.scope,
+                            level=previous_state.level,
+                            reason=previous_state.reason,
+                            updated_by=previous_state.updated_by,
+                        )
+                    )
             except Exception as rollback_exc:
-                compensation_error = f" rollback_failed: {rollback_exc}"
+                verified_state = killswitch_service.get_state(scope)
+                if _killswitch_matches(verified_state, previous_state):
+                    logger.info(
+                        "KillSwitch compensation converged after rollback exception upgrade_key=%s scope=%s restored_level=%s",
+                        upgrade_key,
+                        scope,
+                        previous_state.level,
+                    )
+                else:
+                    compensation_error = (
+                        f" rollback_failed: {rollback_exc}; "
+                        f"current_level={verified_state.level}; expected_level={previous_state.level}"
+                    )
+                    logger.exception(
+                        "KillSwitch compensation failed upgrade_key=%s scope=%s current_level=%s expected_level=%s",
+                        upgrade_key,
+                        scope,
+                        verified_state.level,
+                        previous_state.level,
+                    )
+            else:
+                verified_state = killswitch_service.get_state(scope)
+                if _killswitch_matches(verified_state, previous_state):
+                    logger.info(
+                        "KillSwitch compensation applied upgrade_key=%s scope=%s restored_level=%s",
+                        upgrade_key,
+                        scope,
+                        previous_state.level,
+                    )
+                else:
+                    compensation_error = (
+                        f" rollback_inconsistent: current_level={verified_state.level}; "
+                        f"expected_level={previous_state.level}"
+                    )
+                    logger.error(
+                        "KillSwitch compensation left inconsistent state upgrade_key=%s scope=%s current_level=%s expected_level=%s",
+                        upgrade_key,
+                        scope,
+                        verified_state.level,
+                        previous_state.level,
+                    )
 
         error_message = f"{exc}{compensation_error or ''}"
-        await service.mark_effect_failed(upgrade_key, error_message)
+        try:
+            await asyncio.wait_for(
+                service.mark_effect_failed(upgrade_key, error_message),
+                timeout=EFFECT_STATUS_TIMEOUT_SEC,
+            )
+        except Exception as mark_failed_exc:
+            logger.exception(
+                "Failed to persist effect failure status upgrade_key=%s scope=%s error=%s",
+                upgrade_key,
+                scope,
+                mark_failed_exc,
+            )
+            error_message = f"{error_message} mark_failed_error: {mark_failed_exc}"
         return False, error_message
 
 
