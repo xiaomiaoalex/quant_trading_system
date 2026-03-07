@@ -3,11 +3,11 @@
     "sprint": "Sprint 3",
     "task_id": "Task10.3-C",
     "active_branch": "feature/task10-3-c",
-    "status": "REVIEW_PENDING",
+    "status": "REVISE_REQUIRED",
     "completed_milestones": [
         "Task10.3-A: Risk Events Persistence (Merged)"
     ],
-    "architect_instruction": "",
+    "architect_instruction": "P1: reset_risk_event_repository 在已有事件循环中调用时，asyncio.run(...) 会跳过真实 PostgreSQL 连接回收，并产生 coroutine was never awaited 警告。要求修复：1) async/sync 上下文都能安全 reset；2) 不泄漏连接；3) 补充回归测试与本地结果。",
     "engineer_report": "## Sprint 3 完整实现完成\n\n### 功能\n- risk_upgrade_effects 表作为恢复锚点 (PENDING/APPLIED/FAILED)\n- 事务方法 ingest_event_with_upgrade 原子写入\n- 恢复端点 /v1/risk/recover\n- Fail-Closed 错误处理\n\n### Code Review 修复\n1. uuid import 位置统一到文件顶部\n2. 添加 status 字段索引\n3. 文件锁跨平台回退机制\n4. 原子事务独立异常处理\n\n### 测试结果\n- API 测试: 73 passed\n- PG 存储测试: 7 passed, 14 skipped (无 PG 环境)\n\n### 规范对齐\n- 版本: v3.0.8\n- Changelog: 已更新",
     "pr_readiness_package": {
         "branch": "feature/task10-3-c",
@@ -16,14 +16,46 @@
         "pr_title": "feat: 原子语义与故障恢复 (Task10.3-C)",
         "pr_description": "## 功能\n- risk_upgrade_effects 表作为恢复锚点 (status: PENDING/APPLIED/FAILED)\n- 事务方法 ingest_event_with_upgrade 原子写入\n- 恢复端点 /v1/risk/recover (PENDING/FAILED 效果恢复)\n- 幂等性: DB 唯一约束 + ON CONFLICT DO NOTHING\n- Fail-Closed: 副作用失败返回 500\n\n## 变更点\n- postgres/__init__.py: 新表、索引、事务方法\n- in_memory.py: 内存实现\n- risk_repository.py: Repository 桥接\n- services/risk.py: Service 层\n- routes/risk.py: 恢复端点\n- test_api_endpoints.py: PENDING/FAILED 恢复测试\n\n## 测试结果\n- API 测试: 73 passed\n- PG 存储测试: 7 passed (14 skipped - 无 PG 环境)\n\n## 风险与回滚\n- 风险: PostgreSQL 实际环境回归需在可用环境补测\n- 回滚: git checkout main\n\n## 规范对齐\n- 版本: v3.0.8\n- Changelog: 已记录\n\n## 最小复现步骤\n```bash\n# 1. 启动 PostgreSQL (Docker)\ndocker run -d -e POSTGRES_USER=trader -e POSTGRES_PASSWORD=trader -e POSTGRES_DB=trading -p 5432:5432 postgres:15\n\n# 2. 设置环境变量\nexport POSTGRES_CONNECTION_STRING=\"postgresql://trader:trader@localhost:5432/trading\"\n\n# 3. 运行测试\npytest -q trader/tests/test_postgres_storage.py\n\n# 4. 验证恢复端点\ncurl -X POST http://localhost:8000/v1/risk/recover\n```",
         "changes": [
-            {"file": "trader/adapters/persistence/postgres/__init__.py", "type": "modify", "description": "risk_upgrade_effects 表、索引、事务方法、异常处理"},
-            {"file": "trader/storage/in_memory.py", "type": "modify", "description": "内存实现"},
-            {"file": "trader/adapters/persistence/risk_repository.py", "type": "modify", "description": "Repository 桥接"},
-            {"file": "trader/services/risk.py", "type": "modify", "description": "Service 层"},
-            {"file": "trader/api/routes/risk.py", "type": "modify", "description": "恢复端点"},
-            {"file": "trader/tests/test_api_endpoints.py", "type": "modify", "description": "PENDING/FAILED 恢复测试"},
-            {"file": "quant_trading_system v3.0.8-个人开发者版 技术规范.md", "type": "rename", "description": "版本更新到 v3.0.8"},
-            {"file": "mcp_bridge.py", "type": "modify", "description": "文件锁跨平台回退"}
+            {
+                "file": "trader/adapters/persistence/postgres/__init__.py",
+                "type": "modify",
+                "description": "risk_upgrade_effects 表、索引、事务方法、异常处理"
+            },
+            {
+                "file": "trader/storage/in_memory.py",
+                "type": "modify",
+                "description": "内存实现"
+            },
+            {
+                "file": "trader/adapters/persistence/risk_repository.py",
+                "type": "modify",
+                "description": "Repository 桥接"
+            },
+            {
+                "file": "trader/services/risk.py",
+                "type": "modify",
+                "description": "Service 层"
+            },
+            {
+                "file": "trader/api/routes/risk.py",
+                "type": "modify",
+                "description": "恢复端点"
+            },
+            {
+                "file": "trader/tests/test_api_endpoints.py",
+                "type": "modify",
+                "description": "PENDING/FAILED 恢复测试"
+            },
+            {
+                "file": "quant_trading_system v3.0.8-个人开发者版 技术规范.md",
+                "type": "rename",
+                "description": "版本更新到 v3.0.8"
+            },
+            {
+                "file": "mcp_bridge.py",
+                "type": "modify",
+                "description": "文件锁跨平台回退"
+            }
         ],
         "test_results": {
             "api_regression": "73 passed",
@@ -34,5 +66,5 @@
         ],
         "rollback": "git checkout main"
     },
-    "last_update": "2026-03-07T10:00:00Z"
+    "last_update": "2026-03-07T03:46:50Z"
 }
