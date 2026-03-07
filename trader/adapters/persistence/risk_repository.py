@@ -343,12 +343,27 @@ def reset_risk_event_repository() -> None:
     if repo._postgres_storage is not None:
         try:
             asyncio.get_running_loop()
+            in_async_context = True
         except RuntimeError:
+            in_async_context = False
+        
+        if in_async_context:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    async def do_and_clear():
+                        await repo._reset_postgres_connection()
+                        repo._postgres_storage = None
+                        repo._use_postgres = False
+                    asyncio.create_task(do_and_clear())
+                else:
+                    loop.run_until_complete(repo._reset_postgres_connection())
+            except Exception:
+                repo._terminate_postgres_connection()
+        else:
             try:
                 asyncio.run(repo._reset_postgres_connection())
             except RuntimeError:
                 repo._terminate_postgres_connection()
-        else:
-            repo._terminate_postgres_connection()
     
     _repository_instance = None
