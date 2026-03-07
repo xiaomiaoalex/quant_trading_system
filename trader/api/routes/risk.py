@@ -35,6 +35,59 @@ from trader.services import RiskService, KillSwitchService
 router = APIRouter(tags=["Risk"])
 
 
+async def _apply_killswitch_effect(
+    service: RiskService,
+    killswitch_service: KillSwitchService,
+    *,
+    scope: str,
+    level: int,
+    upgrade_key: str,
+    reason: str,
+    updated_by: str,
+) -> tuple[bool, str | None]:
+    """
+    Apply KillSwitch side-effect with compensation.
+
+    If the KillSwitch has already reached the target level, only mark the effect
+    as applied to keep retries idempotent.
+    """
+    previous_state = killswitch_service.get_state(scope)
+    killswitch_changed = False
+
+    try:
+        if previous_state.level < level:
+            killswitch_service.set_state(
+                KillSwitchSetRequest(
+                    scope=scope,
+                    level=level,
+                    reason=reason,
+                    updated_by=updated_by,
+                )
+            )
+            killswitch_changed = True
+
+        await service.mark_effect_applied(upgrade_key)
+        return True, None
+    except Exception as exc:
+        compensation_error: str | None = None
+        if killswitch_changed:
+            try:
+                killswitch_service.set_state(
+                    KillSwitchSetRequest(
+                        scope=previous_state.scope,
+                        level=previous_state.level,
+                        reason=previous_state.reason,
+                        updated_by=previous_state.updated_by,
+                    )
+                )
+            except Exception as rollback_exc:
+                compensation_error = f" rollback_failed: {rollback_exc}"
+
+        error_message = f"{exc}{compensation_error or ''}"
+        await service.mark_effect_failed(upgrade_key, error_message)
+        return False, error_message
+
+
 @router.get("/v1/risk/limits", response_model=Optional[VersionedConfig])
 async def get_risk_limits(scope: str = Query("GLOBAL", description="Risk scope: GLOBAL or per account/strategy")):
     """
@@ -84,20 +137,18 @@ async def ingest_risk_event(request: RiskEventIngestRequest, response: Response)
         )
         
         if is_first_effect:
-            try:
-                killswitch_service.set_state(
-                    KillSwitchSetRequest(
-                        scope=request.scope,
-                        level=request.recommended_level,
-                        reason=f"Risk event upgrade: {request.reason}",
-                        updated_by=f"risk_event:{request.dedup_key}"
-                    )
-                )
-                await service.mark_effect_applied(upgrade_key)
-            except Exception as e:
-                await service.mark_effect_failed(upgrade_key, str(e))
+            applied, error = await _apply_killswitch_effect(
+                service,
+                killswitch_service,
+                scope=request.scope,
+                level=request.recommended_level,
+                upgrade_key=upgrade_key,
+                reason=f"Risk event upgrade: {request.reason}",
+                updated_by=f"risk_event:{request.dedup_key}",
+            )
+            if not applied:
                 response.status_code = 500
-                return ActionResult(ok=False, message=f"upgrade failed: {str(e)}")
+                return ActionResult(ok=False, message=f"upgrade failed: {error}")
         
         if created:
             response.status_code = 201
@@ -139,20 +190,19 @@ async def recover_pending_effects():
     
     for effect in pending:
         upgrade_key = effect["upgrade_key"]
-        try:
-            level = effect.get("level", 1)
-            killswitch_service.set_state(
-                KillSwitchSetRequest(
-                    scope=effect.get("scope", "GLOBAL"),
-                    level=level,
-                    reason=f"Recovery: {effect.get('last_error', 'unknown')}",
-                    updated_by="recovery_trigger"
-                )
-            )
-            await service.mark_effect_applied(upgrade_key)
+        level = effect.get("level", 1)
+        applied, _error = await _apply_killswitch_effect(
+            service,
+            killswitch_service,
+            scope=effect.get("scope", "GLOBAL"),
+            level=level,
+            upgrade_key=upgrade_key,
+            reason=f"Recovery: {effect.get('last_error', 'unknown')}",
+            updated_by="recovery_trigger",
+        )
+        if applied:
             recovered += 1
-        except Exception as e:
-            await service.mark_effect_failed(upgrade_key, f"Recovery failed: {str(e)}")
+        else:
             failed += 1
     
     return ActionResult(

@@ -107,6 +107,16 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     return normalized
 
 
+def _parse_pr_package(pr_package: str) -> dict[str, Any] | None:
+    try:
+        parsed_package = json.loads(pr_package)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed_package, dict):
+        return None
+    return parsed_package
+
+
 @contextmanager
 def _with_file_lock(lockfile_path: str):
     os.makedirs(os.path.dirname(lockfile_path) or ".", exist_ok=True)
@@ -133,22 +143,50 @@ def _with_file_lock(lockfile_path: str):
         except BlockingIOError:
             return "contended"
 
-    def _try_acquire_fallback_lock(lp_path: str) -> bool:
+    def _try_acquire_fallback_lock(lp_path: str, deadline: float) -> bool:
         fallback_lock = f"{lp_path}.fallback"
-        if os.path.exists(fallback_lock):
+        while time.monotonic() < deadline:
             try:
-                with open(fallback_lock, "r") as f:
-                    lock_time = float(f.read().strip())
-                if time.monotonic() - lock_time < LOCK_TIMEOUT_SEC:
+                fd = os.open(fallback_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    with open(fallback_lock, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    lock_time = float(payload.get("monotonic", 0.0))
+                    lock_pid = int(payload.get("pid", -1))
+                except (ValueError, TypeError, OSError, json.JSONDecodeError):
+                    lock_time = 0.0
+                    lock_pid = -1
+
+                if time.monotonic() - lock_time >= LOCK_TIMEOUT_SEC:
+                    try:
+                        os.remove(fallback_lock)
+                    except OSError:
+                        pass
+                    continue
+
+                if lock_pid == os.getpid():
                     return False
-            except (ValueError, IOError):
-                pass
-        try:
-            with open(fallback_lock, "w") as f:
-                f.write(str(time.monotonic()))
-            return True
-        except IOError:
-            return False
+
+                time.sleep(LOCK_RETRY_INTERVAL_SEC)
+                continue
+            except OSError:
+                return False
+
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump({"pid": os.getpid(), "monotonic": time.monotonic()}, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                return True
+            except OSError:
+                try:
+                    os.remove(fallback_lock)
+                except OSError:
+                    pass
+                return False
+
+        return False
 
     def _release_platform_lock(lock_file):
         lock_file.seek(0)
@@ -191,7 +229,7 @@ def _with_file_lock(lockfile_path: str):
             time.sleep(LOCK_RETRY_INTERVAL_SEC)
 
         if not locked:
-            if fallback_allowed and _try_acquire_fallback_lock(lockfile_path):
+            if fallback_allowed and _try_acquire_fallback_lock(lockfile_path, deadline):
                 use_fallback = True
                 locked = True
             if not locked:
@@ -404,12 +442,9 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     if not is_healthy:
         return f"❌ {msg}"
 
-    try:
-        parsed_package = json.loads(pr_package)
-    except json.JSONDecodeError:
-        return "❌ pr_package 必须是 JSON 对象字符串。"
-    if not isinstance(parsed_package, dict):
-        return "❌ pr_package 必须是 JSON 对象字符串。"
+    parsed_package = _parse_pr_package(pr_package)
+    if parsed_package is None:
+        return "❌ pr_package必须是有效的JSON对象。"
 
     try:
         with _locked_state() as (state, commit):

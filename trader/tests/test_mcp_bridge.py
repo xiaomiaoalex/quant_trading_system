@@ -137,6 +137,17 @@ def test_engineer_submit_work_rejects_invalid_pr_package(mission_file: Path) -> 
     assert state == original
 
 
+def test_engineer_submit_work_rejects_non_object_json(mission_file: Path) -> None:
+    original = _base_state("DEVELOPING")
+    _write_state(mission_file, original)
+
+    msg = mcp_bridge.engineer_submit_work("report", '["not", "an", "object"]')
+    assert msg == "❌ pr_package必须是有效的JSON对象。"
+
+    state = _read_state(mission_file)
+    assert state == original
+
+
 def test_engineer_submit_work_valid_package_transitions_to_review_pending(mission_file: Path) -> None:
     _write_state(mission_file, _base_state("DEVELOPING"))
 
@@ -242,5 +253,8 @@ def test_file_lock_uses_fallback_only_when_platform_lock_unsupported(
 
     with mcp_bridge._with_file_lock(lock_path):
         assert fallback_path.exists()
+        payload = json.loads(fallback_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+        assert isinstance(payload["monotonic"], float)
 
     assert not fallback_path.exists()
