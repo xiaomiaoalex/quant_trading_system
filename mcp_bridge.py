@@ -110,22 +110,31 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
 @contextmanager
 def _with_file_lock(lockfile_path: str):
     os.makedirs(os.path.dirname(lockfile_path) or ".", exist_ok=True)
-    
-    def _try_acquire_platform_lock(lock_file):
-        try:
-            if os.name == "nt":
+
+    def _try_acquire_platform_lock(lock_file) -> str:
+        if os.name == "nt":
+            try:
                 import msvcrt
+            except ImportError:
+                return "unsupported"
+            try:
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except (OSError, BlockingIOError):
-            return False
+                return "acquired"
+            except OSError:
+                return "contended"
+
+        try:
+            import fcntl
+        except ImportError:
+            return "unsupported"
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return "acquired"
+        except BlockingIOError:
+            return "contended"
 
     def _try_acquire_fallback_lock(lp_path: str) -> bool:
-        lock_dir = os.path.dirname(lp_path) or "."
-        fallback_lock = os.path.join(lock_dir, ".lock_fallback")
+        fallback_lock = f"{lp_path}.fallback"
         if os.path.exists(fallback_lock):
             try:
                 with open(fallback_lock, "r") as f:
@@ -154,8 +163,7 @@ def _with_file_lock(lockfile_path: str):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _release_fallback_lock(lp_path: str):
-        lock_dir = os.path.dirname(lp_path) or "."
-        fallback_lock = os.path.join(lock_dir, ".lock_fallback")
+        fallback_lock = f"{lp_path}.fallback"
         try:
             os.remove(fallback_lock)
         except OSError:
@@ -170,18 +178,23 @@ def _with_file_lock(lockfile_path: str):
         lock_file.seek(0)
         deadline = time.monotonic() + LOCK_TIMEOUT_SEC
         locked = False
+        fallback_allowed = False
 
         while time.monotonic() < deadline:
-            if _try_acquire_platform_lock(lock_file):
+            lock_result = _try_acquire_platform_lock(lock_file)
+            if lock_result == "acquired":
                 locked = True
+                break
+            if lock_result == "unsupported":
+                fallback_allowed = True
                 break
             time.sleep(LOCK_RETRY_INTERVAL_SEC)
 
         if not locked:
-            if _try_acquire_fallback_lock(lockfile_path):
+            if fallback_allowed and _try_acquire_fallback_lock(lockfile_path):
                 use_fallback = True
                 locked = True
-            else:
+            if not locked:
                 raise TimeoutError(
                     f"❌ [MISSION_CONTROL] 无法获得文件锁 ({lockfile_path})。\n"
                     "⚠️ 请勿手动编辑 mcp_mission_control.json。\n"
