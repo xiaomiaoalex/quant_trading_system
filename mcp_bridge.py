@@ -311,6 +311,14 @@ def _safe_branch_name(task_id: str) -> str:
     return f"feature/{normalized}"
 
 
+def _extract_task_id(task_desc: str) -> str | None:
+    match = re.search(r"\btask\d+(?:\.\d+)*(?:-[A-Za-z0-9]+)*\b", task_desc, re.IGNORECASE)
+    if match is None:
+        return None
+    matched = match.group(0)
+    return f"Task{matched[4:]}"
+
+
 def _run_git_checkout(branch_name: str) -> tuple[bool, str]:
     try:
         create = subprocess.run(
@@ -420,11 +428,13 @@ def architect_assign_task(task_desc: str) -> str:
             if not can_transit:
                 return f"❌ {transition_msg}"
 
-            branch_name = _safe_branch_name(state.get("task_id", "UNASSIGNED"))
+            task_id = _extract_task_id(task_desc) or state.get("task_id", "UNASSIGNED")
+            branch_name = _safe_branch_name(task_id)
             git_ok, git_msg = _run_git_checkout(branch_name)
             if not git_ok:
                 return f"❌ {git_msg}"
 
+            state["task_id"] = task_id
             state["status"] = "DEVELOPING"
             state["active_branch"] = branch_name
             state["architect_instruction"] = task_desc
