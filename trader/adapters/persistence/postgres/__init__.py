@@ -25,6 +25,8 @@ Usage:
 """
 import os
 import asyncio
+import logging
+import uuid
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -39,6 +41,8 @@ try:
 except ImportError:
     ASYNCPG_AVAILABLE = False
     asyncpg = None
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,6 +133,15 @@ class PostgreSQLStorage:
     def is_connected(self) -> bool:
         """Check if storage is connected"""
         return self._connected
+
+    @staticmethod
+    def _decode_json_field(value: Any) -> Dict[str, Any]:
+        """Normalize JSON/JSONB payloads from asyncpg into dicts."""
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return json.loads(value)
+        return {}
 
     async def connect(self) -> None:
         """Connect to PostgreSQL"""
@@ -233,6 +246,11 @@ class PostgreSQLStorage:
                 )
             """)
 
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_risk_upgrade_effects_status 
+                ON risk_upgrade_effects(status)
+            """)
+
     async def append_event(self, event) -> str:
         """
         Append an event to the event log
@@ -311,8 +329,8 @@ class PostgreSQLStorage:
                 aggregate_id=row["aggregate_id"],
                 aggregate_type=row["aggregate_type"],
                 timestamp=row["timestamp"],
-                data=row["data"],
-                metadata=row["metadata"],
+                data=self._decode_json_field(row["data"]),
+                metadata=self._decode_json_field(row["metadata"]),
             )
             for row in rows
         ]
@@ -383,7 +401,7 @@ class PostgreSQLStorage:
                 aggregate_id=row["aggregate_id"],
                 aggregate_type=row["aggregate_type"],
                 timestamp=row["timestamp"],
-                state=row["state"],
+                state=self._decode_json_field(row["state"]),
             )
         return None
 
@@ -399,7 +417,6 @@ class PostgreSQLStorage:
         Returns:
             Tuple of (event_id, created) where created is True if new, False if duplicate
         """
-        import uuid
         event_id = event_data.get("event_id") or str(uuid.uuid4())
         dedup_key = event_data["dedup_key"]
         scope = event_data.get("scope", "GLOBAL")
@@ -443,7 +460,6 @@ class PostgreSQLStorage:
             - is_first_upgrade: True if this is first time recording this upgrade
             - is_first_effect: True if this is first time recording this effect
         """
-        import uuid
         from asyncpg import UniqueViolationError
         
         event_id = event_data.get("event_id") or str(uuid.uuid4())
@@ -452,18 +468,28 @@ class PostgreSQLStorage:
         reason = event_data.get("reason", "")
         recommended_level = event_data.get("recommended_level", 0)
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
-        data = json.dumps(event_data)
+        data = event_data
         
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                async def _execute_step(step_name: str, operation):
+                    try:
+                        return await operation()
+                    except (asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+                        logger.exception("%s failed [%s]", step_name, exc.__class__.__name__)
+                        raise
+
                 created = False
                 try:
-                    await conn.execute(
-                        """
-                        INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        """,
-                        event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                    await _execute_step(
+                        "Risk event insert",
+                        lambda: conn.execute(
+                            """
+                            INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            """,
+                            event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                        ),
                     )
                     created = True
                 except UniqueViolationError:
@@ -475,25 +501,33 @@ class PostgreSQLStorage:
                         event_id = existing["event_id"]
                     created = False
                 
-                result_upgrade = await conn.execute(
-                    """
-                    INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
-                    VALUES ($1, $2, $3, $4, $5, NOW())
-                    ON CONFLICT (upgrade_key) DO NOTHING
-                    """,
-                    upgrade_key, scope, upgrade_level, reason, dedup_key,
+                upgrade_marker = await _execute_step(
+                    "Upgrade record insert",
+                    lambda: conn.fetchval(
+                        """
+                        INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        ON CONFLICT (upgrade_key) DO NOTHING
+                        RETURNING 1
+                        """,
+                        upgrade_key, scope, upgrade_level, reason, dedup_key,
+                    ),
                 )
-                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                is_first_upgrade = upgrade_marker is not None
                 
-                result_effect = await conn.execute(
-                    """
-                    INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
-                    VALUES ($1, $2, $3, 'PENDING', 1, NOW())
-                    ON CONFLICT (upgrade_key) DO NOTHING
-                    """,
-                    upgrade_key, scope, upgrade_level,
+                effect_marker = await _execute_step(
+                    "Effect record insert",
+                    lambda: conn.fetchval(
+                        """
+                        INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
+                        VALUES ($1, $2, $3, 'PENDING', 1, NOW())
+                        ON CONFLICT (upgrade_key) DO NOTHING
+                        RETURNING 1
+                        """,
+                        upgrade_key, scope, upgrade_level,
+                    )
                 )
-                is_first_effect = result_effect != "INSERT 0 0"
+                is_first_effect = effect_marker is not None
                 
                 return event_id, created, is_first_upgrade, is_first_effect
 
@@ -525,7 +559,7 @@ class PostgreSQLStorage:
                 reason=row["reason"],
                 recommended_level=row["recommended_level"],
                 ingested_at=row["ingested_at"],
-                data=row["data"],
+                data=self._decode_json_field(row["data"]),
             )
         return None
 
@@ -614,15 +648,16 @@ class PostgreSQLStorage:
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
         
         async with self._pool.acquire() as conn:
-            result = await conn.execute(
+            marker = await conn.fetchval(
                 """
                 INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (upgrade_key) DO NOTHING
+                RETURNING 1
                 """,
                 upgrade_key, scope, level, reason, dedup_key, recorded_at,
             )
-            return result != "INSERT 0 0"
+            return marker is not None
 
     async def clear(self) -> None:
         """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""
@@ -645,25 +680,27 @@ class PostgreSQLStorage:
         """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                result_upgrade = await conn.execute(
+                upgrade_marker = await conn.fetchval(
                     """
                     INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                     VALUES ($1, $2, $3, $4, $5, NOW())
                     ON CONFLICT (upgrade_key) DO NOTHING
+                    RETURNING 1
                     """,
                     upgrade_key, scope, level, reason, dedup_key,
                 )
-                is_first_upgrade = result_upgrade != "INSERT 0 0"
+                is_first_upgrade = upgrade_marker is not None
                 
-                result_effect = await conn.execute(
+                effect_marker = await conn.fetchval(
                     """
                     INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
                     VALUES ($1, $2, $3, 'PENDING', 1, NOW())
                     ON CONFLICT (upgrade_key) DO NOTHING
+                    RETURNING 1
                     """,
                     upgrade_key, scope, level,
                 )
-                is_first_effect = result_effect != "INSERT 0 0"
+                is_first_effect = effect_marker is not None
                 
                 return is_first_upgrade, is_first_effect
 

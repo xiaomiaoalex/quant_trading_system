@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import json
+import os
 import shutil
 import subprocess
 import uuid
@@ -129,7 +131,18 @@ def test_engineer_submit_work_rejects_invalid_pr_package(mission_file: Path) -> 
     _write_state(mission_file, original)
 
     msg = mcp_bridge.engineer_submit_work("report", "not-json")
-    assert msg.startswith("❌")
+    assert msg == "❌ pr_package必须是合法的JSON字符串。"
+
+    state = _read_state(mission_file)
+    assert state == original
+
+
+def test_engineer_submit_work_rejects_non_object_json(mission_file: Path) -> None:
+    original = _base_state("DEVELOPING")
+    _write_state(mission_file, original)
+
+    msg = mcp_bridge.engineer_submit_work("report", '["not", "an", "object"]')
+    assert msg == "❌ pr_package必须是有效的JSON对象。"
 
     state = _read_state(mission_file)
     assert state == original
@@ -187,3 +200,61 @@ def test_atomic_write_path_used(mission_file: Path, monkeypatch: pytest.MonkeyPa
     assert calls, "os.replace should be used for atomic write"
     assert calls[0][1] == str(mission_file)
     assert _read_state(mission_file)["marker"] == "atomic"
+
+
+def test_file_lock_timeout_does_not_fallback_on_contention(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = mcp_bridge._lock_path(str(mission_file))
+    fallback_path = Path(f"{lock_path}.fallback")
+    monkeypatch.setattr(mcp_bridge, "LOCK_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(mcp_bridge.time, "sleep", lambda _seconds: None)
+
+    ticks = iter([0.0, 0.0, 0.02, 0.02])
+    monkeypatch.setattr(mcp_bridge.time, "monotonic", lambda: next(ticks))
+
+    if os.name == "nt":
+        import msvcrt
+
+        def _busy_locking(_fd: int, mode: int, _nbytes: int) -> None:
+            if mode == msvcrt.LK_NBLCK:
+                raise OSError("busy")
+
+        monkeypatch.setattr(msvcrt, "locking", _busy_locking)
+    else:
+        import fcntl
+
+        def _busy_flock(_fd: int, _op: int) -> None:
+            raise BlockingIOError("busy")
+
+        monkeypatch.setattr(fcntl, "flock", _busy_flock)
+
+    with pytest.raises(TimeoutError):
+        with mcp_bridge._with_file_lock(lock_path):
+            pass
+
+    assert not fallback_path.exists()
+
+
+def test_file_lock_uses_fallback_only_when_platform_lock_unsupported(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = mcp_bridge._lock_path(str(mission_file))
+    fallback_path = Path(f"{lock_path}.fallback")
+    lock_module = "msvcrt" if os.name == "nt" else "fcntl"
+    original_import = builtins.__import__
+
+    def _fake_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
+        if name == lock_module:
+            raise ImportError("lock module unavailable")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    with mcp_bridge._with_file_lock(lock_path):
+        assert fallback_path.exists()
+        payload = json.loads(fallback_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+        assert isinstance(payload["monotonic"], float)
+
+    assert not fallback_path.exists()

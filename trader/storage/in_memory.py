@@ -374,8 +374,6 @@ class ControlPlaneInMemoryStorage:
         Returns:
             Tuple of (event_id, created, is_first_upgrade, is_first_effect)
         """
-        import uuid
-        
         event_id = event_data.get("event_id") or str(uuid.uuid4())
         dedup_key = event_data["dedup_key"]
         scope = event_data.get("scope", "GLOBAL")

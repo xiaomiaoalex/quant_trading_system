@@ -85,8 +85,11 @@ class TestPostgreSQLStorage:
     async def storage(self):
         """Create storage instance"""
         storage = PostgreSQLStorage()
+        await storage.connect()
+        await storage.clear()
         yield storage
         if storage.is_connected:
+            await storage.clear()
             await storage.disconnect()
 
     @pytest.mark.asyncio
@@ -422,6 +425,27 @@ class TestRiskEventsPersistence:
         """Test getting non-existent upgrade record returns None"""
         stored = await storage.get_upgrade_record("nonexistent-upgrade-key")
         assert stored is None
+
+    @pytest.mark.asyncio
+    async def test_risk_upgrade_effects_upgrade_key_is_effectively_unique(self, storage):
+        """PRIMARY KEY on upgrade_key must prevent duplicate effect intents."""
+        upgrade_key = "upgrade:GLOBAL:2:dedup-key-unique"
+
+        first_upgrade, first_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "first", "dedup-key-unique"
+        )
+        assert first_upgrade is True
+        assert first_effect is True
+
+        second_upgrade, second_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "first", "dedup-key-unique"
+        )
+        assert second_upgrade is False
+        assert second_effect is False
+
+        pending = await storage.get_pending_effects()
+        matching = [effect for effect in pending if effect["upgrade_key"] == upgrade_key]
+        assert len(matching) == 1
 
 
 @skip_if_no_asyncpg

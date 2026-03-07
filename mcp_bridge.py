@@ -107,9 +107,108 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     return normalized
 
 
+def _parse_pr_package(pr_package: str) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        parsed_package = json.loads(pr_package)
+    except json.JSONDecodeError:
+        return None, "❌ pr_package必须是合法的JSON字符串。"
+    if not isinstance(parsed_package, dict):
+        return None, "❌ pr_package必须是有效的JSON对象。"
+    return parsed_package, None
+
+
 @contextmanager
 def _with_file_lock(lockfile_path: str):
     os.makedirs(os.path.dirname(lockfile_path) or ".", exist_ok=True)
+
+    def _try_acquire_platform_lock(lock_file) -> str:
+        if os.name == "nt":
+            try:
+                import msvcrt
+            except ImportError:
+                return "unsupported"
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                return "acquired"
+            except OSError:
+                return "contended"
+
+        try:
+            import fcntl
+        except ImportError:
+            return "unsupported"
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return "acquired"
+        except BlockingIOError:
+            return "contended"
+
+    def _try_acquire_fallback_lock(lp_path: str, deadline: float) -> bool:
+        fallback_lock = f"{lp_path}.fallback"
+        while time.monotonic() < deadline:
+            try:
+                fd = os.open(fallback_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    with open(fallback_lock, "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                    lock_time = float(payload.get("monotonic", 0.0))
+                    lock_pid = int(payload.get("pid", -1))
+                except (ValueError, TypeError, OSError, json.JSONDecodeError):
+                    lock_time = 0.0
+                    lock_pid = -1
+
+                if time.monotonic() - lock_time >= LOCK_TIMEOUT_SEC:
+                    try:
+                        os.remove(fallback_lock)
+                    except OSError:
+                        pass
+                    continue
+
+                if lock_pid == os.getpid():
+                    return False
+
+                time.sleep(LOCK_RETRY_INTERVAL_SEC)
+                continue
+            except OSError:
+                return False
+
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump({"pid": os.getpid(), "monotonic": time.monotonic()}, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                return True
+            except OSError:
+                try:
+                    os.remove(fallback_lock)
+                except OSError:
+                    pass
+                return False
+
+        return False
+
+    def _release_platform_lock(lock_file):
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _release_fallback_lock(lp_path: str):
+        fallback_lock = f"{lp_path}.fallback"
+        try:
+            os.remove(fallback_lock)
+        except OSError:
+            pass
+
+    use_fallback = False
+    
     with open(lockfile_path, "a+b") as lock_file:
         if os.path.getsize(lockfile_path) == 0:
             lock_file.write(b"0")
@@ -117,44 +216,36 @@ def _with_file_lock(lockfile_path: str):
         lock_file.seek(0)
         deadline = time.monotonic() + LOCK_TIMEOUT_SEC
         locked = False
+        fallback_allowed = False
 
         while time.monotonic() < deadline:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_result = _try_acquire_platform_lock(lock_file)
+            if lock_result == "acquired":
                 locked = True
                 break
-            except (OSError, BlockingIOError):
-                time.sleep(LOCK_RETRY_INTERVAL_SEC)
+            if lock_result == "unsupported":
+                fallback_allowed = True
+                break
+            time.sleep(LOCK_RETRY_INTERVAL_SEC)
 
         if not locked:
-            raise TimeoutError(
-                f"❌ [MISSION_CONTROL] 无法获得文件锁 ({lockfile_path})。\n"
-                "⚠️ 请勿手动编辑 mcp_mission_control.json。\n"
-                "👉 请稍后重试或检查是否有并发 MCP 进程占用。"
-            )
+            if fallback_allowed and _try_acquire_fallback_lock(lockfile_path, deadline):
+                use_fallback = True
+                locked = True
+            if not locked:
+                raise TimeoutError(
+                    f"❌ [MISSION_CONTROL] 无法获得文件锁 ({lockfile_path})。\n"
+                    "⚠️ 请勿手动编辑 mcp_mission_control.json。\n"
+                    "👉 请稍后重试或检查是否有并发 MCP 进程占用。"
+                )
 
         try:
             yield
         finally:
-            lock_file.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                try:
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
+            if use_fallback:
+                _release_fallback_lock(lockfile_path)
             else:
-                import fcntl
-
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                _release_platform_lock(lock_file)
 
 
 def _atomic_write_json(path: str, data: dict[str, Any]) -> None:
@@ -351,12 +442,9 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     if not is_healthy:
         return f"❌ {msg}"
 
-    try:
-        parsed_package = json.loads(pr_package)
-    except json.JSONDecodeError:
-        return "❌ pr_package 必须是 JSON 对象字符串。"
-    if not isinstance(parsed_package, dict):
-        return "❌ pr_package 必须是 JSON 对象字符串。"
+    parsed_package, parse_error = _parse_pr_package(pr_package)
+    if parse_error is not None:
+        return parse_error
 
     try:
         with _locked_state() as (state, commit):
