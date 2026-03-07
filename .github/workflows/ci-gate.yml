@@ -85,6 +85,22 @@ jobs:
     name: Postgres Integration Tests
     runs-on: ubuntu-latest
     needs: control-gate
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trading
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: trader_pwd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trader -d trading"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_CONNECTION_STRING: postgresql://trader:trader_pwd@127.0.0.1:5432/trading
     steps:
       - uses: actions/checkout@v4
 
@@ -97,10 +113,29 @@ jobs:
         run: |
           for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
           pip install -r trader/requirements-ci.txt
-          pip install asyncpg
+
+      - name: Wait for Postgres
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 5432
+          deadline = time.time() + 60
+          last_error = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=2):
+                      print("postgres ready")
+                      break
+              except OSError as exc:
+                  last_error = exc
+                  time.sleep(1)
+          else:
+              raise SystemExit(f"postgres not ready: {last_error}")
+          PY
 
       - name: Run Postgres Tests
-        env:
-          POSTGRES_CONNECTION_STRING: ${{ secrets.POSTGRES_CONNECTION_STRING }}
         run: |
           python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
