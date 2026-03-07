@@ -131,7 +131,7 @@ def test_engineer_submit_work_rejects_invalid_pr_package(mission_file: Path) -> 
     _write_state(mission_file, original)
 
     msg = mcp_bridge.engineer_submit_work("report", "not-json")
-    assert msg.startswith("❌")
+    assert msg == "❌ pr_package必须是合法的JSON字符串。"
 
     state = _read_state(mission_file)
     assert state == original

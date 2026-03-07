@@ -472,14 +472,24 @@ class PostgreSQLStorage:
         
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                async def _execute_step(step_name: str, operation):
+                    try:
+                        return await operation()
+                    except Exception:
+                        logger.exception("%s failed", step_name)
+                        raise
+
                 created = False
                 try:
-                    await conn.execute(
-                        """
-                        INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        """,
-                        event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                    await _execute_step(
+                        "Risk event insert",
+                        lambda: conn.execute(
+                            """
+                            INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            """,
+                            event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                        ),
                     )
                     created = True
                 except UniqueViolationError:
@@ -490,26 +500,25 @@ class PostgreSQLStorage:
                     if existing:
                         event_id = existing["event_id"]
                     created = False
-                except Exception as e:
-                    logger.exception("Risk event insert failed")
+                except Exception:
                     raise
                 
-                try:
-                    result_upgrade = await conn.execute(
+                result_upgrade = await _execute_step(
+                    "Upgrade record insert",
+                    lambda: conn.execute(
                         """
                         INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
                         VALUES ($1, $2, $3, $4, $5, NOW())
                         ON CONFLICT (upgrade_key) DO NOTHING
                         """,
                         upgrade_key, scope, upgrade_level, reason, dedup_key,
-                    )
-                    is_first_upgrade = result_upgrade != "INSERT 0 0"
-                except Exception as e:
-                    logger.exception("Upgrade record insert failed")
-                    raise
+                    ),
+                )
+                is_first_upgrade = result_upgrade != "INSERT 0 0"
                 
-                try:
-                    result_effect = await conn.execute(
+                result_effect = await _execute_step(
+                    "Effect record insert",
+                    lambda: conn.execute(
                         """
                         INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
                         VALUES ($1, $2, $3, 'PENDING', 1, NOW())
@@ -517,10 +526,8 @@ class PostgreSQLStorage:
                         """,
                         upgrade_key, scope, upgrade_level,
                     )
-                    is_first_effect = result_effect != "INSERT 0 0"
-                except Exception as e:
-                    logger.exception("Effect record insert failed")
-                    raise
+                )
+                is_first_effect = result_effect != "INSERT 0 0"
                 
                 return event_id, created, is_first_upgrade, is_first_effect
 

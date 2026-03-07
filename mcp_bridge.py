@@ -107,14 +107,14 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     return normalized
 
 
-def _parse_pr_package(pr_package: str) -> dict[str, Any] | None:
+def _parse_pr_package(pr_package: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         parsed_package = json.loads(pr_package)
     except json.JSONDecodeError:
-        return None
+        return None, "❌ pr_package必须是合法的JSON字符串。"
     if not isinstance(parsed_package, dict):
-        return None
-    return parsed_package
+        return None, "❌ pr_package必须是有效的JSON对象。"
+    return parsed_package, None
 
 
 @contextmanager
@@ -442,9 +442,9 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     if not is_healthy:
         return f"❌ {msg}"
 
-    parsed_package = _parse_pr_package(pr_package)
-    if parsed_package is None:
-        return "❌ pr_package必须是有效的JSON对象。"
+    parsed_package, parse_error = _parse_pr_package(pr_package)
+    if parse_error is not None:
+        return parse_error
 
     try:
         with _locked_state() as (state, commit):
