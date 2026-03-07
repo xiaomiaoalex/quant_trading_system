@@ -447,6 +447,23 @@ class TestRiskEventsPersistence:
         matching = [effect for effect in pending if effect["upgrade_key"] == upgrade_key]
         assert len(matching) == 1
 
+    @pytest.mark.asyncio
+    async def test_risk_upgrade_effects_has_updated_at_index(self, storage):
+        """Recovery query should have an index backing ORDER BY updated_at."""
+        async with storage._pool.acquire() as conn:
+            index_def = await conn.fetchval(
+                """
+                SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND tablename = 'risk_upgrade_effects'
+                  AND indexname = 'idx_risk_upgrade_effects_updated_at'
+                """
+            )
+
+        assert index_def is not None
+        assert "updated_at" in index_def
+
 
 @skip_if_no_asyncpg
 class TestStoredRiskEventDataclass:

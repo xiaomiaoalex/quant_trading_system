@@ -251,6 +251,11 @@ class PostgreSQLStorage:
                 ON risk_upgrade_effects(status)
             """)
 
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_risk_upgrade_effects_updated_at
+                ON risk_upgrade_effects(updated_at DESC)
+            """)
+
     async def append_event(self, event) -> str:
         """
         Append an event to the event log
