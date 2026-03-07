@@ -457,7 +457,7 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
             state["pr_readiness_package"] = parsed_package
             state["last_update"] = _utc_now_iso()
             commit(state)
-        return "✅ SUCCESS: 成果已提交，状态已锁定为 REVIEW_PENDING。工程师任务已结束，请立即停止任何代码提交动作，并进入待命(IDLE)状态等待架构师审核。"
+        return "✅ 成果已提交，状态变更为 REVIEW_PENDING，请通知架构师审核。"
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
