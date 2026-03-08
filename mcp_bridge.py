@@ -1,16 +1,18 @@
-import json
 import os
 import sys
-from datetime import datetime
+import json
+import time
+import tempfile
+import re
 import subprocess
+from datetime import datetime, timezone
+from typing import Any, Optional
+from contextlib import contextmanager
 
-# 1. 引入 FastMCP 框架
 from mcp.server.fastmcp import FastMCP
 
-# 2. 实例化 MCP 服务器
-mcp = FastMCP("Dual_AI_Communicator")
-
-# 告示板文件的路径
+# 基础常量定义
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = "mcp_mission_control.json"
 
 VALID_STATUSES = {
@@ -115,6 +117,32 @@ def _parse_pr_package(pr_package: str) -> tuple[dict[str, Any] | None, str | Non
     if not isinstance(parsed_package, dict):
         return None, "❌ pr_package必须是有效的JSON对象。"
     return parsed_package, None
+
+
+def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
+    required_string_fields = {
+        "pr_title": "PR 标题",
+        "pr_description": "PR 描述草稿",
+        "rollback": "回滚方案",
+    }
+    for field, label in required_string_fields.items():
+        value = pr_package.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return f"❌ pr_package缺少必填项：{label}。"
+
+    changes = pr_package.get("changes")
+    if not isinstance(changes, list) or not changes:
+        return "❌ pr_package缺少必填项：变更点（changes）。"
+
+    test_results = pr_package.get("test_results")
+    if not isinstance(test_results, dict) or not test_results:
+        return "❌ pr_package缺少必填项：测试结果（test_results）。"
+
+    risks = pr_package.get("risks")
+    if not isinstance(risks, list):
+        return "❌ pr_package缺少必填项：风险说明（risks）。"
+
+    return None
 
 
 @contextmanager
@@ -397,6 +425,11 @@ def check_git_health() -> tuple[bool, str]:
     git_dir = os.path.join(PROJECT_ROOT, ".git")
     if not os.path.exists(git_dir):
         return False, f"🚨 警告：在 {PROJECT_ROOT} 未检测到 .git 目录！"
+    current_branch = _get_current_branch()
+    if current_branch == "HEAD":
+        return False, "🚨 警告：当前处于 detached HEAD 状态，禁止继续执行任务流转，请先由人类修复 Git 环境。"
+    if current_branch == "unknown":
+        return False, "🚨 警告：无法识别当前 Git 分支状态，请先检查 Git 环境。"
     return True, "Git 环境健康"
 
 
@@ -468,9 +501,16 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     if not is_healthy:
         return f"❌ {msg}"
 
+    clean, clean_msg = _check_clean_worktree()
+    if not clean:
+        return f"❌ {clean_msg}"
+
     parsed_package, parse_error = _parse_pr_package(pr_package)
     if parse_error is not None:
         return parse_error
+    package_error = _validate_pr_package_content(parsed_package)
+    if package_error is not None:
+        return package_error
 
     try:
         with _locked_state() as (state, commit):
