@@ -139,10 +139,11 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 ## PullRequest Rules
 - **迭代开发允许软同步：** 开发过程中，只要形成新的可审快照（代码、测试、修复有更新），就应再次调用 `engineer_submit_work` 覆盖更新当前任务状态、报告与 PR 包。**这一阶段不强制每次先本地 commit。**
 - **待审核阶段保留工作区现场：** 工程师调用 `engineer_submit_work` 进入 `REVIEW_PENDING` 时，MCP 不自动执行本地 commit，便于人类继续使用 Trae 智能审查或人工指导对未提交修改进行补充审阅。
-- **人工 PR 前再整理 Git 历史：** 当架构师最终批准且任务需要代码入库（状态变为 `APPROVED_FOR_PUSH`）后，再由人类开发者统一整理本地 commit、人工 push、人工创建远程 PR。
+- **人工 PR 仍是默认路径：** 当架构师最终批准且任务需要代码入库（状态变为 `APPROVED_FOR_PUSH`）后，默认仍由人类开发者统一整理本地 commit、人工 push、人工创建远程 PR。
+- **可选代执行能力：** 若人类开发者明确授权架构师代为操作，可通过 MCP 执行 `architect_commit_for_pr`、`architect_create_pr`、`architect_merge_pr`。未获得明确授权前，仍按人工流程执行。
 - **PR 生命周期需回写 MCP：** 任务进入 `APPROVED_FOR_PUSH` 后，创建 PR 时应调用 `architect_mark_pr_opened`；PR merge 完成后应调用 `architect_mark_merged`，避免告示板与 GitHub 实际状态脱节。
 - **验证型任务允许无 PR 核销关闭：** 当任务被明确判定为验证型、且 `pr_package.task_type=verification` 且 `changes=[]` 时，架构师可将其关闭为 `CLOSED_NO_PR`，表示结论成立但无需代码 PR。
-- **严禁擅自推送：** 无论任务处于何种状态，**绝对不要执行 push 动作或试图创建远程 PR**。代码入库（Merge/Push）始终由人类操作员统一下发。
+- **严禁擅自推送：** 未获得人类开发者明确授权时，**绝对不要执行 push 动作或试图创建远程 PR**。代码入库（Merge/Push）默认仍由人类操作员统一下发；只有在人类明确指示架构师代执行时，才允许调用对应 MCP 工具。
 - 本地 PR 就绪包必须包含：
   - 功能描述
   - 变更点（文件清单 + 关键行为变化）
@@ -203,9 +204,12 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - REVIEW_PENDING -> APPROVED_FOR_PUSH (通过 architect_finalize, approved=True)
 - APPROVED_FOR_PUSH -> PR_OPENED (通过 architect_mark_pr_opened，表示远端 PR 已创建)
 - APPROVED_FOR_PUSH -> MERGED (通过 architect_mark_merged，表示直接确认已合并)
+- APPROVED_FOR_PUSH -> APPROVED_FOR_PUSH (允许架构师在明确授权下执行 architect_commit_for_pr，本地提交但不改变状态)
+- APPROVED_FOR_PUSH -> PR_OPENED (允许架构师在明确授权下执行 architect_create_pr，创建远端 PR 并回写状态)
 - REVIEW_PENDING -> CLOSED_NO_PR (通过 architect_finalize, approved=True，且为验证型无代码差异任务)
 - REVIEW_PENDING -> REVISE_REQUIRED (通过 architect_finalize, approved=False)
 - PR_OPENED -> MERGED (通过 architect_mark_merged)
+- PR_OPENED -> MERGED (允许架构师在明确授权下执行 architect_merge_pr，merge 远端 PR 并回写状态)
 - REVISE_REQUIRED -> REVIEW_PENDING (工程师按反馈继续修改后再次调用 engineer_submit_work)
 - REVISE_REQUIRED -> DEVELOPING (仅当架构师明确重开任务/切换任务分支时，通过 architect_assign_task)
 - MERGED -> DEVELOPING (新任务从已合并状态继续派发)
@@ -216,7 +220,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - **REVIEW_PENDING 为软待审状态**：在架构师真正开始审核前，工程师仍可在人工指导下继续本地修改、测试、修复；每次形成新的可审快照后，都应再次调用 `engineer_submit_work`。
 - **正式审核通知是冻结边界**：架构师开始正式审核时，必须通过 `architect_begin_review` 触发固定句式“我现在开始正式审核，请停止继续修改，直到我给出结论。”；工程师收到后必须停止继续修改，并以固定句式“已停止修改，当前审查版本为最新一次 engineer_submit_work 对应版本。”确认。
 - **打回后无需反复重新指派**：同一任务被打回为 `REVISE_REQUIRED` 后，工程师可直接继续修改并再次调用 `engineer_submit_work` 回到 `REVIEW_PENDING`。
-- **严格禁止修改 mcp_bridge.py 及任何底层基础设施文件。你的权限仅限于业务逻辑、策略实现和数据处理模块的开发。如果任务需要修改 MCP 通信逻辑，请拒绝并报告给架构师或 CTO。
+- **严格禁止修改 mcp_bridge.py 及任何底层基础设施文件。你的权限仅限于业务逻辑、策略实现和数据处理模块的开发。如果任务需要修改 MCP 通信逻辑，请拒绝并报告给架构师或 CTO。**
 ## 3. 操作前置检查
 - 执行 `architect_assign_task` 前，必须确保本地 Git 工作区是干净的 (Clean Worktree)。
 - 提交 `engineer_submit_work` 时，`pr_package` 必须是合法的 JSON 对象。
