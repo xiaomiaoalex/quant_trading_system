@@ -424,9 +424,100 @@ def check_git_health() -> tuple[bool, str]:
     if not os.path.exists(git_dir):
         return False, f"🚨 警告：在 {PROJECT_ROOT} 未检测到 .git 目录！"
     current_branch = _get_current_branch()
-    if current_branch in {"", "HEAD", "unknown"}:
-        return False, "🚨 警告：当前 Git 分支状态异常（detached HEAD 或无法识别分支）。"
+    if current_branch in {"", "HEAD"}:
+        return False, "🚨 警告：当前 Git 分支处于 detached HEAD 状态。"
+    if current_branch == "unknown":
+        return False, "🚨 警告：无法识别当前 Git 分支状态。"
     return True, "Git 环境健康"
+
+
+def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
+    required_fields = [
+        ("pr_title", "PR 标题"),
+        ("pr_description", "PR 描述"),
+        ("changes", "变更列表"),
+        ("test_results", "测试结果"),
+        ("risks", "风险说明"),
+        ("rollback", "回滚方案"),
+    ]
+    for key, label in required_fields:
+        if key not in pr_package:
+            return f"❌ pr_package缺少必填项：{label}。"
+
+    changes = pr_package.get("changes")
+    if not isinstance(changes, list):
+        return "❌ pr_package.changes 必须是数组。"
+    for change in changes:
+        if not isinstance(change, dict):
+            return "❌ pr_package.changes 中每一项都必须是对象。"
+        for key, label in (("file", "文件路径"), ("type", "变更类型"), ("description", "变更说明")):
+            if key not in change or not isinstance(change.get(key), str) or not change.get(key).strip():
+                return f"❌ pr_package.changes 缺少必填项：{label}。"
+
+    if not isinstance(pr_package.get("test_results"), dict):
+        return "❌ pr_package.test_results 必须是对象。"
+    if not isinstance(pr_package.get("risks"), list):
+        return "❌ pr_package.risks 必须是数组。"
+    if not isinstance(pr_package.get("rollback"), str) or not pr_package.get("rollback", "").strip():
+        return "❌ pr_package.rollback 必须是非空字符串。"
+    return None
+
+
+def _format_pr_ready_package(pr_package: dict[str, Any]) -> str:
+    if not isinstance(pr_package, dict) or not pr_package:
+        return "PR 就绪包：<empty>"
+
+    changes = pr_package.get("changes", [])
+    lines = [
+        "PR 就绪包",
+        f"- branch: {pr_package.get('branch', '')}",
+        f"- target: {pr_package.get('target', '')}",
+        f"- title: {pr_package.get('pr_title', '')}",
+        f"- description: {pr_package.get('pr_description', '')}",
+        f"- changes: {len(changes)}",
+        f"- test_results: {json.dumps(pr_package.get('test_results', {}), ensure_ascii=False)}",
+        f"- risks: {json.dumps(pr_package.get('risks', []), ensure_ascii=False)}",
+        f"- rollback: {pr_package.get('rollback', '')}",
+    ]
+    return "\n".join(lines)
+
+
+def _git_guidance_for_assign_failure(reason: str) -> str:
+    if reason == "health":
+        lines = [
+            "Git 自检建议",
+            "1. git branch --show-current",
+            "2. git status --short",
+            "3. 若处于 detached HEAD 或分支状态异常，请先回到正常分支后再继续。",
+        ]
+    elif reason == "dirty":
+        lines = [
+            "Git 清理建议",
+            "1. git status --short",
+            "2. 若只是暂存现场：git stash",
+            "3. 若准备保留当前修改：先 git add / git commit，再重新分派任务。",
+        ]
+    else:
+        lines = [
+            "Git 排查建议",
+            "1. git branch --show-current",
+            "2. git status --short",
+            "3. 确认当前分支与目标基线无误后再重试。",
+        ]
+    return "\n".join(lines)
+
+
+def _git_guidance_for_pr_submission(pr_package: dict[str, Any]) -> str:
+    branch = str(pr_package.get("branch", "") or _get_current_branch())
+    pr_title = str(pr_package.get("pr_title", "") or "填写本次提交信息")
+    lines = [
+        "Git 收尾建议",
+        "1. git status --short",
+        "2. git add <目标文件>",
+        f'3. git commit -m "{pr_title}"',
+        f"4. git push -u origin {branch}",
+    ]
+    return "\n".join(lines)
 
 
 def _review_start_notice(extra_note: str = "") -> str:
@@ -464,11 +555,11 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
     """发布开发任务并切换到任务分支。"""
     is_healthy, health_msg = check_git_health()
     if not is_healthy:
-        return f"❌ {health_msg}"
+        return f"❌ {health_msg}\n\n{_git_guidance_for_assign_failure('health')}"
 
     clean, clean_msg = _check_clean_worktree()
     if not clean:
-        return f"❌ {clean_msg}"
+        return f"❌ {clean_msg}\n\n{_git_guidance_for_assign_failure('dirty')}"
 
     try:
         with _locked_state() as (state, commit):
@@ -489,7 +580,7 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
                 create_from_base=state["status"] == "IDLE" or normalized_task_id != current_task_id,
             )
             if not git_ok:
-                return f"❌ {git_msg}"
+                return f"❌ {git_msg}\n\n{_git_guidance_for_assign_failure('checkout')}"
 
             state["task_id"] = normalized_task_id
             state["status"] = "DEVELOPING"
@@ -530,7 +621,7 @@ def architect_begin_review(note: str = "") -> str:
 
 @mcp.tool()
 def engineer_submit_work(report: str, pr_package: str) -> str:
-    """工程师提交当前可审快照；后续如继续修改，可再次提交覆盖更新。"""
+    """工程师提交当前可审快照；待审核阶段不自动 commit，便于继续人工/IDE 审查。"""
     is_healthy, msg = check_git_health()
     if not is_healthy:
         return f"❌ {msg}"
@@ -538,6 +629,20 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     parsed_package, parse_error = _parse_pr_package(pr_package)
     if parse_error is not None:
         return parse_error
+    package_error = _validate_pr_package_content(parsed_package)
+    if package_error is not None:
+        return package_error
+
+    current_state = _load_state()
+    can_transit, transition_msg = _validate_transition(current_state["status"], "REVIEW_PENDING")
+    if not can_transit:
+        return f"❌ {transition_msg}"
+    if current_state["review_lock"]["active"]:
+        return (
+            "❌ 架构师已开始正式审核，请先停止继续修改并等待结论。\n"
+            f"{current_state['review_lock']['notice']}\n\n"
+            f"工程师确认语：{_review_stop_notice()}"
+        )
 
     try:
         with _locked_state() as (state, commit):
@@ -558,6 +663,7 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
             commit(state)
         return (
             "✅ 已提交当前可审快照，状态为 REVIEW_PENDING。"
+            "当前阶段不会自动 commit，便于继续使用 Trae 智能审查或人工指导后迭代修改。"
             "如后续仍有新修改，请再次调用 engineer_submit_work() 覆盖更新。"
         )
     except Exception as e:
@@ -579,7 +685,11 @@ def architect_finalize(feedback: str, approved: bool) -> str:
             state["review_lock"] = _normalize_review_lock(None)
             state["last_update"] = _utc_now_iso()
             commit(state)
-        return f"✅ 裁定完成：{'准予手工提交 PR' if approved else '打回修改，状态为 REVISE_REQUIRED'}"
+        if approved:
+            package_summary = _format_pr_ready_package(state.get("pr_readiness_package", {}))
+            git_guidance = _git_guidance_for_pr_submission(state.get("pr_readiness_package", {}))
+            return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}\n\n{git_guidance}"
+        return "✅ 裁定完成：打回修改，状态为 REVISE_REQUIRED"
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
