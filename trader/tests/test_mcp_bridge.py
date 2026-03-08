@@ -690,6 +690,71 @@ def test_architect_assign_task_allows_new_work_from_merged(
     assert new_state["task_id"] == "Task10.3-M"
     assert new_state["active_branch"] == "feature/task10-3-m"
 
+
+def test_gh_command_env_uses_default_proxy_when_shell_env_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr(mcp_bridge, "DEFAULT_GITHUB_PROXY", "http://127.0.0.1:4780")
+
+    env = mcp_bridge._gh_command_env()
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:4780"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:4780"
+
+
+def test_architect_github_preflight_reports_login_guidance_with_auto_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: "gh")
+    monkeypatch.setattr(mcp_bridge, "_read_gh_auth_status", lambda: (False, "not logged in"))
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr(mcp_bridge, "DEFAULT_GITHUB_PROXY", "http://127.0.0.1:4780")
+
+    msg = mcp_bridge.architect_github_preflight()
+    assert "GitHub 预检结果" in msg
+    assert "- gh: gh" in msg
+    assert "- HTTP_PROXY: http://127.0.0.1:4780" in msg
+    assert "MCP 已自动注入 GitHub 代理环境" in msg
+
+
+def test_architect_github_preflight_reports_ready_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: r"C:\Program Files\GitHub CLI\gh.exe")
+    monkeypatch.setattr(mcp_bridge, "_read_gh_auth_status", lambda: (True, "Logged in to github.com"))
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:4780")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:4780")
+
+    msg = mcp_bridge.architect_github_preflight()
+    assert "- auth: ok" in msg
+    assert "gh pr status / gh pr create --fill" in msg
+
+
+def test_read_gh_auth_status_passes_proxy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: "gh")
+    monkeypatch.setattr(mcp_bridge, "DEFAULT_GITHUB_PROXY", "http://127.0.0.1:4780")
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+    captured: dict[str, str] = {}
+
+    def _fake_run(args, **kwargs):
+        captured["http_proxy"] = kwargs["env"]["HTTP_PROXY"]
+        captured["https_proxy"] = kwargs["env"]["HTTPS_PROXY"]
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="Logged in")
+
+    monkeypatch.setattr(mcp_bridge.subprocess, "run", _fake_run)
+
+    ok, _ = mcp_bridge._read_gh_auth_status()
+    assert ok is True
+    assert captured["http_proxy"] == "http://127.0.0.1:4780"
+    assert captured["https_proxy"] == "http://127.0.0.1:4780"
+
+
 def test_invalid_transition_is_rejected_without_write(
     mission_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
