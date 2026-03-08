@@ -221,6 +221,16 @@ def test_check_git_health_rejects_detached_head(monkeypatch: pytest.MonkeyPatch)
     assert "detached HEAD" in msg
 
 
+def test_check_git_health_rejects_none_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_bridge, "PROJECT_ROOT", ".")
+    monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(mcp_bridge, "_get_current_branch", lambda: None)
+
+    ok, msg = mcp_bridge.check_git_health()
+    assert not ok
+    assert "detached HEAD" in msg
+
+
 def test_check_git_health_rejects_unknown_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mcp_bridge, "PROJECT_ROOT", ".")
     monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda _path: True)

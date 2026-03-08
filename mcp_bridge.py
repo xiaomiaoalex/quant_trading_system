@@ -424,7 +424,7 @@ def check_git_health() -> tuple[bool, str]:
     if not os.path.exists(git_dir):
         return False, f"🚨 警告：在 {PROJECT_ROOT} 未检测到 .git 目录！"
     current_branch = _get_current_branch()
-    if current_branch in {"", "HEAD"}:
+    if not current_branch or current_branch in {"", "HEAD"}:
         return False, "🚨 警告：当前 Git 分支处于 detached HEAD 状态。"
     if current_branch == "unknown":
         return False, "🚨 警告：无法识别当前 Git 分支状态。"
