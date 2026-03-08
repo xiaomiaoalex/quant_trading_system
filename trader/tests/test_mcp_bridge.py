@@ -547,6 +547,149 @@ def test_architect_assign_task_allows_new_work_from_closed_no_pr(
     assert new_state["task_id"] == "Task10.3-K"
     assert new_state["active_branch"] == "feature/task10-3-k"
 
+
+def test_architect_mark_pr_opened_records_manual_pr_info(mission_file: Path) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["active_branch"] = "feature/task10-3-l"
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-l",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_mark_pr_opened(
+        pr_url="https://github.com/example/repo/pull/123",
+        pr_number="123",
+    )
+    assert msg.startswith("✅ 已记录 PR 创建状态。")
+    assert "PR #123" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "PR_OPENED"
+    assert new_state["pr_tracking"]["pr_number"] == "123"
+    assert new_state["pr_tracking"]["pr_url"].endswith("/pull/123")
+    assert new_state["pr_readiness_package"]["pr_number"] == "123"
+
+
+def test_architect_mark_pr_opened_uses_gh_when_available(
+    mission_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["active_branch"] = "feature/task10-3-l"
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-l",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_read_pr_info_from_gh",
+        lambda _branch: (
+            {
+                "pr_number": "20",
+                "pr_url": "https://github.com/example/repo/pull/20",
+                "pr_state": "OPEN",
+                "merge_commit": "",
+                "merged_at": "",
+                "base_ref": "main",
+                "head_ref": "feature/task10-3-l",
+            },
+            None,
+        ),
+    )
+
+    msg = mcp_bridge.architect_mark_pr_opened()
+    assert msg.startswith("✅ 已记录 PR 创建状态。")
+    assert "PR #20" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "PR_OPENED"
+    assert new_state["pr_tracking"]["pr_number"] == "20"
+
+
+def test_architect_mark_merged_records_merge_and_milestone(
+    mission_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _base_state("PR_OPENED")
+    state["task_id"] = "Task10.3-L"
+    state["active_branch"] = "feature/task10-3-l"
+    state["pr_tracking"] = {
+        "pr_number": "20",
+        "pr_url": "https://github.com/example/repo/pull/20",
+        "opened_at": "2026-03-08T00:00:00Z",
+        "merged_at": "",
+        "merge_commit": "",
+    }
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-l",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_read_pr_info_from_gh",
+        lambda _branch: (
+            {
+                "pr_number": "20",
+                "pr_url": "https://github.com/example/repo/pull/20",
+                "pr_state": "MERGED",
+                "merge_commit": "abc123",
+                "merged_at": "2026-03-08T12:00:00Z",
+                "base_ref": "main",
+                "head_ref": "feature/task10-3-l",
+            },
+            None,
+        ),
+    )
+
+    msg = mcp_bridge.architect_mark_merged("","Task10.3-L: Timezone-Aware UTC Cleanup (Merged)")
+    assert msg.startswith("✅ 已记录 PR 合并状态。")
+    assert "merge_commit: abc123" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "MERGED"
+    assert new_state["pr_tracking"]["merge_commit"] == "abc123"
+    assert "Task10.3-L: Timezone-Aware UTC Cleanup (Merged)" in new_state["completed_milestones"]
+
+
+def test_architect_assign_task_allows_new_work_from_merged(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("MERGED")
+    state["task_id"] = "Task10.3-L"
+    state["active_branch"] = "feature/task10-3-l"
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_assign_task("Task10.3-M: next mission")
+    assert msg.startswith("✅")
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "DEVELOPING"
+    assert new_state["task_id"] == "Task10.3-M"
+    assert new_state["active_branch"] == "feature/task10-3-m"
+
 def test_invalid_transition_is_rejected_without_write(
     mission_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
