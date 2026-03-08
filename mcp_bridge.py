@@ -1,16 +1,18 @@
-import json
 import os
 import sys
-from datetime import datetime
+import json
+import time
+import tempfile
+import re
 import subprocess
+from datetime import datetime, timezone
+from typing import Any, Optional
+from contextlib import contextmanager
 
-# 1. 引入 FastMCP 框架
 from mcp.server.fastmcp import FastMCP
 
-# 2. 实例化 MCP 服务器
-mcp = FastMCP("Dual_AI_Communicator")
-
-# 告示板文件的路径
+# 基础常量定义
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = "mcp_mission_control.json"
 
 VALID_STATUSES = {
@@ -115,6 +117,182 @@ def _parse_pr_package(pr_package: str) -> tuple[dict[str, Any] | None, str | Non
     if not isinstance(parsed_package, dict):
         return None, "❌ pr_package必须是有效的JSON对象。"
     return parsed_package, None
+
+
+def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
+    required_string_fields = {
+        "pr_title": "PR 标题",
+        "pr_description": "PR 描述草稿",
+        "rollback": "回滚方案",
+    }
+    for field, label in required_string_fields.items():
+        value = pr_package.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return f"❌ pr_package缺少必填项：{label}。"
+
+    changes = pr_package.get("changes")
+    if not isinstance(changes, list) or not changes:
+        return "❌ pr_package缺少必填项：变更点（changes）。"
+    for change in changes:
+        if not isinstance(change, dict):
+            return "❌ pr_package.changes 中的每一项都必须是对象。"
+        file_path = change.get("file")
+        change_type = change.get("type")
+        description = change.get("description")
+        if not isinstance(file_path, str) or not file_path.strip():
+            return "❌ pr_package.changes 缺少必填项：file。"
+        if not isinstance(change_type, str) or not change_type.strip():
+            return "❌ pr_package.changes 缺少必填项：type。"
+        if not isinstance(description, str) or not description.strip():
+            return "❌ pr_package.changes 缺少必填项：description。"
+        if file_path == "mcp_mission_control.json" or file_path.endswith(".lock"):
+            return f"❌ pr_package.changes 包含受保护运行态文件：{file_path}。"
+
+    test_results = pr_package.get("test_results")
+    if not isinstance(test_results, dict) or not test_results:
+        return "❌ pr_package缺少必填项：测试结果（test_results）。"
+
+    risks = pr_package.get("risks")
+    if not isinstance(risks, list):
+        return "❌ pr_package缺少必填项：风险说明（risks）。"
+
+    return None
+
+
+def _collect_worktree_changes() -> tuple[set[str] | None, str | None]:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            return None, f"无法收集工作区改动: {err}"
+        dirty_files: set[str] = set()
+        for raw_line in result.stdout.splitlines():
+            if not raw_line:
+                continue
+            path = raw_line[3:].strip()
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1].strip()
+            if path:
+                dirty_files.add(path)
+        return dirty_files, None
+    except subprocess.TimeoutExpired:
+        return None, "收集工作区改动超时，请稍后重试。"
+    except Exception as e:
+        return None, f"收集工作区改动失败: {str(e)}"
+
+
+def _declared_change_files(pr_package: dict[str, Any]) -> set[str]:
+    files: set[str] = set()
+    for change in pr_package.get("changes", []):
+        if isinstance(change, dict):
+            file_path = change.get("file")
+            if isinstance(file_path, str) and file_path.strip():
+                files.add(file_path.strip())
+    return files
+
+
+def _sanitize_commit_message(message: str) -> str:
+    cleaned = " ".join(message.splitlines()).strip()
+    return cleaned or "chore: auto commit before engineer_submit_work"
+
+
+def _auto_commit_declared_changes(task_id: str, pr_package: dict[str, Any]) -> tuple[bool, str]:
+    dirty_files, dirty_error = _collect_worktree_changes()
+    if dirty_error is not None or dirty_files is None:
+        return False, dirty_error or "无法识别工作区改动。"
+    if not dirty_files:
+        return True, ""
+
+    declared_files = _declared_change_files(pr_package)
+    undeclared_files = sorted(dirty_files - declared_files)
+    if undeclared_files:
+        return False, (
+            "检测到未在 pr_package.changes 声明的工作区改动，请先补全 PR 包或清理后重试："
+            + ", ".join(undeclared_files)
+        )
+
+    try:
+        add_cmd = ["git", "add", "-A", "--", *sorted(declared_files)]
+        add_result = subprocess.run(
+            add_cmd,
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=10,
+        )
+        if add_result.returncode != 0:
+            err = (add_result.stderr or add_result.stdout or "").strip()
+            return False, f"自动暂存改动失败: {err}"
+
+        commit_message = _sanitize_commit_message(pr_package.get("pr_title", f"chore({task_id}): auto commit"))
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", commit_message],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=15,
+        )
+        if commit_result.returncode != 0:
+            err = (commit_result.stderr or commit_result.stdout or "").strip()
+            return False, f"自动提交本地 commit 失败: {err}"
+
+        head_result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=5,
+            check=True,
+        )
+        return True, head_result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return False, "自动提交本地 commit 超时，请稍后重试。"
+    except Exception as e:
+        return False, f"自动提交本地 commit 异常: {str(e)}"
+
+
+def _format_pr_ready_package(pr_package: dict[str, Any]) -> str:
+    branch = pr_package.get("branch", "")
+    target = pr_package.get("target", "")
+    title = pr_package.get("pr_title", "")
+    description = pr_package.get("pr_description", "")
+    changes = pr_package.get("changes", [])
+    test_results = pr_package.get("test_results", {})
+    risks = pr_package.get("risks", [])
+    rollback = pr_package.get("rollback", "")
+
+    change_lines = []
+    for change in changes:
+        if isinstance(change, dict):
+            file_path = change.get("file", "")
+            desc = change.get("description", "")
+            change_lines.append(f"- {file_path}: {desc}")
+
+    test_lines = [f"- {name}: {result}" for name, result in test_results.items()]
+    risk_lines = [f"- {risk}" for risk in risks] if risks else ["- 无"]
+
+    lines = [
+        "PR 就绪包",
+        f"- branch: {branch}",
+        f"- target: {target}",
+        f"- title: {title}",
+        "- description:",
+        description,
+        "- changes:",
+        *change_lines,
+        "- test_results:",
+        *test_lines,
+        "- risks:",
+        *risk_lines,
+        f"- rollback: {rollback}",
+    ]
+    return "\n".join(lines)
 
 
 @contextmanager
@@ -397,6 +575,11 @@ def check_git_health() -> tuple[bool, str]:
     git_dir = os.path.join(PROJECT_ROOT, ".git")
     if not os.path.exists(git_dir):
         return False, f"🚨 警告：在 {PROJECT_ROOT} 未检测到 .git 目录！"
+    current_branch = _get_current_branch()
+    if current_branch == "HEAD":
+        return False, "🚨 警告：当前处于 detached HEAD 状态，禁止继续执行任务流转，请先由人类修复 Git 环境。"
+    if current_branch == "unknown":
+        return False, "🚨 警告：无法识别当前 Git 分支状态，请先检查 Git 环境。"
     return True, "Git 环境健康"
 
 
@@ -471,6 +654,23 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     parsed_package, parse_error = _parse_pr_package(pr_package)
     if parse_error is not None:
         return parse_error
+    package_error = _validate_pr_package_content(parsed_package)
+    if package_error is not None:
+        return package_error
+
+    current_state = _load_state()
+    can_transit, transition_msg = _validate_transition(current_state["status"], "REVIEW_PENDING")
+    if not can_transit:
+        return f"❌ {transition_msg}"
+
+    task_id = current_state.get("task_id", "UNASSIGNED")
+    commit_ok, commit_info = _auto_commit_declared_changes(task_id, parsed_package)
+    if not commit_ok:
+        return f"❌ {commit_info}"
+
+    clean, clean_msg = _check_clean_worktree()
+    if not clean:
+        return f"❌ {clean_msg}"
 
     try:
         with _locked_state() as (state, commit):
@@ -483,7 +683,12 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
             state["pr_readiness_package"] = parsed_package
             state["last_update"] = _utc_now_iso()
             commit(state)
-        return "✅ SUCCESS: 成果已提交，状态已锁定为 REVIEW_PENDING。工程师任务已结束，请立即停止任何代码提交动作，并进入待命(IDLE)状态等待架构师审核。"
+        commit_suffix = f"\n📝 已自动生成本地 commit: {commit_info}" if commit_info else ""
+        return (
+            "✅ SUCCESS: 成果已提交，状态已锁定为 REVIEW_PENDING。"
+            "工程师任务已结束，请立即停止任何代码提交动作，并进入待命(IDLE)状态等待架构师审核。"
+            f"{commit_suffix}"
+        )
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
@@ -502,7 +707,10 @@ def architect_finalize(feedback: str, approved: bool) -> str:
             state["architect_instruction"] = feedback
             state["last_update"] = _utc_now_iso()
             commit(state)
-        return f"✅ 裁定完成：{'准予手工提交 PR' if approved else '打回修改，状态为 REVISE_REQUIRED'}"
+        if approved:
+            package_summary = _format_pr_ready_package(state.get("pr_readiness_package", {}))
+            return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}"
+        return "✅ 裁定完成：打回修改，状态为 REVISE_REQUIRED"
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 

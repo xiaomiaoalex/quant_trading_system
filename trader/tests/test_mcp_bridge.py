@@ -191,10 +191,33 @@ def test_architect_assign_task_git_failure_does_not_mutate_state(
     assert state == original
 
 
-def test_engineer_submit_work_rejects_invalid_pr_package(mission_file: Path) -> None:
+def test_check_git_health_rejects_detached_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_bridge, "PROJECT_ROOT", ".")
+    monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(mcp_bridge, "_get_current_branch", lambda: "HEAD")
+
+    ok, msg = mcp_bridge.check_git_health()
+    assert not ok
+    assert "detached HEAD" in msg
+
+
+def test_check_git_health_rejects_unknown_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_bridge, "PROJECT_ROOT", ".")
+    monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda _path: True)
+    monkeypatch.setattr(mcp_bridge, "_get_current_branch", lambda: "unknown")
+
+    ok, msg = mcp_bridge.check_git_health()
+    assert not ok
+    assert "无法识别当前 Git 分支状态" in msg
+
+
+def test_engineer_submit_work_rejects_invalid_pr_package(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     original = _base_state("DEVELOPING")
     original["engineer_report"] = "old report"
     _write_state(mission_file, original)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
 
     msg = mcp_bridge.engineer_submit_work("report", "not-json")
     assert msg == "❌ pr_package必须是合法的JSON字符串。"
@@ -203,9 +226,12 @@ def test_engineer_submit_work_rejects_invalid_pr_package(mission_file: Path) -> 
     assert state == original
 
 
-def test_engineer_submit_work_rejects_non_object_json(mission_file: Path) -> None:
+def test_engineer_submit_work_rejects_non_object_json(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     original = _base_state("DEVELOPING")
     _write_state(mission_file, original)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
 
     msg = mcp_bridge.engineer_submit_work("report", '["not", "an", "object"]')
     assert msg == "❌ pr_package必须是有效的JSON对象。"
@@ -214,10 +240,40 @@ def test_engineer_submit_work_rejects_non_object_json(mission_file: Path) -> Non
     assert state == original
 
 
-def test_engineer_submit_work_valid_package_transitions_to_review_pending(mission_file: Path) -> None:
-    _write_state(mission_file, _base_state("DEVELOPING"))
+def test_engineer_submit_work_rejects_missing_required_pr_fields(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = _base_state("DEVELOPING")
+    _write_state(mission_file, original)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
 
-    package = json.dumps({"branch": "feature/task10-3-c", "status": "ready"}, ensure_ascii=False)
+    msg = mcp_bridge.engineer_submit_work("report", '{"branch":"feature/task10-3-c"}')
+    assert msg == "❌ pr_package缺少必填项：PR 标题。"
+
+    state = _read_state(mission_file)
+    assert state == original
+
+
+def test_engineer_submit_work_valid_package_transitions_to_review_pending(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_state(mission_file, _base_state("DEVELOPING"))
+    monkeypatch.setattr(mcp_bridge, "_auto_commit_declared_changes", lambda _task_id, _pkg: (True, "abc123"))
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
+
+    package = json.dumps(
+        {
+            "branch": "feature/task10-3-c",
+            "status": "ready",
+            "pr_title": "fix: sample",
+            "pr_description": "desc",
+            "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
     msg = mcp_bridge.engineer_submit_work("done", package)
     assert msg.startswith("✅")
 
@@ -226,6 +282,100 @@ def test_engineer_submit_work_valid_package_transitions_to_review_pending(missio
     assert state["engineer_report"] == "done"
     assert isinstance(state["pr_readiness_package"], dict)
     assert state["pr_readiness_package"]["branch"] == "feature/task10-3-c"
+
+
+def test_engineer_submit_work_rejects_dirty_worktree(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = _base_state("DEVELOPING")
+    _write_state(mission_file, original)
+    monkeypatch.setattr(mcp_bridge, "_auto_commit_declared_changes", lambda _task_id, _pkg: (True, "abc123"))
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (False, "工作区不干净"))
+
+    package = json.dumps(
+        {
+            "branch": "feature/task10-3-c",
+            "status": "ready",
+            "pr_title": "fix: sample",
+            "pr_description": "desc",
+            "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
+    msg = mcp_bridge.engineer_submit_work("done", package)
+    assert msg == "❌ 工作区不干净"
+
+    state = _read_state(mission_file)
+    assert state == original
+
+
+def test_engineer_submit_work_auto_commits_declared_changes(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("DEVELOPING")
+    state["active_branch"] = "main"
+    _write_state(mission_file, state)
+
+    target_file = temp_git_repo / "feature_change.txt"
+    target_file.write_text("changed\n", encoding="utf-8")
+
+    package = json.dumps(
+        {
+            "branch": "main",
+            "target": "main",
+            "pr_title": "fix: sample auto commit",
+            "pr_description": "desc",
+            "changes": [{"file": "feature_change.txt", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
+    msg = mcp_bridge.engineer_submit_work("done", package)
+    assert msg.startswith("✅")
+    assert "已自动生成本地 commit" in msg
+
+    state = _read_state(mission_file)
+    assert state["status"] == "REVIEW_PENDING"
+
+    status = subprocess.run(
+        ["git", "status", "--short"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert status == ""
+
+
+def test_engineer_submit_work_rejects_undeclared_dirty_files(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("DEVELOPING")
+    state["active_branch"] = "main"
+    _write_state(mission_file, state)
+
+    (temp_git_repo / "declared.txt").write_text("declared\n", encoding="utf-8")
+    (temp_git_repo / "undeclared.txt").write_text("undeclared\n", encoding="utf-8")
+
+    package = json.dumps(
+        {
+            "branch": "main",
+            "target": "main",
+            "pr_title": "fix: sample auto commit",
+            "pr_description": "desc",
+            "changes": [{"file": "declared.txt", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
+    msg = mcp_bridge.engineer_submit_work("done", package)
+    assert msg.startswith("❌ 检测到未在 pr_package.changes 声明的工作区改动")
+
+    state = _read_state(mission_file)
+    assert state["status"] == "DEVELOPING"
 
 
 def test_architect_finalize_only_allowed_from_review_pending(mission_file: Path) -> None:
@@ -238,11 +388,46 @@ def test_architect_finalize_only_allowed_from_review_pending(mission_file: Path)
     assert state["status"] == "DEVELOPING"
 
 
-def test_invalid_transition_is_rejected_without_write(mission_file: Path) -> None:
+def test_architect_finalize_outputs_pr_ready_package(mission_file: Path) -> None:
+    state = _base_state("REVIEW_PENDING")
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-c",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_finalize("approve", True)
+    assert msg.startswith("✅ 裁定完成：准予手工提交 PR")
+    assert "PR 就绪包" in msg
+    assert "feature/task10-3-c" in msg
+    assert "fix: sample" in msg
+
+
+def test_invalid_transition_is_rejected_without_write(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     original = _base_state("IDLE")
     _write_state(mission_file, original)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
 
-    package = json.dumps({"branch": "feature/task10-3-c"}, ensure_ascii=False)
+    package = json.dumps(
+        {
+            "branch": "feature/task10-3-c",
+            "pr_title": "fix: sample",
+            "pr_description": "desc",
+            "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
     msg = mcp_bridge.engineer_submit_work("should fail", package)
     assert msg.startswith("❌")
 
