@@ -412,6 +412,62 @@ class PostgreSQLStorage:
             )
         return None
 
+    async def reconstruct_state(
+        self,
+        stream_key: str,
+        projection_fn: callable = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Reconstruct aggregate state from snapshot + events.
+        
+        This implements the core event sourcing pattern:
+        1. Get latest snapshot
+        2. Get all events after snapshot timestamp
+        3. Apply projection to rebuild state
+        
+        Args:
+            stream_key: The stream key to reconstruct
+            projection_fn: Optional function to apply events to state.
+                          If not provided, returns snapshot state + events for external reconstruction.
+        
+        Returns:
+            Reconstructed state dictionary, or None if no snapshot exists
+        """
+        snapshot = await self.get_latest_snapshot(stream_key)
+        
+        if snapshot is None:
+            return None
+        
+        events_after_snapshot = await self.get_events(
+            aggregate_id=stream_key,
+            since=snapshot.timestamp,
+        )
+        
+        if projection_fn is None:
+            return {
+                "snapshot": {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "state": snapshot.state,
+                    "timestamp": snapshot.timestamp,
+                },
+                "events": [
+                    {
+                        "event_id": e.event_id,
+                        "event_type": e.event_type,
+                        "data": e.data,
+                        "timestamp": e.timestamp,
+                    }
+                    for e in events_after_snapshot
+                ],
+                "event_count": len(events_after_snapshot),
+            }
+        
+        current_state = snapshot.state.copy()
+        for event in events_after_snapshot:
+            current_state = projection_fn(current_state, event)
+        
+        return current_state
+
     async def save_risk_event(self, event_data: Dict[str, Any]) -> tuple[str, bool]:
         """
         Save a risk event with deduplication.

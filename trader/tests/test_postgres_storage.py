@@ -294,6 +294,100 @@ class TestPostgreSQLStorage:
         
         await storage.disconnect()
 
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
+    async def test_reconstruct_state_with_projection(self, storage):
+        """Test reconstruct_state method with projection function"""
+        await storage.connect()
+        
+        snapshot_ts = datetime.now(timezone.utc)
+        
+        snapshot_data = {
+            "snapshot_id": "snap-proj-001",
+            "stream_key": "order-proj",
+            "aggregate_id": "order-proj",
+            "aggregate_type": "Order",
+            "timestamp": snapshot_ts,
+            "state": {"status": "NEW", "quantity": 0, "filled_quantity": 0},
+        }
+        await storage.save_snapshot(snapshot_data)
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-proj-001",
+            event_type="OrderCreated",
+            aggregate_id="order-proj",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"symbol": "BTCUSDT", "quantity": 2.0},
+        ))
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-proj-002",
+            event_type="OrderFilled",
+            aggregate_id="order-proj",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"fill_price": 51000, "filled_quantity": 2.0},
+        ))
+        
+        def order_projection(state, event):
+            if event.event_type == "OrderCreated":
+                state["quantity"] = event.data.get("quantity", 0)
+                state["status"] = "CREATED"
+            elif event.event_type == "OrderFilled":
+                state["filled_quantity"] = event.data.get("filled_quantity", 0)
+                state["fill_price"] = event.data.get("fill_price")
+                state["status"] = "FILLED"
+            return state
+        
+        reconstructed = await storage.reconstruct_state("order-proj", order_projection)
+        
+        assert reconstructed is not None
+        assert reconstructed["status"] == "FILLED"
+        assert reconstructed["quantity"] == 2.0
+        assert reconstructed["filled_quantity"] == 2.0
+        assert reconstructed["fill_price"] == 51000
+        
+        await storage.disconnect()
+
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
+    async def test_reconstruct_state_returns_snapshot_and_events(self, storage):
+        """Test reconstruct_state returns snapshot + events when no projection provided"""
+        await storage.connect()
+        
+        snapshot_ts = datetime.now(timezone.utc)
+        
+        snapshot_data = {
+            "snapshot_id": "snap-raw-001",
+            "stream_key": "order-raw",
+            "aggregate_id": "order-raw",
+            "aggregate_type": "Order",
+            "timestamp": snapshot_ts,
+            "state": {"status": "NEW"},
+        }
+        await storage.save_snapshot(snapshot_data)
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-raw-001",
+            event_type="OrderCreated",
+            aggregate_id="order-raw",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"symbol": "ETHUSDT"},
+        ))
+        
+        result = await storage.reconstruct_state("order-raw")
+        
+        assert result is not None
+        assert "snapshot" in result
+        assert "events" in result
+        assert result["snapshot"]["state"]["status"] == "NEW"
+        assert len(result["events"]) == 1
+        assert result["events"][0]["event_type"] == "OrderCreated"
+        
+        await storage.disconnect()
+
 
 @skip_if_no_postgres
 class TestStoredEventDataclass:
