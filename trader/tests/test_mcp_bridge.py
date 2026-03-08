@@ -507,6 +507,46 @@ def test_architect_finalize_outputs_pr_ready_package(mission_file: Path) -> None
     assert "git push -u origin feature/task10-3-c" in msg
 
 
+def test_architect_finalize_closes_verification_task_without_pr(mission_file: Path) -> None:
+    state = _base_state("REVIEW_PENDING")
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-j",
+        "target": "main",
+        "task_type": "verification",
+        "pr_title": "[验证] Task10.3-J",
+        "pr_description": "验证型任务",
+        "changes": [],
+        "test_results": {"pytest": "10 passed"},
+        "risks": [],
+        "rollback": "N/A",
+    }
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_finalize("verified", True)
+    assert msg.startswith("✅ 裁定完成：核销关闭，无需 PR")
+    assert "PR 就绪包" in msg
+    assert "Git 收尾建议" not in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "CLOSED_NO_PR"
+
+
+def test_architect_assign_task_allows_new_work_from_closed_no_pr(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("CLOSED_NO_PR")
+    state["task_id"] = "Task10.3-J"
+    state["active_branch"] = "feature/task10-3-j"
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_assign_task("Task10.3-K: next mission")
+    assert msg.startswith("✅")
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "DEVELOPING"
+    assert new_state["task_id"] == "Task10.3-K"
+    assert new_state["active_branch"] == "feature/task10-3-k"
+
 def test_invalid_transition_is_rejected_without_write(
     mission_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

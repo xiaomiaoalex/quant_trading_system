@@ -19,16 +19,19 @@ VALID_STATUSES = {
     "REVIEW_PENDING",
     "REVISE_REQUIRED",
     "APPROVED_FOR_PUSH",
+    "CLOSED_NO_PR",
 }
 
 ALLOWED_TRANSITIONS = {
     ("IDLE", "DEVELOPING"),
     ("REVISE_REQUIRED", "DEVELOPING"),
     ("APPROVED_FOR_PUSH", "DEVELOPING"),
+    ("CLOSED_NO_PR", "DEVELOPING"),
     ("DEVELOPING", "REVIEW_PENDING"),
     ("REVIEW_PENDING", "REVIEW_PENDING"),
     ("REVISE_REQUIRED", "REVIEW_PENDING"),
     ("REVIEW_PENDING", "APPROVED_FOR_PUSH"),
+    ("REVIEW_PENDING", "CLOSED_NO_PR"),
     ("REVIEW_PENDING", "REVISE_REQUIRED"),
 }
 
@@ -482,6 +485,14 @@ def _format_pr_ready_package(pr_package: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_close_no_pr_package(pr_package: dict[str, Any]) -> bool:
+    if not isinstance(pr_package, dict):
+        return False
+    task_type = str(pr_package.get("task_type", "") or "").strip().lower()
+    changes = pr_package.get("changes", [])
+    return task_type == "verification" and isinstance(changes, list) and len(changes) == 0
+
+
 def _git_guidance_for_assign_failure(reason: str) -> str:
     if reason == "health":
         lines = [
@@ -676,6 +687,8 @@ def architect_finalize(feedback: str, approved: bool) -> str:
     target_status = "APPROVED_FOR_PUSH" if approved else "REVISE_REQUIRED"
     try:
         with _locked_state() as (state, commit):
+            if approved and _is_close_no_pr_package(state.get("pr_readiness_package", {})):
+                target_status = "CLOSED_NO_PR"
             can_transit, transition_msg = _validate_transition(state["status"], target_status)
             if not can_transit:
                 return f"❌ {transition_msg}"
@@ -687,6 +700,8 @@ def architect_finalize(feedback: str, approved: bool) -> str:
             commit(state)
         if approved:
             package_summary = _format_pr_ready_package(state.get("pr_readiness_package", {}))
+            if target_status == "CLOSED_NO_PR":
+                return f"✅ 裁定完成：核销关闭，无需 PR\n\n{package_summary}"
             git_guidance = _git_guidance_for_pr_submission(state.get("pr_readiness_package", {}))
             return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}\n\n{git_guidance}"
         return "✅ 裁定完成：打回修改，状态为 REVISE_REQUIRED"

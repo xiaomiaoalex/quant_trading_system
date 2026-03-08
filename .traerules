@@ -139,7 +139,8 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 ## PullRequest Rules
 - **迭代开发允许软同步：** 开发过程中，只要形成新的可审快照（代码、测试、修复有更新），就应再次调用 `engineer_submit_work` 覆盖更新当前任务状态、报告与 PR 包。**这一阶段不强制每次先本地 commit。**
 - **待审核阶段保留工作区现场：** 工程师调用 `engineer_submit_work` 进入 `REVIEW_PENDING` 时，MCP 不自动执行本地 commit，便于人类继续使用 Trae 智能审查或人工指导对未提交修改进行补充审阅。
-- **人工 PR 前再整理 Git 历史：** 当架构师最终批准（状态变为 APPROVED_FOR_PUSH）后，再由人类开发者统一整理本地 commit、人工 push、人工创建远程 PR。
+- **人工 PR 前再整理 Git 历史：** 当架构师最终批准且任务需要代码入库（状态变为 `APPROVED_FOR_PUSH`）后，再由人类开发者统一整理本地 commit、人工 push、人工创建远程 PR。
+- **验证型任务允许无 PR 核销关闭：** 当任务被明确判定为验证型、且 `pr_package.task_type=verification` 且 `changes=[]` 时，架构师可将其关闭为 `CLOSED_NO_PR`，表示结论成立但无需代码 PR。
 - **严禁擅自推送：** 无论任务处于何种状态，**绝对不要执行 push 动作或试图创建远程 PR**。代码入库（Merge/Push）始终由人类操作员统一下发。
 - 本地 PR 就绪包必须包含：
   - 功能描述
@@ -199,9 +200,11 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - REVIEW_PENDING -> REVIEW_PENDING (工程师有新修改后再次调用 engineer_submit_work 覆盖更新)
 - REVIEW_PENDING -> REVIEW_PENDING(locked) (通过 architect_begin_review 发出正式审核冻结通知；状态不变但不允许工程师再提交)
 - REVIEW_PENDING -> APPROVED_FOR_PUSH (通过 architect_finalize, approved=True)
+- REVIEW_PENDING -> CLOSED_NO_PR (通过 architect_finalize, approved=True，且为验证型无代码差异任务)
 - REVIEW_PENDING -> REVISE_REQUIRED (通过 architect_finalize, approved=False)
 - REVISE_REQUIRED -> REVIEW_PENDING (工程师按反馈继续修改后再次调用 engineer_submit_work)
 - REVISE_REQUIRED -> DEVELOPING (仅当架构师明确重开任务/切换任务分支时，通过 architect_assign_task)
+- CLOSED_NO_PR -> DEVELOPING (后续正式任务重新派发)
 
 ## 2. 严禁行为
 - **禁止手动篡改状态**：严禁通过手改 JSON 伪造“已提交”“已通过”或绕过评审。
