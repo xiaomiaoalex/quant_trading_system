@@ -451,6 +451,7 @@ def test_engineer_submit_work_keeps_local_changes_uncommitted_while_review_pendi
     msg = mcp_bridge.engineer_submit_work("done", package)
     assert msg.startswith("✅")
     assert "不会自动 commit" in msg
+    assert "\n当前阶段不会自动 commit" in msg
 
     state = _read_state(mission_file)
     assert state["status"] == "REVIEW_PENDING"

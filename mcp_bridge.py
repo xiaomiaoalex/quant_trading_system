@@ -662,8 +662,8 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
             state["last_update"] = _utc_now_iso()
             commit(state)
         return (
-            "✅ 已提交当前可审快照，状态为 REVIEW_PENDING。"
-            "当前阶段不会自动 commit，便于继续使用 Trae 智能审查或人工指导后迭代修改。"
+            "✅ 已提交当前可审快照，状态为 REVIEW_PENDING。\n"
+            "当前阶段不会自动 commit，便于继续使用 Trae 智能审查或人工指导后迭代修改。\n"
             "如后续仍有新修改，请再次调用 engineer_submit_work() 覆盖更新。"
         )
     except Exception as e:
