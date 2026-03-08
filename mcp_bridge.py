@@ -45,6 +45,7 @@ LOCK_TIMEOUT_SEC = float(os.getenv("MCP_LOCK_TIMEOUT_SEC", "10.0"))
 LOCK_RETRY_INTERVAL_SEC = float(os.getenv("MCP_LOCK_RETRY_INTERVAL_SEC", "0.1"))
 
 mcp = FastMCP("Dual_AI_Communicator")
+DEFAULT_GITHUB_PROXY = os.getenv("MCP_GITHUB_PROXY", "http://127.0.0.1:4780")
 
 
 def _utc_now_iso() -> str:
@@ -603,6 +604,50 @@ def _gh_executable() -> str | None:
     return None
 
 
+def _github_proxy_settings() -> dict[str, str]:
+    default_proxy = DEFAULT_GITHUB_PROXY.strip()
+    return {
+        "http_proxy": str(os.environ.get("HTTP_PROXY", "") or default_proxy),
+        "https_proxy": str(os.environ.get("HTTPS_PROXY", "") or default_proxy),
+    }
+
+
+def _gh_command_env() -> dict[str, str]:
+    env = dict(os.environ)
+    proxy = _github_proxy_settings()
+    if proxy["http_proxy"]:
+        env["HTTP_PROXY"] = proxy["http_proxy"]
+        env["http_proxy"] = proxy["http_proxy"]
+    if proxy["https_proxy"]:
+        env["HTTPS_PROXY"] = proxy["https_proxy"]
+        env["https_proxy"] = proxy["https_proxy"]
+    return env
+
+
+def _read_gh_auth_status() -> tuple[bool, str]:
+    gh = _gh_executable()
+    if gh is None:
+        return False, "GitHub CLI 未安装或当前终端不可见。"
+    try:
+        result = subprocess.run(
+            [gh, "auth", "status"],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            env=_gh_command_env(),
+            timeout=15,
+        )
+    except Exception as exc:
+        return False, f"GitHub CLI 调用异常: {exc}"
+
+    output = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+    details = "\n".join(part for part in [output, err] if part).strip()
+    if result.returncode == 0:
+        return True, details or "GitHub CLI 已登录。"
+    return False, details or "GitHub CLI 未登录或认证状态不可用。"
+
+
 def _read_pr_info_from_gh(branch_name: str) -> tuple[dict[str, str] | None, str | None]:
     gh = _gh_executable()
     if gh is None:
@@ -620,6 +665,7 @@ def _read_pr_info_from_gh(branch_name: str) -> tuple[dict[str, str] | None, str 
             capture_output=True,
             text=True,
             cwd=PROJECT_ROOT,
+            env=_gh_command_env(),
             timeout=15,
         )
     except Exception as exc:
@@ -923,6 +969,65 @@ def architect_mark_merged(merge_commit: str = "", summary: str = "") -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_github_preflight() -> str:
+    """检查 GitHub CLI、代理环境与认证状态，给出下一步建议。"""
+    proxy = _github_proxy_settings()
+    gh = _gh_executable()
+    auth_ok, auth_message = _read_gh_auth_status()
+
+    lines = ["GitHub 预检结果"]
+    lines.append(f"- gh: {gh or 'missing'}")
+    lines.append(f"- HTTP_PROXY: {proxy['http_proxy'] or '<empty>'}")
+    lines.append(f"- HTTPS_PROXY: {proxy['https_proxy'] or '<empty>'}")
+    lines.append(f"- auth: {'ok' if auth_ok else 'not_ready'}")
+    lines.append(f"- detail: {auth_message}")
+
+    if gh is None:
+        lines.extend(
+            [
+                "",
+                "下一步",
+                '1. 全局安装 GitHub CLI，例如：winget install --id GitHub.cli',
+                "2. 重新打开终端后执行 gh --version",
+            ]
+        )
+        return "\n".join(lines)
+
+    if not proxy["http_proxy"] or not proxy["https_proxy"]:
+        lines.extend(
+            [
+                "",
+                "下一步",
+                "1. 先加载 dev-github.ps1，确保终端代理环境一致",
+                "2. 再执行 architect_github_preflight() 或 gh auth status",
+            ]
+        )
+        return "\n".join(lines)
+
+    if not auth_ok:
+        lines.extend(
+            [
+                "",
+                "下一步",
+                "1. MCP 已自动注入 GitHub 代理环境",
+                "2. 直接执行 gh auth login",
+                "3. 登录成功后执行 gh auth status",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "",
+            "下一步",
+            "1. 可直接使用 gh pr status / gh pr create --fill",
+            "2. 也可继续通过 architect_mark_pr_opened() / architect_mark_merged() 回写 MCP",
+        ]
+    )
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
