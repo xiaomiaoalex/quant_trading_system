@@ -76,7 +76,7 @@ class DomainEvent:
     aggregate_version: int = 1            # 聚合根版本（乐观锁）
 
     # 时间
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 事件数据（具体内容）
     data: Dict[str, Any] = field(default_factory=dict)
