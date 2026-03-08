@@ -1,5 +1,6 @@
 """Domain Events Tests - 领域事件回归测试"""
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from trader.core.domain.models.events import (
     DomainEvent,
@@ -110,3 +111,22 @@ def test_domain_event_from_json():
     restored = DomainEvent.from_json(json_str)
     assert restored.event_type == EventType.ORDER_CREATED
     assert restored.aggregate_id == "order_123"
+
+
+def test_domain_event_timestamp_is_timezone_aware_utc():
+    """验证事件 timestamp 为 timezone-aware UTC"""
+    order = MockOrder()
+    event = create_order_created_event(order)
+    
+    assert event.timestamp.tzinfo is not None
+    assert event.timestamp.tzinfo == timezone.utc
+
+
+def test_domain_event_timestamp_serialization_round_trip():
+    """验证 timezone-aware timestamp 序列化/反序列化兼容性"""
+    order = MockOrder()
+    event = create_order_created_event(order)
+    json_str = event.to_json()
+    
+    restored = DomainEvent.from_json(json_str)
+    assert restored.timestamp.tzinfo == timezone.utc
