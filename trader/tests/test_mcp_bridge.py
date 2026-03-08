@@ -182,7 +182,11 @@ def test_architect_assign_task_git_failure_does_not_mutate_state(
     _write_state(mission_file, original)
 
     monkeypatch.setattr(mcp_bridge, "check_git_health", lambda: (True, "ok"))
-    monkeypatch.setattr(mcp_bridge, "_run_git_checkout", lambda _branch: (False, "git failed"))
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_run_git_checkout",
+        lambda _branch, **_kwargs: (False, "git failed"),
+    )
 
     msg = mcp_bridge.architect_assign_task("new mission")
     assert msg.startswith("❌")
@@ -226,6 +230,87 @@ def test_engineer_submit_work_valid_package_transitions_to_review_pending(missio
     assert state["engineer_report"] == "done"
     assert isinstance(state["pr_readiness_package"], dict)
     assert state["pr_readiness_package"]["branch"] == "feature/task10-3-c"
+
+
+def test_engineer_submit_work_allows_refresh_while_review_pending(mission_file: Path) -> None:
+    existing = _base_state("REVIEW_PENDING")
+    existing["engineer_report"] = "old"
+    existing["pr_readiness_package"] = {"branch": "feature/task10-3-c", "status": "ready"}
+    _write_state(mission_file, existing)
+
+    package = json.dumps({"branch": "feature/task10-3-c", "status": "updated"}, ensure_ascii=False)
+    msg = mcp_bridge.engineer_submit_work("new snapshot", package)
+    assert msg.startswith("✅")
+    assert "再次调用 engineer_submit_work" in msg
+
+    state = _read_state(mission_file)
+    assert state["status"] == "REVIEW_PENDING"
+    assert state["engineer_report"] == "new snapshot"
+    assert state["pr_readiness_package"]["status"] == "updated"
+
+
+def test_engineer_submit_work_allows_direct_resubmit_from_revise_required(mission_file: Path) -> None:
+    existing = _base_state("REVISE_REQUIRED")
+    _write_state(mission_file, existing)
+
+    package = json.dumps({"branch": "feature/task10-3-c", "status": "ready"}, ensure_ascii=False)
+    msg = mcp_bridge.engineer_submit_work("fixed after review", package)
+    assert msg.startswith("✅")
+
+    state = _read_state(mission_file)
+    assert state["status"] == "REVIEW_PENDING"
+    assert state["engineer_report"] == "fixed after review"
+
+
+def test_architect_begin_review_sets_review_lock_and_notice(mission_file: Path) -> None:
+    existing = _base_state("REVIEW_PENDING")
+    _write_state(mission_file, existing)
+
+    msg = mcp_bridge.architect_begin_review("请基于当前版本开始审查。")
+    assert msg.startswith("✅")
+    assert "我现在开始正式审核，请停止继续修改，直到我给出结论。" in msg
+
+    state = _read_state(mission_file)
+    assert state["status"] == "REVIEW_PENDING"
+    assert state["review_lock"]["active"] is True
+    assert "我现在开始正式审核，请停止继续修改，直到我给出结论。" in state["review_lock"]["notice"]
+
+
+def test_architect_begin_review_rejects_duplicate_start(mission_file: Path) -> None:
+    existing = _base_state("REVIEW_PENDING")
+    existing["review_lock"] = {
+        "active": True,
+        "notice": "我现在开始正式审核，请停止继续修改，直到我给出结论。",
+        "locked_at": "2026-03-08T00:00:00Z",
+    }
+    _write_state(mission_file, existing)
+
+    msg = mcp_bridge.architect_begin_review("重复开始")
+    assert msg == "❌ 审核已在进行中，请勿重复开始。"
+
+    state = _read_state(mission_file)
+    assert state["review_lock"]["active"] is True
+    assert state["review_lock"]["locked_at"] == "2026-03-08T00:00:00Z"
+
+
+def test_engineer_submit_work_rejects_updates_after_architect_begins_review(mission_file: Path) -> None:
+    existing = _base_state("REVIEW_PENDING")
+    existing["review_lock"] = {
+        "active": True,
+        "notice": "我现在开始正式审核，请停止继续修改，直到我给出结论。",
+        "locked_at": "2026-03-08T00:00:00Z",
+    }
+    _write_state(mission_file, existing)
+
+    package = json.dumps({"branch": "feature/task10-3-c", "status": "updated"}, ensure_ascii=False)
+    msg = mcp_bridge.engineer_submit_work("new snapshot", package)
+    assert msg.startswith("❌")
+    assert "架构师已开始正式审核" in msg
+    assert "已停止修改，当前审查版本为最新一次 engineer_submit_work 对应版本。" in msg
+
+    state = _read_state(mission_file)
+    assert state["status"] == "REVIEW_PENDING"
+    assert state["review_lock"]["active"] is True
 
 
 def test_architect_finalize_only_allowed_from_review_pending(mission_file: Path) -> None:

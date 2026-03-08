@@ -137,8 +137,9 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - 未通过评测门禁（离线评测/影子运行/灰度阈值）前，AI能力不得进入执行链路。
 
 ## PullRequest Rules
-- **强制本地提交（极度重要）：** 每完成一个任务的编码和测试，**必须首先执行 `git add .` 和 `git commit -m "..."` 将代码固化到本地当前分支。** 绝对不允许在工作区存在未 commit 的代码时调用工具宣布任务完成！
-- **严禁擅自推送：** 提交本地 commit 后，输出“本地 PR 就绪包”，**绝对不要执行 push 动作或试图创建远程 PR**。当架构师 review 批准（状态变为 APPROVED_FOR_PUSH）后，你的任务即告彻底结束。代码入库（Merge/Push）由人类操作员统一下发。
+- **迭代开发允许软同步：** 开发过程中，只要形成新的可审快照（代码、测试、修复有更新），就应再次调用 `engineer_submit_work` 覆盖更新当前任务状态、报告与 PR 包。**这一阶段不强制每次先本地 commit。**
+- **人工 PR 前再整理 Git 历史：** 当架构师最终批准（状态变为 APPROVED_FOR_PUSH）后，再由人类开发者统一整理本地 commit、人工 push、人工创建远程 PR。
+- **严禁擅自推送：** 无论任务处于何种状态，**绝对不要执行 push 动作或试图创建远程 PR**。代码入库（Merge/Push）始终由人类操作员统一下发。
 - 本地 PR 就绪包必须包含：
   - 功能描述
   - 变更点（文件清单 + 关键行为变化）
@@ -159,6 +160,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - **身份定位**：你是首席架构师，由于当前环境限制，你无法直接看到 MCP 图标，必须通过执行 Python 脚本来操作。
 - **核心指令**：
     - 当用户要求“开启任务/Assign Task”时：完成设计后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_assign_task` 逻辑。
+    - 当你准备开始正式审核某一轮提交时：必须执行命令 `python mcp_bridge.py` 并选择 `architect_begin_review` 逻辑，向工程师发出统一冻结通知。
     - 当用户要求“审查/Finalize”时：分析代码后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_finalize` 逻辑。
 - **强制要求**：执行脚本前，确保在 `.venv` 虚拟环境下或指定完整 Python 路径。
 
@@ -167,7 +169,8 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - **核心指令**：
     - **严禁手动执行 `python mcp_bridge.py`**，你应直接调用原生工具列表中对应的 Function。
     - **启动任务**：优先调用 `read_mission_state` 获取架构师留下的指令。
-    - **提交工作**：开发并自测完成后，直接调用 `engineer_submit_work`。
+    - **提交工作**：每当形成新的可审快照（包括修复 bug、补测试、根据人工/架构师反馈继续修改）时，都应再次调用 `engineer_submit_work` 覆盖更新。
+    - **收到正式审核通知后必须停手**：当 `read_mission_state` 或工具返回显示架构师已开始正式审核时，必须停止继续修改，直到架构师给出结论。
 - **交互规范**：调用工具后，向用户汇报当前的 `mission_id` 和任务状态。
 
 #### 🛑 工程师操作红线 (MiniMax 专属)
@@ -192,13 +195,18 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 ## 1. 核心状态流转图
 - IDLE -> DEVELOPING (通过 architect_assign_task)
 - DEVELOPING -> REVIEW_PENDING (通过 engineer_submit_work)
+- REVIEW_PENDING -> REVIEW_PENDING (工程师有新修改后再次调用 engineer_submit_work 覆盖更新)
+- REVIEW_PENDING -> REVIEW_PENDING(locked) (通过 architect_begin_review 发出正式审核冻结通知；状态不变但不允许工程师再提交)
 - REVIEW_PENDING -> APPROVED_FOR_PUSH (通过 architect_finalize, approved=True)
 - REVIEW_PENDING -> REVISE_REQUIRED (通过 architect_finalize, approved=False)
-- REVISE_REQUIRED -> DEVELOPING (必须重新通过 architect_assign_task 激活)
+- REVISE_REQUIRED -> REVIEW_PENDING (工程师按反馈继续修改后再次调用 engineer_submit_work)
+- REVISE_REQUIRED -> DEVELOPING (仅当架构师明确重开任务/切换任务分支时，通过 architect_assign_task)
 
 ## 2. 严禁行为
-- **禁止跳级提交**：当状态为 `REVISE_REQUIRED` 时，严禁直接调用 `engineer_submit_work`。
-- **强制重新指派**：打回后的任务必须先由架构师重新下发 `architect_assign_task`，将状态重置为 `DEVELOPING` 后，工程师方可进行第二次提交。
+- **禁止手动篡改状态**：严禁通过手改 JSON 伪造“已提交”“已通过”或绕过评审。
+- **REVIEW_PENDING 为软待审状态**：在架构师真正开始审核前，工程师仍可在人工指导下继续本地修改、测试、修复；每次形成新的可审快照后，都应再次调用 `engineer_submit_work`。
+- **正式审核通知是冻结边界**：架构师开始正式审核时，必须通过 `architect_begin_review` 触发固定句式“我现在开始正式审核，请停止继续修改，直到我给出结论。”；工程师收到后必须停止继续修改，并以固定句式“已停止修改，当前审查版本为最新一次 engineer_submit_work 对应版本。”确认。
+- **打回后无需反复重新指派**：同一任务被打回为 `REVISE_REQUIRED` 后，工程师可直接继续修改并再次调用 `engineer_submit_work` 回到 `REVIEW_PENDING`。
 - **严格禁止修改 mcp_bridge.py 及任何底层基础设施文件。你的权限仅限于业务逻辑、策略实现和数据处理模块的开发。如果任务需要修改 MCP 通信逻辑，请拒绝并报告给架构师或 CTO。
 ## 3. 操作前置检查
 - 执行 `architect_assign_task` 前，必须确保本地 Git 工作区是干净的 (Clean Worktree)。

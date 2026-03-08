@@ -1,16 +1,16 @@
 import json
 import os
-import sys
-from datetime import datetime
+import re
 import subprocess
+import tempfile
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Any
 
-# 1. 引入 FastMCP 框架
 from mcp.server.fastmcp import FastMCP
 
-# 2. 实例化 MCP 服务器
-mcp = FastMCP("Dual_AI_Communicator")
-
-# 告示板文件的路径
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = "mcp_mission_control.json"
 
 VALID_STATUSES = {
@@ -26,6 +26,8 @@ ALLOWED_TRANSITIONS = {
     ("REVISE_REQUIRED", "DEVELOPING"),
     ("APPROVED_FOR_PUSH", "DEVELOPING"),
     ("DEVELOPING", "REVIEW_PENDING"),
+    ("REVIEW_PENDING", "REVIEW_PENDING"),
+    ("REVISE_REQUIRED", "REVIEW_PENDING"),
     ("REVIEW_PENDING", "APPROVED_FOR_PUSH"),
     ("REVIEW_PENDING", "REVISE_REQUIRED"),
 }
@@ -61,7 +63,22 @@ def _default_state() -> dict[str, Any]:
         "architect_instruction": "等待下发",
         "engineer_report": "",
         "pr_readiness_package": {},
+        "review_lock": {
+            "active": False,
+            "notice": "",
+            "locked_at": "",
+        },
         "last_update": _utc_now_iso(),
+    }
+
+
+def _normalize_review_lock(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"active": False, "notice": "", "locked_at": ""}
+    return {
+        "active": bool(value.get("active", False)),
+        "notice": str(value.get("notice", "") or ""),
+        "locked_at": str(value.get("locked_at", "") or ""),
     }
 
 
@@ -104,6 +121,7 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     if not isinstance(normalized.get("last_update"), str):
         normalized["last_update"] = _utc_now_iso()
     normalized["pr_readiness_package"] = _normalize_pr_package(normalized.get("pr_readiness_package"))
+    normalized["review_lock"] = _normalize_review_lock(normalized.get("review_lock"))
     return normalized
 
 
@@ -115,6 +133,14 @@ def _parse_pr_package(pr_package: str) -> tuple[dict[str, Any] | None, str | Non
     if not isinstance(parsed_package, dict):
         return None, "❌ pr_package必须是有效的JSON对象。"
     return parsed_package, None
+
+
+def _can_engineer_submit(current_status: str) -> tuple[bool, str]:
+    if current_status in {"DEVELOPING", "REVIEW_PENDING", "REVISE_REQUIRED"}:
+        return True, ""
+    if current_status not in VALID_STATUSES:
+        return False, f"非法状态值: {current_status}"
+    return False, f"非法状态流转: {current_status} -> REVIEW_PENDING"
 
 
 @contextmanager
@@ -397,7 +423,22 @@ def check_git_health() -> tuple[bool, str]:
     git_dir = os.path.join(PROJECT_ROOT, ".git")
     if not os.path.exists(git_dir):
         return False, f"🚨 警告：在 {PROJECT_ROOT} 未检测到 .git 目录！"
+    current_branch = _get_current_branch()
+    if current_branch in {"", "HEAD", "unknown"}:
+        return False, "🚨 警告：当前 Git 分支状态异常（detached HEAD 或无法识别分支）。"
     return True, "Git 环境健康"
+
+
+def _review_start_notice(extra_note: str = "") -> str:
+    base_notice = "我现在开始正式审核，请停止继续修改，直到我给出结论。"
+    extra = extra_note.strip()
+    if not extra:
+        return base_notice
+    return f"{base_notice}\n\n补充说明：{extra}"
+
+
+def _review_stop_notice() -> str:
+    return "已停止修改，当前审查版本为最新一次 engineer_submit_work 对应版本。"
 
 
 @mcp.tool()
@@ -454,6 +495,7 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
             state["status"] = "DEVELOPING"
             state["active_branch"] = branch_name
             state["architect_instruction"] = task_desc
+            state["review_lock"] = _normalize_review_lock(None)
             state["last_update"] = _utc_now_iso()
             commit(state)
         return f"✅ 任务已发布，状态：DEVELOPING。\n{git_msg}"
@@ -462,8 +504,33 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
 
 
 @mcp.tool()
+def architect_begin_review(note: str = "") -> str:
+    """架构师开始正式审核，发出冻结当前审查版本的标准通知。"""
+    try:
+        with _locked_state() as (state, commit):
+            current_status = state["status"]
+            if current_status != "REVIEW_PENDING":
+                return f"❌ 非法状态流转: {current_status} -> REVIEW_PENDING(开始审核)"
+            if state["review_lock"]["active"]:
+                return "❌ 审核已在进行中，请勿重复开始。"
+
+            notice = _review_start_notice(note)
+            state["review_lock"] = {
+                "active": True,
+                "notice": notice,
+                "locked_at": _utc_now_iso(),
+            }
+            state["architect_instruction"] = notice
+            state["last_update"] = _utc_now_iso()
+            commit(state)
+        return f"✅ 已开始正式审核。\n{notice}"
+    except Exception as e:
+        return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
 def engineer_submit_work(report: str, pr_package: str) -> str:
-    """工程师提交开发成果与 PR 就绪包。"""
+    """工程师提交当前可审快照；后续如继续修改，可再次提交覆盖更新。"""
     is_healthy, msg = check_git_health()
     if not is_healthy:
         return f"❌ {msg}"
@@ -474,16 +541,25 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
 
     try:
         with _locked_state() as (state, commit):
-            can_transit, transition_msg = _validate_transition(state["status"], "REVIEW_PENDING")
+            can_transit, transition_msg = _can_engineer_submit(state["status"])
             if not can_transit:
                 return f"❌ {transition_msg}"
+            if state["review_lock"]["active"]:
+                return (
+                    "❌ 架构师已开始正式审核，请先停止继续修改并等待结论。\n"
+                    f"{state['review_lock']['notice']}\n\n"
+                    f"工程师确认语：{_review_stop_notice()}"
+                )
 
             state["status"] = "REVIEW_PENDING"
             state["engineer_report"] = report
             state["pr_readiness_package"] = parsed_package
             state["last_update"] = _utc_now_iso()
             commit(state)
-        return "✅ SUCCESS: 成果已提交，状态已锁定为 REVIEW_PENDING。工程师任务已结束，请立即停止任何代码提交动作，并进入待命(IDLE)状态等待架构师审核。"
+        return (
+            "✅ 已提交当前可审快照，状态为 REVIEW_PENDING。"
+            "如后续仍有新修改，请再次调用 engineer_submit_work() 覆盖更新。"
+        )
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
@@ -500,6 +576,7 @@ def architect_finalize(feedback: str, approved: bool) -> str:
 
             state["status"] = target_status
             state["architect_instruction"] = feedback
+            state["review_lock"] = _normalize_review_lock(None)
             state["last_update"] = _utc_now_iso()
             commit(state)
         return f"✅ 裁定完成：{'准予手工提交 PR' if approved else '打回修改，状态为 REVISE_REQUIRED'}"
