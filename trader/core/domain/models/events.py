@@ -14,7 +14,7 @@ Events - 领域事件模型
                     -> PositionUpdated
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any, List
@@ -76,7 +76,7 @@ class DomainEvent:
     aggregate_version: int = 1            # 聚合根版本（乐观锁）
 
     # 时间
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     # 事件数据（具体内容）
     data: Dict[str, Any] = field(default_factory=dict)
