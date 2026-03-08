@@ -19,6 +19,8 @@ VALID_STATUSES = {
     "REVIEW_PENDING",
     "REVISE_REQUIRED",
     "APPROVED_FOR_PUSH",
+    "PR_OPENED",
+    "MERGED",
     "CLOSED_NO_PR",
 }
 
@@ -26,6 +28,7 @@ ALLOWED_TRANSITIONS = {
     ("IDLE", "DEVELOPING"),
     ("REVISE_REQUIRED", "DEVELOPING"),
     ("APPROVED_FOR_PUSH", "DEVELOPING"),
+    ("MERGED", "DEVELOPING"),
     ("CLOSED_NO_PR", "DEVELOPING"),
     ("DEVELOPING", "REVIEW_PENDING"),
     ("REVIEW_PENDING", "REVIEW_PENDING"),
@@ -33,6 +36,9 @@ ALLOWED_TRANSITIONS = {
     ("REVIEW_PENDING", "APPROVED_FOR_PUSH"),
     ("REVIEW_PENDING", "CLOSED_NO_PR"),
     ("REVIEW_PENDING", "REVISE_REQUIRED"),
+    ("APPROVED_FOR_PUSH", "PR_OPENED"),
+    ("APPROVED_FOR_PUSH", "MERGED"),
+    ("PR_OPENED", "MERGED"),
 }
 
 LOCK_TIMEOUT_SEC = float(os.getenv("MCP_LOCK_TIMEOUT_SEC", "10.0"))
@@ -71,6 +77,13 @@ def _default_state() -> dict[str, Any]:
             "notice": "",
             "locked_at": "",
         },
+        "pr_tracking": {
+            "pr_number": "",
+            "pr_url": "",
+            "opened_at": "",
+            "merged_at": "",
+            "merge_commit": "",
+        },
         "last_update": _utc_now_iso(),
     }
 
@@ -82,6 +95,24 @@ def _normalize_review_lock(value: Any) -> dict[str, Any]:
         "active": bool(value.get("active", False)),
         "notice": str(value.get("notice", "") or ""),
         "locked_at": str(value.get("locked_at", "") or ""),
+    }
+
+
+def _normalize_pr_tracking(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "pr_number": "",
+            "pr_url": "",
+            "opened_at": "",
+            "merged_at": "",
+            "merge_commit": "",
+        }
+    return {
+        "pr_number": str(value.get("pr_number", "") or ""),
+        "pr_url": str(value.get("pr_url", "") or ""),
+        "opened_at": str(value.get("opened_at", "") or ""),
+        "merged_at": str(value.get("merged_at", "") or ""),
+        "merge_commit": str(value.get("merge_commit", "") or ""),
     }
 
 
@@ -125,6 +156,7 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
         normalized["last_update"] = _utc_now_iso()
     normalized["pr_readiness_package"] = _normalize_pr_package(normalized.get("pr_readiness_package"))
     normalized["review_lock"] = _normalize_review_lock(normalized.get("review_lock"))
+    normalized["pr_tracking"] = _normalize_pr_tracking(normalized.get("pr_tracking"))
     return normalized
 
 
@@ -543,6 +575,81 @@ def _review_stop_notice() -> str:
     return "已停止修改，当前审查版本为最新一次 engineer_submit_work 对应版本。"
 
 
+def _gh_executable() -> str | None:
+    candidates = [
+        "gh",
+        r"C:\Program Files\GitHub CLI\gh.exe",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "GitHub CLI", "gh.exe"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.isabs(candidate):
+            if os.path.exists(candidate):
+                return candidate
+            continue
+        try:
+            result = subprocess.run(
+                [candidate, "--version"],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _read_pr_info_from_gh(branch_name: str) -> tuple[dict[str, str] | None, str | None]:
+    gh = _gh_executable()
+    if gh is None:
+        return None, "GitHub CLI 不可用，请手工提供 PR 信息。"
+    try:
+        result = subprocess.run(
+            [
+                gh,
+                "pr",
+                "view",
+                branch_name,
+                "--json",
+                "number,url,state,mergeCommit,mergedAt,baseRefName,headRefName",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=15,
+        )
+    except Exception as exc:
+        return None, f"GitHub CLI 查询异常: {exc}"
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        return None, f"GitHub CLI 无法读取 PR 信息: {err}"
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        return None, f"GitHub CLI 返回了无效 JSON: {exc}"
+    merge_commit = payload.get("mergeCommit") or {}
+    return {
+        "pr_number": str(payload.get("number", "") or ""),
+        "pr_url": str(payload.get("url", "") or ""),
+        "pr_state": str(payload.get("state", "") or ""),
+        "merge_commit": str(merge_commit.get("oid", "") or ""),
+        "merged_at": str(payload.get("mergedAt", "") or ""),
+        "base_ref": str(payload.get("baseRefName", "") or ""),
+        "head_ref": str(payload.get("headRefName", "") or ""),
+    }, None
+
+
+def _append_completed_milestone(state: dict[str, Any], summary: str) -> None:
+    milestones = list(state.get("completed_milestones", []))
+    if summary not in milestones:
+        milestones.append(summary)
+    state["completed_milestones"] = milestones
+
+
 @mcp.tool()
 def read_mission_state() -> str:
     """读取任务状态并校验当前分支是否与任务绑定分支一致。"""
@@ -598,6 +705,7 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
             state["active_branch"] = branch_name
             state["architect_instruction"] = task_desc
             state["review_lock"] = _normalize_review_lock(None)
+            state["pr_tracking"] = _normalize_pr_tracking(None)
             state["last_update"] = _utc_now_iso()
             commit(state)
         return f"✅ 任务已发布，状态：DEVELOPING。\n{git_msg}"
@@ -703,8 +811,116 @@ def architect_finalize(feedback: str, approved: bool) -> str:
             if target_status == "CLOSED_NO_PR":
                 return f"✅ 裁定完成：核销关闭，无需 PR\n\n{package_summary}"
             git_guidance = _git_guidance_for_pr_submission(state.get("pr_readiness_package", {}))
-            return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}\n\n{git_guidance}"
+            followup = (
+                "后续 MCP 动作\n"
+                "1. PR 创建后调用 architect_mark_pr_opened()\n"
+                "2. PR merge 后调用 architect_mark_merged()"
+            )
+            return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}\n\n{git_guidance}\n\n{followup}"
         return "✅ 裁定完成：打回修改，状态为 REVISE_REQUIRED"
+    except Exception as e:
+        return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_mark_pr_opened(pr_url: str = "", pr_number: str = "") -> str:
+    """标记 PR 已创建；若安装了 gh，且参数为空，则尝试自动读取 PR 信息。"""
+    try:
+        with _locked_state() as (state, commit):
+            can_transit, transition_msg = _validate_transition(state["status"], "PR_OPENED")
+            if not can_transit:
+                return f"❌ {transition_msg}"
+
+            branch_name = str(state.get("pr_readiness_package", {}).get("branch", "") or state.get("active_branch", ""))
+            detected, detected_err = (None, None)
+            if not pr_url.strip() or not pr_number.strip():
+                detected, detected_err = _read_pr_info_from_gh(branch_name)
+
+            resolved_number = pr_number.strip() or (detected or {}).get("pr_number", "")
+            resolved_url = pr_url.strip() or (detected or {}).get("pr_url", "")
+            pr_state = (detected or {}).get("pr_state", "")
+
+            if detected is not None and pr_state and pr_state != "OPEN":
+                return f"❌ 当前 PR 状态不是 OPEN，而是 {pr_state}。请直接使用 architect_mark_merged() 或检查远端状态。"
+            if not resolved_number and not resolved_url:
+                if detected_err:
+                    return f"❌ 无法自动读取 PR 信息，也未提供 pr_url/pr_number。\n{detected_err}"
+                return "❌ 请提供 pr_url 或 pr_number，或确保 gh 可读取当前分支 PR。"
+
+            state["status"] = "PR_OPENED"
+            state["architect_instruction"] = "PR 已创建，等待合并。"
+            state["pr_tracking"] = {
+                "pr_number": resolved_number,
+                "pr_url": resolved_url,
+                "opened_at": _utc_now_iso(),
+                "merged_at": "",
+                "merge_commit": "",
+            }
+            package = dict(state.get("pr_readiness_package", {}))
+            if resolved_number:
+                package["pr_number"] = resolved_number
+            if resolved_url:
+                package["pr_url"] = resolved_url
+            state["pr_readiness_package"] = package
+            state["last_update"] = _utc_now_iso()
+            commit(state)
+        lines = ["✅ 已记录 PR 创建状态。"]
+        if resolved_number:
+            lines.append(f"PR #{resolved_number}")
+        if resolved_url:
+            lines.append(resolved_url)
+        lines.append("后续在 PR merge 后调用 architect_mark_merged()。")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_mark_merged(merge_commit: str = "", summary: str = "") -> str:
+    """标记当前任务对应 PR 已合并；若安装了 gh，则尝试自动读取 merge 信息。"""
+    try:
+        with _locked_state() as (state, commit):
+            current_status = state["status"]
+            if current_status not in {"APPROVED_FOR_PUSH", "PR_OPENED"}:
+                return f"❌ 非法状态流转: {current_status} -> MERGED"
+
+            branch_name = str(state.get("pr_readiness_package", {}).get("branch", "") or state.get("active_branch", ""))
+            detected, detected_err = _read_pr_info_from_gh(branch_name)
+            detected_state = (detected or {}).get("pr_state", "")
+            resolved_commit = merge_commit.strip() or (detected or {}).get("merge_commit", "")
+            resolved_number = (detected or {}).get("pr_number", "") or state.get("pr_tracking", {}).get("pr_number", "")
+            resolved_url = (detected or {}).get("pr_url", "") or state.get("pr_tracking", {}).get("pr_url", "")
+            resolved_merged_at = (detected or {}).get("merged_at", "") or _utc_now_iso()
+
+            if detected is not None and detected_state and detected_state != "MERGED":
+                return f"❌ 当前 PR 状态不是 MERGED，而是 {detected_state}。"
+            if not resolved_commit and detected_err and current_status == "PR_OPENED":
+                return f"❌ 无法确认 merge commit。\n{detected_err}"
+
+            task_id = str(state.get("task_id", "UNASSIGNED"))
+            milestone_summary = summary.strip() or f"{task_id}: Merged"
+
+            state["status"] = "MERGED"
+            state["architect_instruction"] = summary.strip() or "PR 已合并到 main。"
+            state["review_lock"] = _normalize_review_lock(None)
+            state["pr_tracking"] = {
+                "pr_number": resolved_number,
+                "pr_url": resolved_url,
+                "opened_at": state.get("pr_tracking", {}).get("opened_at", ""),
+                "merged_at": resolved_merged_at,
+                "merge_commit": resolved_commit,
+            }
+            _append_completed_milestone(state, milestone_summary)
+            state["last_update"] = _utc_now_iso()
+            commit(state)
+        lines = ["✅ 已记录 PR 合并状态。", milestone_summary]
+        if resolved_number:
+            lines.append(f"PR #{resolved_number}")
+        if resolved_url:
+            lines.append(resolved_url)
+        if resolved_commit:
+            lines.append(f"merge_commit: {resolved_commit}")
+        return "\n".join(lines)
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
