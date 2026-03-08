@@ -3,11 +3,27 @@ Unit Tests - API Endpoints
 =========================
 Tests for FastAPI endpoints using TestClient.
 """
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
 from trader.api.main import app
+from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
+from trader.adapters.persistence.risk_repository import reset_risk_event_repository
 from trader.storage.in_memory import reset_storage
+
+
+async def _clear_postgres_risk_state() -> None:
+    if not is_postgres_available():
+        return
+    storage = PostgreSQLStorage()
+    await storage.connect()
+    try:
+        await storage.clear()
+    finally:
+        await storage.disconnect()
+        await close_pool()
 
 
 class TestHealthEndpoint:
@@ -17,6 +33,8 @@ class TestHealthEndpoint:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_risk_event_repository()
+        asyncio.run(_clear_postgres_risk_state())
 
     def test_health_check(self):
         """Test health check returns 200"""
@@ -286,6 +304,8 @@ class TestRiskEndpoints:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_risk_event_repository()
+        asyncio.run(_clear_postgres_risk_state())
 
     def test_get_risk_limits_default(self):
         """Test getting default risk limits"""
@@ -428,6 +448,114 @@ class TestRiskEndpoints:
         
         killswitch_after_low = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after_low.json()["level"] == 3
+
+    def test_recover_pending_effects(self):
+        """Test recovery endpoint replays PENDING effects with correct scope/level"""
+        import asyncio
+        from trader.services.risk import RiskService
+        from trader.storage.in_memory import reset_storage
+        
+        reset_storage()
+        reset_risk_event_repository()
+        service = RiskService()
+        
+        upgrade_key = "test_recovery_key"
+        asyncio.run(service.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "Test recovery", "dedup_recovery"
+        ))
+        
+        state_before = self.client.get("/v1/killswitch?scope=GLOBAL")
+        level_before = state_before.json()["level"]
+        
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        
+        state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert state_after.json()["level"] == 2
+
+    def test_recover_failed_effects(self):
+        """Test recovery endpoint replays FAILED effects with correct scope/level"""
+        from trader.services.risk import RiskService
+        from trader.storage.in_memory import reset_storage
+        
+        reset_storage()
+        reset_risk_event_repository()
+        service = RiskService()
+        
+        upgrade_key = "test_failed_recovery_key"
+        asyncio.run(service.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 3, "Test failed recovery", "dedup_failed"
+        ))
+        asyncio.run(service.mark_effect_failed(upgrade_key, "Simulated failure"))
+        
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        
+        state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
+        assert state_after.json()["level"] == 3
+
+    def test_ingest_risk_event_rolls_back_killswitch_when_effect_mark_fails(self, monkeypatch):
+        """Test side-effect compensation restores KillSwitch when effect status write fails"""
+        from trader.services.risk import RiskService
+
+        async def _failing_mark_effect_applied(self, upgrade_key: str) -> None:
+            raise RuntimeError("mark applied failed")
+
+        monkeypatch.setattr(RiskService, "mark_effect_applied", _failing_mark_effect_applied)
+
+        payload = {
+            "dedup_key": "risk-key-compensation",
+            "severity": "HIGH",
+            "reason": "Compensation test",
+            "metrics": {},
+            "recommended_level": 2,
+            "scope": "GLOBAL",
+            "ts_ms": 1700000000000,
+            "adapter_name": "test_adapter",
+        }
+
+        response = self.client.post("/v1/risk/events", json=payload)
+        assert response.status_code == 500
+        assert response.json()["ok"] is False
+
+        killswitch_state = self.client.get("/v1/killswitch?scope=GLOBAL").json()
+        assert killswitch_state["level"] == 0
+
+        pending = asyncio.run(RiskService().get_pending_effects())
+        assert len(pending) == 1
+        assert pending[0]["status"] == "FAILED"
+
+    def test_recover_pending_effects_marks_applied_when_killswitch_already_at_target(self):
+        """Test recovery is idempotent if KillSwitch is already at target level"""
+        from trader.services.killswitch import KillSwitchService, KillSwitchSetRequest
+        from trader.services.risk import RiskService
+        from trader.storage.in_memory import reset_storage
+
+        reset_storage()
+        reset_risk_event_repository()
+        service = RiskService()
+        killswitch = KillSwitchService()
+
+        upgrade_key = "test_recover_idempotent_key"
+        asyncio.run(service.try_record_upgrade_with_effect(
+            upgrade_key, "GLOBAL", 2, "Test idempotent recovery", "dedup_recover_idempotent"
+        ))
+        killswitch.set_state(KillSwitchSetRequest(
+            scope="GLOBAL", level=2, reason="already_applied", updated_by="test"
+        ))
+
+        recover_response = self.client.post("/v1/risk/recover")
+        assert recover_response.status_code == 200
+        result = recover_response.json()
+        assert result["ok"] is True
+        assert "1 recovered" in result["message"]
+
+        pending_after = asyncio.run(service.get_pending_effects())
+        assert pending_after == []
 
 
 class TestOrderEndpoints:

@@ -3,9 +3,13 @@ Unit Tests - Services Layer
 ==========================
 Tests for business logic services.
 """
+import asyncio
+
 import pytest
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 
+from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.storage.in_memory import InMemoryStorage, reset_storage
 from trader.services import (
     StrategyService,
@@ -30,6 +34,18 @@ from trader.api.models.schemas import (
     ReplayRequest,
     KillSwitchSetRequest,
 )
+
+
+async def _clear_postgres_risk_state() -> None:
+    if not is_postgres_available():
+        return
+    storage = PostgreSQLStorage()
+    await storage.connect()
+    try:
+        await storage.clear()
+    finally:
+        await storage.disconnect()
+        await close_pool()
 
 
 class TestStrategyService:
@@ -239,7 +255,10 @@ class TestRiskService:
 
     def setup_method(self):
         """Setup for each test"""
+        from trader.adapters.persistence.risk_repository import reset_risk_event_repository
+        reset_risk_event_repository()
         self.storage = reset_storage()
+        asyncio.run(_clear_postgres_risk_state())
         self.service = RiskService(self.storage)
 
     def test_set_limits(self):
@@ -265,6 +284,250 @@ class TestRiskService:
         limits = self.service.get_limits("GLOBAL")
         assert limits is not None
         assert limits.version == 1
+
+    @pytest.mark.asyncio
+    async def test_try_record_upgrade_first_write(self):
+        """Test try_record_upgrade returns True for first write"""
+        upgrade_key = "upgrade:test:1:dedup_001"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 1,
+            "reason": "Test upgrade",
+            "dedup_key": "dedup_001",
+        }
+        
+        result = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result is True
+        
+        record = await self.service.get_upgrade_record(upgrade_key)
+        assert record is not None
+        assert record["scope"] == "TEST"
+        assert record["level"] == 1
+
+    @pytest.mark.asyncio
+    async def test_try_record_upgrade_duplicate(self):
+        """Test try_record_upgrade returns False for duplicate"""
+        upgrade_key = "upgrade:test:1:dedup_002"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 1,
+            "reason": "Test upgrade",
+            "dedup_key": "dedup_002",
+        }
+        
+        result1 = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result1 is True
+        
+        result2 = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+        assert result2 is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_upgrade_idempotency(self):
+        """Test concurrent upgrades only trigger once"""
+        from trader.services.killswitch import KillSwitchService
+        
+        upgrade_key = "upgrade:test:2:dedup_003"
+        upgrade_data = {
+            "scope": "TEST",
+            "level": 2,
+            "reason": "Concurrent test",
+            "dedup_key": "dedup_003",
+        }
+        
+        killswitch_service = KillSwitchService()
+        killswitch_service.set_state = AsyncMock()
+        
+        async def try_upgrade_and_set():
+            is_first = await self.service.try_record_upgrade(upgrade_key, upgrade_data)
+            if is_first:
+                await killswitch_service.set_state(KillSwitchSetRequest(
+                    scope="TEST",
+                    level=2,
+                    reason="test",
+                    updated_by="test"
+                ))
+        
+        import asyncio
+        await asyncio.gather(
+            try_upgrade_and_set(),
+            try_upgrade_and_set(),
+            try_upgrade_and_set(),
+        )
+        
+        assert killswitch_service.set_state.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_upgrade_with_effect_tracking(self):
+        """Test upgrade with effect status tracking (PENDING -> APPLIED)"""
+        upgrade_key = "upgrade:test:3:dedup_004"
+        
+        is_first_upgrade, is_first_effect = await self.service.try_record_upgrade_with_effect(
+            upgrade_key,
+            "TEST",
+            3,
+            "Effect tracking test",
+            "dedup_004",
+        )
+        
+        assert is_first_upgrade is True
+        assert is_first_effect is True
+        
+        pending = await self.service.get_pending_effects()
+        assert len(pending) == 1
+        assert pending[0]["upgrade_key"] == upgrade_key
+        assert pending[0]["status"] == "PENDING"
+        
+        await self.service.mark_effect_applied(upgrade_key)
+        
+        pending_after = await self.service.get_pending_effects()
+        assert len(pending_after) == 0
+
+    @pytest.mark.asyncio
+    async def test_upgrade_effect_failure_tracking(self):
+        """Test upgrade with effect failure tracking"""
+        upgrade_key = "upgrade:test:4:dedup_005"
+        
+        await self.service.try_record_upgrade_with_effect(
+            upgrade_key,
+            "TEST",
+            4,
+            "Failure test",
+            "dedup_005",
+        )
+        
+        await self.service.mark_effect_failed(upgrade_key, "Test error")
+        
+        pending = await self.service.get_pending_effects()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "FAILED"
+        assert pending[0]["last_error"] == "Test error"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_effect_idempotency(self):
+        """Test duplicate effect with different upgrade_keys doesn't interfere"""
+        from trader.services.killswitch import KillSwitchService
+        
+        upgrade_key1 = "upgrade:test:5:dedup_006"
+        upgrade_key2 = "upgrade:test:5:dedup_007"
+        
+        is_first_upgrade1, is_first_effect1 = await self.service.try_record_upgrade_with_effect(
+            upgrade_key1, "TEST", 5, "Idempotency test 1", "dedup_006",
+        )
+        assert is_first_upgrade1 is True
+        assert is_first_effect1 is True
+        
+        is_first_upgrade2, is_first_effect2 = await self.service.try_record_upgrade_with_effect(
+            upgrade_key2, "TEST", 5, "Idempotency test 2", "dedup_007",
+        )
+        assert is_first_upgrade2 is True
+        assert is_first_effect2 is True
+        
+        is_first_upgrade_dup, is_first_effect_dup = await self.service.try_record_upgrade_with_effect(
+            upgrade_key1, "TEST", 5, "Idempotency test 1", "dedup_006",
+        )
+        assert is_first_upgrade_dup is False
+        assert is_first_effect_dup is False
+
+    @pytest.mark.asyncio
+    async def test_step6_failure_pending_effect_recovery(self):
+        """Test Step6: intent written but side-effect not executed - effect stays PENDING"""
+        upgrade_key = "upgrade:test:2:dedup_007"
+        
+        is_first_upgrade, is_first_effect = await self.service.try_record_upgrade_with_effect(
+            upgrade_key, "TEST", 2, "Step6 test", "dedup_007",
+        )
+        
+        assert is_first_upgrade is True
+        assert is_first_effect is True
+        
+        pending = await self.service.get_pending_effects()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "PENDING"
+        
+        from trader.services.killswitch import KillSwitchService, KillSwitchSetRequest
+        ks = KillSwitchService()
+        ks.set_state(KillSwitchSetRequest(
+            scope="TEST", level=2, reason="recovered", updated_by="recovery"
+        ))
+        
+        await self.service.mark_effect_applied(upgrade_key)
+        
+        pending_after = await self.service.get_pending_effects()
+        assert len(pending_after) == 0
+
+    @pytest.mark.asyncio
+    async def test_step8_failure_effect_marked_failed(self):
+        """Test Step8: side-effect executed but status write fails - effect stays FAILED"""
+        upgrade_key = "upgrade:test:2:dedup_008"
+        
+        is_first_upgrade, is_first_effect = await self.service.try_record_upgrade_with_effect(
+            upgrade_key, "TEST", 2, "Step8 test", "dedup_008",
+        )
+        
+        await self.service.mark_effect_failed(upgrade_key, "Network error during status write")
+        
+        pending = await self.service.get_pending_effects()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "FAILED"
+        assert "Network error" in pending[0]["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_idempotency_under_retry(self):
+        """Test that retry after failure maintains idempotency"""
+        upgrade_key = "upgrade:test:2:dedup_009"
+        
+        is_first_upgrade, is_first_effect = await self.service.try_record_upgrade_with_effect(
+            upgrade_key, "TEST", 2, "Retry test", "dedup_009",
+        )
+        
+        assert is_first_effect is True
+        
+        await self.service.mark_effect_failed(upgrade_key, "First attempt failed")
+        
+        is_first_upgrade2, is_first_effect2 = await self.service.try_record_upgrade_with_effect(
+            upgrade_key, "TEST", 2, "Retry test", "dedup_009",
+        )
+        
+        assert is_first_upgrade2 is False
+        assert is_first_effect2 is False
+        
+        pending = await self.service.get_pending_effects()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "FAILED"
+
+    @pytest.mark.asyncio
+    async def test_step2_dedup_failure_no_upgrade_recorded(self):
+        """Test Step2: dedup fails (duplicate event), upgrade and effect should NOT be recorded"""
+        upgrade_key = "upgrade:test:2:dedup_step2"
+        
+        event_data = {
+            "dedup_key": "dedup_step2",
+            "scope": "TEST",
+            "reason": "Step2 test",
+            "recommended_level": 2,
+        }
+        
+        event_id1, created1, is_first_upgrade1, is_first_effect1 = await self.service.ingest_event_with_upgrade(
+            event_data, upgrade_key, 2
+        )
+        
+        assert created1 is True
+        assert is_first_upgrade1 is True
+        assert is_first_effect1 is True
+        
+        pending1 = await self.service.get_pending_effects()
+        assert len(pending1) == 1
+        
+        event_id2, created2, is_first_upgrade2, is_first_effect2 = await self.service.ingest_event_with_upgrade(
+            event_data, upgrade_key, 2
+        )
+        
+        assert created2 is False
+        assert is_first_upgrade2 is False
+        assert is_first_effect2 is False
+        
+        pending2 = await self.service.get_pending_effects()
+        assert len(pending2) == 1
 
 
 class TestOrderService:

@@ -214,3 +214,9 @@ Thumbs.db
 
 mcp_mission_control.json
 *.lock
+
+
+.mcp_bridge_test_tmp/
+.mcp_smoke_*/
+tmp*/
+*.tmp

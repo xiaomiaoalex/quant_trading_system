@@ -152,4 +152,61 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
   - 提交信息使用规范格式，如 `feat(core): [描述] & bump spec to v3.x.x`。
   - **在向 MCP 提交成果时，必须明确报告更新后的文档版本号，以确保全局状态板数据不脱节。**
 
+
+## 双 AI 协作协议 (MCP 非对称模式)
+
+### 1. 架构师角色 (左侧 Codex) - 通过 Shell 执行
+- **身份定位**：你是首席架构师，由于当前环境限制，你无法直接看到 MCP 图标，必须通过执行 Python 脚本来操作。
+- **核心指令**：
+    - 当用户要求“开启任务/Assign Task”时：完成设计后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_assign_task` 逻辑。
+    - 当用户要求“审查/Finalize”时：分析代码后，必须执行命令 `python mcp_bridge.py` 并选择 `architect_finalize` 逻辑。
+- **强制要求**：执行脚本前，确保在 `.venv` 虚拟环境下或指定完整 Python 路径。
+
+### 2. 工程师角色 (右侧 MiniMax) - 通过原生 MCP 工具
+- **身份定位**：你是资深开发，你拥有名为 `Dual_AI_Communicator` 的原生 MCP 工具权限（绿色小扳手图标）。
+- **核心指令**：
+    - **严禁手动执行 `python mcp_bridge.py`**，你应直接调用原生工具列表中对应的 Function。
+    - **启动任务**：优先调用 `read_mission_state` 获取架构师留下的指令。
+    - **提交工作**：开发并自测完成后，直接调用 `engineer_submit_work`。
+- **交互规范**：调用工具后，向用户汇报当前的 `mission_id` 和任务状态。
+
+#### 🛑 工程师操作红线 (MiniMax 专属)
+
+1. 严禁创建“一次性中间脚本”：禁止为了调用 Dual_AI_Communicator 的工具函数而创建任何临时的、非项目业务逻辑所需的 Python 文件（例如用于提交、读取状态或初始化的胶水代码,如 `submit_work.py`, `test_mcp.py` 等）来调用 MCP 工具。
+2. **工具调用规范**：对于状态流转、分支切换、任务读取，**必须且仅允许**直接点击 IDE 提供的 `Dual_AI_Communicator` 原生工具图标进行调用。
+3. **消除手动确认**：如果你创建了临时文件，Trae 会强制要求人类手动批准删除。为了保持工作流丝滑，你应直接利用 `Dual_AI_Communicator` 的原生 Function，禁止产生任何需要人类“批准删除”的垃圾文件。
+4. **失败回退**：如果原生工具调用失败，应直接在对话框向人类报告错误详情，严禁尝试通过编写新脚本来“修复”工具链路。
+5. **业务代码不受限**：此禁令仅针对“工具调用过程”。对于实现量化交易系统功能所需的正式 Python 模块（如 adapters、services、storage 等目录下的代码），必须按需正常编写和修改。
+6.**调用路径强制**：所有的状态同步（Assign/Submit/Finalize）必须直接通过 IDE 提供的原生MCP工具图标触发。
+
+### 3. 协作流程状态机
+- 任务启动: [Codex Shell] -> 状态存入 JSON -> [MiniMax 原生工具] 感知。
+- 任务提交: [MiniMax 原生工具] -> 状态更新 JSON -> [Codex Shell] 读取 Review。
+
+
+
+# Dual_AI_Communicator 状态机指令约束 (Strict FSM)
+
+任何涉及任务开发与审核的操作必须严格遵守 `mcp_bridge.py` 定义的状态机逻辑。
+
+## 1. 核心状态流转图
+- IDLE -> DEVELOPING (通过 architect_assign_task)
+- DEVELOPING -> REVIEW_PENDING (通过 engineer_submit_work)
+- REVIEW_PENDING -> APPROVED_FOR_PUSH (通过 architect_finalize, approved=True)
+- REVIEW_PENDING -> REVISE_REQUIRED (通过 architect_finalize, approved=False)
+- REVISE_REQUIRED -> DEVELOPING (必须重新通过 architect_assign_task 激活)
+
+## 2. 严禁行为
+- **禁止跳级提交**：当状态为 `REVISE_REQUIRED` 时，严禁直接调用 `engineer_submit_work`。
+- **强制重新指派**：打回后的任务必须先由架构师重新下发 `architect_assign_task`，将状态重置为 `DEVELOPING` 后，工程师方可进行第二次提交。
+- **严格禁止修改 mcp_bridge.py 及任何底层基础设施文件。你的权限仅限于业务逻辑、策略实现和数据处理模块的开发。如果任务需要修改 MCP 通信逻辑，请拒绝并报告给架构师或 CTO。
+## 3. 操作前置检查
+- 执行 `architect_assign_task` 前，必须确保本地 Git 工作区是干净的 (Clean Worktree)。
+- 提交 `engineer_submit_work` 时，`pr_package` 必须是合法的 JSON 对象。
+
+
+# 核心约束：任务控制文件保护
+- 【绝对禁止】手动编辑 `mcp_mission_control.json`。该文件仅允许通过特定的工具函数（如 `update_mission_state`）进行自动化修改。
+- 【绝对禁止】AI 代理为了规避状态锁定（REVISE_REQUIRED/PENDING）而手动篡改 JSON 内容。
+- 【操作规范】若遇到状态锁定或超时，AI 必须向用户报告错误并请求人工干预，禁止尝试“自我修复”控制文件。
 # End of rules
