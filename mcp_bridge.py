@@ -1,16 +1,16 @@
 import json
 import os
-import re
+import sys
+from datetime import datetime
 import subprocess
-import tempfile
-import time
-from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any
 
+# 1. 引入 FastMCP 框架
 from mcp.server.fastmcp import FastMCP
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# 2. 实例化 MCP 服务器
+mcp = FastMCP("Dual_AI_Communicator")
+
+# 告示板文件的路径
 DB_FILE = "mcp_mission_control.json"
 
 VALID_STATUSES = {

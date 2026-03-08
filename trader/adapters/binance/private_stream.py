@@ -417,11 +417,12 @@ class PrivateStreamManager(BaseStreamFSM):
 
                 if data.get("x") in ["TRADE", "NEW"]:
                     fill_update = self._parse_fill_update(data, exchange_ts)
-                    for handler in self._fill_update_handlers:
-                        try:
-                            handler(fill_update)
-                        except Exception as e:
-                            logger.error(f"[{self._name}] Fill handler error: {e}")
+                    if fill_update is not None:
+                        for handler in self._fill_update_handlers:
+                            try:
+                                handler(fill_update)
+                            except Exception as e:
+                                logger.error(f"[{self._name}] Fill handler error: {e}")
 
             await self._trigger_event(StreamEvent.DATA_RECEIVED, data)
 
@@ -441,32 +442,36 @@ class PrivateStreamManager(BaseStreamFSM):
             source="WS"
         )
 
-    def _parse_fill_update(self, data: Dict, exchange_ts: int) -> RawFillUpdate:
+    def _parse_fill_update(self, data: Dict, exchange_ts: int) -> Optional[RawFillUpdate]:
         """解析成交更新"""
-        raw_trade_id = data.get("t", 0)
-        trade_id = 0
-        if isinstance(raw_trade_id, int):
-            trade_id = raw_trade_id
-        else:
-            raw_text = str(raw_trade_id)
-            try:
-                trade_id = int(raw_text)
-            except ValueError:
-                digits = "".join(ch for ch in raw_text if ch.isdigit())
-                trade_id = int(digits) if digits else 0
+        try:
+            raw_trade_id = data.get("t", 0)
+            trade_id = 0
+            if isinstance(raw_trade_id, int):
+                trade_id = raw_trade_id
+            else:
+                raw_text = str(raw_trade_id)
+                try:
+                    trade_id = int(raw_text)
+                except ValueError:
+                    digits = "".join(ch for ch in raw_text if ch.isdigit())
+                    trade_id = int(digits) if digits else 0
 
-        return RawFillUpdate(
-            cl_ord_id=data.get("c"),
-            trade_id=trade_id,
-            exec_type=data.get("x"),
-            side=data.get("S"),
-            price=float(data.get("p", 0)),
-            qty=float(data.get("q", 0)),
-            commission=float(data.get("n", 0)),
-            exchange_ts_ms=exchange_ts,
-            local_receive_ts_ms=int(time.time() * 1000),
-            source="WS"
-        )
+            return RawFillUpdate(
+                cl_ord_id=data.get("c"),
+                trade_id=trade_id,
+                exec_type=data.get("x"),
+                side=data.get("S"),
+                price=float(data.get("p", 0)),
+                qty=float(data.get("q", 0)),
+                commission=float(data.get("n", 0)),
+                exchange_ts_ms=exchange_ts,
+                local_receive_ts_ms=int(time.time() * 1000),
+                source="WS"
+            )
+        except (ValueError, TypeError, KeyError) as e:
+            logger.warning(f"[{self._name}] Failed to parse fill update: {e}")
+            return None
 
     async def _ping_loop(self) -> None:
         """Ping 循环"""

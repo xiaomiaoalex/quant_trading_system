@@ -35,8 +35,9 @@
 ---
 ## Git Execution Guardrails (Strictly Forbidden)
 1) **禁止环境篡改**：绝对禁止执行 `git init`、`git push`、`git clone` 或任何修改/删除 `.git` 目录的命令。
-2) **权限白名单**：你的 Git 权限仅限于只读和本地暂存区操作：`git status`、`git diff`、`git add`、`git commit`、`git log`、`git branch`、`git checkout`。
-3) **Fail-Closed 原则（物理环境版）**：当遇到 `fatal: not a git repository`、`detached HEAD` 或其他严重的 Git 环境报错时，**必须立即停止一切操作**。严禁自作主张尝试“修复”环境，必须立刻向人类发出最高级别的警报。
+2) **权限白名单**：你的 Git 权限仅限于只读和本地暂存区操作：`git status`、`git diff`、`git add`、`git commit`、`git log`。
+3) **禁止擅自切换分支**：分支的创建与切换已由 MCP 底层自动准备好，你只需在当前所在分支直接进行开发。**严禁执行 `git branch` 或 `git checkout` 命令！**
+4) **Fail-Closed 原则（物理环境版）**：当遇到 `fatal: not a git repository`、`detached HEAD` 或其他严重的 Git 环境报错时，**必须立即停止一切操作**。严禁自作主张尝试“修复”环境，必须立刻向人类发出最高级别的警报。
 
 ---
 ## Architecture Boundaries (Must Respect)
@@ -105,7 +106,7 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 
 4) **Observability**
    - 每条外部消息必须携带 meta：local_receive_ts_ms、exchange_event_ts_ms、seq/update_id、source、out_of_order、gap_detected。
-   - 关键状态迁移必须打结构化日志，并有可追踪 trace_id\stream_key\schema_version 等冻结字段
+   - 关键状态迁移必须打结构化日志，并有可追踪 trace_id\stream_key\schema_version 等冻结字段。
 
 5) **Output Discipline**
    - 当收到具体 Coding Package 任务：不要复述需求，不要写大段空话。
@@ -136,20 +137,20 @@ Adapter/Runner 必须正确执行这些行为，并具备高覆盖率单测。
 - 未通过评测门禁（离线评测/影子运行/灰度阈值）前，AI能力不得进入执行链路。
 
 ## PullRequest Rules
-- 每完成一个任务，先输出“本地 PR 就绪包”，不要自动 push 或自动创建 PR。
+- **强制本地提交（极度重要）：** 每完成一个任务的编码和测试，**必须首先执行 `git add .` 和 `git commit -m "..."` 将代码固化到本地当前分支。** 绝对不允许在工作区存在未 commit 的代码时调用工具宣布任务完成！
+- **严禁擅自推送：** 提交本地 commit 后，输出“本地 PR 就绪包”，**绝对不要执行 push 动作或试图创建远程 PR**。当架构师 review 批准（状态变为 APPROVED_FOR_PUSH）后，你的任务即告彻底结束。代码入库（Merge/Push）由人类操作员统一下发。
 - 本地 PR 就绪包必须包含：
   - 功能描述
   - 变更点（文件清单 + 关键行为变化）
   - 测试用例与结果（本地/CI）
   - 风险与回滚方案
   - PR 标题与 PR 描述草稿
-- 首席架构师（Codex）review 并明确“可提交”后，才执行一次性手工 push/创建 PR。
-- 若网络不稳定允许延迟提交 PR，但代码、测试与 PR 材料必须先完整就绪并可复核。
 - 所有变更必须通过 CI 检查（代码质量、单测覆盖率、文档格式）。
-- 规范对齐（必须执行）：修改 `quant_trading_system v3.0.5-个人开发者版 技术规范.md`：
+- **规范对齐与版本号流转：** 修改 `quant_trading_system vxxx 技术规范.md`：
   - 将文档顶部版本号递增一个修订位（例如从 v3.0.5 改为 v3.0.6）。
   - 在 `13) 变更记录（Spec Changelog）` 表格首行插入新记录：日期为今日，版本为新版本号，摘要需精准描述本次改动，变更人为开发者。
   - 提交信息使用规范格式，如 `feat(core): [描述] & bump spec to v3.x.x`。
+  - **在向 MCP 提交成果时，必须明确报告更新后的文档版本号，以确保全局状态板数据不脱节。**
 
 
 ## 双 AI 协作协议 (MCP 非对称模式)
