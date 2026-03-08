@@ -577,6 +577,64 @@ def test_architect_mark_pr_opened_records_manual_pr_info(mission_file: Path) -> 
     assert new_state["pr_readiness_package"]["pr_number"] == "123"
 
 
+def test_architect_commit_for_pr_commits_declared_changes(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["active_branch"] = "main"
+    state["pr_readiness_package"] = {
+        "branch": "main",
+        "target": "main",
+        "pr_title": "fix: sample commit",
+        "pr_description": "desc",
+        "changes": [{"file": "feature_change.txt", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    target_file = temp_git_repo / "feature_change.txt"
+    target_file.write_text("changed\n", encoding="utf-8")
+
+    msg = mcp_bridge.architect_commit_for_pr()
+    assert msg.startswith("✅ 已完成本地提交。")
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "APPROVED_FOR_PUSH"
+    assert new_state["pr_tracking"]["local_commit"] != ""
+
+    log = subprocess.run(
+        ["git", "log", "--oneline", "-1"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout
+    assert "fix: sample commit" in log
+
+
+def test_architect_commit_for_pr_rejects_undeclared_changes(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["active_branch"] = "main"
+    state["pr_readiness_package"] = {
+        "branch": "main",
+        "target": "main",
+        "pr_title": "fix: sample commit",
+        "pr_description": "desc",
+        "changes": [{"file": "declared.txt", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    (temp_git_repo / "declared.txt").write_text("ok\n", encoding="utf-8")
+    (temp_git_repo / "extra.txt").write_text("unexpected\n", encoding="utf-8")
+
+    msg = mcp_bridge.architect_commit_for_pr()
+    assert msg.startswith("❌")
+    assert "extra.txt" in msg
+
+
 def test_architect_mark_pr_opened_uses_gh_when_available(
     mission_file: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -619,6 +677,42 @@ def test_architect_mark_pr_opened_uses_gh_when_available(
     new_state = _read_state(mission_file)
     assert new_state["status"] == "PR_OPENED"
     assert new_state["pr_tracking"]["pr_number"] == "20"
+
+
+def test_architect_create_pr_creates_remote_pr_and_marks_opened(
+    mission_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["active_branch"] = "feature/task10-3-l"
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-l",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_run_gh",
+        lambda _args, timeout=60: (
+            subprocess.CompletedProcess(args=_args, returncode=0, stdout="https://github.com/example/repo/pull/55\n", stderr=""),
+            None,
+        ),
+    )
+
+    msg = mcp_bridge.architect_create_pr()
+    assert msg.startswith("✅ 已创建 PR。")
+    assert "/pull/55" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "PR_OPENED"
+    assert new_state["pr_tracking"]["pr_number"] == "55"
 
 
 def test_architect_mark_merged_records_merge_and_milestone(
@@ -672,6 +766,79 @@ def test_architect_mark_merged_records_merge_and_milestone(
     assert new_state["status"] == "MERGED"
     assert new_state["pr_tracking"]["merge_commit"] == "abc123"
     assert "Task10.3-L: Timezone-Aware UTC Cleanup (Merged)" in new_state["completed_milestones"]
+
+
+def test_architect_merge_pr_merges_remote_pr_and_marks_merged(
+    mission_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _base_state("PR_OPENED")
+    state["task_id"] = "Task10.3-L"
+    state["active_branch"] = "feature/task10-3-l"
+    state["pr_tracking"] = {
+        "pr_number": "20",
+        "pr_url": "https://github.com/example/repo/pull/20",
+        "opened_at": "2026-03-08T00:00:00Z",
+        "merged_at": "",
+        "merge_commit": "",
+        "local_commit": "deadbeef",
+    }
+    state["pr_readiness_package"] = {
+        "branch": "feature/task10-3-l",
+        "target": "main",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+    }
+    _write_state(mission_file, state)
+
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_run_gh",
+        lambda _args, timeout=90: (
+            subprocess.CompletedProcess(args=_args, returncode=0, stdout="merged\n", stderr=""),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_bridge,
+        "_read_pr_info_from_gh",
+        lambda _branch: (
+            {
+                "pr_number": "20",
+                "pr_url": "https://github.com/example/repo/pull/20",
+                "pr_state": "MERGED",
+                "merge_commit": "abc123",
+                "merged_at": "2026-03-08T12:00:00Z",
+                "base_ref": "main",
+                "head_ref": "feature/task10-3-l",
+            },
+            None,
+        ),
+    )
+
+    msg = mcp_bridge.architect_merge_pr(summary="Task10.3-L: merged by architect")
+    assert msg.startswith("✅ 已执行 PR merge。")
+    assert "merge_commit: abc123" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "MERGED"
+    assert "Task10.3-L: merged by architect" in new_state["completed_milestones"]
+
+
+@pytest.mark.parametrize("merge_method", ["", None, " invalid "])
+def test_architect_merge_pr_rejects_invalid_merge_method(
+    mission_file: Path,
+    merge_method: str | None,
+) -> None:
+    state = _base_state("PR_OPENED")
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_merge_pr(merge_method=merge_method)
+    assert msg.startswith("❌ merge_method 必须是")
 
 
 def test_architect_assign_task_allows_new_work_from_merged(

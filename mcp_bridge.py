@@ -84,6 +84,7 @@ def _default_state() -> dict[str, Any]:
             "opened_at": "",
             "merged_at": "",
             "merge_commit": "",
+            "local_commit": "",
         },
         "last_update": _utc_now_iso(),
     }
@@ -107,6 +108,7 @@ def _normalize_pr_tracking(value: Any) -> dict[str, Any]:
             "opened_at": "",
             "merged_at": "",
             "merge_commit": "",
+            "local_commit": "",
         }
     return {
         "pr_number": str(value.get("pr_number", "") or ""),
@@ -114,6 +116,7 @@ def _normalize_pr_tracking(value: Any) -> dict[str, Any]:
         "opened_at": str(value.get("opened_at", "") or ""),
         "merged_at": str(value.get("merged_at", "") or ""),
         "merge_commit": str(value.get("merge_commit", "") or ""),
+        "local_commit": str(value.get("local_commit", "") or ""),
     }
 
 
@@ -496,6 +499,10 @@ def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
         return "❌ pr_package.risks 必须是数组。"
     if not isinstance(pr_package.get("rollback"), str) or not pr_package.get("rollback", "").strip():
         return "❌ pr_package.rollback 必须是非空字符串。"
+    for change in changes:
+        file_path = str(change.get("file", "") or "")
+        if file_path == "mcp_mission_control.json" or file_path.endswith(".lock"):
+            return "❌ pr_package.changes 不得包含运行态控制文件或 lock 文件。"
     return None
 
 
@@ -604,6 +611,16 @@ def _gh_executable() -> str | None:
     return None
 
 
+def _run_git(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+        timeout=timeout,
+    )
+
+
 def _github_proxy_settings() -> dict[str, str]:
     default_proxy = DEFAULT_GITHUB_PROXY.strip()
     return {
@@ -622,6 +639,24 @@ def _gh_command_env() -> dict[str, str]:
         env["HTTPS_PROXY"] = proxy["https_proxy"]
         env["https_proxy"] = proxy["https_proxy"]
     return env
+
+
+def _run_gh(args: list[str], timeout: int = 30) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
+    gh = _gh_executable()
+    if gh is None:
+        return None, "GitHub CLI 未安装或当前终端不可见。"
+    try:
+        result = subprocess.run(
+            [gh, *args],
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            env=_gh_command_env(),
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return None, f"GitHub CLI 调用异常: {exc}"
+    return result, None
 
 
 def _read_gh_auth_status() -> tuple[bool, str]:
@@ -646,6 +681,48 @@ def _read_gh_auth_status() -> tuple[bool, str]:
     if result.returncode == 0:
         return True, details or "GitHub CLI 已登录。"
     return False, details or "GitHub CLI 未登录或认证状态不可用。"
+
+
+def _declared_change_files(pr_package: dict[str, Any]) -> list[str]:
+    files: list[str] = []
+    for change in pr_package.get("changes", []):
+        if not isinstance(change, dict):
+            continue
+        file_path = str(change.get("file", "") or "").strip()
+        if file_path:
+            files.append(file_path)
+    return files
+
+
+def _parse_porcelain_path(line: str) -> str:
+    path = line[3:].strip()
+    if " -> " in path:
+        return path.split(" -> ", 1)[1].strip()
+    return path
+
+
+def _git_dirty_files() -> tuple[list[str] | None, str | None]:
+    result = _run_git(["status", "--porcelain"], timeout=10)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        return None, f"无法检查 Git 工作区状态: {err}"
+    files = [_parse_porcelain_path(line) for line in result.stdout.splitlines() if line.strip()]
+    return files, None
+
+
+def _git_head_sha() -> tuple[str | None, str | None]:
+    result = _run_git(["rev-parse", "HEAD"], timeout=10)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        return None, f"无法读取当前 HEAD: {err}"
+    return result.stdout.strip(), None
+
+
+def _extract_pr_url_and_number(text: str) -> tuple[str, str]:
+    match = re.search(r"https://github\.com/[^\s]+/pull/(\d+)", text)
+    if match is None:
+        return "", ""
+    return match.group(0), match.group(1)
 
 
 def _read_pr_info_from_gh(branch_name: str) -> tuple[dict[str, str] | None, str | None]:
@@ -687,6 +764,38 @@ def _read_pr_info_from_gh(branch_name: str) -> tuple[dict[str, str] | None, str 
         "base_ref": str(payload.get("baseRefName", "") or ""),
         "head_ref": str(payload.get("headRefName", "") or ""),
     }, None
+
+
+def _commit_declared_changes(pr_package: dict[str, Any], commit_message: str) -> tuple[bool, str]:
+    declared_files = _declared_change_files(pr_package)
+    if not declared_files:
+        return False, "pr_package.changes 为空，无法自动整理本地提交。"
+
+    dirty_files, dirty_err = _git_dirty_files()
+    if dirty_err is not None:
+        return False, dirty_err
+    assert dirty_files is not None
+    if not dirty_files:
+        return False, "当前工作区没有待提交改动。"
+
+    undeclared = sorted(set(dirty_files) - set(declared_files))
+    if undeclared:
+        return False, f"发现未在 pr_package.changes 声明的改动：{', '.join(undeclared)}"
+
+    add_result = _run_git(["add", "--", *declared_files], timeout=20)
+    if add_result.returncode != 0:
+        err = (add_result.stderr or add_result.stdout or "").strip()
+        return False, f"git add 失败: {err}"
+
+    commit_result = _run_git(["commit", "-m", commit_message], timeout=30)
+    if commit_result.returncode != 0:
+        err = (commit_result.stderr or commit_result.stdout or "").strip()
+        return False, f"git commit 失败: {err}"
+
+    head_sha, head_err = _git_head_sha()
+    if head_err is not None:
+        return False, head_err
+    return True, head_sha or ""
 
 
 def _append_completed_milestone(state: dict[str, Any], summary: str) -> None:
@@ -859,13 +968,131 @@ def architect_finalize(feedback: str, approved: bool) -> str:
             git_guidance = _git_guidance_for_pr_submission(state.get("pr_readiness_package", {}))
             followup = (
                 "后续 MCP 动作\n"
-                "1. PR 创建后调用 architect_mark_pr_opened()\n"
-                "2. PR merge 后调用 architect_mark_merged()"
+                "1. 人工流程：创建 PR 后调用 architect_mark_pr_opened()，merge 后调用 architect_mark_merged()\n"
+                "2. 半自动流程：如你明确授权，可调用 architect_commit_for_pr() / architect_create_pr() / architect_merge_pr()"
             )
             return f"✅ 裁定完成：准予手工提交 PR\n\n{package_summary}\n\n{git_guidance}\n\n{followup}"
         return "✅ 裁定完成：打回修改，状态为 REVISE_REQUIRED"
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_commit_for_pr(commit_message: str = "") -> str:
+    """在用户明确授权时，由架构师按 pr_package.changes 整理并提交本地代码。"""
+    is_healthy, msg = check_git_health()
+    if not is_healthy:
+        return f"❌ {msg}"
+
+    try:
+        with _locked_state() as (state, commit):
+            if state["status"] != "APPROVED_FOR_PUSH":
+                return f"❌ 非法状态流转: {state['status']} -> 本地提交"
+            pr_package = dict(state.get("pr_readiness_package", {}))
+            resolved_message = commit_message.strip() or str(pr_package.get("pr_title", "") or "").strip()
+            if not resolved_message:
+                return "❌ 缺少 commit message，请提供 commit_message 或确保 pr_title 已填写。"
+
+            ok, result = _commit_declared_changes(pr_package, resolved_message)
+            if not ok:
+                return f"❌ {result}"
+
+            tracking = dict(state.get("pr_tracking", {}))
+            tracking["local_commit"] = result
+            state["pr_tracking"] = _normalize_pr_tracking(tracking)
+            state["last_update"] = _utc_now_iso()
+            commit(state)
+        return f"✅ 已完成本地提交。\ncommit: {result}"
+    except Exception as e:
+        return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_create_pr(base_branch: str = "main", title: str = "", body: str = "") -> str:
+    """在用户明确授权时，由架构师直接创建 GitHub PR，并回写 PR_OPENED。"""
+    try:
+        with _locked_state() as (state, _commit):
+            can_transit, transition_msg = _validate_transition(state["status"], "PR_OPENED")
+            if not can_transit:
+                return f"❌ {transition_msg}"
+            pr_package = dict(state.get("pr_readiness_package", {}))
+            branch_name = str(pr_package.get("branch", "") or state.get("active_branch", "")).strip()
+            resolved_title = title.strip() or str(pr_package.get("pr_title", "") or "").strip()
+            resolved_body = body.strip() or str(pr_package.get("pr_description", "") or "").strip()
+            if not branch_name:
+                return "❌ 缺少目标分支信息，无法创建 PR。"
+            if not resolved_title or not resolved_body:
+                return "❌ 缺少 PR 标题或描述，无法创建 PR。"
+
+        result, err = _run_gh(
+            [
+                "pr",
+                "create",
+                "--base",
+                base_branch,
+                "--head",
+                branch_name,
+                "--title",
+                resolved_title,
+                "--body",
+                resolved_body,
+            ],
+            timeout=60,
+        )
+        if err is not None:
+            return f"❌ {err}"
+        assert result is not None
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            return f"❌ gh pr create 失败: {detail}"
+
+        output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part).strip()
+        pr_url, pr_number = _extract_pr_url_and_number(output)
+        mark_result = architect_mark_pr_opened(pr_url=pr_url, pr_number=pr_number)
+        if not mark_result.startswith("✅"):
+            return f"❌ PR 已创建，但 MCP 回写失败。\n{mark_result}"
+        return f"✅ 已创建 PR。\n{output}\n\n{mark_result}"
+    except Exception as e:
+        return f"❌ 创建 PR 失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_merge_pr(pr_number: str = "", merge_method: str = "merge", delete_branch: bool = True, summary: str = "") -> str:
+    """在用户明确授权时，由架构师直接 merge GitHub PR，并回写 MERGED。"""
+    allowed_methods = {"merge", "squash", "rebase"}
+    normalized_merge_method = str(merge_method or "").strip().lower()
+    if not normalized_merge_method or normalized_merge_method not in allowed_methods:
+        return f"❌ merge_method 必须是 {', '.join(sorted(allowed_methods))} 之一。"
+
+    try:
+        with _locked_state() as (state, _commit):
+            current_status = state["status"]
+            if current_status not in {"APPROVED_FOR_PUSH", "PR_OPENED"}:
+                return f"❌ 非法状态流转: {current_status} -> MERGED"
+            identifier = pr_number.strip() or str(state.get("pr_tracking", {}).get("pr_number", "") or "").strip()
+            if not identifier:
+                identifier = str(state.get("pr_readiness_package", {}).get("branch", "") or state.get("active_branch", "")).strip()
+            if not identifier:
+                return "❌ 缺少 PR 编号或分支名，无法执行 merge。"
+
+        args = ["pr", "merge", identifier, f"--{normalized_merge_method}"]
+        if delete_branch:
+            args.append("--delete-branch")
+        result, err = _run_gh(args, timeout=90)
+        if err is not None:
+            return f"❌ {err}"
+        assert result is not None
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            return f"❌ gh pr merge 失败: {detail}"
+
+        output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part).strip()
+        mark_result = architect_mark_merged(summary=summary)
+        if not mark_result.startswith("✅"):
+            return f"❌ PR 已 merge，但 MCP 回写失败。\n{mark_result}"
+        return f"✅ 已执行 PR merge。\n{output}\n\n{mark_result}"
+    except Exception as e:
+        return f"❌ merge PR 失败: {str(e)}"
 
 
 @mcp.tool()
