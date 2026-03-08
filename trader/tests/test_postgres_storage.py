@@ -228,6 +228,72 @@ class TestPostgreSQLStorage:
         
         await storage.disconnect()
 
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
+    async def test_snapshot_and_event_reconstruction(self, storage):
+        """Test state reconstruction from snapshot + events - consistent replay after restart"""
+        await storage.connect()
+        
+        snapshot_ts = datetime.now(timezone.utc)
+        
+        snapshot_data = {
+            "snapshot_id": "snap-recon-001",
+            "stream_key": "order-recon",
+            "aggregate_id": "order-recon",
+            "aggregate_type": "Order",
+            "timestamp": snapshot_ts,
+            "state": {"status": "NEW", "quantity": 0},
+        }
+        await storage.save_snapshot(snapshot_data)
+        
+        event1 = MockEvent(
+            event_id="evt-recon-001",
+            event_type="OrderCreated",
+            aggregate_id="order-recon",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"symbol": "BTCUSDT", "quantity": 1.0},
+        )
+        
+        event2 = MockEvent(
+            event_id="evt-recon-002",
+            event_type="OrderFilled",
+            aggregate_id="order-recon",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"fill_price": 50000, "filled_quantity": 1.0},
+        )
+        
+        await storage.append_event(event1)
+        await storage.append_event(event2)
+        
+        snapshot = await storage.get_latest_snapshot("order-recon")
+        assert snapshot is not None
+        assert snapshot.state["status"] == "NEW"
+        
+        events_after_snapshot = await storage.get_events(
+            aggregate_id="order-recon",
+            since=snapshot_ts,
+        )
+        assert len(events_after_snapshot) == 2
+        
+        reconstructed_state = snapshot.state.copy()
+        for event in events_after_snapshot:
+            if event.event_type == "OrderCreated":
+                reconstructed_state["quantity"] = event.data.get("quantity", 0)
+                reconstructed_state["status"] = "CREATED"
+            elif event.event_type == "OrderFilled":
+                reconstructed_state["filled_quantity"] = event.data.get("filled_quantity", 0)
+                reconstructed_state["fill_price"] = event.data.get("fill_price")
+                reconstructed_state["status"] = "FILLED"
+        
+        assert reconstructed_state["status"] == "FILLED"
+        assert reconstructed_state["quantity"] == 1.0
+        assert reconstructed_state["filled_quantity"] == 1.0
+        assert reconstructed_state["fill_price"] == 50000
+        
+        await storage.disconnect()
+
 
 @skip_if_no_postgres
 class TestStoredEventDataclass:
