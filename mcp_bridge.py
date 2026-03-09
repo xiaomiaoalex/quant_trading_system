@@ -46,6 +46,7 @@ LOCK_RETRY_INTERVAL_SEC = float(os.getenv("MCP_LOCK_RETRY_INTERVAL_SEC", "0.1"))
 
 mcp = FastMCP("Dual_AI_Communicator")
 DEFAULT_GITHUB_PROXY = os.getenv("MCP_GITHUB_PROXY", "http://127.0.0.1:4780")
+DEFAULT_WINDOWS_OPENSSH = r"C:\Windows\System32\OpenSSH\ssh.exe"
 
 
 def _utc_now_iso() -> str:
@@ -398,6 +399,7 @@ def _run_git_checkout(
                 capture_output=True,
                 text=True,
                 cwd=PROJECT_ROOT,
+                env=_git_command_env(),
                 timeout=10,
             )
             if create.returncode == 0:
@@ -409,6 +411,7 @@ def _run_git_checkout(
             capture_output=True,
             text=True,
             cwd=PROJECT_ROOT,
+            env=_git_command_env(),
             timeout=10,
         )
         if switch.returncode == 0:
@@ -429,6 +432,7 @@ def _get_current_branch() -> str:
             capture_output=True,
             text=True,
             cwd=PROJECT_ROOT,
+            env=_git_command_env(),
             timeout=5,
             check=True,
         )
@@ -444,6 +448,7 @@ def _check_clean_worktree() -> tuple[bool, str]:
             capture_output=True,
             text=True,
             cwd=PROJECT_ROOT,
+            env=_git_command_env(),
             timeout=10,
         )
         if result.returncode != 0:
@@ -619,12 +624,30 @@ def _gh_executable() -> str | None:
     return None
 
 
+def _git_ssh_command() -> str:
+    configured = str(os.environ.get("GIT_SSH_COMMAND", "") or "").strip()
+    if configured:
+        return configured
+    if os.path.exists(DEFAULT_WINDOWS_OPENSSH):
+        return DEFAULT_WINDOWS_OPENSSH
+    return ""
+
+
+def _git_command_env() -> dict[str, str]:
+    env = dict(os.environ)
+    ssh_command = _git_ssh_command()
+    if ssh_command:
+        env["GIT_SSH_COMMAND"] = ssh_command
+    return env
+
+
 def _run_git(args: list[str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         capture_output=True,
         text=True,
         cwd=PROJECT_ROOT,
+        env=_git_command_env(),
         timeout=timeout,
     )
 
