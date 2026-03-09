@@ -803,6 +803,39 @@ def _git_head_sha() -> tuple[str | None, str | None]:
     return result.stdout.strip(), None
 
 
+def _sync_branch_ff_only(branch: str, remote: str) -> tuple[bool, str]:
+    normalized_branch = str(branch or "").strip()
+    normalized_remote = str(remote or "").strip()
+    if not normalized_branch or not normalized_remote:
+        return False, "branch 和 remote 不能为空。"
+
+    current_branch = _get_current_branch()
+    if current_branch != normalized_branch:
+        return False, f"当前分支是 {current_branch}，请先切换到 {normalized_branch} 后再同步。"
+
+    clean, clean_msg = _check_clean_worktree()
+    if not clean:
+        return False, clean_msg
+
+    fetch_result = _run_git(["fetch", normalized_remote, normalized_branch], timeout=45)
+    if fetch_result.returncode != 0:
+        err = (fetch_result.stderr or fetch_result.stdout or "").strip()
+        return False, f"git fetch 失败: {err}"
+
+    remote_ref = f"{normalized_remote}/{normalized_branch}"
+    merge_result = _run_git(["merge", "--ff-only", remote_ref], timeout=45)
+    if merge_result.returncode != 0:
+        err = (merge_result.stderr or merge_result.stdout or "").strip()
+        return False, f"git merge --ff-only 失败: {err}"
+
+    head_sha, head_err = _git_head_sha()
+    if head_err is not None:
+        return False, head_err
+
+    output = (merge_result.stdout or merge_result.stderr or "").strip() or "Already up to date."
+    return True, f"已同步 {normalized_branch} <- {remote_ref}\n{output}\nHEAD: {head_sha}"
+
+
 def _extract_pr_url_and_number(text: str) -> tuple[str, str]:
     match = re.search(r"https://github\.com/[^\s]+/pull/(\d+)", text)
     if match is None:
@@ -906,6 +939,19 @@ def read_mission_state() -> str:
         return json.dumps(state, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"❌ 读取任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_sync_branch_ff_only(branch: str = "main", remote: str = "origin") -> str:
+    """对当前分支执行显式 fetch + merge --ff-only，同步远端而不使用 git pull。"""
+    is_healthy, msg = check_git_health()
+    if not is_healthy:
+        return f"❌ {msg}"
+
+    ok, result = _sync_branch_ff_only(branch=branch, remote=remote)
+    if not ok:
+        return f"❌ {result}"
+    return f"✅ {result}"
 
 
 @mcp.tool()
