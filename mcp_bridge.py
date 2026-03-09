@@ -566,8 +566,16 @@ def _git_guidance_for_pr_submission(pr_package: dict[str, Any]) -> str:
         "1. git status --short",
         "2. git add <目标文件>",
         f'3. git commit -m "{pr_title}"',
-        f"4. git push -u origin {branch}",
     ]
+    remote_url, _ = _git_origin_url()
+    if _git_remote_mode(remote_url) == "https":
+        ssh_remote = _suggest_ssh_remote(remote_url)
+        if ssh_remote:
+            lines.append(f"4. 建议先切换 origin 到 SSH：git remote set-url origin {ssh_remote}")
+            lines.append("5. 验证 SSH：ssh -T git@github.com")
+            lines.append(f"6. git push -u origin {branch}")
+            return "\n".join(lines)
+    lines.append(f"4. git push -u origin {branch}")
     return "\n".join(lines)
 
 
@@ -629,15 +637,69 @@ def _github_proxy_settings() -> dict[str, str]:
     }
 
 
+def _github_token_source() -> str:
+    for env_name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if str(os.environ.get(env_name, "") or "").strip():
+            return env_name
+    return ""
+
+
+def _github_token() -> str:
+    source = _github_token_source()
+    if not source:
+        return ""
+    return str(os.environ.get(source, "") or "").strip()
+
+
+def _github_auth_mode() -> str:
+    return "token" if _github_token() else "keyring"
+
+
+def _git_origin_url() -> tuple[str, str | None]:
+    result = _run_git(["remote", "get-url", "origin"], timeout=10)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        return "", err or "origin 未配置。"
+    return (result.stdout or "").strip(), None
+
+
+def _git_remote_mode(remote_url: str) -> str:
+    normalized = remote_url.strip().lower()
+    if not normalized:
+        return "missing"
+    if normalized.startswith("git@") or normalized.startswith("ssh://"):
+        return "ssh"
+    if normalized.startswith("https://") or normalized.startswith("http://"):
+        return "https"
+    return "other"
+
+
+def _suggest_ssh_remote(remote_url: str) -> str:
+    match = re.match(
+        r"https://(?:[^@]+@)?github\.com(?::\d+)?/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$",
+        remote_url.strip(),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return ""
+    owner, repo = match.groups()
+    return f"git@github.com:{owner}/{repo}.git"
+
+
 def _gh_command_env() -> dict[str, str]:
     env = dict(os.environ)
     proxy = _github_proxy_settings()
+    token = _github_token()
     if proxy["http_proxy"]:
         env["HTTP_PROXY"] = proxy["http_proxy"]
         env["http_proxy"] = proxy["http_proxy"]
     if proxy["https_proxy"]:
         env["HTTPS_PROXY"] = proxy["https_proxy"]
         env["https_proxy"] = proxy["https_proxy"]
+    if token:
+        # Keep gh and adjacent tooling on one explicit token source instead of per-session keyring state.
+        env["GH_TOKEN"] = token
+        env["GITHUB_TOKEN"] = token
     return env
 
 
@@ -1203,14 +1265,24 @@ def architect_github_preflight() -> str:
     """检查 GitHub CLI、代理环境与认证状态，给出下一步建议。"""
     proxy = _github_proxy_settings()
     gh = _gh_executable()
+    token_source = _github_token_source()
+    auth_mode = _github_auth_mode()
+    origin_url, origin_err = _git_origin_url()
+    remote_mode = _git_remote_mode(origin_url)
     auth_ok, auth_message = _read_gh_auth_status()
 
     lines = ["GitHub 预检结果"]
     lines.append(f"- gh: {gh or 'missing'}")
     lines.append(f"- HTTP_PROXY: {proxy['http_proxy'] or '<empty>'}")
     lines.append(f"- HTTPS_PROXY: {proxy['https_proxy'] or '<empty>'}")
+    lines.append(f"- auth_mode: {auth_mode}")
+    lines.append(f"- token_source: {token_source or '<empty>'}")
+    lines.append(f"- origin: {origin_url or '<unknown>'}")
+    lines.append(f"- git_transport: {remote_mode}")
     lines.append(f"- auth: {'ok' if auth_ok else 'not_ready'}")
     lines.append(f"- detail: {auth_message}")
+    if origin_err:
+        lines.append(f"- origin_detail: {origin_err}")
 
     if gh is None:
         lines.extend(
@@ -1223,37 +1295,36 @@ def architect_github_preflight() -> str:
         )
         return "\n".join(lines)
 
+    next_steps: list[str] = []
+    if remote_mode == "https":
+        ssh_remote = _suggest_ssh_remote(origin_url)
+        if ssh_remote:
+            next_steps.append(f"将 origin 切到 SSH：git remote set-url origin {ssh_remote}")
+            next_steps.append("验证 SSH：ssh -T git@github.com")
+        else:
+            next_steps.append("将 origin 切到 SSH，避免继续依赖 HTTPS 凭据。")
+
     if not proxy["http_proxy"] or not proxy["https_proxy"]:
-        lines.extend(
-            [
-                "",
-                "下一步",
-                "1. 先加载 dev-github.ps1，确保终端代理环境一致",
-                "2. 再执行 architect_github_preflight() 或 gh auth status",
-            ]
-        )
-        return "\n".join(lines)
+        next_steps.append("先加载 dev-github.ps1，确保 gh 子进程代理环境一致。")
+        next_steps.append("然后重新执行 architect_github_preflight() 或 gh auth status。")
+    elif not auth_ok:
+        if auth_mode == "token":
+            next_steps.append("当前已是 token 模式；请检查 GH_TOKEN/GITHUB_TOKEN 是否有效后重试 gh auth status。")
+        else:
+            next_steps.append('设置用户级 GH_TOKEN，例如：[System.Environment]::SetEnvironmentVariable("GH_TOKEN", "<PAT>", "User")')
+            next_steps.append("重新打开终端后执行 dev-github.ps1，再执行 gh auth status。")
+    elif auth_mode != "token":
+        next_steps.append("当前 gh 仍依赖 keyring；建议切换到 GH_TOKEN，以稳定 MCP/脚本子进程认证。")
+        next_steps.append("完成切换后重新执行 architect_github_preflight()，确认 auth_mode=token。")
+    else:
+        next_steps.append("可直接使用 gh pr status / gh pr create --fill。")
+        next_steps.append("也可继续通过 architect_mark_pr_opened() / architect_mark_merged() 回写 MCP。")
 
-    if not auth_ok:
-        lines.extend(
-            [
-                "",
-                "下一步",
-                "1. MCP 已自动注入 GitHub 代理环境",
-                "2. 直接执行 gh auth login",
-                "3. 登录成功后执行 gh auth status",
-            ]
-        )
-        return "\n".join(lines)
-
-    lines.extend(
-        [
-            "",
-            "下一步",
-            "1. 可直接使用 gh pr status / gh pr create --fill",
-            "2. 也可继续通过 architect_mark_pr_opened() / architect_mark_merged() 回写 MCP",
-        ]
-    )
+    if next_steps:
+        lines.append("")
+        lines.append("下一步")
+        for index, step in enumerate(next_steps, start=1):
+            lines.append(f"{index}. {step}")
     return "\n".join(lines)
 
 
