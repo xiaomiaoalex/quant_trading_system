@@ -241,6 +241,46 @@ def test_check_git_health_rejects_unknown_branch(monkeypatch: pytest.MonkeyPatch
     assert "无法识别当前 Git 分支状态" in msg
 
 
+def test_architect_sync_branch_ff_only_uses_fetch_then_ff_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _fake_run_git(args: list[str], timeout: int = 15):
+        calls.append(args)
+        if args[:2] == ["fetch", "origin"]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        if args[:2] == ["merge", "--ff-only"]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="Already up to date.\n", stderr="")
+        if args == ["rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="abc123\n", stderr="")
+        raise AssertionError(f"unexpected git args: {args}")
+
+    monkeypatch.setattr(mcp_bridge, "check_git_health", lambda: (True, "ok"))
+    monkeypatch.setattr(mcp_bridge, "_get_current_branch", lambda: "main")
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
+    monkeypatch.setattr(mcp_bridge, "_run_git", _fake_run_git)
+
+    msg = mcp_bridge.architect_sync_branch_ff_only()
+    assert msg.startswith("✅ 已同步 main <- origin/main")
+    assert "HEAD: abc123" in msg
+    assert calls == [
+        ["fetch", "origin", "main"],
+        ["merge", "--ff-only", "origin/main"],
+        ["rev-parse", "HEAD"],
+    ]
+
+
+def test_architect_sync_branch_ff_only_rejects_wrong_current_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_bridge, "check_git_health", lambda: (True, "ok"))
+    monkeypatch.setattr(mcp_bridge, "_get_current_branch", lambda: "feature/x")
+
+    msg = mcp_bridge.architect_sync_branch_ff_only()
+    assert msg.startswith("❌ 当前分支是 feature/x")
+
+
 def test_engineer_submit_work_rejects_invalid_pr_package(
     mission_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

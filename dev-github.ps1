@@ -36,4 +36,5 @@ if (-not $env:GIT_SSH_COMMAND -and (Test-Path $windowsOpenSsh)) {
     $env:GIT_SSH_COMMAND = $windowsOpenSsh
 }
 Write-Host "GIT_SSH_COMMAND=$($env:GIT_SSH_COMMAND)"
+Write-Host "Recommended sync: git fetch origin main; git merge --ff-only origin/main"
 Write-Host "Git remote recommendation: use SSH origin (git@github.com:owner/repo.git)"
