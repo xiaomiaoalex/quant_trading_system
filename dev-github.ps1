@@ -15,5 +15,20 @@ if ($gh) {
     Write-Host "GH_EXE not found in common install paths."
 }
 
+if (-not $env:GH_TOKEN -and $env:GITHUB_TOKEN) {
+    $env:GH_TOKEN = $env:GITHUB_TOKEN
+}
+
+if ($env:GH_TOKEN) {
+    $env:GITHUB_TOKEN = $env:GH_TOKEN
+    Write-Host "GH_AUTH_MODE=token"
+    Write-Host "GH_TOKEN=present"
+} else {
+    Write-Host "GH_AUTH_MODE=keyring"
+    Write-Host "GH_TOKEN=missing"
+    Write-Host 'Hint: [System.Environment]::SetEnvironmentVariable("GH_TOKEN", "<PAT>", "User")'
+}
+
 Write-Host "HTTP_PROXY=$($env:HTTP_PROXY)"
 Write-Host "HTTPS_PROXY=$($env:HTTPS_PROXY)"
+Write-Host "Git remote recommendation: use SSH origin (git@github.com:owner/repo.git)"

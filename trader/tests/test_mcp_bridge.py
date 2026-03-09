@@ -870,20 +870,52 @@ def test_gh_command_env_uses_default_proxy_when_shell_env_missing(
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:4780"
 
 
+def test_gh_command_env_injects_explicit_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "token-123")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    env = mcp_bridge._gh_command_env()
+    assert env["GH_TOKEN"] == "token-123"
+    assert env["GITHUB_TOKEN"] == "token-123"
+
+
+@pytest.mark.parametrize(
+    ("remote_url", "expected"),
+    [
+        ("https://github.com/example/repo", "git@github.com:example/repo.git"),
+        ("https://github.com/example/repo.git", "git@github.com:example/repo.git"),
+        ("https://github.com:443/example/repo", "git@github.com:example/repo.git"),
+        ("https://user@github.com/example/repo", "git@github.com:example/repo.git"),
+    ],
+)
+def test_suggest_ssh_remote_supports_common_github_https_variants(
+    remote_url: str, expected: str
+) -> None:
+    assert mcp_bridge._suggest_ssh_remote(remote_url) == expected
+
+
 def test_architect_github_preflight_reports_login_guidance_with_auto_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: "gh")
     monkeypatch.setattr(mcp_bridge, "_read_gh_auth_status", lambda: (False, "not logged in"))
+    monkeypatch.setattr(mcp_bridge, "_git_origin_url", lambda: ("https://github.com/example/repo.git", None))
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(mcp_bridge, "DEFAULT_GITHUB_PROXY", "http://127.0.0.1:4780")
 
     msg = mcp_bridge.architect_github_preflight()
     assert "GitHub 预检结果" in msg
     assert "- gh: gh" in msg
     assert "- HTTP_PROXY: http://127.0.0.1:4780" in msg
-    assert "MCP 已自动注入 GitHub 代理环境" in msg
+    assert "- auth_mode: keyring" in msg
+    assert "- git_transport: https" in msg
+    assert "设置用户级 GH_TOKEN" in msg
+    assert "git remote set-url origin git@github.com:example/repo.git" in msg
 
 
 def test_architect_github_preflight_reports_ready_state(
@@ -891,12 +923,33 @@ def test_architect_github_preflight_reports_ready_state(
 ) -> None:
     monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: r"C:\Program Files\GitHub CLI\gh.exe")
     monkeypatch.setattr(mcp_bridge, "_read_gh_auth_status", lambda: (True, "Logged in to github.com"))
+    monkeypatch.setattr(mcp_bridge, "_git_origin_url", lambda: ("git@github.com:example/repo.git", None))
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:4780")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:4780")
+    monkeypatch.setenv("GH_TOKEN", "token-123")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     msg = mcp_bridge.architect_github_preflight()
     assert "- auth: ok" in msg
+    assert "- auth_mode: token" in msg
+    assert "- token_source: GH_TOKEN" in msg
     assert "gh pr status / gh pr create --fill" in msg
+
+
+def test_architect_github_preflight_recommends_moving_off_keyring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mcp_bridge, "_gh_executable", lambda: "gh")
+    monkeypatch.setattr(mcp_bridge, "_read_gh_auth_status", lambda: (True, "Logged in to github.com"))
+    monkeypatch.setattr(mcp_bridge, "_git_origin_url", lambda: ("git@github.com:example/repo.git", None))
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:4780")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:4780")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    msg = mcp_bridge.architect_github_preflight()
+    assert "- auth_mode: keyring" in msg
+    assert "当前 gh 仍依赖 keyring" in msg
 
 
 def test_read_gh_auth_status_passes_proxy_env(
