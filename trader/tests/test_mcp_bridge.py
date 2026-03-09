@@ -870,6 +870,25 @@ def test_gh_command_env_uses_default_proxy_when_shell_env_missing(
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:4780"
 
 
+def test_git_command_env_uses_windows_openssh_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda path: path == mcp_bridge.DEFAULT_WINDOWS_OPENSSH)
+
+    env = mcp_bridge._git_command_env()
+    assert env["GIT_SSH_COMMAND"] == mcp_bridge.DEFAULT_WINDOWS_OPENSSH
+
+
+def test_git_command_env_prefers_existing_ssh_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GIT_SSH_COMMAND", "custom-ssh.exe")
+
+    env = mcp_bridge._git_command_env()
+    assert env["GIT_SSH_COMMAND"] == "custom-ssh.exe"
+
+
 def test_gh_command_env_injects_explicit_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

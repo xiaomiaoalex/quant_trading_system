@@ -6,6 +6,7 @@ $ghPaths = @(
 
 $env:HTTP_PROXY = $proxy
 $env:HTTPS_PROXY = $proxy
+$windowsOpenSsh = "C:\Windows\System32\OpenSSH\ssh.exe"
 
 $gh = $ghPaths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($gh) {
@@ -31,4 +32,8 @@ if ($env:GH_TOKEN) {
 
 Write-Host "HTTP_PROXY=$($env:HTTP_PROXY)"
 Write-Host "HTTPS_PROXY=$($env:HTTPS_PROXY)"
+if (-not $env:GIT_SSH_COMMAND -and (Test-Path $windowsOpenSsh)) {
+    $env:GIT_SSH_COMMAND = $windowsOpenSsh
+}
+Write-Host "GIT_SSH_COMMAND=$($env:GIT_SSH_COMMAND)"
 Write-Host "Git remote recommendation: use SSH origin (git@github.com:owner/repo.git)"
