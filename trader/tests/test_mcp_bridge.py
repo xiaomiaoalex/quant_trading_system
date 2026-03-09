@@ -908,6 +908,7 @@ def test_gh_command_env_uses_default_proxy_when_shell_env_missing(
     env = mcp_bridge._gh_command_env()
     assert env["HTTP_PROXY"] == "http://127.0.0.1:4780"
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:4780"
+    assert env["GH_PROMPT_DISABLED"] == "1"
 
 
 def test_git_command_env_uses_windows_openssh_when_available(
@@ -917,7 +918,13 @@ def test_git_command_env_uses_windows_openssh_when_available(
     monkeypatch.setattr(mcp_bridge.os.path, "exists", lambda path: path == mcp_bridge.DEFAULT_WINDOWS_OPENSSH)
 
     env = mcp_bridge._git_command_env()
-    assert env["GIT_SSH_COMMAND"] == mcp_bridge.DEFAULT_WINDOWS_OPENSSH
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_SSH_COMMAND"] == (
+        f'"{mcp_bridge.DEFAULT_WINDOWS_OPENSSH}"'
+        " -o BatchMode=yes"
+        " -o StrictHostKeyChecking=accept-new"
+        f" -o ConnectTimeout={mcp_bridge.DEFAULT_GIT_CONNECT_TIMEOUT_SEC}"
+    )
 
 
 def test_git_command_env_prefers_existing_ssh_command(
@@ -926,6 +933,7 @@ def test_git_command_env_prefers_existing_ssh_command(
     monkeypatch.setenv("GIT_SSH_COMMAND", "custom-ssh.exe")
 
     env = mcp_bridge._git_command_env()
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert env["GIT_SSH_COMMAND"] == "custom-ssh.exe"
 
 
@@ -936,6 +944,7 @@ def test_gh_command_env_injects_explicit_token(
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     env = mcp_bridge._gh_command_env()
+    assert env["GH_PROMPT_DISABLED"] == "1"
     assert env["GH_TOKEN"] == "token-123"
     assert env["GITHUB_TOKEN"] == "token-123"
 
