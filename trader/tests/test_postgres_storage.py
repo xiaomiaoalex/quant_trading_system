@@ -800,6 +800,83 @@ class TestRiskEventsPersistence:
         assert index_def is not None
         assert "updated_at" in index_def
 
+    @pytest.mark.asyncio
+    async def test_risk_event_idempotency_after_reconnect(self, storage):
+        """Test that duplicate dedup_key returns same event_id after reconnect (restart simulation)."""
+        event_data = {
+            "event_id": "risk-evt-reconnect-001",
+            "dedup_key": "dedup-key-reconnect-001",
+            "scope": "GLOBAL",
+            "reason": "Test idempotency after reconnect",
+            "recommended_level": 2,
+            "data": {"test": "reconnect"},
+        }
+        
+        event_id_1, created_1 = await storage.save_risk_event(event_data)
+        assert created_1 is True
+        
+        await storage.disconnect()
+        await storage.connect()
+        
+        event_id_2, created_2 = await storage.save_risk_event(event_data)
+        assert created_2 is False, "After reconnect, duplicate should return created=False"
+        assert event_id_2 == event_id_1, "After reconnect, duplicate should return same event_id"
+
+    @pytest.mark.asyncio
+    async def test_upgrade_key_idempotency_after_reconnect(self, storage):
+        """Test that duplicate upgrade_key does NOT trigger duplicate side effects after reconnect."""
+        upgrade_key = "upgrade:ACCOUNT:1:dedup-key-reconnect-001"
+        upgrade_data = {
+            "scope": "ACCOUNT",
+            "level": 1,
+            "reason": "Test upgrade idempotency after reconnect",
+            "dedup_key": "dedup-key-reconnect-001",
+        }
+        
+        first_upgrade, first_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "ACCOUNT", 1, "test_reason", "dedup-key-reconnect-001"
+        )
+        assert first_upgrade is True
+        assert first_effect is True
+        
+        await storage.disconnect()
+        await storage.connect()
+        
+        second_upgrade, second_effect = await storage.try_record_upgrade_with_effect(
+            upgrade_key, "ACCOUNT", 1, "test_reason", "dedup-key-reconnect-001"
+        )
+        assert second_upgrade is False, "After reconnect, duplicate upgrade should return upgrade=False"
+        assert second_effect is False, "After reconnect, duplicate should NOT trigger side effect"
+        
+        pending = await storage.get_pending_effects()
+        matching = [effect for effect in pending if effect["upgrade_key"] == upgrade_key]
+        assert len(matching) == 1, "Only one pending effect should exist after reconnect"
+
+    @pytest.mark.asyncio
+    async def test_recovery_endpoint_works_after_reconnect(self, storage):
+        """Test that get_pending_effects works correctly after reconnect (recovery simulation)."""
+        upgrade_key_1 = "upgrade:ACCOUNT:1:dedup-key-recovery-001"
+        upgrade_key_2 = "upgrade:ACCOUNT:2:dedup-key-recovery-002"
+        
+        await storage.try_record_upgrade_with_effect(
+            upgrade_key_1, "ACCOUNT", 1, "reason_1", "dedup-key-recovery-001"
+        )
+        await storage.try_record_upgrade_with_effect(
+            upgrade_key_2, "ACCOUNT", 2, "reason_2", "dedup-key-recovery-002"
+        )
+        
+        pending_before = await storage.get_pending_effects()
+        count_before = len(pending_before)
+        
+        await storage.disconnect()
+        await storage.connect()
+        
+        pending_after = await storage.get_pending_effects()
+        count_after = len(pending_after)
+        
+        assert count_before == count_after, "Pending effects count should be same after reconnect"
+        assert count_after == 2, "Should have 2 pending effects after reconnect"
+
 
 @skip_if_no_asyncpg
 class TestStoredRiskEventDataclass:
