@@ -379,6 +379,10 @@ def _safe_branch_name(task_id: str) -> str:
 
 
 def _extract_task_id(task_desc: str) -> str | None:
+    sprint_match = re.search(r"\bsprint-\d+(?:-\d+)+\b", task_desc, re.IGNORECASE)
+    if sprint_match is not None:
+        return sprint_match.group(0).lower()
+
     match = re.search(r"\btask\d+(?:\.\d+)*(?:-[A-Za-z0-9]+)*\b", task_desc, re.IGNORECASE)
     if match is None:
         return None

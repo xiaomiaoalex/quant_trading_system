@@ -129,6 +129,26 @@ def test_architect_assign_task_auto_updates_task_id_and_branch_from_description(
     assert branch == "feature/task10-3-e"
 
 
+def test_architect_assign_task_supports_sprint_style_task_ids(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    _write_state(mission_file, _base_state("APPROVED_FOR_PUSH"))
+
+    msg = mcp_bridge.architect_assign_task("sprint-5-1: observability mvp")
+    assert msg.startswith("✅")
+
+    state = _read_state(mission_file)
+    assert state["status"] == "DEVELOPING"
+    assert state["task_id"] == "sprint-5-1"
+    assert state["active_branch"] == "feature/sprint-5-1"
+    assert state["architect_instruction"] == "sprint-5-1: observability mvp"
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert branch == "feature/sprint-5-1"
+
+
 def test_architect_assign_task_new_task_branches_from_main_not_current_head(
     mission_file: Path, temp_git_repo: Path
 ) -> None:
@@ -172,6 +192,14 @@ def test_architect_assign_task_explicit_task_id_overrides_description(
         ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
     ).stdout.strip()
     assert branch == "feature/task10-3-f"
+
+
+def test_extract_task_id_keeps_legacy_format_compatible() -> None:
+    assert mcp_bridge._extract_task_id("Task10.3-E: next stage mission") == "Task10.3-E"
+
+
+def test_extract_task_id_prefers_sprint_style_format() -> None:
+    assert mcp_bridge._extract_task_id("Sprint-5-2: next mission") == "sprint-5-2"
 
 
 def test_architect_assign_task_git_failure_does_not_mutate_state(
