@@ -47,6 +47,7 @@ LOCK_RETRY_INTERVAL_SEC = float(os.getenv("MCP_LOCK_RETRY_INTERVAL_SEC", "0.1"))
 mcp = FastMCP("Dual_AI_Communicator")
 DEFAULT_GITHUB_PROXY = os.getenv("MCP_GITHUB_PROXY", "http://127.0.0.1:4780")
 DEFAULT_WINDOWS_OPENSSH = r"C:\Windows\System32\OpenSSH\ssh.exe"
+DEFAULT_GIT_CONNECT_TIMEOUT_SEC = "10"
 
 
 def _utc_now_iso() -> str:
@@ -629,13 +630,19 @@ def _git_ssh_command() -> str:
     if configured:
         return configured
     if os.path.exists(DEFAULT_WINDOWS_OPENSSH):
-        return DEFAULT_WINDOWS_OPENSSH
+        return (
+            f'"{DEFAULT_WINDOWS_OPENSSH}"'
+            " -o BatchMode=yes"
+            " -o StrictHostKeyChecking=accept-new"
+            f" -o ConnectTimeout={DEFAULT_GIT_CONNECT_TIMEOUT_SEC}"
+        )
     return ""
 
 
 def _git_command_env() -> dict[str, str]:
     env = dict(os.environ)
     ssh_command = _git_ssh_command()
+    env["GIT_TERMINAL_PROMPT"] = "0"
     if ssh_command:
         env["GIT_SSH_COMMAND"] = ssh_command
     return env
@@ -713,6 +720,7 @@ def _gh_command_env() -> dict[str, str]:
     env = dict(os.environ)
     proxy = _github_proxy_settings()
     token = _github_token()
+    env["GH_PROMPT_DISABLED"] = "1"
     if proxy["http_proxy"]:
         env["HTTP_PROXY"] = proxy["http_proxy"]
         env["http_proxy"] = proxy["http_proxy"]
