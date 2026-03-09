@@ -421,12 +421,12 @@ class PostgreSQLStorage:
         Reconstruct aggregate state from snapshot + events.
         
         This implements the core event sourcing pattern:
-        1. Get latest snapshot
-        2. Get all events after snapshot timestamp
+        1. Get latest snapshot by stream_key
+        2. Get all events after snapshot timestamp using snapshot's aggregate_id
         3. Apply projection to rebuild state
         
         Args:
-            stream_key: The stream key to reconstruct
+            stream_key: The stream key to locate the snapshot
             projection_fn: Optional function to apply events to state.
                           If not provided, returns snapshot state + events for external reconstruction.
         
@@ -439,14 +439,20 @@ class PostgreSQLStorage:
             return None
         
         events_after_snapshot = await self.get_events(
-            aggregate_id=stream_key,
+            aggregate_id=snapshot.aggregate_id,
             since=snapshot.timestamp,
         )
+        
+        events_after_snapshot = [
+            e for e in events_after_snapshot
+            if e.timestamp > snapshot.timestamp
+        ]
         
         if projection_fn is None:
             return {
                 "snapshot": {
                     "snapshot_id": snapshot.snapshot_id,
+                    "aggregate_id": snapshot.aggregate_id,
                     "state": snapshot.state,
                     "timestamp": snapshot.timestamp,
                 },

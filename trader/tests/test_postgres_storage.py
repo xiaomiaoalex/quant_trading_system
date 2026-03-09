@@ -167,6 +167,41 @@ class TestPostgreSQLStorage:
 
     @pytest.mark.asyncio
     @skip_if_no_asyncpg
+    async def test_get_events_since_includes_boundary(self, storage):
+        """Test get_events since filter uses >= semantics (includes boundary timestamp)"""
+        await storage.connect()
+        
+        boundary_ts = datetime.now(timezone.utc)
+        
+        event_at_boundary = MockEvent(
+            event_id="evt-bound-001",
+            event_type="OrderCreated",
+            aggregate_id="order-bound",
+            aggregate_type="Order",
+            timestamp=boundary_ts,
+            data={"symbol": "ETHUSDT"},
+        )
+        
+        event_after = MockEvent(
+            event_id="evt-bound-002",
+            event_type="OrderFilled",
+            aggregate_id="order-bound",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"fill_price": 50000},
+        )
+        
+        await storage.append_event(event_at_boundary)
+        await storage.append_event(event_after)
+        
+        events = await storage.get_events(aggregate_id="order-bound", since=boundary_ts)
+        
+        assert len(events) == 2, "get_events should include events at exactly the since timestamp (>= semantics)"
+        
+        await storage.disconnect()
+
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
     async def test_save_and_get_snapshot(self, storage):
         """Test save and get snapshot"""
         await storage.connect()
@@ -385,6 +420,112 @@ class TestPostgreSQLStorage:
         assert result["snapshot"]["state"]["status"] == "NEW"
         assert len(result["events"]) == 1
         assert result["events"][0]["event_type"] == "OrderCreated"
+        
+        await storage.disconnect()
+
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
+    async def test_reconstruct_state_with_different_stream_key_and_aggregate_id(self, storage):
+        """Test reconstruct_state works when stream_key != aggregate_id"""
+        await storage.connect()
+        
+        snapshot_ts = datetime.now(timezone.utc)
+        
+        snapshot_data = {
+            "snapshot_id": "snap-diff-001",
+            "stream_key": "account-123",  # stream_key different from aggregate_id
+            "aggregate_id": "order-456",   # aggregate_id different from stream_key
+            "aggregate_type": "Order",
+            "timestamp": snapshot_ts,
+            "state": {"status": "NEW", "quantity": 0},
+        }
+        await storage.save_snapshot(snapshot_data)
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-diff-001",
+            event_type="OrderCreated",
+            aggregate_id="order-456",  # uses aggregate_id, not stream_key
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"symbol": "BTCUSDT", "quantity": 1.5},
+        ))
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-diff-002",
+            event_type="OrderFilled",
+            aggregate_id="order-456",  # uses aggregate_id, not stream_key
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),
+            data={"fill_price": 50000, "filled_quantity": 1.5},
+        ))
+        
+        def order_projection(state, event):
+            if event.event_type == "OrderCreated":
+                state["quantity"] = event.data.get("quantity", 0)
+                state["status"] = "CREATED"
+            elif event.event_type == "OrderFilled":
+                state["filled_quantity"] = event.data.get("filled_quantity", 0)
+                state["fill_price"] = event.data.get("fill_price")
+                state["status"] = "FILLED"
+            return state
+        
+        result = await storage.reconstruct_state("account-123", order_projection)
+        
+        assert result is not None
+        assert result["status"] == "FILLED"
+        assert result["quantity"] == 1.5
+        assert result["filled_quantity"] == 1.5
+        assert result["fill_price"] == 50000
+        
+        await storage.disconnect()
+
+    @pytest.mark.asyncio
+    @skip_if_no_asyncpg
+    async def test_reconstruct_state_excludes_boundary_events(self, storage):
+        """Test reconstruct_state does NOT replay events at exactly snapshot timestamp"""
+        await storage.connect()
+        
+        boundary_ts = datetime.now(timezone.utc)
+        
+        snapshot_data = {
+            "snapshot_id": "snap-bound-001",
+            "stream_key": "order-bound",
+            "aggregate_id": "order-bound",
+            "aggregate_type": "Order",
+            "timestamp": boundary_ts,
+            "state": {"status": "CREATED", "quantity": 1.0, "filled_quantity": 1.0},
+        }
+        await storage.save_snapshot(snapshot_data)
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-bound-001",
+            event_type="OrderFilled",
+            aggregate_id="order-bound",
+            aggregate_type="Order",
+            timestamp=boundary_ts,  # exactly the same timestamp as snapshot
+            data={"fill_price": 51000, "filled_quantity": 0.5},
+        ))
+        
+        await storage.append_event(MockEvent(
+            event_id="evt-bound-002",
+            event_type="OrderFilled",
+            aggregate_id="order-bound",
+            aggregate_type="Order",
+            timestamp=datetime.now(timezone.utc),  # later timestamp
+            data={"fill_price": 52000, "filled_quantity": 0.5},
+        ))
+        
+        def order_projection(state, event):
+            if event.event_type == "OrderFilled":
+                state["filled_quantity"] = state.get("filled_quantity", 0) + event.data.get("filled_quantity", 0)
+                state["fill_price"] = event.data.get("fill_price")
+            return state
+        
+        result = await storage.reconstruct_state("order-bound", order_projection)
+        
+        assert result is not None
+        assert result["filled_quantity"] == 1.5, "Should only replay 1 event (later timestamp), not boundary event"
+        assert result["fill_price"] == 52000
         
         await storage.disconnect()
 
