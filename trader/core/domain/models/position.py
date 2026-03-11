@@ -39,7 +39,7 @@ class Position:
 
     # 时间戳
     opened_at: Optional[datetime] = None    # 建仓时间
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 扩展
     metadata: Dict[str, Any] = field(default_factory=dict)

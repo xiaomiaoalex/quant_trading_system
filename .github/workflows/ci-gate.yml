@@ -139,3 +139,4 @@ jobs:
       - name: Run Postgres Tests
         run: |
           python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
+          python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short

@@ -37,6 +37,38 @@ def _base_state(status: str = "IDLE") -> dict:
     }
 
 
+def _aligned_package(branch: str = "feature/task10-3-c") -> dict:
+    return {
+        "branch": branch,
+        "status": "ready",
+        "pr_title": "fix: sample",
+        "pr_description": "desc",
+        "changes": [
+            {
+                "file": "x.py",
+                "type": "modify",
+                "description": "sample",
+                "spec_ref": "实施计划-v3.0.5 Sprint4",
+            }
+        ],
+        "test_results": {"pytest": "1 passed"},
+        "risks": [],
+        "rollback": "git checkout main",
+        "spec_alignment": {
+            "spec_files": [
+                "实施计划-v3.0.5-蓝图到Sprint.md",
+                "quant_trading_system v3.0.5-个人开发者版 技术规范.md",
+            ],
+            "requirements": ["Sprint 4 Contract Gate"],
+            "summary": "代码与规范一致，新增测试覆盖契约行为。",
+            "doc_sync": {
+                "updated": True,
+                "files": ["docs/chief_architect_audit_2026-03-09.md"],
+            },
+        },
+    }
+
+
 @pytest.fixture
 def mission_file(monkeypatch: pytest.MonkeyPatch) -> Path:
     base_tmp = Path(".mcp_bridge_test_tmp")
@@ -149,6 +181,27 @@ def test_architect_assign_task_supports_sprint_style_task_ids(
     assert branch == "feature/sprint-5-1"
 
 
+def test_architect_assign_task_injects_alignment_template_when_policy_enabled(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["protocol_policy"] = {
+        "require_spec_alignment": True,
+        "enforce_doc_sync_for_code_changes": True,
+    }
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_assign_task("sprint-5-1: observability mvp")
+    assert msg.startswith("✅")
+
+    new_state = _read_state(mission_file)
+    instruction = new_state["architect_instruction"]
+    assert instruction.startswith("sprint-5-1: observability mvp")
+    assert "spec_alignment" in instruction
+    assert "spec_ref" in instruction
+    assert "doc_sync" in instruction
+
+
 def test_architect_assign_task_new_task_branches_from_main_not_current_head(
     mission_file: Path, temp_git_repo: Path
 ) -> None:
@@ -237,6 +290,79 @@ def test_architect_assign_task_dirty_worktree_includes_git_guidance(
     assert msg.startswith("❌ 工作区不干净")
     assert "git status --short" in msg
     assert "git stash" in msg
+
+
+def test_architect_reassign_active_task_updates_developing_task_and_branch(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    subprocess.run(["git", "checkout", "-b", "feature/task10-4-a"], cwd=temp_git_repo, check=True)
+    (temp_git_repo / "in_progress.txt").write_text("work\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=temp_git_repo, check=True)
+    subprocess.run(["git", "commit", "-m", "work in progress"], cwd=temp_git_repo, check=True)
+
+    state = _base_state("DEVELOPING")
+    state["task_id"] = "Task10.4-A"
+    state["active_branch"] = "feature/task10-4-a"
+    state["architect_instruction"] = "Task10.4-A: old observability task"
+    state["engineer_report"] = "stale report"
+    state["pr_readiness_package"] = {"branch": "feature/task10-3-p", "status": "ready"}
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_reassign_active_task("sprint-5-1: observability mvp")
+    assert msg.startswith("✅")
+    assert "创建并切换到新分支" in msg
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "DEVELOPING"
+    assert new_state["task_id"] == "sprint-5-1"
+    assert new_state["active_branch"] == "feature/sprint-5-1"
+    assert new_state["architect_instruction"] == "sprint-5-1: observability mvp"
+    assert new_state["engineer_report"] == ""
+    assert new_state["pr_readiness_package"] == {}
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], cwd=temp_git_repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert branch == "feature/sprint-5-1"
+    assert (temp_git_repo / "in_progress.txt").read_text(encoding="utf-8") == "work\n"
+
+
+def test_architect_reassign_active_task_injects_alignment_template_when_policy_enabled(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    subprocess.run(["git", "checkout", "-b", "feature/task10-4-a"], cwd=temp_git_repo, check=True)
+    state = _base_state("DEVELOPING")
+    state["task_id"] = "Task10.4-A"
+    state["active_branch"] = "feature/task10-4-a"
+    state["architect_instruction"] = "Task10.4-A: old observability task"
+    state["protocol_policy"] = {
+        "require_spec_alignment": True,
+        "enforce_doc_sync_for_code_changes": True,
+    }
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_reassign_active_task("sprint-5-2: observability mvp extension")
+    assert msg.startswith("✅")
+
+    new_state = _read_state(mission_file)
+    instruction = new_state["architect_instruction"]
+    assert instruction.startswith("sprint-5-2: observability mvp extension")
+    assert "spec_alignment" in instruction
+    assert "spec_ref" in instruction
+    assert "doc_sync" in instruction
+
+
+def test_architect_reassign_active_task_rejects_non_developing_status(
+    mission_file: Path, temp_git_repo: Path
+) -> None:
+    subprocess.run(["git", "checkout", "-b", "feature/task10-4-a"], cwd=temp_git_repo, check=True)
+    state = _base_state("APPROVED_FOR_PUSH")
+    state["task_id"] = "Task10.4-A"
+    state["active_branch"] = "feature/task10-4-a"
+    _write_state(mission_file, state)
+
+    msg = mcp_bridge.architect_reassign_active_task("sprint-5-1: observability mvp")
+    assert msg.startswith("❌ 当前状态不是 DEVELOPING")
 
 
 def test_check_git_health_rejects_detached_head(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -350,6 +476,54 @@ def test_engineer_submit_work_rejects_missing_required_pr_fields(
 
     state = _read_state(mission_file)
     assert state == original
+
+
+def test_engineer_submit_work_rejects_missing_spec_alignment_when_policy_enabled(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _base_state("DEVELOPING")
+    state["protocol_policy"] = {
+        "require_spec_alignment": True,
+        "enforce_doc_sync_for_code_changes": True,
+    }
+    _write_state(mission_file, state)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
+
+    package = json.dumps(
+        {
+            "branch": "feature/task10-3-c",
+            "status": "ready",
+            "pr_title": "fix: sample",
+            "pr_description": "desc",
+            "changes": [{"file": "x.py", "type": "modify", "description": "sample"}],
+            "test_results": {"pytest": "1 passed"},
+            "risks": [],
+            "rollback": "git checkout main",
+        },
+        ensure_ascii=False,
+    )
+    msg = mcp_bridge.engineer_submit_work("done", package)
+    assert msg == "❌ pr_package缺少必填块：spec_alignment（规范对齐信息）。"
+
+
+def test_engineer_submit_work_accepts_spec_alignment_when_policy_enabled(
+    mission_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _base_state("DEVELOPING")
+    state["protocol_policy"] = {
+        "require_spec_alignment": True,
+        "enforce_doc_sync_for_code_changes": True,
+    }
+    _write_state(mission_file, state)
+    monkeypatch.setattr(mcp_bridge, "_check_clean_worktree", lambda: (True, ""))
+
+    package = json.dumps(_aligned_package(), ensure_ascii=False)
+    msg = mcp_bridge.engineer_submit_work("done", package)
+    assert msg.startswith("✅")
+
+    new_state = _read_state(mission_file)
+    assert new_state["status"] == "REVIEW_PENDING"
+    assert "spec_alignment" in new_state["pr_readiness_package"]
 
 
 def test_engineer_submit_work_valid_package_transitions_to_review_pending(

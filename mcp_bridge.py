@@ -88,6 +88,10 @@ def _default_state() -> dict[str, Any]:
             "merge_commit": "",
             "local_commit": "",
         },
+        "protocol_policy": {
+            "require_spec_alignment": False,
+            "enforce_doc_sync_for_code_changes": False,
+        },
         "last_update": _utc_now_iso(),
     }
 
@@ -119,6 +123,18 @@ def _normalize_pr_tracking(value: Any) -> dict[str, Any]:
         "merged_at": str(value.get("merged_at", "") or ""),
         "merge_commit": str(value.get("merge_commit", "") or ""),
         "local_commit": str(value.get("local_commit", "") or ""),
+    }
+
+
+def _normalize_protocol_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "require_spec_alignment": False,
+            "enforce_doc_sync_for_code_changes": False,
+        }
+    return {
+        "require_spec_alignment": bool(value.get("require_spec_alignment", False)),
+        "enforce_doc_sync_for_code_changes": bool(value.get("enforce_doc_sync_for_code_changes", False)),
     }
 
 
@@ -163,6 +179,7 @@ def _normalize_state(raw: Any) -> dict[str, Any]:
     normalized["pr_readiness_package"] = _normalize_pr_package(normalized.get("pr_readiness_package"))
     normalized["review_lock"] = _normalize_review_lock(normalized.get("review_lock"))
     normalized["pr_tracking"] = _normalize_pr_tracking(normalized.get("pr_tracking"))
+    normalized["protocol_policy"] = _normalize_protocol_policy(normalized.get("protocol_policy"))
     return normalized
 
 
@@ -480,7 +497,76 @@ def check_git_health() -> tuple[bool, str]:
     return True, "Git 环境健康"
 
 
-def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
+def _validate_spec_alignment_content(
+    pr_package: dict[str, Any],
+    changes: list[dict[str, Any]],
+    enforce_doc_sync_for_code_changes: bool,
+) -> str | None:
+    if str(pr_package.get("task_type", "") or "").strip().lower() == "verification" and len(changes) == 0:
+        return None
+
+    spec_alignment = pr_package.get("spec_alignment")
+    if not isinstance(spec_alignment, dict):
+        return "❌ pr_package缺少必填块：spec_alignment（规范对齐信息）。"
+
+    spec_files = spec_alignment.get("spec_files")
+    if not isinstance(spec_files, list) or len(spec_files) == 0:
+        return "❌ pr_package.spec_alignment.spec_files 必须是非空数组。"
+    for entry in spec_files:
+        if not isinstance(entry, str) or not entry.strip():
+            return "❌ pr_package.spec_alignment.spec_files 中每一项都必须是非空字符串。"
+
+    requirements = spec_alignment.get("requirements")
+    if not isinstance(requirements, list) or len(requirements) == 0:
+        return "❌ pr_package.spec_alignment.requirements 必须是非空数组。"
+    for entry in requirements:
+        if not isinstance(entry, str) or not entry.strip():
+            return "❌ pr_package.spec_alignment.requirements 中每一项都必须是非空字符串。"
+
+    summary = spec_alignment.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return "❌ pr_package.spec_alignment.summary 必须是非空字符串。"
+
+    for change in changes:
+        spec_ref = change.get("spec_ref")
+        if not isinstance(spec_ref, str) or not spec_ref.strip():
+            return "❌ 启用规范对齐门禁时，pr_package.changes 每一项都必须提供 spec_ref。"
+
+    if not enforce_doc_sync_for_code_changes:
+        return None
+
+    doc_sync = spec_alignment.get("doc_sync")
+    if not isinstance(doc_sync, dict):
+        return "❌ 已启用文档同步门禁：pr_package.spec_alignment.doc_sync 必须是对象。"
+    if "updated" not in doc_sync or not isinstance(doc_sync.get("updated"), bool):
+        return "❌ pr_package.spec_alignment.doc_sync.updated 必须是布尔值。"
+
+    updated = bool(doc_sync.get("updated"))
+    code_changes = [
+        change for change in changes if str(change.get("file", "")).strip().endswith((".py", ".yml", ".yaml", ".toml", ".json"))
+    ]
+    if not code_changes:
+        return None
+
+    if updated:
+        files = doc_sync.get("files")
+        if not isinstance(files, list) or len(files) == 0:
+            return "❌ 已声明 doc_sync.updated=true，但未提供 doc_sync.files。"
+        for file_path in files:
+            if not isinstance(file_path, str) or not file_path.strip():
+                return "❌ pr_package.spec_alignment.doc_sync.files 中每一项都必须是非空字符串。"
+    else:
+        reason = doc_sync.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return "❌ 已声明 doc_sync.updated=false，必须提供 doc_sync.reason。"
+    return None
+
+
+def _validate_pr_package_content(
+    pr_package: dict[str, Any],
+    require_spec_alignment: bool = False,
+    enforce_doc_sync_for_code_changes: bool = False,
+) -> str | None:
     required_fields = [
         ("pr_title", "PR 标题"),
         ("pr_description", "PR 描述"),
@@ -513,6 +599,12 @@ def _validate_pr_package_content(pr_package: dict[str, Any]) -> str | None:
         file_path = str(change.get("file", "") or "")
         if file_path == "mcp_mission_control.json" or file_path.endswith(".lock"):
             return "❌ pr_package.changes 不得包含运行态控制文件或 lock 文件。"
+    if require_spec_alignment:
+        return _validate_spec_alignment_content(
+            pr_package=pr_package,
+            changes=changes,
+            enforce_doc_sync_for_code_changes=enforce_doc_sync_for_code_changes,
+        )
     return None
 
 
@@ -587,6 +679,78 @@ def _git_guidance_for_pr_submission(pr_package: dict[str, Any]) -> str:
             return "\n".join(lines)
     lines.append(f"4. git push -u origin {branch}")
     return "\n".join(lines)
+
+
+def _spec_alignment_pr_package_template(
+    *,
+    task_id: str,
+    sprint: str,
+    branch: str,
+    task_desc: str,
+) -> dict[str, Any]:
+    return {
+        "branch": branch,
+        "target": "main",
+        "pr_title": f"feat: {task_id}",
+        "pr_description": task_desc,
+        "changes": [
+            {
+                "file": "path/to/changed_file.py",
+                "type": "modify",
+                "description": "what changed",
+                "spec_ref": f"{sprint} / {task_id}",
+            }
+        ],
+        "test_results": {"pytest": "x passed"},
+        "risks": [],
+        "rollback": "git checkout -- <file>",
+        "spec_alignment": {
+            "spec_files": [
+                "实施计划-v3.0.5-蓝图到Sprint.md",
+                "quant_trading_system v3.0.5-个人开发者版 技术规范.md",
+            ],
+            "requirements": [f"{sprint} / {task_id}"],
+            "summary": "逐项说明代码与规范条目如何对齐。",
+            "doc_sync": {
+                "updated": True,
+                "files": [
+                    "docs/chief_architect_audit_2026-03-09.md",
+                ],
+            },
+        },
+    }
+
+
+def _compose_architect_instruction(
+    *,
+    task_desc: str,
+    task_id: str,
+    sprint: str,
+    branch: str,
+    policy: dict[str, Any],
+) -> str:
+    if not bool(policy.get("require_spec_alignment", False)):
+        return task_desc
+
+    template = _spec_alignment_pr_package_template(
+        task_id=task_id,
+        sprint=sprint,
+        branch=branch,
+        task_desc=task_desc,
+    )
+    template_text = json.dumps(template, ensure_ascii=False, indent=2)
+    gate_note = "已启用规范对齐门禁：engineer_submit_work 时必须提供 spec_alignment 与每项变更 spec_ref。"
+    if bool(policy.get("enforce_doc_sync_for_code_changes", False)):
+        gate_note = (
+            f"{gate_note}\n已启用文档同步门禁：涉及代码文件改动时，必须在 "
+            "spec_alignment.doc_sync 中声明 updated 与 files/reason。"
+        )
+    return (
+        f"{task_desc}\n\n"
+        f"{gate_note}\n"
+        "推荐 pr_package 模板如下（可按任务实际调整）：\n"
+        f"{template_text}"
+    )
 
 
 def _review_start_notice(extra_note: str = "") -> str:
@@ -1001,12 +1165,83 @@ def architect_assign_task(task_desc: str, task_id: str = "") -> str:
             state["task_id"] = normalized_task_id
             state["status"] = "DEVELOPING"
             state["active_branch"] = branch_name
-            state["architect_instruction"] = task_desc
+            policy = _normalize_protocol_policy(state.get("protocol_policy"))
+            state["architect_instruction"] = _compose_architect_instruction(
+                task_desc=task_desc,
+                task_id=normalized_task_id,
+                sprint=str(state.get("sprint", "") or ""),
+                branch=branch_name,
+                policy=policy,
+            )
             state["review_lock"] = _normalize_review_lock(None)
             state["pr_tracking"] = _normalize_pr_tracking(None)
             state["last_update"] = _utc_now_iso()
             commit(state)
         return f"✅ 任务已发布，状态：DEVELOPING。\n{git_msg}"
+    except Exception as e:
+        return f"❌ 写入任务状态失败: {str(e)}"
+
+
+@mcp.tool()
+def architect_reassign_active_task(task_desc: str, task_id: str = "") -> str:
+    """在 DEVELOPING 状态下重命名当前任务口径，并切换到新的任务分支。"""
+    is_healthy, health_msg = check_git_health()
+    if not is_healthy:
+        return f"❌ {health_msg}\n\n{_git_guidance_for_assign_failure('health')}"
+
+    clean, clean_msg = _check_clean_worktree()
+    if not clean:
+        return f"❌ {clean_msg}\n\n{_git_guidance_for_assign_failure('dirty')}"
+
+    try:
+        with _locked_state() as (state, commit):
+            current_status = state["status"]
+            if current_status != "DEVELOPING":
+                return f"❌ 当前状态不是 DEVELOPING，不能重分派任务：{current_status}"
+
+            current_branch = _get_current_branch()
+            expected_branch = str(state.get("active_branch", "") or "")
+            if expected_branch and current_branch != expected_branch:
+                return (
+                    "❌ 当前分支与任务绑定分支不一致，不能重分派任务。\n"
+                    f"- 当前分支: {current_branch}\n"
+                    f"- 绑定分支: {expected_branch}"
+                )
+
+            current_task_id = state.get("task_id", "UNASSIGNED")
+            next_task_id = task_id.strip() if isinstance(task_id, str) else ""
+            if next_task_id:
+                normalized_task_id = next_task_id
+            else:
+                normalized_task_id = _extract_task_id(task_desc) or current_task_id
+
+            branch_name = _safe_branch_name(normalized_task_id)
+            git_ok, git_msg = _run_git_checkout(
+                branch_name,
+                base_branch=current_branch,
+                create_from_base=branch_name != current_branch,
+            )
+            if not git_ok:
+                return f"❌ {git_msg}\n\n{_git_guidance_for_assign_failure('checkout')}"
+
+            state["task_id"] = normalized_task_id
+            state["status"] = "DEVELOPING"
+            state["active_branch"] = branch_name
+            policy = _normalize_protocol_policy(state.get("protocol_policy"))
+            state["architect_instruction"] = _compose_architect_instruction(
+                task_desc=task_desc,
+                task_id=normalized_task_id,
+                sprint=str(state.get("sprint", "") or ""),
+                branch=branch_name,
+                policy=policy,
+            )
+            state["engineer_report"] = ""
+            state["pr_readiness_package"] = {}
+            state["review_lock"] = _normalize_review_lock(None)
+            state["pr_tracking"] = _normalize_pr_tracking(None)
+            state["last_update"] = _utc_now_iso()
+            commit(state)
+        return f"✅ 当前开发任务已重分派，状态：DEVELOPING。\n{git_msg}"
     except Exception as e:
         return f"❌ 写入任务状态失败: {str(e)}"
 
@@ -1046,11 +1281,16 @@ def engineer_submit_work(report: str, pr_package: str) -> str:
     parsed_package, parse_error = _parse_pr_package(pr_package)
     if parse_error is not None:
         return parse_error
-    package_error = _validate_pr_package_content(parsed_package)
+    current_state = _load_state()
+    policy = _normalize_protocol_policy(current_state.get("protocol_policy"))
+    package_error = _validate_pr_package_content(
+        parsed_package,
+        require_spec_alignment=policy["require_spec_alignment"],
+        enforce_doc_sync_for_code_changes=policy["enforce_doc_sync_for_code_changes"],
+    )
     if package_error is not None:
         return package_error
 
-    current_state = _load_state()
     can_transit, transition_msg = _validate_transition(current_state["status"], "REVIEW_PENDING")
     if not can_transit:
         return f"❌ {transition_msg}"
