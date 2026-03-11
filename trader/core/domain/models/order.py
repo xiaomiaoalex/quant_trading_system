@@ -87,8 +87,8 @@ class Order:
     error_message: Optional[str] = None    # 错误信息（如被拒绝）
 
     # 时间戳
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     submitted_at: Optional[datetime] = None
     filled_at: Optional[datetime] = None
 
