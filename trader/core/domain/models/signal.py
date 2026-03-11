@@ -5,7 +5,7 @@ Signal - 交易信号领域模型
 信号包含足够的上下文信息以便追溯和审计。
 """
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any
@@ -51,7 +51,7 @@ class Signal:
 
     # 上下文
     reason: str = ""                       # 信号产生原因
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
