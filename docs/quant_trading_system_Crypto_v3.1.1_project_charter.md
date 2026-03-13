@@ -650,102 +650,7 @@ A 股版强调 `Portfolio Constructor`，Crypto 版当前更适合定义为：
 
 ---
 
-## 13. 开发蓝图（Gate 驱动里程碑）
-
-借鉴 v4.3.0 的“Gate + 最小闭环”哲学，不铺大饼，先做最关键的事情。
-
----
-
-## Sprint 1–2：数据底盘与感知层
-### 目标
-把 Binance 数据接入做成“可信输入”，而不是“能收到消息”。
-
-### 任务
-- Binance Adapter 封装
-- WS 静默断流检测
-- REST 快照对齐
-- Alignment Gate
-- PostgreSQL 事件溯源 Schema
-
-### 验收
-- 断流与重连可被检测
-- 未对齐时不外发 Private/Execution 事件
-- 数据流可审计
-
-### Entry/Exit Gate
-- Entry：Adapter 核心模块与接口定义存在
-- Exit：核心测试非 skip + 故障演练记录完成
-
----
-
-## Sprint 3–4：Core 状态机与风险闭环
-### 目标
-把“不会乱掉”放在“先能跑”之前。
-
-### 任务
-- 订单状态单调递增
-- 终态不可逆
-- 风险事件收口
-- KillSwitch API
-- 账户 / 持仓状态管理
-
-### 验收
-- 无重复记账
-- 无逆序回滚
-- 风控可本地锁死
-
-### Entry/Exit Gate
-- Entry：CAS 与风险规则路径可定位
-- Exit：状态机与风险回归测试非 skip + 失败场景演练完成
-
----
-
-## Sprint 5–6：Crypto 特征沙盒与基础研究主线
-### 目标
-建立第一批真正贴近 crypto 的研究资产。
-
-### 任务
-- 趋势基础特征
-- 量价基础特征
-- Funding / OI 接口预留
-- Feature Sandbox
-- 流动性差标的过滤
-- 事件驱动样例回放
-
-### 验收
-- 有第一批可信规则
-- 坏规则能被拒绝
-- 基础研究链路成立
-
-### Entry/Exit Gate
-- Entry：特征与沙盒模块落地
-- Exit：研究链路测试/回放通过 + 噪声规则拦截证据完整
-
----
-
-## Sprint 7–8：对账器与 AI 观测哨（Next/Target）
-### 目标
-形成最小研究—执行—复盘闭环。
-
-### 任务
-- Reconciler（Next）
-- 账户状态与交易所状态对账
-- 确认窗口（reconcile grace period）
-- AI Regime 观测报告（Target，仅读洞察）
-- 统一复盘报告
-
-### 验收
-- 本地和交易所状态可校验
-- AI 输出仅作为 Insight，不直接执行
-- 闭环可复盘
-
-### Entry/Exit Gate
-- Entry：Reconciler/AI 相关模块和接口已落地
-- Exit：非 skip 测试 + 端到端演练记录 + 审计追踪字段完整
-
----
-
-## 14. 长期架构价值
+## 13. 长期架构价值
 
 这版 Crypto-First 架构的真正价值不只是“先能接 Binance”，而在于：
 
@@ -776,6 +681,6 @@ A 股版强调 `Portfolio Constructor`，Crypto 版当前更适合定义为：
 
 ---
 
-## 15. 一句话总结
+## 14. 一句话总结
 
 `quant_trading_system Crypto v3.1.1` 是一个以 Binance 为首发落地场景、以五平面隔离和事件溯源为基础设施、以趋势/量价/事件驱动为研究主线、以 Fail-Closed 和状态机确定性为生存底座，并通过 Current/Next/Target 分层治理能力边界的系统化数字资产交易平台。
