@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"TODO\\\\|FIXME\\\\|XXX\\\\|STUB\\\\|PLACEHOLDER\" '/d/Code of Python/quant_trading_system/trader' --include=*.py)",
+      "Bash(python mcp_bridge.py)"
+    ]
+  }
+}
