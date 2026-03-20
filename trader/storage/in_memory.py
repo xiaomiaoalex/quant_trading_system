@@ -66,6 +66,9 @@ class ControlPlaneInMemoryStorage:
         # Brokers
         self.broker_accounts: Dict[str, Dict[str, Any]] = {}
 
+        # Feature Store (Feature Values)
+        self.feature_values_by_key: Dict[str, Dict[str, Any]] = {}
+
         # Event counters
         self._event_counter = 0
         self._snapshot_counter = 0

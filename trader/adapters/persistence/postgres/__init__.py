@@ -258,6 +258,30 @@ class PostgreSQLStorage:
                 ON risk_upgrade_effects(updated_at DESC)
             """)
 
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS feature_values (
+                    symbol VARCHAR(50) NOT NULL,
+                    feature_name VARCHAR(255) NOT NULL,
+                    version VARCHAR(50) NOT NULL,
+                    ts_ms BIGINT NOT NULL,
+                    value JSONB NOT NULL,
+                    meta JSONB DEFAULT '{}',
+                    value_hash VARCHAR(16) NOT NULL,
+                    ingested_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_feature_values_key UNIQUE (symbol, feature_name, version, ts_ms)
+                )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_feature_values_symbol_feature_version 
+                ON feature_values(symbol, feature_name, version)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_feature_values_ts_ms 
+                ON feature_values(ts_ms DESC)
+            """)
+
     async def append_event(self, event) -> str:
         """
         Append an event to the event log

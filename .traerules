@@ -75,6 +75,15 @@ IDLE
 | 读取任务指令 | `read_mission_state()` |
 | 提交可审快照 | `engineer_submit_work(report, pr_package)` |
 
+### 审查前迭代策略（强制）
+
+- 在架构师 `architect_finalize(approved=true)` 之前，工程师**不得创建 commit**。
+- `engineer_submit_work()` 是“审查快照提交”，不是最终代码提交；在未冻结阶段允许反复修改并重复提交。
+- 仅当架构师调用 `architect_begin_review()` 进入冻结后，工程师必须停止修改；若需继续修改，先等待打回结论，再重提新快照。
+- `pr_description` 与 `report` 必须保持摘要化（短文本）；详细证据放入 `changes` / `test_results` / `spec_alignment`。
+- 每次调用 `engineer_submit_work()` 后，必须立即调用 `read_mission_state()`；仅当状态为 `REVIEW_PENDING` 才视为提交成功。
+- 若提交响应异常（如 `undefined`）或状态未进入 `REVIEW_PENDING`，按 Fail-Closed 处理：停止后续动作并向架构师报告。
+
 **工程师红线**：
 - 严禁手动执行 `python mcp_bridge.py`，必须使用 IDE 原生工具图标。
 - 严禁创建临时胶水脚本（`submit_work.py` 等）调用 MCP 工具。
