@@ -25,6 +25,7 @@ from trader.core.domain.models.events import (
     DomainEvent, EventType,
     create_order_created_event, create_order_filled_event, create_position_updated_event
 )
+from trader.core.domain.models.orderbook import OrderBook, OrderBookLevel, DepthCheckResult
 
 __all__ = [
     # Money
@@ -42,4 +43,7 @@ __all__ = [
     # Events
     "DomainEvent", "EventType",
     "create_order_created_event", "create_order_filled_event", "create_position_updated_event",
+
+    # OrderBook
+    "OrderBook", "OrderBookLevel", "DepthCheckResult",
 ]
