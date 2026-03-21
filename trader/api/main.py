@@ -18,6 +18,7 @@ from trader.api.routes import (
     events,
     killswitch,
     brokers,
+    reconciler,
 )
 
 # Create FastAPI application
@@ -40,6 +41,7 @@ app.include_router(portfolio.router)
 app.include_router(events.router)
 app.include_router(killswitch.router)
 app.include_router(brokers.router)
+app.include_router(reconciler.router)
 
 
 # Root endpoint
