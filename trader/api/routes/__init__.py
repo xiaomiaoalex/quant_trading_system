@@ -14,6 +14,7 @@ from trader.api.routes import (
     events,
     killswitch,
     brokers,
+    reconciler,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "events",
     "killswitch",
     "brokers",
+    "reconciler",
 ]
