@@ -72,10 +72,10 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：版本冲突拒绝、幂等写入、跨版本读取隔离
 
 **验收标准**：
-- [ ] 同一特征不同版本可共存
-- [ ] 写入幂等（重复写相同数据不报错，不重复插入）
-- [ ] 版本冲突（相同key不同value）抛出明确异常
-- [ ] CI postgres-integration阶段通过
+- [x] 同一特征不同版本可共存
+- [x] 写入幂等（重复写相同数据不报错，不重复插入）
+- [x] 版本冲突（相同key不同value）抛出明确异常
+- [x] CI postgres-integration阶段通过
 
 ---
 
@@ -94,11 +94,11 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：GHOST/PHANTOM/DIVERGED三种场景、宽限窗口边界、幂等触发
 
 **验收标准**：
-- [ ] 能检测出本地OPEN但交易所已FILLED的订单
-- [ ] 能检测出本地无记录但交易所存在的挂单
-- [ ] 宽限窗口内新订单不误报
-- [ ] 漂移事件发布到event bus，KillSwitch可订阅
-- [ ] P0回归测试不回归
+- [x] 能检测出本地OPEN但交易所已FILLED的订单
+- [x] 能检测出本地无记录但交易所存在的挂单
+- [x] 宽限窗口内新订单不误报
+- [x] 漂移事件发布到event bus，KillSwitch可订阅
+- [x] P0回归测试不回归
 
 ---
 
@@ -115,9 +115,9 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：正常深度通过、深度不足拒绝、滑点超限拒绝
 
 **验收标准**：
-- [ ] 深度不足时pre-trade check返回REJECT
-- [ ] 滑点估算误差在合理范围（单测用mock orderbook验证）
-- [ ] 不引入任何IO（Core Plane约束）
+- [x] 深度不足时pre-trade check返回REJECT
+- [x] 滑点估算误差在合理范围（单测用mock orderbook验证）
+- [x] 不引入任何IO（Core Plane约束）
 
 ---
 
@@ -134,9 +134,9 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：各时段边界、系数应用、RESTRICTED时段拒绝新开仓
 
 **验收标准**：
-- [ ] RESTRICTED时段pre-trade返回REJECT
-- [ ] OFF_PEAK时段仓位上限按系数缩减
-- [ ] 时段配置可热更新（通过Control Plane API）
+- [x] RESTRICTED时段pre-trade返回REJECT
+- [x] OFF_PEAK时段仓位上限按系数缩减
+- [x] 时段配置可热更新（通过Control Plane API）
 
 ---
 

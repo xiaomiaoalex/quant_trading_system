@@ -33,6 +33,24 @@ jobs:
           python -c "import trader.tests.test_binance_private_stream"
           python -c "import trader.tests.test_binance_degraded_cascade"
 
+  architecture-gate:
+    name: Architecture Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Core Plane IO Check
+        run: python scripts/check_core_no_io.py
+
+      - name: Commit Format Check (on push only)
+        if: github.event_name == 'push'
+        run: python scripts/check_commit_format.py "${{ github.event.head_commit.message }}"
+
   p0-gate:
     name: P0 Regression Tests
     runs-on: ubuntu-latest
