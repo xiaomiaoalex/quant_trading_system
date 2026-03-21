@@ -6,6 +6,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+# NOTE: For running tests, use:
+#   .venv\Scripts\python.exe -m pytest trader/tests/ -v
+# The .venv path contains spaces, so always quote paths when running manually.
 
 [tool.black]
 line-length = 100

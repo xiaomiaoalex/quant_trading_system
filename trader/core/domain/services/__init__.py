@@ -1,0 +1,28 @@
+# Domain Services - 领域服务包
+"""
+本包包含交易系统的核心领域服务。
+
+核心服务：
+- DepthChecker: 订单簿深度检查和滑点估算
+
+重要原则：
+1. Core Plane 禁止 IO
+2. 服务应该是纯计算逻辑
+3. 类型注解必须完整
+"""
+
+from trader.core.domain.services.depth_checker import (
+    DepthChecker,
+    DepthCheckerConfig,
+    DepthCheckPreTradePlugin,
+    MarketDataPort,
+    DepthCheckResult,
+)
+
+__all__ = [
+    "DepthChecker",
+    "DepthCheckerConfig",
+    "DepthCheckPreTradePlugin",
+    "MarketDataPort",
+    "DepthCheckResult",
+]
