@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from trader.core.domain.models.order import Order, OrderSide, OrderType
 from trader.core.domain.models.position import Position, BrokerPosition
+from trader.core.domain.models.orderbook import OrderBook
 
 
 # ==================== Broker Port ====================
@@ -220,6 +221,19 @@ class MarketDataPort(ABC):
     @abstractmethod
     async def get_ticker(self, symbol: str) -> MarketTicker:
         """获取实时行情"""
+        pass
+
+    @abstractmethod
+    async def get_orderbook(self, symbol: str) -> Optional[OrderBook]:
+        """
+        获取订单簿快照
+
+        Args:
+            symbol: 交易标的
+
+        Returns:
+            Optional[OrderBook]: 订单簿快照
+        """
         pass
 
 
