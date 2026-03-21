@@ -25,6 +25,12 @@ from enum import Enum, IntEnum
 from trader.core.application.ports import BrokerPort
 from trader.core.domain.models.signal import Signal
 from trader.core.domain.models.order import OrderSide
+from trader.core.domain.rules.time_window_policy import (
+    TimeWindowPolicy,
+    TimeWindowConfig,
+    TimeWindowContext,
+    TimeWindowPeriod,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +113,9 @@ class RiskConfig:
     trading_start_hour: int = 9                             # 交易开始时间（小时）
     trading_end_hour: int = 15                             # 交易结束时间（小时）
 
+    # 时间窗口风控配置
+    time_window_config: Optional[TimeWindowConfig] = None   # 时间窗口配置
+
 
 class PreTradeRiskPlugin(Protocol):
     """交易前风控插件接口"""
@@ -162,6 +171,10 @@ class RiskEngine:
         self._pre_trade_plugins: List[PreTradeRiskPlugin] = list(pre_trade_plugins or [])
         self._in_trade_plugins: List[InTradeRiskPlugin] = list(in_trade_plugins or [])
         self._post_trade_plugins: List[PostTradeRiskPlugin] = list(post_trade_plugins or [])
+
+        # 时间窗口策略
+        time_window_config = self._config.time_window_config or TimeWindowConfig.create_default()
+        self._time_window_policy: TimeWindowPolicy = TimeWindowPolicy(time_window_config)
 
         # 运行时状态
         self._daily_start_balance: Optional[Decimal] = None
@@ -228,10 +241,28 @@ class RiskEngine:
                 details={"order_count": len(self._today_orders)}
             ))
 
-        # 5. 资金检查（对于买入信号）
+        # 5. 时间窗口检查（提前到资金检查前）
+        tw_context = self._time_window_policy.evaluate_now()
+        
+        # RESTRICTED 时段拒绝新开仓
+        if signal.is_buy_signal() and not tw_context.allow_new_position:
+            return self._with_killswitch_hint(RiskCheckResult(
+                passed=False,
+                risk_level=RiskLevel.HIGH,
+                rejection_reason=RejectionReason.TRADING_HOURS,
+                message=f"当前时段 {tw_context.period.value} 禁止新开仓",
+                details={
+                    "time_window_period": tw_context.period.value,
+                    "position_coefficient": tw_context.position_coefficient,
+                }
+            ))
+
+        # 6. 资金检查（对于买入信号）
         if signal.is_buy_signal():
             account = await self._broker.get_account()
-            required_amount = signal.price * signal.quantity
+            # 根据时间窗口调整仓位
+            adjusted_quantity = signal.quantity * Decimal(str(tw_context.position_coefficient))
+            required_amount = signal.price * adjusted_quantity
 
             if account.available_cash < required_amount:
                 return self._with_killswitch_hint(RiskCheckResult(
@@ -259,7 +290,7 @@ class RiskEngine:
                     }
                 ))
 
-        # 6. 交易时段检查
+        # 7. 交易时段检查
         if not self._check_trading_hours():
             return self._with_killswitch_hint(RiskCheckResult(
                 passed=False,
@@ -517,11 +548,43 @@ class RiskEngine:
     def update_config(self, config: RiskConfig):
         """更新风控配置"""
         self._config = config
+        # 如果配置中包含时间窗口配置，则更新
+        if config.time_window_config is not None:
+            self._time_window_policy.update_config(config.time_window_config)
         logger.info("[RiskEngine] 风控配置已更新")
 
     def get_config(self) -> RiskConfig:
         """获取当前风控配置"""
         return self._config
+
+    def update_time_window_config(self, config: TimeWindowConfig) -> None:
+        """
+        热更新时间窗口配置
+        
+        Args:
+            config: 新的时间窗口配置
+        """
+        self._time_window_policy.update_config(config)
+        logger.info("[RiskEngine] 时间窗口配置已热更新")
+
+    def update_time_window_config_from_dict(self, data: Dict[str, Any]) -> None:
+        """
+        从字典热更新时间窗口配置
+        
+        Args:
+            data: 时间窗口配置字典
+        """
+        self._time_window_policy.update_config_from_dict(data)
+        logger.info("[RiskEngine] 时间窗口配置已从字典热更新")
+
+    def get_time_window_context(self) -> TimeWindowContext:
+        """
+        获取当前时间窗口上下文
+        
+        Returns:
+            TimeWindowContext: 当前时间窗口上下文
+        """
+        return self._time_window_policy.evaluate_now()
 
     def register_pre_trade_plugin(self, plugin: PreTradeRiskPlugin) -> None:
         """注册交易前风控插件"""
