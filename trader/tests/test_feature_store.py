@@ -15,6 +15,14 @@ class TestFeatureStore:
     def setup_method(self):
         self.storage = ControlPlaneInMemoryStorage()
         self.store = FeatureStore(storage=self.storage)
+        # Mock _ensure_postgres to always use in-memory storage
+        # This prevents PostgreSQL state pollution between tests
+        self._original_ensure_postgres = self.store._ensure_postgres
+        self.store._ensure_postgres = AsyncMock(return_value=False)
+
+    def teardown_method(self):
+        # Restore original method to prevent test pollution
+        self.store._ensure_postgres = self._original_ensure_postgres
 
     def test_make_key(self):
         key = self.store._make_key("BTCUSDT", "ema_20", "v1", 1700000000000)

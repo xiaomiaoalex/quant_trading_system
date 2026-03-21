@@ -102,6 +102,7 @@ class TestStreamFSMExtended:
     async def test_wait_until_stopped(self):
         """测试等待直到停止"""
         fsm = ExtendedStreamFSM()
+        await fsm.start()  # 先启动，才能正确停止
 
         async def stop_later():
             await asyncio.sleep(0.01)

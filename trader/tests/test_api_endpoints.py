@@ -93,18 +93,22 @@ class TestHealthEndpoint:
         assert "status" in storage
         assert "message" in storage
 
-    def test_dependency_check_postgresql_not_configured(self):
-        """Test dependency check when PostgreSQL is not configured"""
+    def test_dependency_check_postgresql_status(self):
+        """Test dependency check for PostgreSQL status"""
         response = self.client.get("/health/dependency")
         assert response.status_code == 200
         data = response.json()
         
         assert "postgresql" in data["checks"]
         pg_status = data["checks"]["postgresql"]["status"]
-        assert pg_status in ["not_configured", "degraded", "unhealthy"]
+        # PostgreSQL health check only returns: healthy, not_configured, unhealthy
+        # (degraded is not returned by _check_postgresql_health)
+        assert pg_status in ["healthy", "not_configured", "unhealthy"]
         
         overall_status = data["status"]
-        if pg_status in ["degraded", "unhealthy"]:
+        if pg_status == "healthy":
+            assert overall_status == "ok"
+        elif pg_status == "unhealthy":
             assert overall_status == "degraded"
 
     def test_readiness_check_storage_failure(self):
