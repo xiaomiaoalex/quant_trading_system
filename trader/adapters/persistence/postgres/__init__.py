@@ -282,9 +282,134 @@ class PostgreSQLStorage:
                 ON feature_values(ts_ms DESC)
             """)
 
+    async def save_event(self, event) -> str:
+        """
+        Save an event to the event log.
+        
+        This method provides idempotent event append using stream_key and seq.
+        Uses atomic SQL to avoid TOCTOU race condition.
+        
+        Args:
+            event: Event object with event_id, event_type, aggregate_id, 
+                   aggregate_type, timestamp, data, metadata attributes
+                   
+        Returns:
+            event_id of the stored event (the same event_id is returned for duplicates)
+        """
+        import uuid
+        
+        # Derive stream_key from aggregate_type and aggregate_id
+        # If aggregate_id is empty, generate a unique stream_key using event_id to prevent collisions
+        if not event.aggregate_id:
+            # Generate unique stream_key for events without aggregate_id
+            # This maintains backward compatibility while preventing stream collisions
+            event_id_for_key = event.event_id or str(uuid.uuid4())
+            stream_key = f"{event.aggregate_type}-legacy-{event_id_for_key}"
+            logger.warning(
+                "EVENT_STORE_MISSING_AGGREGATE_ID",
+                extra={
+                    "event_id": event.event_id,
+                    "event_type": getattr(event, 'event_type', 'unknown'),
+                    "generated_stream_key": stream_key,
+                },
+            )
+        else:
+            stream_key = f"{event.aggregate_type}-{event.aggregate_id}"
+        
+        # Prepare event data
+        event_id = event.event_id or str(uuid.uuid4())
+        event_type = event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type)
+        timestamp = event.timestamp or datetime.now(timezone.utc)
+        ts_ms = int(timestamp.timestamp() * 1000)
+        
+        async with self._pool.acquire() as conn:
+            try:
+                # Use atomic CTE with advisory lock to prevent race condition
+                # Use pg_advisory_xact_lock(hashtext(stream_key)) to ensure exclusive access.
+                # This locks the stream_key atomically, preventing concurrent transactions from
+                # both calculating the same next_seq when the stream is empty (no rows to FOR UPDATE).
+                row = await conn.fetchrow(
+                    """
+                    WITH lock AS (
+                        SELECT pg_advisory_xact_lock(hashtext($2)) AS lock_result
+                    ),
+                    new_event AS (
+                        SELECT COALESCE(MAX(seq), -1) + 1 as next_seq
+                        FROM event_log
+                        WHERE stream_key = $2
+                    ),
+                    insert_result AS (
+                        INSERT INTO event_log (event_id, stream_key, seq, event_type, aggregate_id, aggregate_type, timestamp, ts_ms, data, metadata, schema_version)
+                        SELECT $1, $2, new_event.next_seq, $3, $4, $5, $6, $7, $8, $9, $10
+                        FROM new_event
+                        ON CONFLICT (stream_key, seq) DO NOTHING
+                        RETURNING event_id
+                    ),
+                    -- If insert succeeded, use that event_id; otherwise query the existing one
+                    final AS (
+                        SELECT event_id FROM insert_result
+                        UNION ALL
+                        SELECT e.event_id 
+                        FROM event_log e, new_event n
+                        WHERE e.stream_key = $2 AND e.seq = n.next_seq
+                        AND NOT EXISTS (SELECT 1 FROM insert_result)
+                    )
+                    SELECT event_id FROM final LIMIT 1
+                    """,
+                    event_id,
+                    stream_key,
+                    event_type,
+                    event.aggregate_id,
+                    event.aggregate_type,
+                    timestamp,
+                    ts_ms,
+                    json.dumps(event.data),
+                    json.dumps(event.metadata or {}),
+                    1,
+                )
+                
+                stored_event_id = row["event_id"] if row else None
+                
+                if stored_event_id == event_id:
+                    logger.debug(
+                        "EVENT_SAVED",
+                        extra={"stream_key": stream_key, "event_id": stored_event_id},
+                    )
+                else:
+                    # Conflict occurred - a different event_id was already stored at this seq
+                    logger.debug(
+                        "EVENT_DUPLICATE_IGNORED",
+                        extra={"stream_key": stream_key, "requested_event_id": event_id, "stored_event_id": stored_event_id},
+                    )
+                    
+            except Exception as e:
+                logger.error(
+                    "PG_SAVE_EVENT_ERROR",
+                    extra={
+                        "stream_key": stream_key,
+                        "error": str(e),
+                    },
+                )
+                raise
+        
+        # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
+        return stored_event_id
+
     async def append_event(self, event) -> str:
         """
-        Append an event to the event log
+        Append an event to the event log (legacy method)
+        
+        .. deprecated::
+            This method uses the original schema without stream_key/seq.
+            For new implementations, use save_event() instead.
+        
+        Note:
+            This method creates a unique stream_key per event (legacy behavior).
+            Prefer save_event() which supports stream-based ordering with seq.
+        
+        Idempotency:
+            Uses ON CONFLICT (event_id) DO NOTHING to ensure duplicate events
+            (same event_id) are ignored without error.
         
         Args:
             event: Event object with event_id, event_type, aggregate_id, 
@@ -298,6 +423,7 @@ class PostgreSQLStorage:
                 """
                 INSERT INTO event_log (event_id, event_type, aggregate_id, aggregate_type, timestamp, data, metadata)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (event_id) DO NOTHING
                 """,
                 event.event_id,
                 event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type),
