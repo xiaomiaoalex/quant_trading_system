@@ -11,3 +11,4 @@ from trader.services.portfolio import PortfolioService
 from trader.services.event import EventService
 from trader.services.killswitch import KillSwitchService
 from trader.services.broker import BrokerService
+from trader.services.monitor_service import MonitorService

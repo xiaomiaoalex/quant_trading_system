@@ -1,6 +1,6 @@
 """
 API Routes - All route modules
-=============================
+==============================
 Aggregates all API route modules.
 """
 from trader.api.routes import (
@@ -15,6 +15,7 @@ from trader.api.routes import (
     killswitch,
     brokers,
     reconciler,
+    monitor,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "killswitch",
     "brokers",
     "reconciler",
+    "monitor",
 ]

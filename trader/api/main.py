@@ -1,6 +1,6 @@
 """
 FastAPI Application - Systematic Trader Control Plane API
-========================================================
+=======================================================
 Main application entry point for the Systematic Trader Control Plane API.
 
 Based on OpenAPI 3.0.3 specification v0.2.0
@@ -19,6 +19,7 @@ from trader.api.routes import (
     killswitch,
     brokers,
     reconciler,
+    monitor,
 )
 
 # Create FastAPI application
@@ -42,6 +43,7 @@ app.include_router(events.router)
 app.include_router(killswitch.router)
 app.include_router(brokers.router)
 app.include_router(reconciler.router)
+app.include_router(monitor.router)
 
 
 # Root endpoint

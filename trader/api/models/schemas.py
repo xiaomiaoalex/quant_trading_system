@@ -311,3 +311,69 @@ class HealthCheckResponse(BaseModel):
     time: str = Field(default_factory=_utc_time)
     checks: Dict[str, ComponentHealth] = Field(default_factory=dict)
     dependencies: Optional[DependencyStatus] = None
+
+
+# ==================== Monitor Models ====================
+
+AlertSeverity = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+
+class AlertRule(BaseModel):
+    """告警规则"""
+    rule_name: str
+    metric_key: str
+    threshold: float
+    comparison: Literal["gt", "lt", "gte", "lte", "eq"] = Field(..., description="Comparison operator")
+    severity: AlertSeverity
+    cooldown_seconds: int = Field(default=60, description="告警冷却时间（秒）")
+
+
+class Alert(BaseModel):
+    """告警实例"""
+    alert_id: str
+    rule_name: str
+    severity: AlertSeverity
+    message: str
+    metric_key: str
+    metric_value: float
+    threshold: float
+    triggered_at: str
+
+
+class AdapterHealthStatus(BaseModel):
+    """适配器健康状态"""
+    adapter_name: str
+    status: str = Field(..., description="HEALTHY, DEGRADED, DOWN")
+    last_heartbeat_ts_ms: Optional[int] = None
+    error_count: int = 0
+    message: Optional[str] = None
+
+
+class MonitorSnapshot(BaseModel):
+    """系统监控快照"""
+    timestamp: str = Field(default_factory=_utc_time)
+    
+    # 持仓信息
+    total_positions: int = 0
+    total_exposure: str = "0"
+    
+    # 订单信息
+    open_orders_count: int = 0
+    pending_orders_count: int = 0
+    
+    # PnL信息
+    daily_pnl: str = "0"
+    daily_pnl_pct: str = "0"
+    realized_pnl: str = "0"
+    unrealized_pnl: str = "0"
+    
+    # KillSwitch状态
+    killswitch_level: int = 0
+    killswitch_scope: str = "GLOBAL"
+    
+    # 适配器状态
+    adapters: Dict[str, AdapterHealthStatus] = Field(default_factory=dict)
+    
+    # 告警信息
+    active_alerts: List[Alert] = Field(default_factory=list)
+    alert_count_by_severity: Dict[str, int] = Field(default_factory=dict)

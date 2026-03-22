@@ -208,6 +208,56 @@ pytest trader/tests/test_depth_checker.py::TestDepthCheckerBasic -v
 pytest -s trader/tests/test_depth_checker.py
 ```
 
+### 5.4 Python命令行执行在PowerShell中输出为空的问题
+
+**问题描述**：
+使用 `python -c "..."` 在PowerShell中执行多行Python代码或复杂字符串时，输出经常为空，且无任何错误信息。
+
+**问题原因**：
+1. PowerShell字符串转义问题 - 反斜杠`\`、引号`"`等被PowerShell解释
+2. 多行字符串在 `-c` 参数中处理复杂
+3. stdout缓冲问题
+4. Windows和Unix路径/换行符差异
+
+**解决方案**：
+**优先使用写文件再执行的方式**：
+```powershell
+# 错误方式 - 输出为空
+python -c "import asyncio
+async def test():
+    print('hello')
+asyncio.run(test())"
+
+# 正确方式 - 可靠执行
+# 1. 写测试脚本到文件
+# 2. 执行脚本
+python test_debug.py
+```
+
+**经验总结**：
+1. **不要用 `-c` 执行多行Python代码** - 在PowerShell中容易出现转义和缓冲问题
+2. **使用写文件再执行的方式** - 更可靠，可调试
+3. **对于async代码，确保正确import asyncio并调用**
+4. **输出为空可能是stdout缓冲问题** - 添加 `sys.stdout.flush()`
+5. **调试脚本命名规范** - 使用 `test_debug.py` 或类似名称，完成后删除
+
+**调试流程推荐**：
+```powershell
+# 1. 写调试脚本
+Write-Content -Path "test_debug.py" -Value @"
+import asyncio
+async def test():
+    print('hello')
+asyncio.run(test())
+"@
+
+# 2. 执行
+python test_debug.py
+
+# 3. 检查结果后删除
+Remove-Item test_debug.py
+```
+
 ---
 
 ## 六、变更记录
@@ -215,6 +265,7 @@ pytest -s trader/tests/test_depth_checker.py
 | 日期 | 作者 | 描述 |
 |------|------|------|
 | 2026-03-21 | Kilo Code | 初始版本，记录 Reconciler 和 DepthChecker 开发经验 |
+| 2026-03-22 | Kilo Code | 添加PowerShell中Python命令行执行输出为空问题的经验总结 |
 
 ---
 
