@@ -25,6 +25,23 @@ python -m pytest -q trader/tests/test_binance_connector.py --tb=short
 python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed" --tb=short
 ```
 
+## Documentation Updates (必须流程)
+
+完成开发任务后，必须更新以下文档：
+
+### PROJECT_STATUS.md (滚动式追踪)
+- **开发前状态**：记录本次开发开始前的状态
+- **本次开发动作**：记录本次完成的工作
+- **下一步计划**：根据 PLAN.md 记录下一步开发动作
+- 更新 `## 最后更新时间` 时间戳
+- 将完成的 issue 从"待确认任务"移到"已验证任务"
+- 更新 CI 门禁状态
+
+### EXPERIENCE_SUMMARY.md (经验总结)
+- 记录本次开发中遇到的问题和解决方案
+- 记录可复用的设计模式或代码片段
+- 记录踩坑记录和教训
+
 ### P0 regression suite (must pass before any PR)
 ```bash
 python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short

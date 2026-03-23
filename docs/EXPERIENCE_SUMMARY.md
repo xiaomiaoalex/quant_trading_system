@@ -260,12 +260,40 @@ Remove-Item test_debug.py
 
 ---
 
-## 六、变更记录
+## 六、OnChain 适配器开发经验
+
+### 6.1 STUB 实现标注规范
+
+**经验**：
+- STUB 实现必须在函数 docstring 首行标注 `[STUB IMPLEMENTATION]`
+- 在代码中添加 TODO 注释说明需要接入的真实数据源
+- 使用 `logger.debug` 而非 `logger.warning` 记录 STUB 状态，避免生产环境告警噪音
+- 考虑是否应使用特性开关控制 STUB 代码的加载
+
+### 6.2 外部 API 降级保护
+
+**经验**：
+- 所有外部 API 调用必须使用 try-except 包裹
+- 限流 (429) 应使用指数退避重试
+- 重试次数应有上限，超过后应优雅降级
+- 降级时应记录有意义的日志，便于排查
+
+### 6.3 CoinGecko API 使用注意
+
+**经验**：
+- 免费 API 有严格限流，测试环境中容易触发
+- `total_supply` 字段可能返回 None，需使用 `or 0` 处理
+- CoinGecko coin ID 与交易所 symbol 映射需要额外维护映射表
+
+---
+
+## 七、变更记录
 
 | 日期 | 作者 | 描述 |
 |------|------|------|
 | 2026-03-21 | Kilo Code | 初始版本，记录 Reconciler 和 DepthChecker 开发经验 |
 | 2026-03-22 | Kilo Code | 添加PowerShell中Python命令行执行输出为空问题的经验总结 |
+| 2026-03-23 | Kilo Code | 添加OnChain适配器开发经验：STUB实现标注、外部API限流处理、降级保护设计 |
 
 ---
 

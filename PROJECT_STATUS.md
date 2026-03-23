@@ -4,12 +4,33 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-23 11:49:39 (北京时间)
+2026-03-23 15:44:57 (北京时间)
 
 ## 分支状态
-- **当前分支**：`feature/20260323-new-task`
+- **当前分支**：`main`
 - **基于**：`main`
 - **工作树**：干净
+- **最新提交**：`bda5ef2` - feat(trader): add OnChainMarketDataAdapter
+
+## 本次开发记录
+
+### 开发前状态
+- OnChain 适配器模块不存在
+- Reconciler 集成测试缺失 (Issue #2)
+- API 测试覆盖不足，/v1/reconciler/* 端点无 HTTP 测试 (Issue #3)
+
+### 本次开发动作 (2026-03-23)
+1. 新增 `trader/adapters/onchain/` 模块
+   - `OnChainMarketDataAdapter`: 链上/宏观市场数据适配器
+   - 支持 Binance ticker、CoinGecko 稳定币供应数据采集
+   - 写入 Feature Store，包含降级保护
+2. 新增 `trader/tests/test_onchain_market_data_stream.py`: 565 行单元测试
+3. 新增 `trader/tests/test_reconciler_service_integration.py`: 493 行集成测试
+4. 新增 `trader/tests/test_api_reconciler.py`: 396 行 API 端点测试
+
+### 下一步计划 (依据 PLAN.md)
+- Phase 2.2: 部署与监控 API 完善
+- Phase 2.3: 风控阈值动态调整
 
 ## Phase 1: M1 安全闭环
 
@@ -38,14 +59,19 @@
 | Task | 模块 | 状态 | 备注 |
 |------|------|------|------|
 | 2.1 | Funding/OI适配器 | ✅ 已完成 | 已实现 funding_oi_stream.py，21个测试通过 |
+| 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
+| 2.3 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
+| 2.4 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
 
 ## 已知问题
 
 | 优先级 | 问题 | 状态 | 备注 |
 |--------|------|------|------|
 | 高 | Funding/OI适配器文件缺失 | ✅ 已解决 | Task 2.1 已完成 |
-| 中 | Reconciler集成测试缺失 | ⚠️ 已知 | 无ReconcilerService与存储层集成测试 |
-| 中 | API测试覆盖不足 | ⚠️ 已知 | /v1/reconciler/* 端点无HTTP测试 |
+| 中 | Reconciler集成测试缺失 | ✅ 已解决 | Task 2.3 已完成 |
+| 中 | API测试覆盖不足 | ✅ 已解决 | Task 2.4 已完成 |
+| 低 | OnChain爆仓数据为STUB | ⚠️ 已知 | Binance无公开爆仓API，需接入Coinglass等付费数据源 |
+| 低 | 交易所流量为STUB | ⚠️ 已知 | Glassnode需API Key，待接入 |
 
 ## CI 门禁状态
 
