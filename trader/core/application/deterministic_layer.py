@@ -16,53 +16,127 @@ Order Version Deterministic Layer (CAS + ShadowState)
 - 订单状态不回滚（单调状态机）
 - REST 终态可 override（用于纠偏）但不可造成回滚
 - 输出事件带齐 meta（source/ts/seq/gap flags）
+
+重要约束：
+- trader.core.domain.models.order.OrderStatus 是全项目唯一订单领域状态 source of truth
+- deterministic layer 内部如需表达执行过程，使用 ExecutionPhase
+- 所有对外输出、持久化、监控、对账均使用统一 OrderStatus
 """
+
 import asyncio
-import time
-import fnvhash
 import hashlib
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, List, Dict, Any, Set, Union
-import threading
+from typing import Any, Dict, List, Optional, Union
+
+import fnvhash
+
+from trader.core.domain.models.order import OrderStatus
+
+
+class ExecutionPhase(str, Enum):
+    """
+    deterministic layer 内部执行阶段。
+
+    说明：
+    - 这是执行层内部状态，不等同于全项目统一订单状态
+    - 只用于描述执行流程推进，例如已发送、已确认、撤单请求中
+    - 对外暴露、持久化、监控、对账时，必须转换为 order.py 中的 OrderStatus
+    """
+
+    CREATED = "CREATED"
+    SENT_TO_BROKER = "SENT_TO_BROKER"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCEL_CONFIRMED = "CANCEL_CONFIRMED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+def phase_to_order_status(phase: ExecutionPhase) -> OrderStatus:
+    """
+    将 deterministic layer 的内部执行阶段映射为全项目统一订单状态。
+    """
+    mapping = {
+        ExecutionPhase.CREATED: OrderStatus.PENDING,
+        ExecutionPhase.SENT_TO_BROKER: OrderStatus.SUBMITTED,
+        ExecutionPhase.ACKNOWLEDGED: OrderStatus.SUBMITTED,
+        ExecutionPhase.PARTIALLY_FILLED: OrderStatus.PARTIALLY_FILLED,
+        ExecutionPhase.FILLED: OrderStatus.FILLED,
+        ExecutionPhase.CANCEL_REQUESTED: OrderStatus.CANCEL_PENDING,
+        ExecutionPhase.CANCEL_CONFIRMED: OrderStatus.CANCELLED,
+        ExecutionPhase.REJECTED: OrderStatus.REJECTED,
+        ExecutionPhase.EXPIRED: OrderStatus.CANCELLED,
+    }
+    return mapping[phase]
+
+
+def normalize_external_status(status: Union[str, OrderStatus]) -> OrderStatus:
+    """
+    将交易所/外部状态统一映射为领域层唯一 OrderStatus。
+
+    兼容：
+    - Binance/交易所原始状态：NEW / CANCELED / PENDING_CANCEL / EXPIRED
+    - deterministic 旧内部状态：CANCEL_REQUESTED
+    - 领域状态本身：PENDING / SUBMITTED / PARTIALLY_FILLED / FILLED / CANCELLED / REJECTED / CANCEL_PENDING
+    """
+    if isinstance(status, OrderStatus):
+        return status
+
+    raw = str(status).strip().upper()
+
+    mapping = {
+        "PENDING": OrderStatus.PENDING,
+        "NEW": OrderStatus.SUBMITTED,
+        "SUBMITTED": OrderStatus.SUBMITTED,
+        "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
+        "FILLED": OrderStatus.FILLED,
+        "CANCELED": OrderStatus.CANCELLED,
+        "CANCELLED": OrderStatus.CANCELLED,
+        "PENDING_CANCEL": OrderStatus.CANCEL_PENDING,
+        "CANCEL_PENDING": OrderStatus.CANCEL_PENDING,
+        "CANCEL_REQUESTED": OrderStatus.CANCEL_PENDING,
+        "REJECTED": OrderStatus.REJECTED,
+        "EXPIRED": OrderStatus.CANCELLED,
+    }
+
+    if raw not in mapping:
+        raise ValueError(f"Unsupported external order status: {status}")
+
+    return mapping[raw]
 
 
 # ==================== 状态 Rank 定义 ====================
 
-class OrderStatus(str, Enum):
-    """订单状态枚举"""
-    PENDING = "PENDING"
-    NEW = "NEW"
-    SUBMITTED = "SUBMITTED"
-    PARTIALLY_FILLED = "PARTIALLY_FILLED"
-    CANCEL_REQUESTED = "CANCEL_REQUESTED"
-    CANCELLED = "CANCELLED"
-    REJECTED = "REJECTED"
-    FILLED = "FILLED"
-    EXPIRED = "EXPIRED"
-
-
 # 状态 Rank 映射：状态只能从低 Rank 向高 Rank 演进
+# 统一使用领域状态字符串
 STATUS_RANK: Dict[str, int] = {
-    "PENDING": 0,
-    "NEW": 10,
-    "SUBMITTED": 20,
-    "PARTIALLY_FILLED": 30,
-    "CANCEL_REQUESTED": 40,
-    "CANCELLED": 50,
-    "REJECTED": 60,
-    "FILLED": 70,
-    "EXPIRED": 80,
+    OrderStatus.PENDING.value: 0,
+    OrderStatus.SUBMITTED.value: 20,
+    OrderStatus.PARTIALLY_FILLED.value: 30,
+    OrderStatus.CANCEL_PENDING.value: 40,
+    OrderStatus.CANCELLED.value: 50,
+    OrderStatus.REJECTED.value: 60,
+    OrderStatus.FILLED.value: 70,
 }
 
-# TERMINAL_MIN_RANK: CANCELLED/REJECTED/FILLED/EXPIRED 都是终态
-TERMINAL_MIN_RANK = STATUS_RANK["CANCELLED"]
+# TERMINAL_MIN_RANK: CANCELLED/REJECTED/FILLED 都是终态
+TERMINAL_MIN_RANK = STATUS_RANK[OrderStatus.CANCELLED.value]
 
 # 允许的 REST 终态 override 偏移量（毫秒）
 ALLOWED_SKEW_MS = 5000  # 5秒
 
-TERMINAL_STATUSES = {"CANCELLED", "REJECTED", "FILLED", "EXPIRED"}
+TERMINAL_STATUSES = {
+    OrderStatus.CANCELLED.value,
+    OrderStatus.REJECTED.value,
+    OrderStatus.FILLED.value,
+}
 
 
 # ==================== TTL Set 实现 ====================
@@ -91,7 +165,6 @@ class TTLSet:
             if expiry is None:
                 return False
             if time.time() >= expiry:
-                # 已过期，清理
                 del self._data[key]
                 return False
             return True
@@ -124,6 +197,7 @@ class OrderVersionVector:
     last_source: 最后一次更新的来源 (WS/REST/RECONCILE)
     seen_exec_keys: 已见过的成交键集合（带 TTL）
     """
+
     last_status_rank: int = 0
     last_exchange_ts_ms: int = 0
     last_local_ts_ms: int = 0
@@ -135,10 +209,11 @@ class OrderVersionVector:
 class ShadowOrder:
     """
     影子订单：缓存当前订单状态。
+    status 使用统一领域状态字符串。
     """
     cl_ord_id: str
     broker_order_id: Optional[str] = None
-    status: str = "PENDING"
+    status: str = OrderStatus.PENDING.value
     filled_qty: Decimal = field(default_factory=lambda: Decimal("0"))
     avg_price: Optional[Decimal] = None
     last_exchange_ts_ms: int = 0
@@ -164,21 +239,16 @@ class ShadowState:
         return order
 
     def get_by_cl_ord_id(self, cl_ord_id: str) -> Optional[ShadowOrder]:
-        """通过 client_order_id 获取订单"""
         return self.orders_by_cl.get(cl_ord_id)
 
     def get_by_broker_order_id(self, broker_order_id: str) -> Optional[ShadowOrder]:
-        """通过 broker_order_id 获取订单"""
         cl_ord_id = self.orders_by_broker_id.get(broker_order_id)
         if cl_ord_id:
             return self.orders_by_cl.get(cl_ord_id)
         return None
 
 
-# ==================== PendingBuffer（新增）====================
-
-from collections import deque
-
+# ==================== PendingBuffer ====================
 
 @dataclass
 class PendingItem:
@@ -190,7 +260,7 @@ class PendingItem:
 
 class PendingBuffer:
     """
-    PendingBuffer：缓存"无法 resolve cl_ord_id"的事件。
+    PendingBuffer：缓存无法 resolve cl_ord_id 的事件。
     - key: broker_order_id
     - value: deque[PendingItem]
     """
@@ -199,11 +269,10 @@ class PendingBuffer:
         self.ttl_s = ttl_s
         self.max_keys = max_keys
         self.max_items_per_key = max_items_per_key
-        self._buf: dict[str, deque[PendingItem]] = {}
+        self._buf: Dict[str, deque[PendingItem]] = {}
         self._order: deque[str] = deque()
 
     def add(self, broker_order_id: str, item: PendingItem) -> None:
-        """添加事件到 buffer"""
         now = time.time()
         self.cleanup(now)
 
@@ -219,8 +288,7 @@ class PendingBuffer:
             dq.popleft()
         dq.append(item)
 
-    def pop_all(self, broker_order_id: str) -> list[PendingItem]:
-        """获取并移除所有与 broker_order_id 相关的项"""
+    def pop_all(self, broker_order_id: str) -> List[PendingItem]:
         dq = self._buf.pop(broker_order_id, None)
         if dq is None:
             return []
@@ -230,8 +298,7 @@ class PendingBuffer:
             pass
         return list(dq)
 
-    def cleanup(self, now: float | None = None) -> None:
-        """清理过期项"""
+    def cleanup(self, now: Optional[float] = None) -> None:
         now = now or time.time()
         expired_keys = []
         for k, dq in self._buf.items():
@@ -245,11 +312,9 @@ class PendingBuffer:
                 pass
 
     def size(self) -> int:
-        """返回 buffer 大小"""
         return len(self._buf)
 
     def clear(self) -> None:
-        """清空 buffer"""
         self._buf.clear()
         self._order.clear()
 
@@ -260,10 +325,11 @@ class PendingBuffer:
 class RawOrderUpdate:
     """
     原始订单更新：来自 WS/REST 的输入。
+    status 允许传交易所原始状态或领域状态，进入 CAS 前会统一归一化。
     """
     cl_ord_id: Optional[str] = None
     broker_order_id: Optional[str] = None
-    status: str = "PENDING"  # 映射到标准状态
+    status: str = OrderStatus.PENDING.value
     filled_qty: Optional[Decimal] = None
     avg_price: Optional[Decimal] = None
     exchange_event_ts_ms: Optional[int] = None
@@ -295,6 +361,7 @@ class RawFillUpdate:
 class OrderEvent:
     """
     确定的订单事件：输出到 Core 的 canonical event stream。
+    status 使用统一领域状态字符串。
     """
     cl_ord_id: str
     broker_order_id: Optional[str]
@@ -306,8 +373,8 @@ class OrderEvent:
     source: str
     update_id: Optional[int] = None
     seq: Optional[int] = None
-    ts_inferred: bool = False  # exchange_ts 是否推断的
-    is_reconciliation: bool = False  # 是否来自对账
+    ts_inferred: bool = False
+    is_reconciliation: bool = False
 
 
 @dataclass
@@ -337,7 +404,6 @@ def compute_exec_key(fill: "RawFillUpdate") -> str:
     if fill.exec_id:
         return f"{cl}:{fill.exec_id}"
 
-    # exec_id 缺失：用稳定哈希（避免 local_receive_ts 变化导致无法去重）
     exch_ts = fill.exchange_event_ts_ms or 0
     payload = f"{cl}|{fill.broker_order_id or ''}|{fill.fill_qty}|{fill.fill_price}|{exch_ts}|{fill.source}"
     h = hashlib.sha1(payload.encode("utf-8")).hexdigest()
@@ -392,7 +458,6 @@ def cas_apply_fill(
     else:
         order.avg_price = fill.fill_price
 
-    # version vector: do not infer exchange ts into vv.last_exchange_ts_ms
     if fill.exchange_event_ts_ms is not None:
         vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, fill.exchange_event_ts_ms)
     vv.last_local_ts_ms = fill.local_receive_ts_ms
@@ -432,7 +497,9 @@ def cas_apply_order(
     5. exchange_ts 必须单调递增
     6. filled_qty 数值必须单调递增
     """
-    new_rank = STATUS_RANK.get(update.status, 0)
+    normalized_status = normalize_external_status(update.status).value
+
+    new_rank = STATUS_RANK.get(normalized_status, 0)
     old_rank = vv.last_status_rank
 
     exch_ts = update.exchange_event_ts_ms
@@ -442,9 +509,8 @@ def cas_apply_order(
     if order is None:
         order = shadow.add_order(cl_ord_id, update.broker_order_id)
 
-    # ---------- Finality override: ONLY for terminal statuses ----------
     if update.finality_override and update.source in ("REST", "RECONCILE"):
-        if update.status not in TERMINAL_STATUSES:
+        if normalized_status not in TERMINAL_STATUSES:
             return []
         if new_rank < old_rank:
             return []
@@ -452,13 +518,11 @@ def cas_apply_order(
     else:
         accept_override = False
 
-    # ---------- Rank rollback protection ----------
     if old_rank >= TERMINAL_MIN_RANK and new_rank < old_rank:
         return []
     if new_rank < old_rank:
         return []
 
-    # ---------- Same-rank handling ----------
     if new_rank == old_rank:
         if old_rank >= TERMINAL_MIN_RANK:
             return []
@@ -472,16 +536,13 @@ def cas_apply_order(
         if has_exch_ts and vv.last_exchange_ts_ms and exch_ts <= vv.last_exchange_ts_ms:
             return []
 
-    # ---------- Higher-rank stale REST protection ----------
     if (new_rank > old_rank) and update.source == "REST" and (not accept_override):
         if has_exch_ts and vv.last_exchange_ts_ms and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms:
             return []
 
-    # ---------- Numeric monotonicity protection ----------
     if update.filled_qty is not None and update.filled_qty < order.filled_qty:
         return []
 
-    # ---------- Commit CAS ----------
     vv.last_status_rank = max(old_rank, new_rank)
 
     if has_exch_ts:
@@ -489,7 +550,7 @@ def cas_apply_order(
     vv.last_local_ts_ms = update.local_receive_ts_ms
     vv.last_source = update.source
 
-    order.status = update.status
+    order.status = normalized_status
     if update.filled_qty is not None:
         order.filled_qty = update.filled_qty
     if update.avg_price is not None:
@@ -542,8 +603,6 @@ class DeterministicApplier:
         self._eviction_counter = 0
 
     def _lock_for(self, cl_ord_id: str) -> asyncio.Lock:
-        """获取 cl_ord_id 对应的分片锁"""
-        # 使用 FNV-1a hash 分散锁
         idx = fnvhash.fnv1a_32(cl_ord_id.encode()) % self._partitions
         return self._locks[idx]
 
@@ -573,7 +632,9 @@ class DeterministicApplier:
             self._vv.pop(cl, None)
             self._order_last_touch.pop(cl, None)
         if len(self._shadow.orders_by_cl) > self._max_orders:
-            oldest = sorted(self._order_last_touch.items(), key=lambda x: x[1])[: (len(self._shadow.orders_by_cl) - self._max_orders)]
+            oldest = sorted(self._order_last_touch.items(), key=lambda x: x[1])[
+                : (len(self._shadow.orders_by_cl) - self._max_orders)
+            ]
             for cl, _ in oldest:
                 o = self._shadow.orders_by_cl.pop(cl, None)
                 if o and o.broker_order_id:
@@ -581,8 +642,8 @@ class DeterministicApplier:
                 self._vv.pop(cl, None)
                 self._order_last_touch.pop(cl, None)
 
-    async def _flush_pending_async(self, broker_order_id: str) -> List:
-        out: List = []
+    async def _flush_pending_async(self, broker_order_id: str) -> List[Any]:
+        out: List[Any] = []
         items = self._pending.pop_all(broker_order_id)
         for it in items:
             if it.kind == "order":
@@ -599,6 +660,7 @@ class DeterministicApplier:
             if self._on_resync_callback:
                 await self._on_resync_callback(f"unknown_order:{update.broker_order_id}")
             return []
+
         async with self._lock_for(cl_ord_id):
             vv = self._get_or_create_vv(cl_ord_id)
             events = cas_apply_order(vv, self._shadow, cl_ord_id, update)
@@ -619,6 +681,7 @@ class DeterministicApplier:
             if self._on_resync_callback:
                 await self._on_resync_callback(f"unknown_fill:{fill.broker_order_id}")
             return []
+
         async with self._lock_for(cl_ord_id):
             vv = self._get_or_create_vv(cl_ord_id)
             events = cas_apply_fill(vv, self._shadow, cl_ord_id, fill)
@@ -632,11 +695,9 @@ class DeterministicApplier:
             return events
 
     def get_shadow_order(self, cl_ord_id: str) -> Optional[ShadowOrder]:
-        """获取影子订单"""
         return self._shadow.get_by_cl_ord_id(cl_ord_id)
 
     def get_version_vector(self, cl_ord_id: str) -> Optional[OrderVersionVector]:
-        """获取版本向量"""
         return self._vv.get(cl_ord_id)
 
     def get_all_orders(self) -> Dict[str, ShadowOrder]:
