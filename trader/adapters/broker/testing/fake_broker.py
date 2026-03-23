@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from dataclasses import dataclass, field
 
-from trader.core.application.ports import BrokerPort, BrokerOrder, BrokerAccount
+from trader.core.application.ports import BrokerPort, BrokerOrder, BrokerAccount, BrokerNetworkError, BrokerBusinessError
 from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
 from trader.core.domain.models.position import BrokerPosition
 
@@ -36,6 +36,9 @@ class FakeBrokerConfig:
     partial_fill_rate: float = 0.3    # 部分成交率
     reject_rate: float = 0.0          # 拒绝率
     orderbook_imbalance: float = 0.1  # 订单簿不平衡度
+    # 确定性错误注入（优先级高于 error_rate/reject_rate）
+    force_error: bool = False         # 强制触发网络错误
+    force_reject: bool = False        # 强制触发业务拒绝
 
 
 class FakeBroker(BrokerPort):
@@ -67,6 +70,34 @@ class FakeBroker(BrokerPort):
             "orders_cancelled": 0,
             "orders_rejected": 0,
         }
+
+    # ==================== 确定性错误注入 ====================
+
+    def trigger_network_error(self) -> "FakeBroker":
+        """
+        触发一次网络错误（自动重置）
+
+        用于测试中确定性注入网络错误。
+        """
+        self._config.force_error = True
+        return self
+
+    def trigger_reject(self) -> "FakeBroker":
+        """
+        触发一次订单拒绝（自动重置）
+
+        用于测试中确定性注入业务拒绝。
+        """
+        self._config.force_reject = True
+        return self
+
+    def reset_forced_errors(self) -> "FakeBroker":
+        """
+        重置所有强制错误标志
+        """
+        self._config.force_error = False
+        self._config.force_reject = False
+        return self
 
     @property
     def broker_name(self) -> str:
@@ -130,15 +161,25 @@ class FakeBroker(BrokerPort):
                 created_at=existing["created_at"]
             )
 
-        # 模拟错误
+        # 模拟错误（确定性注入优先于随机率，自动重置）
+        if self._config.force_error:
+            self._config.force_error = False  # 自动重置
+            self._stats["orders_rejected"] += 1
+            raise BrokerNetworkError("模拟网络错误")
+
         if random.random() < self._config.error_rate:
             self._stats["orders_rejected"] += 1
-            raise Exception("模拟网络错误")
+            raise BrokerNetworkError("模拟网络错误")
 
-        # 模拟拒绝
+        # 模拟拒绝（确定性注入优先于随机率，自动重置）
+        if self._config.force_reject:
+            self._config.force_reject = False  # 自动重置
+            self._stats["orders_rejected"] += 1
+            raise BrokerBusinessError("模拟订单拒绝：资金不足")
+
         if random.random() < self._config.reject_rate:
             self._stats["orders_rejected"] += 1
-            raise Exception("模拟订单拒绝：资金不足")
+            raise BrokerBusinessError("模拟订单拒绝：资金不足")
 
         # 创建订单
         order_data = {

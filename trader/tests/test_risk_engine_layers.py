@@ -67,11 +67,17 @@ def _build_buy_signal() -> Signal:
 
 @pytest.mark.asyncio
 async def test_check_signal_compatibility_uses_pre_trade():
+    from trader.core.application.risk_engine import RiskConfig
+    from trader.core.domain.rules.time_window_policy import TimeWindowConfig
+    
     broker = FakeBroker()
     broker.set_balance(Decimal("10000"), Decimal("10000"))
     await broker.connect()
 
-    engine = RiskEngine(broker)
+    # 配置允许交易的时间窗口（清空时段限制）
+    config = RiskConfig()
+    config.time_window_config = TimeWindowConfig(slots=[], default_coefficient=1.0)
+    engine = RiskEngine(broker, config=config)
     signal = _build_buy_signal()
 
     legacy = await engine.check_signal(signal)
@@ -85,17 +91,24 @@ async def test_check_signal_compatibility_uses_pre_trade():
 
 @pytest.mark.asyncio
 async def test_pre_trade_plugin_block_and_fail_closed():
+    from trader.core.application.risk_engine import RiskConfig
+    from trader.core.domain.rules.time_window_policy import TimeWindowConfig
+    
     broker = FakeBroker()
     broker.set_balance(Decimal("10000"), Decimal("10000"))
     await broker.connect()
 
-    blocked_engine = RiskEngine(broker, pre_trade_plugins=[BlockPreTradePlugin()])
+    # 配置允许交易的时间窗口
+    config = RiskConfig()
+    config.time_window_config = TimeWindowConfig(slots=[], default_coefficient=1.0)
+
+    blocked_engine = RiskEngine(broker, config=config, pre_trade_plugins=[BlockPreTradePlugin()])
     blocked = await blocked_engine.check_pre_trade(_build_buy_signal())
     assert blocked.passed is False
     assert blocked.rejection_reason == RejectionReason.MAX_POSITIONS
     assert blocked.details["recommended_killswitch_level"] == 1
 
-    fail_closed_engine = RiskEngine(broker, pre_trade_plugins=[ExplodingPreTradePlugin()])
+    fail_closed_engine = RiskEngine(broker, config=config, pre_trade_plugins=[ExplodingPreTradePlugin()])
     fail_closed = await fail_closed_engine.check_pre_trade(_build_buy_signal())
     assert fail_closed.passed is False
     assert fail_closed.rejection_reason == RejectionReason.RISK_SYSTEM_ERROR

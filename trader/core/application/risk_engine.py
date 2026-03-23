@@ -200,6 +200,17 @@ class RiskEngine:
         # 获取当前风险指标
         metrics = await self._collect_metrics()
 
+        # Fail-Closed: 无法获取风险指标时，拒绝所有交易
+        if metrics is None:
+            logger.error("[RiskEngine] 无法获取风险指标，Fail-Closed 拒绝交易")
+            return self._with_killswitch_hint(RiskCheckResult(
+                passed=False,
+                risk_level=RiskLevel.CRITICAL,
+                rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+                message="无法获取风险指标，风控系统不可用，Fail-Closed 拒绝交易",
+                details={"reason": "metrics_collect_failed"}
+            ))
+
         # 1. 日亏损检查
         if metrics.daily_pnl_percent <= -self._config.max_daily_loss_percent:
             return self._with_killswitch_hint(RiskCheckResult(
@@ -344,24 +355,30 @@ class RiskEngine:
 
     # ==================== 辅助方法 ====================
 
-    async def _collect_metrics(self) -> RiskMetrics:
-        """收集当前风险指标"""
+    async def _collect_metrics(self) -> RiskMetrics | None:
+        """
+        收集当前风险指标
+        
+        Returns:
+            RiskMetrics: 成功获取时返回
+            None: 获取失败时返回（Fail-Closed）
+        """
         # 清理跨日数据
         await self._cleanup_daily_data()
 
-        # 获取账户信息
+        # 获取账户信息 - Fail-Closed: 失败时返回 None
         try:
             account = await self._broker.get_account()
         except Exception as e:
             logger.error(f"获取账户信息失败: {e}")
-            # 风控不可用时返回保守估计
-            return RiskMetrics()
+            return None  # Fail-Closed
 
-        # 获取持仓信息
+        # 获取持仓信息 - Fail-Closed: 失败时返回 None
         try:
             positions = await self._broker.get_positions()
-        except Exception:
-            positions = []
+        except Exception as e:
+            logger.error(f"获取持仓信息失败: {e}")
+            return None  # Fail-Closed
 
         # 初始化
         if self._daily_start_balance is None:

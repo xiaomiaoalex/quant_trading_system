@@ -22,7 +22,7 @@ from typing import List, Optional, Dict, Any, Callable
 from datetime import datetime
 from decimal import Decimal
 
-from trader.core.application.ports import BrokerPort, StoragePort, EventBusPort
+from trader.core.application.ports import BrokerPort, StoragePort, EventBusPort, BrokerNetworkError, BrokerBusinessError
 from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
 from trader.core.domain.models.events import (
     DomainEvent, EventType,
@@ -187,16 +187,58 @@ class OMS:
 
                 return order
 
+            except BrokerNetworkError as e:
+                # 网络错误，等待后重试
+                logger.warning(f"[OMS] 订单提交失败 网络错误 (尝试 {attempt + 1}/{self._max_retries}): {e}")
+                
+                # 检查是否已达到最大重试次数
+                if attempt + 1 >= self._max_retries:
+                    # 重试耗尽，最终失败
+                    logger.error(f"[OMS] 订单提交失败 网络错误重试耗尽: {e}")
+                    order.reject(f"网络错误重试耗尽: {e}")
+                    await self._storage.save_order(order)
+                    await self._publish_order_event(order, EventType.ORDER_REJECTED)
+                    self._stats["orders_rejected"] += 1
+                    await self._trigger_handler("on_order_rejected", order)
+                    return order
+                
+                await asyncio.sleep(2 ** attempt)
+                continue
+
+            except BrokerBusinessError as e:
+                # 业务错误，拒绝订单
+                logger.warning(f"[OMS] 订单提交失败 业务错误: {e}")
+                order.reject(str(e))
+                await self._storage.save_order(order)
+                await self._publish_order_event(order, EventType.ORDER_REJECTED)
+
+                self._stats["orders_rejected"] += 1
+
+                # 触发回调
+                await self._trigger_handler("on_order_rejected", order)
+
+                return order
+
             except Exception as e:
+                # 其他未知错误，尝试判断是否是网络错误
                 error_msg = str(e)
                 logger.warning(f"[OMS] 订单提交失败 (尝试 {attempt + 1}/{self._max_retries}): {error_msg}")
 
-                # 网络错误，等待后重试
-                if "NetworkError" in error_msg or "timeout" in error_msg.lower():
+                # 兼容旧式异常（基于字符串匹配）
+                if "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                    # 检查是否已达到最大重试次数
+                    if attempt + 1 >= self._max_retries:
+                        logger.error(f"[OMS] 订单提交失败 网络错误(兼容)重试耗尽: {error_msg}")
+                        order.reject(f"网络错误重试耗尽: {error_msg}")
+                        await self._storage.save_order(order)
+                        await self._publish_order_event(order, EventType.ORDER_REJECTED)
+                        self._stats["orders_rejected"] += 1
+                        await self._trigger_handler("on_order_rejected", order)
+                        return order
                     await asyncio.sleep(2 ** attempt)
                     continue
 
-                # 业务错误，拒绝订单
+                # 无法识别的错误，当作业务错误处理
                 order.reject(error_msg)
                 await self._storage.save_order(order)
                 await self._publish_order_event(order, EventType.ORDER_REJECTED)

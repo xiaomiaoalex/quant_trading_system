@@ -25,6 +25,23 @@ from trader.core.domain.models.position import Position, BrokerPosition
 from trader.core.domain.models.orderbook import OrderBook
 
 
+# ==================== Broker Exceptions ====================
+
+class BrokerError(Exception):
+    """Broker 异常基类"""
+    pass
+
+
+class BrokerNetworkError(BrokerError):
+    """网络错误，可重试"""
+    pass
+
+
+class BrokerBusinessError(BrokerError):
+    """业务错误，不应重试"""
+    pass
+
+
 # ==================== Broker Port ====================
 
 @dataclass

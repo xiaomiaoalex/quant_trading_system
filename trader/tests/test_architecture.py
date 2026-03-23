@@ -96,6 +96,10 @@ class TestOrder:
             quantity=Decimal("1.0")
         )
 
+        # 先提交订单才能成交
+        order.submit()
+        assert order.status == OrderStatus.SUBMITTED
+
         # 模拟部分成交
         order.fill(Decimal("0.5"), Decimal("50000"))
         assert order.status == OrderStatus.PARTIALLY_FILLED
@@ -106,6 +110,30 @@ class TestOrder:
         order.fill(Decimal("0.5"), Decimal("50100"))
         assert order.status == OrderStatus.FILLED
         assert order.filled_quantity == Decimal("1.0")
+
+    def test_order_fill_invalid_state(self):
+        """测试订单在非 SUBMITTED/PARTIALLY_FILLED 状态不允许成交"""
+        order = Order(
+            order_id="test_002",
+            client_order_id="cli_002",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            quantity=Decimal("1.0")
+        )
+
+        # PENDING 状态直接 fill 应抛出 ValueError
+        with pytest.raises(ValueError, match="订单状态不允许成交"):
+            order.fill(Decimal("0.5"), Decimal("50000"))
+
+        # 验证状态未变
+        assert order.status == OrderStatus.PENDING
+        assert order.filled_quantity == Decimal("0")
+
+        # 提交后再 fill 应成功
+        order.submit()
+        order.fill(Decimal("0.5"), Decimal("50000"))
+        assert order.status == OrderStatus.PARTIALLY_FILLED
 
     def test_order_state_transitions(self):
         """测试订单状态转换"""
@@ -321,13 +349,16 @@ class TestRiskEngine:
     @pytest.mark.asyncio
     async def test_risk_check_pass(self):
         """测试风控通过"""
+        from trader.core.domain.rules.time_window_policy import TimeWindowConfig
+        
         broker = FakeBroker()
         broker.set_balance(Decimal("10000"), Decimal("10000"))
         await broker.connect()
 
         config = RiskConfig(
             max_daily_loss_percent=Decimal("5.0"),
-            max_positions=3
+            max_positions=3,
+            time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0)
         )
         risk_engine = RiskEngine(broker, config)
 
@@ -347,11 +378,15 @@ class TestRiskEngine:
     @pytest.mark.asyncio
     async def test_insufficient_balance(self):
         """测试资金不足"""
+        from trader.core.domain.rules.time_window_policy import TimeWindowConfig
+        
         broker = FakeBroker()
         broker.set_balance(Decimal("100"), Decimal("100"))  # 资金不足
         await broker.connect()
 
-        config = RiskConfig()
+        config = RiskConfig(
+            time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0)
+        )
         risk_engine = RiskEngine(broker, config)
 
         # 创建信号（需要5000USDT，但只有100）

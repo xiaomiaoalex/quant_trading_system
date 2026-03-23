@@ -173,7 +173,14 @@ class Order:
         Args:
             fill_quantity: 本次成交数量
             fill_price: 本次成交价格
+
+        Raises:
+            ValueError: 如果订单状态不允许成交
         """
+        # 状态检查：只有 SUBMITTED 或 PARTIALLY_FILLED 状态可以成交
+        if self.status not in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED):
+            raise ValueError(f"订单状态不允许成交: 当前状态 {self.status}")
+
         # 更新成交数量
         self.filled_quantity += fill_quantity
 
