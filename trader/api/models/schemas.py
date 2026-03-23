@@ -90,6 +90,30 @@ class RiskEventIngestRequest(BaseModel):
     account_id: Optional[str] = None
 
 
+class TimeWindowSlotSchema(BaseModel):
+    """时间窗口时段槽"""
+    period: Literal["PRIME", "OFF_PEAK", "RESTRICTED"]
+    start_hour: int = Field(..., ge=0, le=23)
+    start_minute: int = Field(..., ge=0, le=59)
+    end_hour: int = Field(..., ge=0, le=23)
+    end_minute: int = Field(..., ge=0, le=59)
+    position_coefficient: float = Field(default=1.0, ge=0.0, le=1.0)
+    allow_new_position: bool = Field(default=True)
+
+
+class TimeWindowConfigSchema(BaseModel):
+    """时间窗口配置"""
+    slots: List[TimeWindowSlotSchema] = Field(default_factory=list)
+    default_coefficient: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class TimeWindowConfigUpdateRequest(BaseModel):
+    """时间窗口配置更新请求"""
+    slots: List[TimeWindowSlotSchema]
+    default_coefficient: float = Field(default=1.0, ge=0.0, le=1.0)
+    updated_by: str = Field(..., min_length=1)
+
+
 # ==================== Deployment Models ====================
 
 class Deployment(BaseModel):

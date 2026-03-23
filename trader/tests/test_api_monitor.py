@@ -21,8 +21,9 @@ class TestMonitorEndpoints:
 
     def teardown_method(self):
         """Cleanup after each test"""
-        # Reset global MonitorService singleton to clean up state
+        # Reset global MonitorService and PortfolioService singletons to clean up state
         monitor._monitor_service = None
+        monitor._portfolio_service = None
 
     def test_get_monitor_snapshot_default(self):
         """Test getting default monitor snapshot"""

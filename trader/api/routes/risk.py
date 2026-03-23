@@ -23,7 +23,7 @@ Risk limits management endpoints (versioned).
 import asyncio
 import logging
 from typing import Optional
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from trader.api.models.schemas import (
     VersionedConfig,
@@ -31,6 +31,15 @@ from trader.api.models.schemas import (
     RiskEventIngestRequest,
     ActionResult,
     KillSwitchSetRequest,
+    TimeWindowConfigSchema,
+    TimeWindowConfigUpdateRequest,
+    TimeWindowSlotSchema,
+)
+from trader.core.domain.rules.time_window_policy import (
+    TimeWindowPolicy,
+    TimeWindowConfig as TWConfig,
+    TimeWindowSlot,
+    TimeWindowPeriod,
 )
 from trader.services import RiskService, KillSwitchService
 
@@ -305,4 +314,150 @@ async def recover_pending_effects():
     return ActionResult(
         ok=True, 
         message=f"recovery completed: {recovered} recovered, {failed} failed"
+    )
+
+
+# ==================== Time Window Config Endpoints ====================
+
+# Singleton TimeWindowPolicy instance with async-safe initialization
+_time_window_policy: TimeWindowPolicy | None = None
+_time_window_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def _get_time_window_policy() -> TimeWindowPolicy:
+    """
+    获取或创建 TimeWindowPolicy 单例（async-safe）。
+    
+    这是模块级别的单例，用于存储和管理时间窗口配置。
+    使用双检锁保证线程安全。
+    """
+    global _time_window_policy
+    if _time_window_policy is None:
+        async with _time_window_lock:
+            # Double-check after acquiring lock
+            if _time_window_policy is None:
+                _time_window_policy = TimeWindowPolicy()
+    return _time_window_policy
+
+
+@router.get("/v1/risk/time-window/config", response_model=TimeWindowConfigSchema)
+async def get_time_window_config():
+    """
+    Get current time window configuration.
+    
+    Returns the current time window configuration including all slots
+    and the default coefficient.
+    """
+    policy = await _get_time_window_policy()
+    config = policy.config
+    
+    return TimeWindowConfigSchema(
+        slots=[
+            TimeWindowSlotSchema(
+                period=s.period.value,
+                start_hour=s.start_hour,
+                start_minute=s.start_minute,
+                end_hour=s.end_hour,
+                end_minute=s.end_minute,
+                position_coefficient=s.position_coefficient,
+                allow_new_position=s.allow_new_position,
+            )
+            for s in config.slots
+        ],
+        default_coefficient=config.default_coefficient,
+    )
+
+
+@router.get("/v1/risk/time-window/evaluate")
+async def evaluate_time_window(hour: int = Query(..., ge=0, le=23), minute: int = Query(..., ge=0, le=59)):
+    """
+    Evaluate time window policy for a specific time.
+    
+    This endpoint allows evaluating what the time window policy
+    would return for a given UTC time, useful for testing and
+    verification without modifying the current configuration.
+    
+    Returns the period, position_coefficient, and allow_new_position
+    for the given time.
+    """
+    policy = await _get_time_window_policy()
+    ctx = policy.evaluate(hour, minute)
+    
+    return {
+        "period": ctx.period.value,
+        "position_coefficient": ctx.position_coefficient,
+        "allow_new_position": ctx.allow_new_position,
+    }
+
+
+@router.put("/v1/risk/time-window/config", response_model=TimeWindowConfigSchema)
+async def update_time_window_config(request: TimeWindowConfigUpdateRequest):
+    """
+    Update time window configuration.
+    
+    This endpoint allows hot-updating the time window configuration
+    without restarting the service.
+    
+    The configuration change is validated and applied atomically.
+    On successful update, returns the new configuration.
+    """
+    policy = await _get_time_window_policy()
+    
+    # Convert schema to domain model
+    # Note: period validation is handled by Pydantic's Literal type at request parsing time,
+    # but we add defensive handling for ValueError from TimeWindowPeriod enum conversion
+    try:
+        slots = [
+            TimeWindowSlot(
+                period=TimeWindowPeriod(s.period),
+                start_hour=s.start_hour,
+                start_minute=s.start_minute,
+                end_hour=s.end_hour,
+                end_minute=s.end_minute,
+                position_coefficient=s.position_coefficient,
+                allow_new_position=s.allow_new_position,
+            )
+            for s in request.slots
+        ]
+    except ValueError as e:
+        logger.warning(f"Invalid time window period in config update: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid period value in slot: {e}"
+        )
+    
+    new_config = TWConfig(
+        slots=slots,
+        default_coefficient=request.default_coefficient,
+    )
+    
+    # Update the policy with async-safe locking
+    # Note: We use the same _time_window_lock to ensure atomic updates
+    async with _time_window_lock:
+        policy.update_config(new_config)
+    
+    logger.info(
+        "TimeWindowConfig updated",
+        extra={
+            "updated_by": request.updated_by,
+            "slot_count": len(request.slots),
+            "default_coefficient": request.default_coefficient,
+        }
+    )
+    
+    # Return the new configuration
+    return TimeWindowConfigSchema(
+        slots=[
+            TimeWindowSlotSchema(
+                period=s.period.value,
+                start_hour=s.start_hour,
+                start_minute=s.start_minute,
+                end_hour=s.end_hour,
+                end_minute=s.end_minute,
+                position_coefficient=s.position_coefficient,
+                allow_new_position=s.allow_new_position,
+            )
+            for s in policy.config.slots
+        ],
+        default_coefficient=policy.config.default_coefficient,
     )

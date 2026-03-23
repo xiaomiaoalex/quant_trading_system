@@ -562,6 +562,224 @@ class TestRiskEndpoints:
         assert pending_after == []
 
 
+class TestTimeWindowConfigEndpoints:
+    """Test time window config API endpoints"""
+
+    def setup_method(self):
+        """Setup for each test"""
+        self.client = TestClient(app)
+        from trader.api.routes import risk
+        # Reset the time window policy singleton to avoid state pollution
+        risk._time_window_policy = None
+
+    def teardown_method(self):
+        """Cleanup after each test"""
+        from trader.api.routes import risk
+        risk._time_window_policy = None
+
+    def test_get_time_window_config_default(self):
+        """Test getting default time window config"""
+        response = self.client.get("/v1/risk/time-window/config")
+        assert response.status_code == 200
+        data = response.json()
+        # Default config should have 3 slots
+        assert len(data["slots"]) == 3
+        assert data["default_coefficient"] == 1.0
+        # Verify slot periods
+        periods = [s["period"] for s in data["slots"]]
+        assert "RESTRICTED" in periods
+        assert "OFF_PEAK" in periods
+        assert "PRIME" in periods
+
+    def test_update_time_window_config(self):
+        """Test updating time window config"""
+        new_config = {
+            "slots": [
+                {
+                    "period": "PRIME",
+                    "start_hour": 9,
+                    "start_minute": 0,
+                    "end_hour": 17,
+                    "end_minute": 0,
+                    "position_coefficient": 1.0,
+                    "allow_new_position": True,
+                },
+                {
+                    "period": "OFF_PEAK",
+                    "start_hour": 17,
+                    "start_minute": 0,
+                    "end_hour": 22,
+                    "end_minute": 0,
+                    "position_coefficient": 0.5,
+                    "allow_new_position": True,
+                },
+            ],
+            "default_coefficient": 0.8,
+            "updated_by": "test_user",
+        }
+        response = self.client.put("/v1/risk/time-window/config", json=new_config)
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["slots"]) == 2
+        assert data["default_coefficient"] == 0.8
+
+    def test_update_time_window_config_invalid_period(self):
+        """Test updating time window config with invalid period returns 422"""
+        invalid_config = {
+            "slots": [
+                {
+                    "period": "INVALID_PERIOD",
+                    "start_hour": 9,
+                    "start_minute": 0,
+                    "end_hour": 17,
+                    "end_minute": 0,
+                    "position_coefficient": 1.0,
+                    "allow_new_position": True,
+                },
+            ],
+            "default_coefficient": 1.0,
+            "updated_by": "test_user",
+        }
+        response = self.client.put("/v1/risk/time-window/config", json=invalid_config)
+        assert response.status_code == 422
+        error_data = response.json()
+        # Pydantic validates the Literal field and returns a validation error
+        assert "Input should be" in str(error_data["detail"])
+
+    def test_update_time_window_config_preserves_order(self):
+        """Test that config update returns slots in priority order (RESTRICTED first)"""
+        new_config = {
+            "slots": [
+                {
+                    "period": "PRIME",
+                    "start_hour": 8,
+                    "start_minute": 0,
+                    "end_hour": 16,
+                    "end_minute": 0,
+                    "position_coefficient": 1.0,
+                    "allow_new_position": True,
+                },
+                {
+                    "period": "RESTRICTED",
+                    "start_hour": 22,
+                    "start_minute": 0,
+                    "end_hour": 8,
+                    "end_minute": 0,
+                    "position_coefficient": 0.0,
+                    "allow_new_position": False,
+                },
+            ],
+            "default_coefficient": 1.0,
+            "updated_by": "test_user",
+        }
+        response = self.client.put("/v1/risk/time-window/config", json=new_config)
+        assert response.status_code == 200
+        data = response.json()
+        # RESTRICTED should be first due to priority sorting
+        assert data["slots"][0]["period"] == "RESTRICTED"
+        assert data["slots"][1]["period"] == "PRIME"
+
+    def test_update_time_window_config_evaluation(self):
+        """Test that updated config correctly evaluates time periods via public API"""
+        # Setup config with known time windows:
+        # - RESTRICTED: 22:00-08:00 (overnight)
+        # - PRIME: 09:00-16:00
+        # - OFF_PEAK: 16:00-22:00
+        new_config = {
+            "slots": [
+                {
+                    "period": "PRIME",
+                    "start_hour": 9,
+                    "start_minute": 0,
+                    "end_hour": 16,
+                    "end_minute": 0,
+                    "position_coefficient": 1.0,
+                    "allow_new_position": True,
+                },
+                {
+                    "period": "OFF_PEAK",
+                    "start_hour": 16,
+                    "start_minute": 0,
+                    "end_hour": 22,
+                    "end_minute": 0,
+                    "position_coefficient": 0.5,
+                    "allow_new_position": True,
+                },
+                {
+                    "period": "RESTRICTED",
+                    "start_hour": 22,
+                    "start_minute": 0,
+                    "end_hour": 8,
+                    "end_minute": 0,
+                    "position_coefficient": 0.0,
+                    "allow_new_position": False,
+                },
+            ],
+            "default_coefficient": 1.0,
+            "updated_by": "test_user",
+        }
+        response = self.client.put("/v1/risk/time-window/config", json=new_config)
+        assert response.status_code == 200
+
+        # Test PRIME time (10:30) via public API
+        resp_prime = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 30})
+        assert resp_prime.status_code == 200
+        data_prime = resp_prime.json()
+        assert data_prime["period"] == "PRIME"
+        assert data_prime["position_coefficient"] == 1.0
+        assert data_prime["allow_new_position"] is True
+
+        # Test OFF_PEAK time (18:00) via public API
+        resp_offpeak = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 18, "minute": 0})
+        assert resp_offpeak.status_code == 200
+        data_offpeak = resp_offpeak.json()
+        assert data_offpeak["period"] == "OFF_PEAK"
+        assert data_offpeak["position_coefficient"] == 0.5
+        assert data_offpeak["allow_new_position"] is True
+
+        # Test RESTRICTED time (23:00 - within overnight window) via public API
+        resp_restricted = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 23, "minute": 0})
+        assert resp_restricted.status_code == 200
+        data_restricted = resp_restricted.json()
+        assert data_restricted["period"] == "RESTRICTED"
+        assert data_restricted["position_coefficient"] == 0.0
+        assert data_restricted["allow_new_position"] is False
+
+        # Test RESTRICTED time (03:00 - also within overnight window 22:00-08:00) via public API
+        resp_restricted2 = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 3, "minute": 0})
+        assert resp_restricted2.status_code == 200
+        assert resp_restricted2.json()["period"] == "RESTRICTED"
+
+        # Verify slots are stored in priority order via GET config endpoint (RESTRICTED first)
+        resp_config = self.client.get("/v1/risk/time-window/config")
+        assert resp_config.status_code == 200
+        config_data = resp_config.json()
+        assert len(config_data["slots"]) == 3
+        assert config_data["slots"][0]["period"] == "RESTRICTED"
+        assert config_data["slots"][1]["period"] == "OFF_PEAK"
+        assert config_data["slots"][2]["period"] == "PRIME"
+
+    def test_evaluate_time_window_invalid_hour(self):
+        """Test that invalid hour values return 422"""
+        # Test hour=25 (out of range)
+        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 25, "minute": 0})
+        assert response.status_code == 422
+        
+        # Test hour=-1 (negative)
+        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": -1, "minute": 0})
+        assert response.status_code == 422
+
+    def test_evaluate_time_window_invalid_minute(self):
+        """Test that invalid minute values return 422"""
+        # Test minute=60 (out of range)
+        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 60})
+        assert response.status_code == 422
+        
+        # Test minute=-1 (negative)
+        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": -1})
+        assert response.status_code == 422
+
+
 class TestOrderEndpoints:
     """Test order API endpoints"""
 
