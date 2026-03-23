@@ -150,19 +150,36 @@ python scripts/get_experience.py <keyword>
 
 ---
 
-## 九、经验自动积累规则
+## 九、文档更新规则（开发后必须执行）
 
-**每次完成以下类型的任务后，必须prompt用户**：
+### 9.1 PROJECT_STATUS.md 滚动式追踪
 
+**更新时机**：每次完成开发任务提交前
+
+**追踪格式**：
 ```
-"是否将这个经验添加到 docs/EXPERIENCE_SUMMARY.md？"
+## 本次开发记录
+
+### 开发前状态
+- 记录本次开发开始前的状态（issue、待办事项等）
+
+### 本次开发动作 (YYYY-MM-DD)
+- 具体完成了哪些工作
+- 新增/修改的文件
+- 解决的 issue
+
+### 下一步计划 (依据 PLAN.md)
+- 根据 PLAN.md 记录下一步开发动作
 ```
 
-需要prompt的场景：
+### 9.2 EXPERIENCE_SUMMARY.md 经验积累
+
+**更新时机**：完成以下类型任务时
 - 修复了重要bug（尤其是复现条件复杂、耗时长的）
 - 发现并解决了反复出现的问题
 - 调试过程中遇到的非预期行为及其解决方案
 - 架构决策或重大设计变更
+- 外部API集成（如本项目中的 CoinGecko、Binance API）
 
 **经验文档格式**：
 ```markdown
@@ -172,4 +189,24 @@ python scripts/get_experience.py <keyword>
 **问题原因**：...
 **解决方案**：...
 **经验**：...
+```
+
+### 9.3 提交要求
+
+**文档更新必须作为提交的一部分**，不得单独提交文档更新。
+
+**提交流程**：
+```bash
+# 1. 完成代码和测试
+git add .
+
+# 2. 同时添加文档更新
+git add PROJECT_STATUS.md docs/EXPERIENCE_SUMMARY.md
+
+# 3. 一次性提交（代码+文档）
+git commit -m "feat(task-x): 完成功能开发
+
+- 新增 xxx 功能
+- 更新 PROJECT_STATUS.md
+- 添加经验总结"
 ```
