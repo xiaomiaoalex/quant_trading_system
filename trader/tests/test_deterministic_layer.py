@@ -191,8 +191,8 @@ class TestCASApplyOrder:
         )
         events = cas_apply_order(vv, shadow, "cl_001", update1)
         assert len(events) == 1
-        assert events[0].status == "NEW"
-        assert vv.last_status_rank == STATUS_RANK["NEW"]
+        assert events[0].status == "SUBMITTED"  # NEW maps to SUBMITTED in unified domain model
+        assert vv.last_status_rank == STATUS_RANK["SUBMITTED"]
 
         # PARTIALLY_FILLED
         update2 = RawOrderUpdate(
@@ -519,7 +519,7 @@ class TestDeterministicApplier:
         )
         events = await self.applier.apply_order_update(update)
         assert len(events) == 1
-        assert events[0].status == "NEW"
+        assert events[0].status == "SUBMITTED"  # NEW maps to SUBMITTED
 
     @pytest.mark.asyncio
     async def test_apply_fill_update(self):
@@ -711,10 +711,9 @@ class TestEdgeCases:
             local_receive_ts_ms=1000,
             source="WS",
         )
-        events = cas_apply_order(vv, shadow, "cl_001", update)
-        # 未知状态应该被接受（Rank 0）
-        assert len(events) == 1
-        assert vv.last_status_rank == 0
+        # 未知状态现在会抛出 ValueError（fail-closed），不再静默接受
+        with pytest.raises(ValueError, match="Unsupported external order status"):
+            cas_apply_order(vv, shadow, "cl_001", update)
 
     @pytest.mark.asyncio
     async def test_broker_order_id_mapping(self):

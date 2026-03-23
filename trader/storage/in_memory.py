@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
+from trader.core.domain.models.order import OrderStatus
 
 
 class ControlPlaneInMemoryStorage:
@@ -431,7 +432,7 @@ class ControlPlaneInMemoryStorage:
         now = datetime.now(timezone.utc)
         order = {
             **order_data,
-            "status": order_data.get("status", "NEW"),
+            "status": order_data.get("status", OrderStatus.SUBMITTED.value),
             "created_ts_ms": int(now.timestamp() * 1000),
             "updated_ts_ms": int(now.timestamp() * 1000),
             "filled_qty": order_data.get("filled_qty", "0"),
