@@ -141,15 +141,6 @@ Testing is mandatory and must be dense. AI-generated code that cannot be verifie
 
 CI runs sequentially: `import-gate` → `p0-gate` → `control-gate` → `postgres-integration`. All stages must pass for a PR to merge.
 
-## Dual-AI Workflow (MCP)
-
-This repo uses a two-AI collaboration protocol via `mcp_bridge.py` and `mcp_mission_control.json`:
-- **Architect** (left IDE): assigns tasks via `architect_assign_task`, reviews via `architect_finalize`
-- **Engineer** (right IDE): submits work via `engineer_submit_work` (native MCP tool — never call `python mcp_bridge.py` directly as engineer)
-- **Never manually edit** `mcp_mission_control.json`
-- Task state flow: `IDLE → DEVELOPING → REVIEW_PENDING → APPROVED_FOR_PUSH → MERGED`
-- Code is pushed to remote only by human or with explicit human authorization
-
 ## Code Style
 
 - Python 3.12.5, async-first (`asyncio` throughout; no blocking network calls)
