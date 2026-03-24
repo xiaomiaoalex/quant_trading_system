@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-23 15:44:57 (北京时间)
+2026-03-23 20:24:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -12,14 +12,14 @@
 - **工作树**：干净
 - **最新提交**：`bda5ef2` - feat(trader): add OnChainMarketDataAdapter
 
-## 本次开发记录
+## 本次开发记录 (2026-03-23 下午)
 
 ### 开发前状态
 - OnChain 适配器模块不存在
 - Reconciler 集成测试缺失 (Issue #2)
 - API 测试覆盖不足，/v1/reconciler/* 端点无 HTTP 测试 (Issue #3)
 
-### 本次开发动作 (2026-03-23)
+### 已完成开发动作
 1. 新增 `trader/adapters/onchain/` 模块
    - `OnChainMarketDataAdapter`: 链上/宏观市场数据适配器
    - 支持 Binance ticker、CoinGecko 稳定币供应数据采集
@@ -27,10 +27,24 @@
 2. 新增 `trader/tests/test_onchain_market_data_stream.py`: 565 行单元测试
 3. 新增 `trader/tests/test_reconciler_service_integration.py`: 493 行集成测试
 4. 新增 `trader/tests/test_api_reconciler.py`: 396 行 API 端点测试
+5. **全局订单状态清理** - 统一 `OrderStatus` 定义
+   - `trader/storage/in_memory.py`: 默认值从 `"NEW"` 改为 `OrderStatus.SUBMITTED.value`
+   - `trader/tests/test_deterministic_layer.py`: 3 处测试断言更新
+
+### MVP 验证结果 (2026-03-23 20:18)
+| 验证项 | 结果 |
+|--------|------|
+| 单元测试 | ✅ 667 passed, 0 skipped |
+| PostgreSQL 集成 | ✅ 正常工作 |
+| API 服务 | ✅ http://localhost:8080 |
+| Binance Demo 连接 | ✅ 连通 demo.binance.com |
+| 真实交易 Smoke Test | ✅ 下单→查单→撤单 完整生命周期 |
+| Reconciler 对账 | ✅ trigger + report 正常工作 |
+| Monitor 监控 | ✅ snapshot API 正常返回 |
 
 ### 下一步计划 (依据 PLAN.md)
-- Phase 2.2: 部署与监控 API 完善
-- Phase 2.3: 风控阈值动态调整
+- Phase 3: 信号层增强
+- Broker 适配层接入真实策略
 
 ## Phase 1: M1 安全闭环
 
