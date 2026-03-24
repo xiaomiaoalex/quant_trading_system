@@ -1,0 +1,38 @@
+name: Weekly Plan Alignment Report
+
+on:
+  schedule:
+    # 每周五 9:00 UTC (北京时间 17:00)
+    - cron: '0 9 * * 5'
+  # 也允许手动触发
+  workflow_dispatch:
+
+jobs:
+  report:
+    name: Generate Alignment Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要看完整历史
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r trader/requirements-ci.txt
+
+      - name: Generate Weekly Report
+        id: report
+        run: |
+          python scripts/check_plan_alignment.py --since="7 days" > weekly_report.txt
+          cat weekly_report.txt
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-alignment-report
+          path: weekly_report.txt
+          retention-days: 30

@@ -1,0 +1,160 @@
+name: CI Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  import-gate:
+    name: Import Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+
+      - name: Import Gate Tests
+        run: |
+          python -c "import trader.tests.test_binance_connector"
+          python -c "import trader.tests.test_binance_private_stream"
+          python -c "import trader.tests.test_binance_degraded_cascade"
+
+  architecture-gate:
+    name: Architecture Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Core Plane IO Check
+        run: python scripts/check_core_no_io.py
+
+      - name: Commit Format Check (on push only)
+        if: github.event_name == 'push'
+        run: python scripts/check_commit_format.py "${{ github.event.head_commit.message }}"
+
+  p0-gate:
+    name: P0 Regression Tests
+    runs-on: ubuntu-latest
+    needs: import-gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+
+      - name: Run P0 Tests
+        run: |
+          python -m pytest -q trader/tests/test_binance_connector.py --tb=short
+          python -m pytest -q trader/tests/test_binance_private_stream.py --tb=short
+          python -m pytest -q trader/tests/test_binance_degraded_cascade.py --tb=short
+          python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short
+          python -m pytest -q trader/tests/test_hard_properties.py --tb=short
+
+  control-gate:
+    name: Control Gate
+    runs-on: ubuntu-latest
+    needs: p0-gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+
+      - name: Run Control Tests
+        run: |
+          python -m pytest -q trader/tests/test_api_endpoints.py -k "risk and (invalid_payload or missing_required_fields)" --tb=short
+          python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short
+          python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short
+
+  postgres-integration:
+    name: Postgres Integration Tests
+    runs-on: ubuntu-latest
+    needs: control-gate
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trading
+          POSTGRES_USER: trader
+          POSTGRES_PASSWORD: trader_pwd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trader -d trading"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_CONNECTION_STRING: postgresql://trader:trader_pwd@127.0.0.1:5432/trading
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12.5
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.5"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+
+      - name: Wait for Postgres
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          host = "127.0.0.1"
+          port = 5432
+          deadline = time.time() + 60
+          last_error = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=2):
+                      print("postgres ready")
+                      break
+              except OSError as exc:
+                  last_error = exc
+                  time.sleep(1)
+          else:
+              raise SystemExit(f"postgres not ready: {last_error}")
+          PY
+
+      - name: Run Postgres Tests
+        run: |
+          python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
+          python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short

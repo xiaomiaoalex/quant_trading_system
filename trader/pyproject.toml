@@ -1,0 +1,27 @@
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --timeout=120"
+testpaths = ["tests"]
+timeout = 120
+timeout_method = "thread"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+# NOTE: For running tests, use:
+#   .venv\Scripts\python.exe -m pytest trader/tests/ -v
+# The .venv path contains spaces, so always quote paths when running manually.
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false

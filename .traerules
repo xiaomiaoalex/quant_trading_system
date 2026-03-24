@@ -1,0 +1,212 @@
+# .traerules — quant_trading_system 工程规则
+# 版本：v2.0（移除 MCP，双 AI 协作模式已废弃）
+
+---
+
+## 一、硬性正确性约束（不可违反）
+
+1. **单调状态机**：订单状态只能前进，终态（FILLED/CANCELLED/REJECTED/EXPIRED）不可被覆盖。所有状态更新必须走统一 CAS 入口。
+2. **全链路幂等**：对 `cl_ord_id` + `exec_id` 必须去重。WS 与 REST 可能并发送达同一事件，不得重复记账。
+3. **Fail-Closed**：无法确认一致性时，进入 DEGRADED_MODE 并触发 KillSwitch，禁止猜测继续。禁止裸 `except: pass`。
+4. **确定性并发**：同一 `cl_ord_id` 的并发处理必须加锁（hashed lock / actor 分区），不依赖时序假设。
+5. **Broker 是真相源**：WS 为低延迟驱动，REST 为纠偏；重连后必须先做 REST Alignment 再恢复业务。
+
+---
+
+## 二、架构边界（禁止越界）
+
+| 平面 | 允许 | 禁止 |
+|------|------|------|
+| **Core** (`core/`) | 领域模型、状态机、纯计算 | 任何 IO、网络、DB、环境变量、sleep |
+| **Adapter** (`adapters/`) | WS/REST、限流退避、双驱动合并、对齐恢复 | 直接修改 Core 状态（只能发 canonical events） |
+| **Control** (`api/`, `services/`) | 策略注册、风控配置、KillSwitch、审计 | 绕过 Risk/Policy 直接下单 |
+
+---
+
+## 三、KillSwitch 级别
+
+| 级别 | 名称 | 行为 |
+|------|------|------|
+| L0 | NORMAL | 正常交易 |
+| L1 | NO_NEW_POSITIONS | 禁止新开仓，允许平仓/撤单 |
+| L2 | CANCEL_ALL_AND_HALT | 撤所有挂单，禁止交易 |
+| L3 | LIQUIDATE_AND_DISCONNECT | 强平所有持仓，断开 Broker |
+
+Adapter 进入 DEGRADED_MODE 时，必须通过 Control Plane API 触发全局 KillSwitch L1。
+
+---
+
+## 四、开发流程（Kilo 插件多角色模式）
+
+### 分支命名规范
+
+```
+feature/task-{id}/{short-description}
+bugfix/task-{id}/{short-description}
+hotfix/task-{id}/{short-description}
+docs/task-{id}/{short-description}
+```
+
+示例：
+```
+feature/task-1.4/time-window-risk
+bugfix/task-1.2/reconciler-edge-case
+```
+
+### Commit 规范（Conventional Commits）
+
+```
+{type}(task-{id}): {description}
+
+# type: feat | fix | refactor | test | docs | chore | perf | ci
+```
+
+示例：
+```
+feat(task-1.4): 实现时间窗口风控完整体系
+fix(task-1.2): 修复宽限窗口边界条件
+test(task-1.3): 补充深度检查滑点估算单测
+```
+
+### Review 流程
+
+1. **创建分支**：`git checkout -b feature/task-{id}/description`
+2. **开发并提交**：遵循 commit 规范
+3. **创建 PR**：使用 PR Template 填写必要信息
+4. **Review**：由 Review 角色执行代码审查
+5. **合并**： squash merge 到 main
+
+### PR 必填项
+
+- Task ID（关联 PLAN.md 中的任务）
+- 变更说明
+- 测试结果
+- 风险评估
+- Rollback 方案
+
+---
+
+## 五、Git 操作规则
+
+**标准 Git 工作流**：
+```bash
+# 创建分支
+git checkout -b feature/task-1.5/monitor-alert
+
+# 开发 & 提交
+git add .
+git commit -m "feat(task-1.5): 实现策略监控告警功能"
+
+# 推送
+git push -u origin feature/task-1.5/monitor-alert
+```
+
+**协作约定**：
+- `main` 分支受保护，必须通过 PR 合并
+- 分支命名必须包含 task ID
+- Commit message 必须包含 task ID
+
+---
+
+## 六、代码规范
+
+- **类型注解**：所有函数签名和类属性必须有类型注解，使用 `str | None` 风格（Python 3.10+）。
+- **Async-First**：统一 `asyncio`，禁止在异步上下文使用阻塞网络库（用 aiohttp/httpx async）。锁用 `asyncio.Lock`。
+- **格式**：Black（line-length=100）+ isort（black profile）。
+- **可观测性**：外部消息必须携带 `local_receive_ts_ms`、`exchange_event_ts_ms`、`seq`、`source`；关键状态迁移打结构化日志含 `trace_id`。
+- **输出纪律**：收到编码任务直接输出可运行代码 + 必要注释 + 单测，不复述需求。
+
+---
+
+## 七、AI 集成约束
+
+- AI 只做建议/诊断/分析，不得直接下单或绕过 Risk/Policy/Core。
+- 高风险动作（风控阈值变更、KillSwitch 降级）必须 Human-in-the-Loop 确认。
+- AI 输出必须结构化、可审计，包含 `trace_id`、输入摘要、输出结果。
+- 未通过离线评测/影子运行门禁前，AI 能力不得进入执行链路。
+
+---
+
+## 八、经验查询规范
+
+**在执行以下操作前，必须先查询经验文档** (`docs/EXPERIENCE_SUMMARY.md`)：
+
+| 场景 | 查询关键词 | 原因 |
+|------|----------|------|
+| 使用 `python -c` 执行多行代码 | `powershell` | PowerShell中 `-c` 参数输出经常为空 |
+| 使用 `execute_command` 执行复杂命令 | `命令行` | 复杂命令在PowerShell中可能有转义问题 |
+| 调试异步代码 | `async` | 异步测试的常见陷阱 |
+| 使用Mock对象 | `mock` | Mock使用的最佳实践 |
+
+**查询命令**：
+```bash
+python scripts/get_experience.py <keyword>
+```
+
+**流程**：
+1. 识别场景属于上表中的哪类
+2. 执行查询命令获取相关经验
+3. 根据经验选择正确的实现方式
+
+---
+
+## 九、文档更新规则（开发后必须执行）
+
+### 9.1 PROJECT_STATUS.md 滚动式追踪
+
+**更新时机**：每次完成开发任务提交前
+
+**追踪格式**：
+```
+## 本次开发记录
+
+### 开发前状态
+- 记录本次开发开始前的状态（issue、待办事项等）
+
+### 本次开发动作 (YYYY-MM-DD)
+- 具体完成了哪些工作
+- 新增/修改的文件
+- 解决的 issue
+
+### 下一步计划 (依据 PLAN.md)
+- 根据 PLAN.md 记录下一步开发动作
+```
+
+### 9.2 EXPERIENCE_SUMMARY.md 经验积累
+
+**更新时机**：完成以下类型任务时
+- 修复了重要bug（尤其是复现条件复杂、耗时长的）
+- 发现并解决了反复出现的问题
+- 调试过程中遇到的非预期行为及其解决方案
+- 架构决策或重大设计变更
+- 外部API集成（如本项目中的 CoinGecko、Binance API）
+
+**经验文档格式**：
+```markdown
+### 问题名称
+
+**问题描述**：...
+**问题原因**：...
+**解决方案**：...
+**经验**：...
+```
+
+### 9.3 提交要求
+
+**文档更新必须作为提交的一部分**，不得单独提交文档更新。
+
+**提交流程**：
+```bash
+# 1. 完成代码和测试
+git add .
+
+# 2. 同时添加文档更新
+git add PROJECT_STATUS.md docs/EXPERIENCE_SUMMARY.md
+
+# 3. 一次性提交（代码+文档）
+git commit -m "feat(task-x): 完成功能开发
+
+- 新增 xxx 功能
+- 更新 PROJECT_STATUS.md
+- 添加经验总结"
+```
