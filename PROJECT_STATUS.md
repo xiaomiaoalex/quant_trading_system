@@ -4,13 +4,13 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-24 18:11:00 (北京时间)
+2026-03-24 22:27:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
 - **工作树**：干净
-- **最新提交**：`bda5ef2` - feat(trader): add OnChainMarketDataAdapter
+- **最新提交**：`685efac` - feat(position-risk): add PositionRiskConstructor
 
 ## 本次开发记录 (2026-03-23 下午)
 
