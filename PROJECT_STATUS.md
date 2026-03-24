@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-23 20:24:00 (北京时间)
+2026-03-24 18:11:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -76,6 +76,15 @@
 | 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
 | 2.3 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
 | 2.4 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
+
+## Phase 3: 信号层增强
+
+| Task | 模块 | 状态 | 备注 |
+|------|------|------|------|
+| 7.1 | Position & Risk Constructor | ✅ 完成 | **完成时间**: 2026-03-24
+**实现内容**: Position & Risk Constructor 完整体系
+**测试结果**: 50/50 测试通过
+**新增文件**: position_risk_constructor.py, test_position_risk_constructor.py |
 
 ## 已知问题
 
