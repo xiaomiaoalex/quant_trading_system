@@ -85,6 +85,11 @@
 **实现内容**: Position & Risk Constructor 完整体系
 **测试结果**: 50/50 测试通过
 **新增文件**: position_risk_constructor.py, test_position_risk_constructor.py |
+| 7.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24
+**实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector）
+**测试结果**: 44 个单元测试 + 766 全量测试通过
+**新增文件**: projectors/__init__.py, base.py, position_projector.py, order_projector.py, risk_projector.py
+migrations/003_projections.sql, tests/test_postgres_projectors.py |
 
 ## 已知问题
 
