@@ -28,6 +28,7 @@ from typing import Dict, List, Any, Optional
 from trader.adapters.persistence.postgres.projectors.base import (
     Projectable,
 )
+from trader.core.domain.models.events import EventType
 
 
 # ==================== 数据类型 ====================
@@ -170,8 +171,8 @@ class RiskProjector(Projectable):
     
     # 该投影处理的事件类型
     EVENT_TYPES = {
-        "RISK_CHECK_PASSED",
-        "RISK_CHECK_FAILED",
+        EventType.RISK_CHECK_PASSED.value,
+        EventType.RISK_CHECK_FAILED.value,
     }
     
     def __init__(self, pool: "asyncpg.Pool"):
@@ -288,9 +289,9 @@ class RiskProjector(Projectable):
         for event in events:
             data = event.data if isinstance(event.data, dict) else {}
             
-            if event.event_type == "RISK_CHECK_PASSED":
+            if event.event_type == EventType.RISK_CHECK_PASSED.value:
                 state = self._apply_risk_check_passed(state, data)
-            elif event.event_type == "RISK_CHECK_FAILED":
+            elif event.event_type == EventType.RISK_CHECK_FAILED.value:
                 state = self._apply_risk_check_failed(state, data)
         
         return state

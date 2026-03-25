@@ -356,7 +356,7 @@ class OrderProjector(Projectable):
         """
         通过客户端订单 ID 获取订单
         
-        需要扫描查找，但通过索引可以加速。
+        使用 SQL 索引查询而非全表扫描。
         
         Args:
             client_order_id: 客户端订单 ID
@@ -364,13 +364,23 @@ class OrderProjector(Projectable):
         Returns:
             OrderProjection 或 None
         """
-        # 扫描查找（需要索引优化）
-        projections = await self.list_projections(limit=1000)
-        for proj in projections:
-            state = proj["state"]
-            if state.get("client_order_id") == client_order_id:
-                return OrderProjection.from_state(proj["aggregate_id"], state)
-        return None
+        async with self._pool.acquire() as conn:
+            # 使用索引 idx_orders_proj_client_order_id 进行查询
+            row = await conn.fetchrow(
+                """
+                SELECT aggregate_id, state, version, last_event_seq, updated_at
+                FROM orders_proj
+                WHERE state->>'client_order_id' = $1
+                LIMIT 1
+                """,
+                client_order_id,
+            )
+        
+        if row is None:
+            return None
+        
+        state = json.loads(row["state"]) if isinstance(row["state"], str) else row["state"]
+        return OrderProjection.from_state(row["aggregate_id"], state)
     
     async def list_orders(
         self,
@@ -455,7 +465,7 @@ class OrderProjector(Projectable):
             "by_status": by_status,
             "total_order_value": str(total_order_value),
             "filled_order_value": str(filled_order_value),
-            "fill_rate": str(filled_order_value / total_order_value) if total_order_value > 0 else "0",
+            "fill_rate": str(filled_order_value / total_order_value) if total_order_value > Decimal("0") else "0",
         }
 
 

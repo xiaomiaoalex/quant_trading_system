@@ -294,6 +294,34 @@ Remove-Item test_debug.py
 | 2026-03-21 | Kilo Code | 初始版本，记录 Reconciler 和 DepthChecker 开发经验 |
 | 2026-03-22 | Kilo Code | 添加PowerShell中Python命令行执行输出为空问题的经验总结 |
 | 2026-03-23 | Kilo Code | 添加OnChain适配器开发经验：STUB实现标注、外部API限流处理、降级保护设计 |
+| 2026-03-25 | Kilo Code | 添加 PostgreSQL 投影读模型优化经验：索引查询优化、EventType 枚举设计、重构模式 |
+
+## 八、PostgreSQL 投影读模型优化经验
+
+### 8.1 索引查询优化
+
+**场景**：`get_order_by_client_order_id` 需要 O(1) 查询性能
+
+**经验**：
+- 为 `client_order_id` 字段创建唯一索引
+- 使用 `SELECT ... WHERE client_order_id = $1` 而非模糊查询
+- 确保查询计划走索引扫描（使用 `EXPLAIN ANALYZE` 验证）
+
+### 8.2 EventType 枚举设计
+
+**场景**：避免字符串硬编码，提高类型安全性
+
+**经验**：
+- 在 projector 中定义 `EventType` 枚举，统一事件类型定义
+- 使用枚举替代字符串比较，避免拼写错误
+- 枚举值与数据库中的 event_type 字符串保持一致
+
+### 8.3 重构 `_apply_position_increased` 方法
+
+**经验**：
+- 重构时保持方法签名不变，确保调用方兼容
+- 添加清晰的日志记录重构前的行为差异
+- 单元测试覆盖重构后的所有分支路径
 
 ---
 

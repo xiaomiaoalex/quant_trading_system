@@ -269,8 +269,24 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ### Task 3.1 — PG投影读模型
 
-- 将OMS/Position事件投影为PG读表（`positions_view`、`orders_view`）
-- API层从PG读模型查询，替换内存查询
+**状态**：✅ 已完成（2026-03-25）
+
+**交付物**：
+- `adapters/persistence/postgres/projectors/order_projector.py`
+  - `get_order_by_client_order_id()` 索引查询优化
+- `adapters/persistence/postgres/projectors/position_projector.py`
+  - `_apply_position_increased()` 重构
+- `adapters/persistence/postgres/projectors/risk_projector.py`
+  - `EventType` 枚举引入，统一事件类型定义
+- `adapters/persistence/postgres/migrations/003_projections.sql`
+  - 投影表结构定义
+
+**验收标准**：
+- [x] OrderProjector 索引查询优化，O(1) 查找
+- [x] PositionProjector 重构，状态更新逻辑清晰
+- [x] RiskProjector EventType 枚举避免字符串硬编码
+- [x] 44个单元测试全部通过
+- [x] 766 全量测试通过
 
 ### Task 3.2 — Escape Time模拟器
 

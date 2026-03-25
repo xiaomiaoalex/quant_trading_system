@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-24 22:27:00 (北京时间)
+2026-03-25 01:25:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -85,8 +85,13 @@
 **实现内容**: Position & Risk Constructor 完整体系
 **测试结果**: 50/50 测试通过
 **新增文件**: position_risk_constructor.py, test_position_risk_constructor.py |
-| 7.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24
+| 7.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
+**分支**: task/7.2-pg-projection-read-model
 **实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector）
+**代码优化**:
+- `order_projector.py`: `get_order_by_client_order_id` 索引查询优化
+- `position_projector.py`: `_apply_position_increased` 重构
+- `risk_projector.py`: `EventType` 枚举引入，统一事件类型
 **测试结果**: 44 个单元测试 + 766 全量测试通过
 **新增文件**: projectors/__init__.py, base.py, position_projector.py, order_projector.py, risk_projector.py
 migrations/003_projections.sql, tests/test_postgres_projectors.py |

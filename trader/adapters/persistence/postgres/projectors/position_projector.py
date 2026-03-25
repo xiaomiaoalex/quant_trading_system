@@ -185,13 +185,14 @@ class PositionProjector(Projectable):
         current_avg = Decimal(state["avg_price"])
         
         # 计算新的加权平均价
-        if current_qty + add_qty > 0:
+        new_qty = current_qty + add_qty
+        if new_qty > 0:
             total_cost = (current_qty * current_avg) + (add_qty * add_price)
-            new_avg = total_cost / (current_qty + add_qty)
+            new_avg = total_cost / new_qty
         else:
             new_avg = Decimal("0")
         
-        state["quantity"] = str(current_qty + add_qty)
+        state["quantity"] = str(new_qty)
         state["avg_price"] = str(new_avg)
         
         # 更新市值和成本
