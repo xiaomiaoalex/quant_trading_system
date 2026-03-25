@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-25 04:53:00 (北京时间)
+2026-03-25 05:00:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -12,39 +12,24 @@
 - **工作树**：干净
 - **最新提交**：`685efac` - feat(position-risk): add PositionRiskConstructor
 
-## 本次开发记录 (2026-03-23 下午)
+## 最近开发记录（滚动式）
 
-### 开发前状态
-- OnChain 适配器模块不存在
-- Reconciler 集成测试缺失 (Issue #2)
-- API 测试覆盖不足，/v1/reconciler/* 端点无 HTTP 测试 (Issue #3)
+### 上次任务：Task 7.2 PostgreSQL投影读模型
+- 完成时间: 2026-03-25
+- 分支: task/7.2-pg-projection-read-model
+- 状态: ✅ 已合并到main
+- 主要变更: order_projector索引优化, position_projector重构, risk_projector EventType枚举
 
-### 已完成开发动作
-1. 新增 `trader/adapters/onchain/` 模块
-   - `OnChainMarketDataAdapter`: 链上/宏观市场数据适配器
-   - 支持 Binance ticker、CoinGecko 稳定币供应数据采集
-   - 写入 Feature Store，包含降级保护
-2. 新增 `trader/tests/test_onchain_market_data_stream.py`: 565 行单元测试
-3. 新增 `trader/tests/test_reconciler_service_integration.py`: 493 行集成测试
-4. 新增 `trader/tests/test_api_reconciler.py`: 396 行 API 端点测试
-5. **全局订单状态清理** - 统一 `OrderStatus` 定义
-   - `trader/storage/in_memory.py`: 默认值从 `"NEW"` 改为 `OrderStatus.SUBMITTED.value`
-   - `trader/tests/test_deterministic_layer.py`: 3 处测试断言更新
+### 本次任务：Task 2.5 资金结构信号
+- 完成时间: 2026-03-25
+- 分支: task/2.5-capital-structure-signals
+- 状态: ✅ 已合并到main
+- 主要变更: FeatureStore范围查询, 多空比数据适配器, 三大信号计算
 
-### MVP 验证结果 (2026-03-23 20:18)
-| 验证项 | 结果 |
-|--------|------|
-| 单元测试 | ✅ 667 passed, 0 skipped |
-| PostgreSQL 集成 | ✅ 正常工作 |
-| API 服务 | ✅ http://localhost:8080 |
-| Binance Demo 连接 | ✅ 连通 demo.binance.com |
-| 真实交易 Smoke Test | ✅ 下单→查单→撤单 完整生命周期 |
-| Reconciler 对账 | ✅ trigger + report 正常工作 |
-| Monitor 监控 | ✅ snapshot API 正常返回 |
-
-### 下一步计划 (依据 PLAN.md)
-- Phase 3: 信号层增强
-- Broker 适配层接入真实策略
+### 下次计划：Task 3.3 Replay Runner
+- 目标: 实现事件回放引擎
+- 前置条件: Task 2.5完成（✅）
+- 预计工作量: 待评估
 
 ## Phase 1: M1 安全闭环
 
@@ -85,16 +70,16 @@
 
 | Task | 模块 | 状态 | 备注 |
 |------|------|------|------|
-| 3.1 | PG投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
-**分支**: task/7.2-pg-projection-read-model
-**实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector）
-**代码优化**:
-- `order_projector.py`: `get_order_by_client_order_id` 索引查询优化
-- `position_projector.py`: `_apply_position_increased` 重构
-- `risk_projector.py`: `EventType` 枚举引入，统一事件类型
-**测试结果**: 44 个单元测试 + 766 全量测试通过
-**新增文件**: projectors/__init__.py, base.py, position_projector.py, order_projector.py, risk_projector.py
-migrations/003_projections.sql, tests/test_postgres_projectors.py |
+| 3.1 | PG投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25 |
+| | | | **分支**: task/7.2-pg-projection-read-model |
+| | | | **实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector） |
+| | | | **代码优化**: |
+| | | | - `order_projector.py`: `get_order_by_client_order_id` 索引查询优化 |
+| | | | - `position_projector.py`: `_apply_position_increased` 重构 |
+| | | | - `risk_projector.py`: `EventType` 枚举引入，统一事件类型 |
+| | | | **测试结果**: 44 个单元测试 + 766 全量测试通过 |
+| | | | **新增文件**: projectors/__init__.py, base.py, position_projector.py, order_projector.py, risk_projector.py |
+| | | | migrations/003_projections.sql, tests/test_postgres_projectors.py |
 | 3.2 | Escape Time模拟器 | 🔄 待开始 | 输入：当前持仓 + 实时深度；输出：最快平仓时间估算 |
 | 3.3 | Replay Runner | 🔄 待开始 | 从event_log重放历史事件序列，用于回归测试、场景复现、策略回测 |
 | 3.4 | AI治理接口（HITL） | 🔄 待开始 | AI建议接口 + Human-in-the-Loop确认流程 + 审计日志 |
