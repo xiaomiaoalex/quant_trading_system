@@ -204,14 +204,24 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ### Task 2.2 — On-Chain/宏观数据适配器
 
+**状态**：✅ 已完成（2026-03-25）
+
 **交付物**：
-- `adapters/onchain/coinglass_adapter.py`（或等价公开数据源）
-  - 采集：交易所净流入/流出、稳定币供应量变化、大额清算事件
-  - 写入Feature Store
+- `adapters/onchain/onchain_market_data_stream.py`
+  - `RawLiquidationEvent`：Binance Futures `!forceOrder@arr` WebSocket原始事件模型
+  - `LiquidationBucket`：1分钟聚合桶（count, notional, long/short breakdown, net imbalance）
+  - `LiquidationAggregator`：桶对齐、事件聚合、Feature Store flush
+  - `BinanceLiquidationWSConnector`：WebSocket连接、自动重连、消息解析
+  - `stablecoin_supply`：Binance API稳定币供应量采集
+- `trader/tests/test_onchain_market_data_stream.py`
+  - 34个测试全部通过（单元+集成）
 
 **验收标准**：
-- [ ] 至少2个链上指标稳定写入Feature Store
-- [ ] 数据延迟可观测（local_receive_ts vs source_ts）
+- [x] `stablecoin_supply` 稳定写入Feature Store
+- [x] `liquidation_stream` 通过Binance Futures `!forceOrder@arr` WebSocket实时采集
+- [x] `LiquidationAggregator` 1分钟桶聚合正确（bucket边界对齐验证）
+- [x] 数据延迟可观测（local_receive_ts vs source_ts）
+- [ ] `exchange_flow`（交易所净流入/流出）- 未来增强项，待接入CoinGecko或等价数据源
 
 ---
 
