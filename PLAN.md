@@ -247,19 +247,21 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ### Task 2.4 — 基础信号层（趋势 + 价量）
 
+**状态**：✅ 已完成（2026-03-25）
+
 **交付物**：
 - `core/domain/signals/trend_signals.py`
   - EMA交叉、价格动量、布林带位置
 - `core/domain/signals/price_volume_signals.py`
   - 成交量扩张检测、波动率压缩检测
-- Signal Sandbox：`tools/signal_sandbox.py`
+- Signal Sandbox：`scripts/tools/signal_sandbox.py`
   - 输入：历史Feature Store数据
   - 输出：信号时序、未来函数检测报告
 
 **验收标准**：
-- [ ] 所有信号计算无IO（Core Plane约束）
-- [ ] Signal Sandbox能检测出未来函数泄漏
-- [ ] 信号输出为标准化`Signal` dataclass
+- [x] 所有信号计算无IO（Core Plane约束）
+- [x] Signal Sandbox能检测出未来函数泄漏
+- [x] 信号输出为标准化`Signal` dataclass
 
 ---
 
