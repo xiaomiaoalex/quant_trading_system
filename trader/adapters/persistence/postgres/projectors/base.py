@@ -469,6 +469,7 @@ class Projectable(ABC):
     async def project_event(
         self,
         event: "StreamEvent",
+        event_store: Optional["PostgresEventStore"] = None,
     ) -> bool:
         """
         处理单个事件并更新投影
@@ -477,6 +478,7 @@ class Projectable(ABC):
         
         Args:
             event: 事件对象
+            event_store: 事件存储（可选，默认内部创建）
             
         Returns:
             True if projection was updated, False otherwise
@@ -512,8 +514,9 @@ class Projectable(ABC):
         # 获取该聚合根的所有事件（从当前seq之后）
         # 注意：这里需要从 event_store 读取，而不是直接使用 event
         # 因为 project_event 可能被调用时只传入了单个事件
-        from trader.adapters.persistence.postgres.event_store import PostgresEventStore
-        event_store = PostgresEventStore(self._pool)
+        if event_store is None:
+            from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+            event_store = PostgresEventStore(self._pool)
         events = await event_store.read_stream(
             stream_key=event.stream_key,
             from_seq=current_seq,
@@ -537,6 +540,7 @@ class Projectable(ABC):
         self,
         aggregate_id: str,
         stream_key: str,
+        event_store: Optional["PostgresEventStore"] = None,
     ) -> Dict[str, Any]:
         """
         从头重建投影
@@ -546,18 +550,19 @@ class Projectable(ABC):
         Args:
             aggregate_id: 聚合根 ID
             stream_key: 事件流键
+            event_store: 事件存储（可选，默认内部创建）
             
         Returns:
             重建后的投影状态
         """
-        from trader.adapters.persistence.postgres.event_store import PostgresEventStore
-        
         self._logger.info(
             "PROJECTION_REBUILD_START",
             extra={"aggregate_id": aggregate_id, "stream_key": stream_key},
         )
         
-        event_store = PostgresEventStore(self._pool)
+        if event_store is None:
+            from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+            event_store = PostgresEventStore(self._pool)
         
         # 读取所有事件
         events = await event_store.read_stream(
@@ -602,6 +607,7 @@ class Projectable(ABC):
         self,
         aggregate_id: str,
         at_seq: int,
+        event_store: Optional["PostgresEventStore"] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         获取特定时间点的投影快照
@@ -611,13 +617,14 @@ class Projectable(ABC):
         Args:
             aggregate_id: 聚合根 ID
             at_seq: 目标序列号
+            event_store: 事件存储（可选，默认内部创建）
             
         Returns:
             投影状态（如果存在）
         """
-        from trader.adapters.persistence.postgres.event_store import PostgresEventStore
-        
-        event_store = PostgresEventStore(self._pool)
+        if event_store is None:
+            from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+            event_store = PostgresEventStore(self._pool)
         stream_key = f"{self.__class__.__name__.replace('Projector', '')}-{aggregate_id}"
         
         # 读取截止到 at_seq 的所有事件

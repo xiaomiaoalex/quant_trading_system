@@ -126,9 +126,6 @@ class PositionProjector(Projectable):
             snapshot_table_name="positions_snapshots",
             event_types=[et.value for et in self.EVENT_TYPES],
         )
-        
-        # 内部状态缓存（用于 compute_projection）
-        self._positions: Dict[str, Dict[str, Any]] = {}
     
     def get_projection_id_field(self) -> str:
         """主键字段名"""
@@ -315,8 +312,6 @@ class PositionProjector(Projectable):
         Returns:
             持仓投影状态
         """
-        # 重置内部状态
-        self._positions = {}
         state = self._init_position_state()
         state["position_id"] = aggregate_id
         

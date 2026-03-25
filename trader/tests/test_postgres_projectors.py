@@ -226,7 +226,6 @@ class TestPositionProjectorStateTransitions:
             EventType.POSITION_UPDATED,
         ]}
         projector._logger = MagicMock()
-        projector._positions = {}
         return projector
     
     def _create_opened_event(self, **kwargs) -> MockStreamEvent:
@@ -393,7 +392,6 @@ class TestPositionProjectorEdgeCases:
             EventType.POSITION_UPDATED,
         ]}
         projector._logger = MagicMock()
-        projector._positions = {}
         return projector
     
     def test_empty_events(self):
@@ -1030,7 +1028,6 @@ class TestProjectorE2E:
             EventType.POSITION_UPDATED,
         ]}
         projector._logger = MagicMock()
-        projector._positions = {}
         
         events = [
             MockStreamEvent(
