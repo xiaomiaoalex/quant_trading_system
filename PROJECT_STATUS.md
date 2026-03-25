@@ -81,11 +81,11 @@
 
 | Task | 模块 | 状态 | 备注 |
 |------|------|------|------|
-| 7.1 | Position & Risk Constructor | ✅ 完成 | **完成时间**: 2026-03-24
+| 3.1 | Position & Risk Constructor | ✅ 完成 | **完成时间**: 2026-03-24
 **实现内容**: Position & Risk Constructor 完整体系
 **测试结果**: 50/50 测试通过
 **新增文件**: position_risk_constructor.py, test_position_risk_constructor.py |
-| 7.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
+| 3.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
 **分支**: task/7.2-pg-projection-read-model
 **实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector）
 **代码优化**:
