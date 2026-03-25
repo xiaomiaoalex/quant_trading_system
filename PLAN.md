@@ -249,6 +249,8 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ### Task 2.5 — 资金结构信号
 
+**状态**：✅ 已完成（2026-03-25）
+
 **交付物**：
 - `core/domain/signals/capital_structure_signals.py`
   - Funding rate z-score（滚动窗口）
@@ -256,8 +258,8 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
   - 多空比异常检测
 
 **验收标准**：
-- [ ] 依赖Feature Store中的funding_rate/OI数据
-- [ ] z-score计算有单测（边界：窗口不足时返回None）
+- [x] 依赖Feature Store中的funding_rate/OI数据
+- [x] z-score计算有单测（边界：窗口不足时返回None）
 
 ---
 

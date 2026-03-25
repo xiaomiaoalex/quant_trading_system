@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-25 01:25:00 (北京时间)
+2026-03-25 04:53:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -76,7 +76,10 @@
 | 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
 | 2.3 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
 | 2.4 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
-| 2.5 | 资金结构信号 | 🔄 进行中 | 依赖Feature Store中的funding_rate/OI数据，z-score计算待实现 |
+| 2.5 | 资金结构信号 | ✅ 已完成 | **完成时间**: 2026-03-25 |
+| | | | **分支**: task/2.5-capital-structure-signals |
+| | | | **实现内容**: capital_structure_signals.py - Funding rate z-score、OI变化率+价格背离检测、多空比异常检测 |
+| | | | **测试**: test_capital_structure_signals.py，1000+行测试代码 |
 
 ## Phase 3: 信号层增强
 
