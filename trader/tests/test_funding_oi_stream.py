@@ -14,6 +14,7 @@ from trader.adapters.binance.funding_oi_stream import (
     FundingOIConfig,
     FundingRecord,
     OIRecord,
+    LongShortRatioRecord,
     BINANCE_FUTURES_BASE_URL,
 )
 from trader.adapters.persistence.feature_store import FeatureStore
@@ -106,6 +107,30 @@ class TestOIRecord:
         assert record.open_interest == 123456.789
         assert record.exchange_ts_ms == 1700000000000
         assert record.local_ts_ms == 1700000001000
+
+
+class TestLongShortRatioRecord:
+    """测试 LongShortRatioRecord 数据类"""
+
+    def test_long_short_ratio_record_creation(self):
+        record = LongShortRatioRecord(
+            symbol="BTCUSDT",
+            long_rate=1.25,
+            inverse_long_short_ratio=0.80,
+            long_position_ratio=0.55,
+            short_position_ratio=0.45,
+            exchange_ts_ms=1700000000000,
+            local_ts_ms=1700000001000,
+            period="1h",
+        )
+        assert record.symbol == "BTCUSDT"
+        assert record.long_rate == 1.25
+        assert record.inverse_long_short_ratio == 0.80
+        assert record.long_position_ratio == 0.55
+        assert record.short_position_ratio == 0.45
+        assert record.exchange_ts_ms == 1700000000000
+        assert record.local_ts_ms == 1700000001000
+        assert record.period == "1h"
 
 
 class TestFundingOIConfig:
@@ -325,6 +350,156 @@ class TestFundingOIAdapter:
         assert written[0]["feature_name"] == "open_interest"
         assert written[0]["version"] == "v1"
         assert written[0]["value"]["open_interest"] == 123456.789
+
+    @pytest.mark.asyncio
+    async def test_fetch_long_short_ratio_success(self, adapter):
+        """测试成功拉取多空比"""
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=[{
+            "symbol": "BTCUSDT",
+            "longShortRatio": "1.25",
+            "longPositionRatio": "0.55",
+            "shortPositionRatio": "0.45",
+            "updateTime": 1700000000000,
+        }])
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
+        mock_session.closed = False
+        adapter._session = mock_session
+
+        record = await adapter.fetch_long_short_ratio("BTCUSDT", period="1h", limit=10)
+
+        assert record is not None
+        assert record.symbol == "BTCUSDT"
+        assert record.long_rate == 1.25  # longShortRatio
+        assert record.inverse_long_short_ratio == 0.8  # 1 / longShortRatio
+        assert record.long_position_ratio == 0.55
+        assert record.short_position_ratio == 0.45
+        assert record.exchange_ts_ms == 1700000000000
+        assert record.period == "1h"
+
+    @pytest.mark.asyncio
+    async def test_fetch_long_short_ratio_empty_response(self, adapter):
+        """测试多空比空响应"""
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=[])
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
+        mock_session.closed = False
+        adapter._session = mock_session
+
+        record = await adapter.fetch_long_short_ratio("BTCUSDT")
+
+        assert record is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_long_short_ratio_zero_division_protection(self, adapter):
+        """测试 longShortRatio 为 0 时的除零保护"""
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value=[{
+            "symbol": "BTCUSDT",
+            "longShortRatio": "0",  # 实际为0值
+            "longPositionRatio": "0.5",
+            "shortPositionRatio": "0.5",
+            "updateTime": 1700000000000,
+        }])
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
+        mock_session.closed = False
+        adapter._session = mock_session
+
+        # 不应抛出 ZeroDivisionError
+        record = await adapter.fetch_long_short_ratio("BTCUSDT")
+
+        assert record is not None
+        assert record.long_rate == 0.0
+        assert record.inverse_long_short_ratio == 0  # 0 / 0.0 = 0
+        assert record.long_position_ratio == 0.5
+        assert record.short_position_ratio == 0.5
+
+    @pytest.mark.asyncio
+    async def test_fetch_long_short_ratio_http_error(self, adapter):
+        """测试多空比 HTTP 错误"""
+        mock_response = AsyncMock()
+        mock_response.status = 429
+        mock_response.text = AsyncMock(return_value="Rate limit")
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
+        mock_session.closed = False
+        adapter._session = mock_session
+
+        record = await adapter.fetch_long_short_ratio("BTCUSDT")
+
+        assert record is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_long_short_ratio_timeout(self, adapter):
+        """测试多空比请求超时"""
+        adapter._config.max_retries = 2
+        adapter._config.retry_delay = 0.05
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(side_effect=asyncio.TimeoutError)
+        mock_session.closed = False
+        adapter._session = mock_session
+
+        record = await adapter.fetch_long_short_ratio("BTCUSDT")
+
+        assert record is None
+
+    @pytest.mark.asyncio
+    async def test_store_long_short_ratio(self, adapter, mock_feature_store):
+        """测试将多空比写入 Feature Store"""
+        adapter._feature_store = mock_feature_store
+
+        record = LongShortRatioRecord(
+            symbol="BTCUSDT",
+            long_rate=1.25,
+            inverse_long_short_ratio=0.80,
+            long_position_ratio=0.55,
+            short_position_ratio=0.45,
+            exchange_ts_ms=1700000000000,
+            local_ts_ms=1700000001000,
+            period="1h",
+        )
+
+        await adapter.store_long_short_ratio(record)
+
+        written = mock_feature_store.get_written_features()
+        assert len(written) == 1
+        assert written[0]["symbol"] == "BTCUSDT"
+        assert written[0]["feature_name"] == "long_short_ratio"
+        assert written[0]["version"] == "v1"
+        assert written[0]["value"]["long_position_ratio"] == 0.55
+        assert written[0]["value"]["short_position_ratio"] == 0.45
+        assert written[0]["meta"]["period"] == "1h"
+
+    @pytest.mark.asyncio
+    async def test_store_long_short_ratio_failure_graceful(self, adapter):
+        """测试写入多空比失败时的降级保护"""
+        adapter._feature_store = MagicMock()
+        adapter._feature_store.write_feature = AsyncMock(side_effect=Exception("DB error"))
+
+        record = LongShortRatioRecord(
+            symbol="BTCUSDT",
+            long_rate=1.25,
+            inverse_long_short_ratio=0.80,
+            long_position_ratio=0.55,
+            short_position_ratio=0.45,
+            exchange_ts_ms=1700000000000,
+            local_ts_ms=1700000001000,
+            period="1h",
+        )
+
+        # 不应抛出异常
+        await adapter.store_long_short_ratio(record)
 
     @pytest.mark.asyncio
     async def test_write_to_store_failure_graceful(self, adapter):

@@ -166,6 +166,15 @@ class PostgreSQLStorage:
             await self._pool.close()
         self._connected = False
 
+    def acquire(self):
+        """
+        Acquire a connection from the pool.
+        
+        Returns:
+            asyncpg Pool acquire context manager
+        """
+        return self._pool.acquire()
+
     async def _initialize_schema(self) -> None:
         """Initialize database schema"""
         async with self._pool.acquire() as conn:

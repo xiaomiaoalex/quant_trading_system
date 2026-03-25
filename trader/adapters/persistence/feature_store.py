@@ -19,7 +19,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 
 from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.adapters.persistence.postgres import (
@@ -45,6 +45,20 @@ class FeatureRecord:
     ts_ms: int
     value: Any
     meta: Dict[str, Any]
+
+
+@dataclass
+class FeaturePoint:
+    """
+    时间序列特征点
+    
+    用于范围查询返回的时间序列表征
+    """
+    symbol: str
+    feature_name: str
+    version: str
+    ts_ms: int
+    value: Any
 
 
 class FeatureStore:
@@ -316,6 +330,128 @@ class FeatureStore:
                 "value": json.loads(row["value"]) if isinstance(row["value"], str) else row["value"],
                 "meta": json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"],
             }
+
+    async def read_feature_range(
+        self,
+        symbol: str,
+        feature_name: str,
+        start_time: int,
+        end_time: int,
+        version: Optional[str] = None,
+    ) -> List[FeaturePoint]:
+        """
+        Read feature values within a time range.
+        
+        Args:
+            symbol: Trading symbol
+            feature_name: Feature name
+            start_time: Start timestamp in milliseconds (inclusive)
+            end_time: End timestamp in milliseconds (inclusive)
+            version: Optional version filter (if None, returns all versions)
+            
+        Returns:
+            List of FeaturePoint ordered by ts_ms ascending
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_read_feature_range(
+                    symbol, feature_name, start_time, end_time, version
+                )
+            except Exception as e:
+                logger.warning(f"PostgreSQL read_feature_range failed: {e}, falling back to in-memory")
+        
+        return self._memory_read_feature_range(symbol, feature_name, start_time, end_time, version)
+
+    def _memory_read_feature_range(
+        self,
+        symbol: str,
+        feature_name: str,
+        start_time: int,
+        end_time: int,
+        version: Optional[str] = None,
+    ) -> List[FeaturePoint]:
+        """
+        Read feature range from memory storage.
+        
+        Memory storage scan with prefix filter.
+        Note: O(n) scan over all features. For large datasets, consider adding
+        a secondary index mapping (symbol, feature_name) -> [keys] for O(log n) lookup.
+        """
+        results: List[FeaturePoint] = []
+        prefix = f"{symbol}:{feature_name}:"
+        
+        # Iterate keys first, then access values (avoids unnecessary value access for non-matching keys)
+        storage = self._memory_storage.feature_values_by_key
+        for key in storage.keys():
+            if not key.startswith(prefix):
+                continue
+            feature = storage[key]
+            
+            ts_ms = feature["ts_ms"]
+            if ts_ms < start_time or ts_ms > end_time:
+                continue
+            
+            if version is not None and feature["version"] != version:
+                continue
+            
+            results.append(FeaturePoint(
+                symbol=feature["symbol"],
+                feature_name=feature["feature_name"],
+                version=feature["version"],
+                ts_ms=ts_ms,
+                value=feature["value"],
+            ))
+        
+        results.sort(key=lambda x: x.ts_ms)
+        return results
+
+    async def _postgres_read_feature_range(
+        self,
+        symbol: str,
+        feature_name: str,
+        start_time: int,
+        end_time: int,
+        version: Optional[str] = None,
+    ) -> List[FeaturePoint]:
+        """
+        Read feature range from PostgreSQL.
+        
+        Uses indexed ts_ms column for efficient range query.
+        """
+        async with self._postgres_storage.acquire() as conn:
+            if version is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT symbol, feature_name, version, ts_ms, value
+                    FROM feature_values 
+                    WHERE symbol = $1 AND feature_name = $2 AND version = $3
+                    AND ts_ms >= $4 AND ts_ms <= $5
+                    ORDER BY ts_ms ASC
+                    """,
+                    symbol, feature_name, version, start_time, end_time,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT symbol, feature_name, version, ts_ms, value
+                    FROM feature_values 
+                    WHERE symbol = $1 AND feature_name = $2
+                    AND ts_ms >= $3 AND ts_ms <= $4
+                    ORDER BY ts_ms ASC
+                    """,
+                    symbol, feature_name, start_time, end_time,
+                )
+            
+            return [
+                FeaturePoint(
+                    symbol=row["symbol"],
+                    feature_name=row["feature_name"],
+                    version=row["version"],
+                    ts_ms=row["ts_ms"],
+                    value=json.loads(row["value"]) if isinstance(row["value"], str) else row["value"],
+                )
+                for row in rows
+            ]
 
     async def list_versions(
         self,

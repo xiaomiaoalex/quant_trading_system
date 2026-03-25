@@ -6,8 +6,9 @@ Funding/OI Stream Adapter - Binance Funding Rate & Open Interest Fetcher
 功能：
 - REST 拉取 Funding Rate：GET /fapi/v1/fundingRate
 - REST 拉取 Open Interest：GET /fapi/v1/openInterest
+- REST 拉取多空比：GET /fapi/v1/topLongShortPositionRatio
 - 定时采集（默认8h funding周期前30min触发）
-- 写入 Feature Store：feature_name=funding_rate|open_interest
+- 写入 Feature Store：feature_name=funding_rate|open_interest|long_short_ratio
 
 特性：
 - 降级保护：采集失败仅记录日志，不影响主交易流程
@@ -71,6 +72,19 @@ class OIRecord:
     open_interest: float
     exchange_ts_ms: int
     local_ts_ms: int
+
+
+@dataclass
+class LongShortRatioRecord:
+    """多空比记录"""
+    symbol: str
+    long_rate: float
+    inverse_long_short_ratio: float
+    long_position_ratio: float
+    short_position_ratio: float
+    exchange_ts_ms: int
+    local_ts_ms: int
+    period: str
 
 
 class FundingOIAdapter:
@@ -219,6 +233,136 @@ class FundingOIAdapter:
                 await asyncio.sleep(self._config.retry_delay * (attempt + 1))
 
         return None
+
+    async def fetch_long_short_ratio(
+        self, symbol: str, period: str = "1h", limit: int = 10
+    ) -> Optional[LongShortRatioRecord]:
+        """
+        拉取单个 symbol 的多空比数据
+
+        Args:
+            symbol: 交易对，如 "BTCUSDT"
+            period: 时间周期，如 "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"
+            limit: 数据数量限制，默认 10
+
+        Returns:
+            LongShortRatioRecord 或 None
+        """
+        await self._ensure_session()
+
+        url = f"{self._config.base_url}/fapi/v1/topLongShortPositionRatio"
+        params = {"symbol": symbol, "period": period, "limit": limit}
+
+        for attempt in range(self._config.max_retries):
+            try:
+                async with self._session.get(url, params=params) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data and len(data) > 0:
+                            # 取最新一条数据
+                            record = data[0]
+                            now_ms = int(time.time() * 1000)
+                            
+                            # 安全获取 updateTime，缺失时记录警告
+                            if "updateTime" not in record:
+                                logger.warning(
+                                    f"[FundingOI] Missing updateTime in long short ratio response for {symbol}, "
+                                    f"using local time instead"
+                                )
+                                exchange_ts_ms = now_ms
+                            else:
+                                exchange_ts_ms = record.get("updateTime")
+                            
+                            # 安全计算inverse_long_short_ratio，避免除零和极端小值风险
+                            # 极端小值阈值：小于 1e-6 视为无效值
+                            EXTREME_SMALL_THRESHOLD = 1e-6
+                            long_short_ratio_val = float(record.get("longShortRatio", 0))
+                            if long_short_ratio_val == 0 or long_short_ratio_val < EXTREME_SMALL_THRESHOLD:
+                                inverse_long_short_ratio = 0.0
+                                if long_short_ratio_val != 0:
+                                    logger.warning(
+                                        f"[FundingOI] Extreme small long_short_ratio for {symbol}: "
+                                        f"{long_short_ratio_val}, treating as 0"
+                                    )
+                            else:
+                                inverse_long_short_ratio = 1.0 / long_short_ratio_val
+                            return LongShortRatioRecord(
+                                symbol=symbol,
+                                long_rate=long_short_ratio_val,
+                                inverse_long_short_ratio=inverse_long_short_ratio,
+                                long_position_ratio=float(record.get("longPositionRatio", 0)),
+                                short_position_ratio=float(record.get("shortPositionRatio", 0)),
+                                exchange_ts_ms=exchange_ts_ms,
+                                local_ts_ms=now_ms,
+                                period=period,
+                            )
+                        logger.warning(f"[FundingOI] Empty long short ratio response for {symbol}")
+                        return None
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(
+                            f"[FundingOI] Long short ratio request failed for {symbol}: "
+                            f"status={resp.status}, error={error_text}"
+                        )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[FundingOI] Long short ratio request timeout for {symbol}, "
+                    f"attempt {attempt + 1}/{self._config.max_retries}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[FundingOI] Long short ratio request error for {symbol}: {e}, "
+                    f"attempt {attempt + 1}/{self._config.max_retries}"
+                )
+
+            if attempt < self._config.max_retries - 1:
+                await asyncio.sleep(self._config.retry_delay * (attempt + 1))
+
+        return None
+
+    async def store_long_short_ratio(self, record: LongShortRatioRecord) -> None:
+        """
+        将多空比数据写入 Feature Store
+
+        Args:
+            record: 多空比记录
+        """
+        try:
+            meta = {
+                "period": record.period,
+                "source": "binance_futures",
+                "fetched_at": datetime.now(timezone.utc).isoformat() + "Z",
+            }
+
+            created, is_dup = await self._feature_store.write_feature(
+                symbol=record.symbol,
+                feature_name="long_short_ratio",
+                version="v1",
+                ts_ms=record.exchange_ts_ms,
+                value={
+                    "long_rate": record.long_rate,
+                    "inverse_long_short_ratio": record.inverse_long_short_ratio,
+                    "long_position_ratio": record.long_position_ratio,
+                    "short_position_ratio": record.short_position_ratio,
+                    "symbol": record.symbol,
+                },
+                meta=meta,
+            )
+
+            if created:
+                logger.debug(
+                    f"[FundingOI] Long short ratio written for {record.symbol}: "
+                    f"long={record.long_position_ratio:.4f}, short={record.short_position_ratio:.4f} "
+                    f"at {record.exchange_ts_ms}"
+                )
+            elif is_dup:
+                logger.debug(
+                    f"[FundingOI] Long short ratio duplicate for {record.symbol} at {record.exchange_ts_ms}"
+                )
+
+        except Exception as e:
+            # 降级保护：写入失败仅记录日志
+            logger.error(f"[FundingOI] Failed to write long short ratio to store: {e}")
 
     async def _write_funding_to_store(self, record: FundingRecord) -> None:
         """
