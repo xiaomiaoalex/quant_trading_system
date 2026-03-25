@@ -153,19 +153,24 @@ class OnChainMarketDataAdapter:
         """
         从 Binance 获取最近爆仓数据
 
-        [STUB IMPLEMENTATION] 此方法不采集爆仓数据，仅获取 ticker 价格。
+        [STUB IMPLEMENTATION] 此方法当前为桩实现，返回空列表。
 
-        注意：Binance 没有公开的爆仓历史 API，此方法返回空列表。
-        实际项目中应接入 Coinglass、Binance Liquidation API 等专业数据源。
+        注意：Binance Futures 公开 API (fapi) 没有提供爆仓历史接口。
+        可用的公开数据源：
+        1. Binance WebSocket 得益于 '!liquidation@arr' - 但需要维持连接且仅提供实时数据
+        2. Coinglass API (付费) - 提供历史爆仓数据
+        3. 第三方数据聚合器
 
         当前实现：
-        - 连接 Binance ticker API 获取价格数据
-        - 由于没有爆仓历史公开 API，不产生实际爆仓记录
+        - 仅获取 ticker 价格用于监控调试
+        - 不产生任何爆仓记录 (liquidation records)
 
-        TODO: 接入专业爆仓数据源（如 Coinglass API）以获取真实的爆仓数据
+        TODO (P1):
+        - 如需历史爆仓分析，应接入 Coinglass 等付费 API
+        - 或使用 WebSocket 实时流长期积累数据
 
         Returns:
-            空列表 - 爆仓数据采集功能待完成
+            空列表 - Binance 无公开爆仓历史 API，需接入专业数据源
         """
         await self._ensure_session()
 
@@ -331,10 +336,12 @@ class OnChainMarketDataAdapter:
             record: 爆仓记录
         """
         try:
+            latency_ms = record.local_ts_ms - record.exchange_ts_ms
             meta = {
                 "source": "binance_futures",
                 "side": record.side,
                 "fetched_at": datetime.now(timezone.utc).isoformat() + "Z",
+                "latency_ms": latency_ms,
             }
 
             created, is_dup = await self._feature_store.write_feature(
@@ -369,9 +376,11 @@ class OnChainMarketDataAdapter:
             record: 流量记录
         """
         try:
+            latency_ms = record.local_ts_ms - record.exchange_ts_ms
             meta = {
                 "source": "glassnode",
                 "fetched_at": datetime.now(timezone.utc).isoformat() + "Z",
+                "latency_ms": latency_ms,
             }
 
             created, is_dup = await self._feature_store.write_feature(
@@ -405,9 +414,11 @@ class OnChainMarketDataAdapter:
             record: 供应量记录
         """
         try:
+            latency_ms = record.local_ts_ms - record.exchange_ts_ms
             meta = {
                 "source": "coingecko",
                 "fetched_at": datetime.now(timezone.utc).isoformat() + "Z",
+                "latency_ms": latency_ms,
             }
 
             created, is_dup = await self._feature_store.write_feature(
