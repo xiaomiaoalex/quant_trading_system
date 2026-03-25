@@ -563,3 +563,184 @@ class TestGlobalAdapterInstance:
 
         await stop_onchain_service()
         assert not adapter.is_running()
+
+
+class TestRawLiquidationEventParsing:
+    """Test RawLiquidationEvent WebSocket message parsing."""
+
+    def test_parse_valid_force_order_message(self):
+        """Test parsing valid Binance forceOrder WebSocket message."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        message = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSDT","S":"SELL","o":"LIMIT","p":"11000.00","q":"1.0","ap":"11100.00","l":"1.0","v":"1.0"}'
+        event = connector._parse_message(message)
+
+        assert event is not None
+        assert event.symbol == "BTCUSDT"
+        assert event.side == "sell"
+        assert event.price == 11000.00
+        assert event.quantity == 1.0
+        assert event.notional_usd == 11100.00  # ap * q
+        assert event.order_type == "LIMIT"
+        assert event.event_time_ms == 1568014460943
+
+    def test_parse_buy_liquidation(self):
+        """Test parsing BUY side liquidation."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        message = '{"e":"ForceOrder","E":1568014460943,"s":"ETHUSDT","S":"BUY","o":"MARKET","p":"2000.00","q":"5.0","ap":"2010.00","l":"5.0","v":"5.0"}'
+        event = connector._parse_message(message)
+
+        assert event is not None
+        assert event.side == "buy"
+        assert event.notional_usd == 10050.00  # 2010 * 5
+
+    def test_parse_non_usdt_symbol_rejected(self):
+        """Test that non-USDT symbols are filtered out."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        # BNBUSD should be filtered
+        message = '{"e":"ForceOrder","E":1568014460943,"s":"BNBUSD","S":"SELL","o":"LIMIT","p":"300.00","q":"1.0","ap":"305.00","l":"1.0","v":"1.0"}'
+        event = connector._parse_message(message)
+
+        assert event is None
+
+    def test_parse_non_force_order_message_returns_none(self):
+        """Test that non-ForceOrder messages return None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        #trade message
+        message = '{"e":"trade","E":1568014460943,"s":"BTCUSDT","p":"11000.00"}'
+        event = connector._parse_message(message)
+
+        assert event is None
+
+    def test_parse_invalid_json_returns_none(self):
+        """Test that invalid JSON returns None without raising."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        event = connector._parse_message("not valid json")
+        assert event is None
+
+
+class TestLiquidationAggregator:
+    """Test LiquidationAggregator 1m bucket functionality."""
+
+    def test_bucket_alignment(self):
+        """Test that events are aligned to 1m buckets."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+
+        # Event at 1568014460943 should align to bucket starting at 1568014440000 (1568014460943 // 60000 * 60000)
+        ts = 1568014460943
+        aligned = agg._align_to_bucket(ts)
+        assert aligned == 1568014440000
+
+    def test_add_event_to_bucket(self):
+        """Test adding events to bucket."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        event = RawLiquidationEvent(
+            event_time_ms=1568014460943,
+            symbol="BTCUSDT",
+            side="sell",
+            price=11000.0,
+            quantity=1.0,
+            notional_usd=11000.0,
+            order_type="LIMIT",
+        )
+        agg.add_event(event)
+
+        bucket_ts = agg._align_to_bucket(event.event_time_ms)
+        assert bucket_ts in agg._buckets
+        assert len(agg._buckets[bucket_ts]) == 1
+
+    def test_aggregate_single_event_bucket(self):
+        """Test aggregating a bucket with single event."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        event = RawLiquidationEvent(
+            event_time_ms=1568014460943,
+            symbol="BTCUSDT",
+            side="sell",
+            price=11000.0,
+            quantity=1.0,
+            notional_usd=11000.0,
+            order_type="LIMIT",
+        )
+        agg.add_event(event)
+
+        bucket_ts = agg._align_to_bucket(event.event_time_ms)
+        bucket = agg._aggregate_bucket(bucket_ts)
+
+        assert bucket is not None
+        assert bucket.liquidation_count == 1
+        assert bucket.liquidation_notional_usd == 11000.0
+        assert bucket.short_liquidation_notional_usd == 11000.0
+        assert bucket.long_liquidation_notional_usd == 0.0
+        assert bucket.net_liquidation_imbalance_usd == -11000.0
+
+    def test_aggregate_multi_event_bucket(self):
+        """Test aggregating a bucket with multiple events."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        # Use timestamps that align to the same bucket (same minute)
+        # 1568014440000 is already aligned to 1m bucket
+        base_ts = 1568014440000
+
+        events = [
+            RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"),
+            RawLiquidationEvent(base_ts + 5000, "BTCUSDT", "sell", 11100.0, 0.5, 5550.0, "LIMIT"),
+            RawLiquidationEvent(base_ts + 10000, "ETHUSDT", "buy", 2000.0, 5.0, 10000.0, "MARKET"),
+        ]
+
+        for e in events:
+            agg.add_event(e)
+
+        bucket = agg._aggregate_bucket(base_ts)
+
+        assert bucket is not None
+        assert bucket.liquidation_count == 3
+        assert bucket.liquidation_notional_usd == 26550.0
+        assert bucket.short_liquidation_notional_usd == 16550.0  # 11000 + 5550
+        assert bucket.long_liquidation_notional_usd == 10000.0
+        assert bucket.net_liquidation_imbalance_usd == -6550.0
+        assert set(bucket.symbols) == {"BTCUSDT", "ETHUSDT"}
+
+    def test_aggregate_empty_bucket_returns_none(self):
+        """Test that aggregating empty bucket returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+
+        bucket = agg._aggregate_bucket(1568014400000)
+        assert bucket is None
+
+
+class TestLiquidationAggregatorSmoke:
+    """Smoke tests for LiquidationAggregator (integration without real WS)."""
+
+    def test_aggregator_initialization(self):
+        """Test aggregator can be initialized."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+        assert agg._running is False
+        assert len(agg._buckets) == 0
