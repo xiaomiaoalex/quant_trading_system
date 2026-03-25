@@ -14,21 +14,21 @@
 
 ## 最近开发记录（滚动式）
 
-### 上次任务：Task 7.2 PostgreSQL投影读模型
-- 完成时间: 2026-03-25
-- 分支: task/7.2-pg-projection-read-model
-- 状态: ✅ 已合并到main
-- 主要变更: order_projector索引优化, position_projector重构, risk_projector EventType枚举
-
-### 本次任务：Task 2.5 资金结构信号
+### 上次任务：Task 2.5 资金结构信号
 - 完成时间: 2026-03-25
 - 分支: task/2.5-capital-structure-signals
 - 状态: ✅ 已合并到main
 - 主要变更: FeatureStore范围查询, 多空比数据适配器, 三大信号计算
 
+### 本次任务：Task 2.3 公告爬虫 WS 迁移
+- 完成时间: 2026-03-25
+- 分支: feature/task-2.3/announcement-crawler-tests
+- 状态: ✅ 待合并
+- 主要变更: WebSocket-first架构, RawAnnouncement统一模型, WS/HTML双源, 74个测试全部通过
+
 ### 下次计划：Task 3.3 Replay Runner
 - 目标: 实现事件回放引擎
-- 前置条件: Task 2.5完成（✅）
+- 前置条件: Task 2.3完成（✅）
 - 预计工作量: 待评估
 
 ## Phase 1: M1 安全闭环
@@ -59,9 +59,12 @@
 |------|------|------|------|
 | 2.1 | Funding/OI适配器 | ✅ 已完成 | 已实现 funding_oi_stream.py，21个测试通过 |
 | 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
-| 2.3 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
-| 2.4 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
-| 2.5 | 资金结构信号 | ✅ 已完成 | **完成时间**: 2026-03-25 |
+| 2.3 | 公告爬虫 WS 迁移 | ✅ 已完成 | **分支**: feature/task-2.3/announcement-crawler-tests |
+| | | | **实现内容**: WebSocket-first架构，RawAnnouncement统一模型，ws_source.py + html_source.py 双源 |
+| | | | **测试**: 74个测试全部通过，test_announcements_crawler*.py |
+| 2.4 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
+| 2.5 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
+| 2.6 | 资金结构信号 | ✅ 已完成 | **完成时间**: 2026-03-25 |
 | | | | **分支**: task/2.5-capital-structure-signals |
 | | | | **实现内容**: capital_structure_signals.py - Funding rate z-score、OI变化率+价格背离检测、多空比异常检测 |
 | | | | **测试**: test_capital_structure_signals.py，1000+行测试代码 |

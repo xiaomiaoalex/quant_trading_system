@@ -217,15 +217,31 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ### Task 2.3 — 事件公告爬虫
 
+**状态**：✅ 已完成（2026-03-25）
+
 **交付物**：
 - `adapters/announcements/binance_crawler.py`
   - 解析Binance公告RSS/API
   - 分类：`ListingEvent`、`DelistingEvent`、`MaintenanceEvent`、`OtherEvent`
   - 写入event_log（stream_key=`announcements`）
+- `adapters/announcements/models.py`
+  - `RawAnnouncement` 统一数据模型（所有字段 Optional）
+  - `dedup_key` 属性（URL尾部或 content hash）
+  - `classify_announcement()` 共享分类函数
+- `adapters/announcements/ws_source.py`
+  - WebSocket 主数据源（`wss://api.binance.com/sapi/wss?topic=com_announcement_en`）
+  - 核心方法：`connect()`, `subscribe()`, `recv_one()`, `recv_async_iterator()`
+- `adapters/announcements/html_source.py`
+  - HTML 回退数据源（Binance CMS API）
+  - `fetch_initial()` 返回 `list[RawAnnouncement]`
+- `trader/tests/test_announcements_crawler*.py`
+  - 74个测试全部通过（单元+集成+e2e）
 
 **验收标准**：
-- [ ] 新上币公告能被正确分类为ListingEvent
-- [ ] 事件写入event_log，可被策略订阅
+- [x] 新上币公告能被正确分类为ListingEvent
+- [x] 事件写入event_log，可被策略订阅
+- [x] WebSocket-first 架构，失败自动降级到 HTML
+- [x] RawAnnouncement 统一模型，WS/HTML 双源兼容
 
 ---
 
