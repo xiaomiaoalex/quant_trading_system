@@ -153,9 +153,9 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：各告警规则触发条件
 
 **验收标准**：
-- [ ] `/monitor/snapshot` 返回完整系统状态快照
-- [ ] 日亏损超限时触发告警日志
-- [ ] Adapter DEGRADED时触发告警日志
+- [x] `/monitor/snapshot` 返回完整系统状态快照
+- [x] 日亏损超限时触发告警日志
+- [x] Adapter DEGRADED时触发告警日志
 
 ---
 
@@ -174,10 +174,10 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 - 单测：幂等append、乱序读取、快照恢复
 
 **验收标准**：
-- [ ] OMS事件持久化到PG
-- [ ] 重启后可从event_log恢复OMS状态
-- [ ] 幂等append通过CI postgres-integration
-- [ ] 内存fallback在PG不可用时自动启用
+- [x] OMS事件持久化到PG
+- [x] 重启后可从event_log恢复OMS状态
+- [x] 幂等append通过CI postgres-integration
+- [x] 内存fallback在PG不可用时自动启用
 
 ---
 

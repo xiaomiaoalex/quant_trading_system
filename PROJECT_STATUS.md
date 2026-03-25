@@ -76,16 +76,13 @@
 | 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
 | 2.3 | Reconciler集成测试 | ✅ 已完成 | test_reconciler_service_integration.py，493行，17个测试 |
 | 2.4 | Reconciler API测试 | ✅ 已完成 | test_api_reconciler.py，396行，16个测试 |
+| 2.5 | 资金结构信号 | 🔄 进行中 | 依赖Feature Store中的funding_rate/OI数据，z-score计算待实现 |
 
 ## Phase 3: 信号层增强
 
 | Task | 模块 | 状态 | 备注 |
 |------|------|------|------|
-| 3.1 | Position & Risk Constructor | ✅ 完成 | **完成时间**: 2026-03-24
-**实现内容**: Position & Risk Constructor 完整体系
-**测试结果**: 50/50 测试通过
-**新增文件**: position_risk_constructor.py, test_position_risk_constructor.py |
-| 3.2 | PostgreSQL 投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
+| 3.1 | PG投影读模型 | ✅ 完成 | **完成时间**: 2026-03-24/25
 **分支**: task/7.2-pg-projection-read-model
 **实现内容**: PostgreSQL 投影读模型完整体系（PositionProjector, OrderProjector, RiskProjector）
 **代码优化**:
@@ -95,6 +92,9 @@
 **测试结果**: 44 个单元测试 + 766 全量测试通过
 **新增文件**: projectors/__init__.py, base.py, position_projector.py, order_projector.py, risk_projector.py
 migrations/003_projections.sql, tests/test_postgres_projectors.py |
+| 3.2 | Escape Time模拟器 | 🔄 待开始 | 输入：当前持仓 + 实时深度；输出：最快平仓时间估算 |
+| 3.3 | Replay Runner | 🔄 待开始 | 从event_log重放历史事件序列，用于回归测试、场景复现、策略回测 |
+| 3.4 | AI治理接口（HITL） | 🔄 待开始 | AI建议接口 + Human-in-the-Loop确认流程 + 审计日志 |
 
 ## 已知问题
 
