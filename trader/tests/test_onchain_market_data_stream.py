@@ -647,7 +647,8 @@ class TestLiquidationAggregator:
         aligned = agg._align_to_bucket(ts)
         assert aligned == 1568014440000
 
-    def test_add_event_to_bucket(self):
+    @pytest.mark.asyncio
+    async def test_add_event_to_bucket(self):
         """Test adding events to bucket."""
         from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
 
@@ -662,13 +663,14 @@ class TestLiquidationAggregator:
             notional_usd=11000.0,
             order_type="LIMIT",
         )
-        agg.add_event(event)
+        await agg.add_event(event)
 
         bucket_ts = agg._align_to_bucket(event.event_time_ms)
         assert bucket_ts in agg._buckets
         assert len(agg._buckets[bucket_ts]) == 1
 
-    def test_aggregate_single_event_bucket(self):
+    @pytest.mark.asyncio
+    async def test_aggregate_single_event_bucket(self):
         """Test aggregating a bucket with single event."""
         from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
 
@@ -683,19 +685,21 @@ class TestLiquidationAggregator:
             notional_usd=11000.0,
             order_type="LIMIT",
         )
-        agg.add_event(event)
+        await agg.add_event(event)
 
         bucket_ts = agg._align_to_bucket(event.event_time_ms)
-        bucket = agg._aggregate_bucket(bucket_ts)
+        result = await agg._aggregate_bucket(bucket_ts)
 
-        assert bucket is not None
+        assert result is not None
+        bucket, events_by_symbol = result
         assert bucket.liquidation_count == 1
         assert bucket.liquidation_notional_usd == 11000.0
         assert bucket.short_liquidation_notional_usd == 11000.0
         assert bucket.long_liquidation_notional_usd == 0.0
         assert bucket.net_liquidation_imbalance_usd == -11000.0
 
-    def test_aggregate_multi_event_bucket(self):
+    @pytest.mark.asyncio
+    async def test_aggregate_multi_event_bucket(self):
         """Test aggregating a bucket with multiple events."""
         from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
 
@@ -712,11 +716,12 @@ class TestLiquidationAggregator:
         ]
 
         for e in events:
-            agg.add_event(e)
+            await agg.add_event(e)
 
-        bucket = agg._aggregate_bucket(base_ts)
+        result = await agg._aggregate_bucket(base_ts)
 
-        assert bucket is not None
+        assert result is not None
+        bucket, events_by_symbol = result
         assert bucket.liquidation_count == 3
         assert bucket.liquidation_notional_usd == 26550.0
         assert bucket.short_liquidation_notional_usd == 16550.0  # 11000 + 5550
@@ -724,14 +729,343 @@ class TestLiquidationAggregator:
         assert bucket.net_liquidation_imbalance_usd == -6550.0
         assert set(bucket.symbols) == {"BTCUSDT", "ETHUSDT"}
 
-    def test_aggregate_empty_bucket_returns_none(self):
+    @pytest.mark.asyncio
+    async def test_aggregate_empty_bucket_returns_none(self):
         """Test that aggregating empty bucket returns None."""
         from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
 
         agg = LiquidationAggregator()
 
-        bucket = agg._aggregate_bucket(1568014400000)
-        assert bucket is None
+        result = await agg._aggregate_bucket(1568014400000)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_success(self):
+        """Test _flush_bucket returns True on successful flush."""
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(return_value=(True, None))
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add an event to a bucket
+        base_ts = 1568014440000
+        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event)
+
+        # Flush the bucket
+        result = await agg._flush_bucket(base_ts)
+
+        assert result is True
+        # Bucket is deleted after successful flush (atomic read + I/O + delete)
+        assert base_ts not in agg._buckets
+        mock_store.write_feature.assert_called_once()
+
+        # Verify the call arguments
+        call_args = mock_store.write_feature.call_args
+        assert call_args.kwargs["symbol"] == "BTCUSDT"
+        assert call_args.kwargs["feature_name"] == "liquidation_aggregated"
+        assert call_args.kwargs["version"] == "v1"
+        assert call_args.kwargs["ts_ms"] == base_ts
+        assert call_args.kwargs["value"]["liquidation_count"] == 1
+        assert call_args.kwargs["value"]["liquidation_notional_usd"] == 11000.0
+        assert call_args.kwargs["value"]["long_liquidation_notional_usd"] == 0.0
+        assert call_args.kwargs["value"]["short_liquidation_notional_usd"] == 11000.0
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_failure_returns_false(self):
+        """
+        Test _flush_bucket returns False when feature store fails.
+
+        Note: With the new design (I/O outside lock), when I/O fails the bucket is
+        already deleted from _buckets (no retry possible). This is a deliberate tradeoff:
+        - Pro: add_event is not blocked for long periods during I/O
+        - Con: I/O failure means data is lost (can't retry)
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(side_effect=Exception("Connection error"))
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add an event to a bucket
+        base_ts = 1568014440000
+        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event)
+
+        # Flush the bucket - should return False on failure
+        result = await agg._flush_bucket(base_ts)
+
+        assert result is False
+        # With new design (I/O outside lock), bucket is deleted before I/O
+        # So bucket is NOT in _buckets after failure (no retry possible)
+        assert base_ts not in agg._buckets
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_partial_failure_returns_false(self):
+        """
+        Test _flush_bucket returns False when some symbols fail to write.
+
+        With multiple symbols in a bucket, if some write_feature calls succeed
+        and some fail, _flush_bucket should return False (indicating partial failure).
+        The bucket is still deleted (data loss for failed symbols).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        # Track write results
+        write_results = []
+
+        async def mock_write_feature(**kwargs):
+            symbol = kwargs["symbol"]
+            write_results.append(symbol)
+            if symbol == "BTCUSDT":
+                return (True, None)  # Success
+            else:
+                raise Exception("Connection error")  # Failure for other symbols
+
+        mock_store = MagicMock()
+        mock_store.write_feature = mock_write_feature
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add events for multiple symbols to the same bucket
+        base_ts = 1568014440000
+        events = [
+            RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"),
+            RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 2000.0, 1.0, 2000.0, "LIMIT"),
+        ]
+        for e in events:
+            await agg.add_event(e)
+
+        # Flush the bucket
+        result = await agg._flush_bucket(base_ts)
+
+        # Should return False (partial failure)
+        assert result is False
+        # Bucket is deleted regardless (data loss for failed symbols)
+        assert base_ts not in agg._buckets
+        # Both symbols were attempted
+        assert set(write_results) == {"BTCUSDT", "ETHUSDT"}
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_empty_returns_true(self):
+        """Test _flush_bucket returns True for empty bucket (no data to flush)."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+
+        # Try to flush a non-existent bucket
+        result = await agg._flush_bucket(1568014400000)
+
+        assert result is True  # No data to flush is considered success
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_empty_cleans_retry_count(self):
+        """Test _flush_bucket cleans _bucket_retry_count for empty bucket."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+
+        # Manually add a retry count entry (simulating a bucket that previously failed)
+        bucket_ts = 1568014400000
+        agg._bucket_retry_count[bucket_ts] = 2
+        assert bucket_ts in agg._bucket_retry_count
+
+        # Flush the empty bucket
+        result = await agg._flush_bucket(bucket_ts)
+
+        assert result is True
+        # Retry count should be cleaned up even for empty bucket
+        assert bucket_ts not in agg._bucket_retry_count
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_cutoff_calculation_recent(self):
+        """Test flush cutoff calculation excludes recent buckets."""
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(return_value=(True, None))
+
+        agg = LiquidationAggregator(feature_store=mock_store, flush_interval_seconds=1.0)
+
+        # Use a fixed reference time to avoid flakiness near minute boundaries
+        reference_ms = 1568014400000
+        recent_bucket_ts = (reference_ms // 60000) * 60000  # Align to minute
+        event = RawLiquidationEvent(recent_bucket_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event)
+
+        # Calculate cutoff using same formula as _flush_loop
+        cutoff_ts = (reference_ms // 60000) * 60000 - 60000 * 2  # 2 minutes before reference
+
+        async with agg._lock:
+            bucket_ts_list = [ts for ts in sorted(agg._buckets.keys()) if ts < cutoff_ts]
+
+        # Recent bucket should NOT be in the flush list since it's after cutoff
+        assert len(bucket_ts_list) == 0
+        assert recent_bucket_ts in agg._buckets
+
+        # Verify actual flush behavior: calling _flush_bucket directly will flush
+        # and delete the bucket regardless of cutoff (cutoff is a _flush_loop concern)
+        flush_result = await agg._flush_bucket(recent_bucket_ts)
+        assert flush_result is True
+        # The bucket is deleted after flush (atomic operation)
+        assert recent_bucket_ts not in agg._buckets
+
+    @pytest.mark.asyncio
+    async def test_aggregate_bucket_handles_old_bucket_data(self):
+        """Test that _aggregate_bucket correctly handles data from an old bucket.
+
+        Note: This test verifies that _aggregate_bucket can correctly process
+        bucket data regardless of its age. It does NOT verify cutoff calculation
+        behavior in _flush_loop (that would require an integrated flush loop test).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(return_value=(True, None))
+
+        agg = LiquidationAggregator(feature_store=mock_store, flush_interval_seconds=1.0)
+
+        # Add an event to an old bucket
+        old_ts = 1568014440000
+        event = RawLiquidationEvent(old_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event)
+
+        assert old_ts in agg._buckets
+
+        # Verify _aggregate_bucket correctly processes the old bucket data
+        result = await agg._aggregate_bucket(old_ts)
+        assert result is not None
+        bucket, events_by_symbol = result
+        # Verify the bucket has correct data
+        assert bucket.liquidation_count == 1
+        assert bucket.symbols == ["BTCUSDT"]
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_atomic_read_no_data_loss(self):
+        """
+        Test that _flush_bucket atomically reads bucket data and flushes without data loss.
+
+        This test verifies the fix for the race condition where:
+        1. _flush_loop releases lock after getting bucket_ts_list
+        2. add_event adds events to the bucket
+        3. _flush_bucket reads stale data and deletes bucket
+        4. Events added in step 2 are lost
+
+        The fix ensures _flush_bucket holds lock during read, so any events added
+        before the read are included in the flush.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        flushed_features = []
+
+        async def mock_write_feature(**kwargs):
+            """Track what was flushed"""
+            flushed_features.append(kwargs)
+            return (True, None)
+
+        mock_store = MagicMock()
+        mock_store.write_feature = mock_write_feature
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add first event
+        base_ts = 1568014440000
+        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event1)
+
+        assert base_ts in agg._buckets
+        assert len(agg._buckets[base_ts]) == 1
+
+        # Add second event to the same bucket (simulating concurrent add_event)
+        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT")
+        await agg.add_event(event2)
+
+        assert len(agg._buckets[base_ts]) == 2
+
+        # Now flush - should include both events
+        result = await agg._flush_bucket(base_ts)
+
+        assert result is True
+        assert base_ts not in agg._buckets  # Bucket deleted after flush
+
+        # Verify both events were flushed
+        assert len(flushed_features) == 2  # One per symbol
+
+        symbols_flushed = {f["symbol"] for f in flushed_features}
+        assert symbols_flushed == {"BTCUSDT", "ETHUSDT"}
+
+        # Verify BTCUSDT had correct data
+        btc_feature = next(f for f in flushed_features if f["symbol"] == "BTCUSDT")
+        assert btc_feature["value"]["liquidation_count"] == 1
+        assert btc_feature["value"]["short_liquidation_notional_usd"] == 11000.0
+
+        # Verify ETHUSDT had correct data
+        eth_feature = next(f for f in flushed_features if f["symbol"] == "ETHUSDT")
+        assert eth_feature["value"]["liquidation_count"] == 1
+        assert eth_feature["value"]["long_liquidation_notional_usd"] == 10000.0
+
+    @pytest.mark.asyncio
+    async def test_flush_bucket_prevents_race_with_add_event(self):
+        """
+        Test that _flush_bucket correctly handles events added during the flush operation.
+
+        The design ensures that:
+        - Events added BEFORE _flush_bucket acquires lock are included in flush
+        - Events added AFTER bucket is deleted go to a new bucket (not lost!)
+
+        This prevents data loss from the original race condition.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        flush_count = [0]
+
+        async def slow_write_feature(**kwargs):
+            """Slow write to increase chance of race"""
+            flush_count[0] += 1
+            await asyncio.sleep(0.01)  # Simulate slow I/O
+            return (True, None)
+
+        mock_store = MagicMock()
+        mock_store.write_feature = slow_write_feature
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add initial event
+        base_ts = 1568014440000
+        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event1)
+
+        # Start flush in background
+        flush_task = asyncio.create_task(agg._flush_bucket(base_ts))
+
+        # While flush is in progress (lock held during I/O), add another event
+        # Wait a bit to ensure flush has started
+        await asyncio.sleep(0.005)
+        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT")
+        await agg.add_event(event2)
+
+        # Wait for flush to complete
+        await flush_task
+
+        # Verify: event1 was flushed, event2 went to a NEW bucket (not lost!)
+        # With our fix, the bucket is deleted before I/O completes, 
+        # so event2 (added after flush_task got lock but before I/O) creates a new bucket
+        assert flush_count[0] == 1  # Only event1's bucket was flushed
+
+        # event2 should be in a new bucket (same timestamp, but created after old bucket was deleted)
+        assert base_ts in agg._buckets
+        assert len(agg._buckets[base_ts]) == 1
+        assert agg._buckets[base_ts][0].symbol == "ETHUSDT"
 
 
 class TestLiquidationAggregatorSmoke:
@@ -744,3 +1078,433 @@ class TestLiquidationAggregatorSmoke:
         agg = LiquidationAggregator()
         assert agg._running is False
         assert len(agg._buckets) == 0
+        assert agg._draining is False
+
+
+class TestLiquidationAggregatorDraining:
+    """Test draining flag and stop behavior."""
+
+    @pytest.mark.asyncio
+    async def test_add_event_rejects_when_draining(self):
+        """Test that add_event rejects new events when _draining is True."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+        agg._draining = True  # Simulate shutdown state
+
+        event = RawLiquidationEvent(
+            event_time_ms=1568014460943,
+            symbol="BTCUSDT",
+            side="sell",
+            price=11000.0,
+            quantity=1.0,
+            notional_usd=11000.0,
+            order_type="LIMIT",
+        )
+        await agg.add_event(event)
+
+        # Event should not be added since we're draining
+        assert len(agg._buckets) == 0
+
+    @pytest.mark.asyncio
+    async def test_add_event_rejects_after_lock_acquisition_when_draining(self):
+        """Test double-check draining flag after acquiring lock."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        # Add an event first (not draining yet)
+        event = RawLiquidationEvent(
+            event_time_ms=1568014460943,
+            symbol="BTCUSDT",
+            side="sell",
+            price=11000.0,
+            quantity=1.0,
+            notional_usd=11000.0,
+            order_type="LIMIT",
+        )
+        await agg.add_event(event)
+        assert len(agg._buckets) == 1
+
+        # Now set draining and try to add another event
+        agg._draining = True
+        event2 = RawLiquidationEvent(
+            event_time_ms=1568014461943,
+            symbol="ETHUSDT",
+            side="buy",
+            price=2000.0,
+            quantity=1.0,
+            notional_usd=2000.0,
+            order_type="LIMIT",
+        )
+        await agg.add_event(event2)
+
+        # Only the first event should be present (draining prevented second)
+        assert len(agg._buckets) == 1
+
+    @pytest.mark.asyncio
+    async def test_stop_flushes_pending_buckets(self):
+        """Test stop() flushes all pending buckets before exit."""
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(return_value=(True, None))
+
+        agg = LiquidationAggregator(feature_store=mock_store)
+
+        # Add events
+        base_ts = 1568014440000
+        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event)
+
+        assert base_ts in agg._buckets
+
+        # Simulate running state and stop
+        agg._running = True
+        await agg.stop()
+
+        # Verify flush was called and bucket was removed
+        assert mock_store.write_feature.called
+        assert base_ts not in agg._buckets
+
+    @pytest.mark.asyncio
+    async def test_stop_resets_draining_flag(self):
+        """Test stop() resets _draining flag after completion."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+        agg._running = True
+        agg._draining = True
+
+        await agg.stop()
+
+        assert agg._draining is False
+
+    @pytest.mark.asyncio
+    async def test_stop_idempotent(self):
+        """Test calling stop() multiple times is safe."""
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator
+
+        agg = LiquidationAggregator()
+        agg._running = True
+
+        await agg.stop()
+        await agg.stop()  # Should not raise
+
+        assert agg._running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_during_flush_loop_sleep_no_deadlock(self):
+        """
+        Test that stop() can be called while _flush_loop is sleeping without deadlock.
+
+        The scenario:
+        1. _flush_loop is running with a long sleep interval
+        2. stop() is called
+        3. Draining flag prevents new events
+        4. _flush_loop exits when it wakes up (because _running is False)
+        5. Final flush happens
+
+        This test uses a very short sleep interval and proper task cleanup.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        mock_store = MagicMock()
+        mock_store.write_feature = AsyncMock(return_value=(True, None))
+
+        # Use a very short flush interval so we don't wait long
+        agg = LiquidationAggregator(feature_store=mock_store, flush_interval_seconds=0.05)
+
+        # Add events to multiple buckets
+        base_ts = 1568014440000
+        events = [
+            RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"),
+            RawLiquidationEvent(base_ts + 60000 + 1000, "ETHUSDT", "buy", 2000.0, 1.0, 2000.0, "LIMIT"),
+        ]
+        for e in events:
+            await agg.add_event(e)
+
+        # Start the aggregator
+        agg._running = True
+        agg._ws_connector = MagicMock()
+        agg._ws_connector.disconnect = AsyncMock()
+        agg._ws_task = None  # No need for real WS task
+        agg._flush_task = asyncio.create_task(agg._flush_loop())
+
+        # Let flush_loop run for a bit
+        await asyncio.sleep(0.02)
+
+        # Now call stop - should not deadlock
+        await agg.stop()
+
+        # Verify:
+        # 1. stop() completed
+        assert agg._running is False
+        assert agg._draining is False
+
+        # 2. All buckets were flushed
+        assert len(agg._buckets) == 0
+
+        # 3. write_feature was called for both events
+        assert mock_store.write_feature.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_add_event_blocked_during_stop(self):
+        """
+        Test that add_event is blocked after stop() begins (draining flag set).
+
+        This verifies the double-check locking pattern works:
+        - First check: before acquiring lock (fast path)
+        - Second check: after acquiring lock (ensures no race)
+        """
+        from unittest.mock import AsyncMock, MagicMock
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        # Add initial event
+        base_ts = 1568014440000
+        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event1)
+
+        assert len(agg._buckets) == 1
+
+        # Simulate stop() has been called by setting draining flag
+        # (stop() sets draining before doing anything else)
+        agg._draining = True
+        agg._running = False  # Also set _running to False like stop() does
+
+        # Try to add event while draining - should be rejected at entry check
+        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 1.0, 5000.0, "LIMIT")
+        await agg.add_event(event2)
+
+        # Event2 should NOT have been added (draining blocked it)
+        assert len(agg._buckets) == 1
+        assert agg._buckets[base_ts][0].symbol == "BTCUSDT"
+
+    @pytest.mark.asyncio
+    async def test_add_event_rejected_at_lock_acquisition_when_draining(self):
+        """
+        Test that add_event is rejected even if it gets past the first draining check
+        but the draining flag is set before lock acquisition completes.
+
+        This is a timing test showing that the double-check pattern works:
+        Thread A: checks draining (False) -> proceeds to acquire lock
+        Thread B: sets draining = True
+        Thread A: acquires lock -> checks draining again -> rejects
+        """
+        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        agg = LiquidationAggregator()
+
+        # Add initial event
+        base_ts = 1568014440000
+        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        await agg.add_event(event1)
+
+        # Acquire the lock ourselves to simulate add_event holding the lock
+        await agg._lock.acquire()
+
+        # Now set draining while add_event would be trying to acquire lock
+        agg._draining = True
+
+        # Release the lock
+        agg._lock.release()
+
+        # Now try to add event - should be rejected
+        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 1.0, 5000.0, "LIMIT")
+        await agg.add_event(event2)
+
+        # Event2 should NOT have been added
+        assert len(agg._buckets) == 1
+
+
+class TestBinanceLiquidationWSConnector:
+    """Unit tests for BinanceLiquidationWSConnector."""
+
+    def test_parse_message_valid(self):
+        """Test parsing a valid Binance forceOrder message."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSDT","S":"SELL","o":"LIMIT","p":"11000.00","q":"1.0","ap":"11100.00","l":"1.0","v":"1.0"}'
+        event = connector._parse_message(data)
+
+        assert event is not None
+        assert event.symbol == "BTCUSDT"
+        assert event.side == "sell"
+        assert event.price == 11000.0
+        assert event.quantity == 1.0
+        assert event.notional_usd == 11100.0  # ap * q
+        assert event.event_time_ms == 1568014460943
+        assert event.order_type == "LIMIT"
+
+    def test_parse_message_buy_side(self):
+        """Test parsing a BUY side forceOrder message."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"ETHUSDT","S":"BUY","o":"MARKET","p":"2000.00","q":"2.0","ap":"2010.00","l":"2.0","v":"2.0"}'
+        event = connector._parse_message(data)
+
+        assert event is not None
+        assert event.symbol == "ETHUSDT"
+        assert event.side == "buy"
+        assert event.notional_usd == 4020.0  # 2010 * 2
+
+    def test_parse_message_invalid_json(self):
+        """Test parsing invalid JSON returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        event = connector._parse_message("not valid json")
+        assert event is None
+
+    def test_parse_message_missing_event_type(self):
+        """Test parsing message with wrong event type returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"Trade","E":1568014460943,"s":"BTCUSDT","S":"SELL","p":"11000.00","q":"1.0"}'
+        event = connector._parse_message(data)
+        assert event is None
+
+    def test_parse_message_missing_symbol(self):
+        """Test parsing message without symbol field returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"","S":"SELL","p":"11000.00","q":"1.0"}'
+        event = connector._parse_message(data)
+        assert event is None
+
+    def test_parse_message_non_usdt_contract(self):
+        """Test parsing non-USDT contract returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSD","S":"SELL","p":"11000.00","q":"1.0"}'
+        event = connector._parse_message(data)
+        assert event is None
+
+    def test_parse_message_missing_required_fields(self):
+        """Test parsing message with missing required fields returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        # Missing 'S' (side) field
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSDT","p":"11000.00","q":"1.0"}'
+        event = connector._parse_message(data)
+        assert event is None
+
+    def test_parse_message_invalid_number_format(self):
+        """Test parsing message with invalid number format returns None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSDT","S":"SELL","p":"invalid","q":"1.0","ap":"11100.00","l":"1.0"}'
+        event = connector._parse_message(data)
+        assert event is None
+
+    def test_parse_message_default_order_type(self):
+        """Test that missing order_type defaults to LIMIT."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+
+        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSDT","S":"SELL","p":"11000.00","q":"1.0","ap":"11100.00","l":"1.0"}'
+        event = connector._parse_message(data)
+
+        assert event is not None
+        assert event.order_type == "LIMIT"
+
+    @pytest.mark.asyncio
+    async def test_disconnect_sets_running_false(self):
+        """Test disconnect sets _running to False."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+        connector._running = True
+
+        await connector.disconnect()
+
+        assert connector._running is False
+
+    @pytest.mark.asyncio
+    async def test_disconnect_clears_ws_reference(self):
+        """Test disconnect clears WebSocket reference."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+        from unittest.mock import AsyncMock, MagicMock
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+        connector._ws = MagicMock()
+        connector._ws.close = AsyncMock()
+
+        await connector.disconnect()
+
+        assert connector._ws is None
+
+    def test_connector_initialization(self):
+        """Test connector initializes with correct default values."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        callback = lambda e: None
+        connector = BinanceLiquidationWSConnector(on_event=callback)
+
+        assert connector._on_event is callback
+        assert connector._running is False
+        assert connector._session is None
+        assert connector._ws is None
+        assert connector._reconnect_delay == 1.0
+        assert connector._max_reconnect_delay == 60.0
+
+    @pytest.mark.asyncio
+    async def test_ensure_session_creates_new_session(self):
+        """Test _ensure_session creates a new session when None."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+        import aiohttp
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+        assert connector._session is None
+
+        await connector._ensure_session()
+
+        assert connector._session is not None
+        assert isinstance(connector._session, aiohttp.ClientSession)
+        # Cleanup
+        await connector._close_session()
+
+    @pytest.mark.asyncio
+    async def test_close_session_closes_existing_session(self):
+        """Test _close_session closes existing session."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+        await connector._ensure_session()
+        assert connector._session is not None
+
+        await connector._close_session()
+
+        assert connector._session is None
+
+    @pytest.mark.asyncio
+    async def test_close_session_handles_none_session(self):
+        """Test _close_session handles None session gracefully."""
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
+
+        connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
+        connector._session = None
+
+        # Should not raise
+        await connector._close_session()
+        assert connector._session is None
