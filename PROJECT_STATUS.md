@@ -4,13 +4,13 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-25 05:00:00 (北京时间)
+2026-03-27 10:06:00 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
 - **工作树**：干净
-- **最新提交**：`685efac` - feat(position-risk): add PositionRiskConstructor
+- **最新提交**：`10548e6` - perf(task-2.2): optimize flush_bucket_locked I/O to avoid blocking add_event
 
 ## 最近开发记录（滚动式）
 
@@ -58,7 +58,9 @@
 | Task | 模块 | 状态 | 备注 |
 |------|------|------|------|
 | 2.1 | Funding/OI适配器 | ✅ 已完成 | 已实现 funding_oi_stream.py，21个测试通过 |
-| 2.2 | OnChain适配器 | ✅ 已完成 | OnChainMarketDataAdapter 已实现，3个测试文件共1454行测试代码 |
+| 2.2 | OnChain适配器 | ✅ 已完成 | **本次优化**: perf(task-2.2) - _flush_bucket_locked I/O锁优化，新增部分失败场景测试 |
+| | | | | **原实现**: OnChainMarketDataAdapter + LiquidationAggregator + BinanceLiquidationWSConnector |
+| | | | | **测试**: test_onchain_market_data_stream.py (66 tests 全部通过) |
 | 2.3 | 公告爬虫 WS 迁移 | ✅ 已完成 | **分支**: feature/task-2.3/announcement-crawler-tests |
 | | | | **实现内容**: WebSocket-first架构，RawAnnouncement统一模型，ws_source.py + html_source.py 双源 |
 | | | | **测试**: 74个测试全部通过，test_announcements_crawler*.py |
