@@ -4,6 +4,7 @@
 
 核心服务：
 - DepthChecker: 订单簿深度检查和滑点估算
+- EscapeTimeSimulator: 平仓时间模拟器
 
 重要原则：
 1. Core Plane 禁止 IO
@@ -31,6 +32,15 @@ from trader.core.domain.services.position_risk_constructor import (
     RegimeProviderPort,
     CooldownTrackerPort,
 )
+from trader.core.domain.services.escape_time_simulator import (
+    EscapeTimeSimulator,
+    EscapeTimeSimulatorConfig,
+    EscapeTimeResult,
+    DepthLevel,
+    KillSwitchLevel,
+    KillSwitchProviderPort,
+    CooldownProviderPort,
+)
 
 __all__ = [
     # DepthChecker
@@ -51,4 +61,12 @@ __all__ = [
     "PositionRiskConstruction",
     "RegimeProviderPort",
     "CooldownTrackerPort",
+    # EscapeTimeSimulator
+    "EscapeTimeSimulator",
+    "EscapeTimeSimulatorConfig",
+    "EscapeTimeResult",
+    "DepthLevel",
+    "KillSwitchLevel",
+    "KillSwitchProviderPort",
+    "CooldownProviderPort",
 ]
