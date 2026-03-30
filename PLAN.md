@@ -41,14 +41,19 @@
 - PG投影读模型
 - Escape Time模拟器
 - Replay Runner
+- **策略执行器（StrategyRunner）** — Phase 4核心
+- **策略评估器（StrategyEvaluator）** — Phase 4核心
+- **策略热插拔机制** — Phase 4核心
+- **AI策略生成服务** — Phase 4核心
+- **AI策略聊天界面** — Phase 4核心
 
 ---
 
 ## 二、阶段划分
 
 ```
-Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
-基础设施稳固       闭环安全层    研究信号层    增强与自动化
+Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4
+基础设施稳固       闭环安全层    研究信号层    增强与自动化  策略管理与AI共创
 ```
 
 ---
@@ -295,6 +300,8 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 **前置条件**：Phase 2完成，系统有稳定信号输出。
 
+**目标**：完善系统可观测性和自动化能力，为Phase 4策略管理奠定基础。
+
 ---
 
 ### Task 3.1 — PG投影读模型
@@ -337,7 +344,200 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ---
 
-## 六、工程执行约束（所有Phase通用）
+## 六、Phase 4 — 策略管理与AI共创
+
+**前置条件**：Phase 3完成，系统有完整信号输出和回放能力。
+
+**目标**：实现策略全生命周期管理、热插拔、AI辅助策略开发。
+
+---
+
+### Task 4.1 — StrategyRunner 策略执行器
+
+**背景**：当前仅有策略注册/版本管理，无真正执行策略的运行时组件。
+
+**交付物**：
+- `services/strategy_runner.py`
+  - `StrategyPlugin` 协议：`on_tick()`, `on_fill()`, `on_cancel()` 钩子
+  - `StrategyRunner` 类：
+    - `load_strategy(strategy_id, version)` — 动态加载策略代码
+    - `start()` / `stop()` / `pause()` / `resume()` — 生命周期控制
+    - `run_tick(market_data)` — 驱动策略Tick循环
+  - 每个策略运行在独立 `asyncio.Task` 中
+  - 异常隔离：单策略崩溃不影响其他策略
+- `api/routes/strategies.py` 增强：
+  - `POST /strategies/{id}/start` — 启动策略执行
+  - `POST /strategies/{id}/stop` — 停止策略执行
+  - `GET /strategies/{id}/status` — 获取运行状态
+- 单测：启动/停止、Tick驱动、异常隔离
+
+**验收标准**：
+- [ ] 策略可通过API启动和停止
+- [ ] 策略崩溃不影响系统稳定性
+- [ ] 策略状态可查询（RUNNING/STOPPED/ERROR）
+
+---
+
+### Task 4.2 — StrategyEvaluator 策略评估器
+
+**背景**：策略部署前需要回测验证，运行中需要实时评估。
+
+**交付物**：
+- `services/strategy_evaluator.py`
+  - `BacktestEngine` 类：
+    - 输入：策略代码 + 历史Feature Store数据 + 时间范围
+    - 输出：`BacktestReport`（PnL曲线、夏普率、最大回撤、胜率）
+  - `LiveEvaluator` 类：
+    - 实时计算：当日PnL、持仓盈亏、滑点统计
+  - `StrategyMetrics` dataclass：
+    ```python
+    @dataclass(slots=True)
+    class StrategyMetrics:
+        total_pnl: Decimal
+        sharpe_ratio: float
+        max_drawdown: float
+        win_rate: float
+        avg_win_loss_ratio: float
+        total_trades: int
+        avg_slippage_bps: float
+    ```
+- `api/routes/strategies.py` 增强：
+  - `POST /strategies/{id}/backtest` — 触发回测
+  - `GET /strategies/{id}/metrics` — 获取实时指标
+- 单测：回测引擎准确性、指标计算边界条件
+
+**验收标准**：
+- [ ] 回测报告包含夏普率、最大回撤、胜率
+- [ ] 实时指标可通过API查询
+- [ ] 回测结果可与历史数据对比验证
+
+---
+
+### Task 4.3 — 策略热插拔机制
+
+**背景**：策略更新需要停机部署，无法满足快速迭代需求。
+
+**交付物**：
+- `services/strategy_hotswap.py`
+  - `StrategyLoader` 类：
+    - `load(code_ref)` — 从文件/git/AI生成代码动态加载
+    - `unload(strategy_id)` — 卸载并清理资源
+    - 代码安全验证（AST分析，禁止危险模块导入）
+  - `StrategyHotSwapper` 类：
+    - `swap(old_id, new_id, mode)` — 策略切换
+    - 模式：`IMMEDIATE`（立即切换）/ `GRADUAL`（灰度）/ `WAIT_ORDERS`（等待挂单成交）
+    - 状态迁移：暂停旧策略 → 等待/取消挂单 → 转移持仓 → 启动新策略
+  - `VersionManager` 类：
+    - `deploy_with_rollback()` — 部署后监控，异常自动回滚
+    - 回滚触发条件：错误率>5%、PnL异常、超时无响应
+- `api/routes/deployments.py` 增强：
+  - `POST /deployments/{id}/hotswap` — 热切换策略版本
+  - `POST /deployments/{id}/rollback` — 手动回滚
+- 单测：切换流程、状态迁移、自动回滚
+
+**验收标准**：
+- [ ] 策略更新无需重启系统
+- [ ] 切换时挂单正确处理（成交或取消）
+- [ ] 持仓状态正确迁移到新策略
+- [ ] 异常时自动回滚到旧版本
+- [ ] 代码安全验证阻止危险导入
+
+---
+
+### Task 4.4 — AI策略生成服务
+
+**背景**：人工编写策略效率低，需要AI辅助生成策略代码。
+
+**交付物**：
+- `insight/ai_strategy_generator.py`
+  - `AIStrategyGenerator` 类：
+    - `generate(requirements, features)` — 调用LLM生成策略代码
+    - `validate_syntax(code)` — 语法验证
+    - `extract_metadata(code)` — 提取策略描述、参数Schema
+  - `LLMClientPort` 接口抽象：支持OpenAI/Anthropic/本地模型
+  - Prompt模板：包含项目架构约束、可用特征列表、输出格式要求
+- `insight/code_sandbox.py`
+  - `SafeCodeExecutor` 类：
+    - AST分析检测危险操作（os/subprocess/eval/exec）
+    - 无限循环检测
+    - 内存泄漏模式检测
+    - 执行超时保护
+- `insight/ai_audit_log.py`
+  - 记录：输入需求、生成代码、验证结果、审批状态
+- 单测：语法验证、危险代码检测、Prompt模板正确性
+
+**验收标准**：
+- [ ] AI生成的代码符合StrategyPlugin协议
+- [ ] 危险代码（os/subprocess）被拦截
+- [ ] 生成记录可审计追溯
+- [ ] 支持多LLM后端切换
+
+---
+
+### Task 4.5 — AI策略聊天界面
+
+**背景**：需要自然语言接口让Trader与AI共同开发策略。
+
+**交付物**：
+- `insight/chat_interface.py`
+  - `StrategyChatInterface` 类：
+    - `chat(trader_id, message)` — 处理自然语言输入
+    - 意图识别：`GENERATE_STRATEGY` / `MODIFY_PARAMS` / `CHECK_STATUS` / `REQUEST_BACKTEST`
+    - 上下文管理：维护对话历史，支持多轮交互
+  - `ChatSession` dataclass：
+    ```python
+    @dataclass(slots=True)
+    class ChatSession:
+        session_id: str
+        trader_id: str
+        context: Dict[str, Any]  # 当前讨论的策略、参数等
+        history: List[ChatMessage]
+        created_at: datetime
+    ```
+- `api/routes/chat.py`：
+  - `POST /chat/message` — 发送消息
+  - `GET /chat/history/{session_id}` — 获取对话历史
+  - `GET /chat/sessions` — 获取活跃会话列表
+- 与HITL Governance集成：
+  - AI生成策略 → 提交审批 → Trader确认 → 注册部署
+- 单测：意图识别准确性、上下文保持、审批流程
+
+**验收标准**：
+- [ ] 支持自然语言描述策略需求
+- [ ] AI生成策略后自动提交HITL审批
+- [ ] 对话历史可查询
+- [ ] 审批通过后策略自动注册到管理模块
+
+---
+
+### Task 4.6 — 策略管理端到端集成
+
+**背景**：将上述组件整合为完整的策略管理闭环。
+
+**交付物**：
+- `services/strategy_lifecycle_manager.py`
+  - `StrategyLifecycleManager` 类：
+    - `create_from_chat()` — 从聊天创建策略
+    - `validate_and_deploy()` — 验证 → 回测 → 审批 → 部署
+    - `monitor_and_evaluate()` — 运行时监控 → 指标计算
+    - `hot_update()` — 热更新 → 回滚保护
+  - 完整生命周期：`DRAFT → VALIDATED → BACKTESTED → APPROVED → RUNNING → STOPPED`
+- 端到端测试：
+  - 场景1：AI生成策略 → 审批 → 部署 → 运行 → 停止
+  - 场景2：策略运行中热更新 → 异常 → 自动回滚
+  - 场景3：策略评估指标计算 → 告警触发
+- 文档更新：
+  - `docs/STRATEGY_MANAGEMENT_GUIDE.md` — 策略管理用户手册
+  - `docs/AI_STRATEGY_WORKFLOW.md` — AI策略共创工作流
+
+**验收标准**：
+- [ ] 完整生命周期流程可走通
+- [ ] 端到端测试覆盖主要场景
+- [ ] 用户文档完整
+
+---
+
+## 七、工程执行约束（所有Phase通用）
 
 1. **Core Plane禁止IO**：`core/` 下所有新代码不得有网络/DB/文件IO，不得读环境变量。
 2. **幂等优先**：所有写操作必须幂等，重复调用结果一致。
@@ -349,7 +549,7 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 
 ---
 
-## 七、里程碑检查点
+## 八、里程碑检查点
 
 | 里程碑 | 完成条件 | 对应Tasks |
 |--------|----------|-----------|
@@ -357,14 +557,17 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3
 | M2: 数据就绪 | Funding/OI/链上数据稳定写入Feature Store | 2.1–2.2 |
 | M3: 信号就绪 | 至少3类信号通过Signal Sandbox验证 | 2.3–2.5 |
 | M4: 可试运行 | M1+M3完成 + Reconciler无漂移告警 + 监控正常 | 全部Phase 1+2 |
+| M5: 策略可执行 | StrategyRunner可启动/停止策略，评估器输出指标 | 4.1–4.2 |
+| M6: 热插拔就绪 | 策略更新无需重启，异常自动回滚 | 4.3 |
+| M7: AI共创可用 | AI可生成策略代码，聊天界面可用，HITL审批集成 | 4.4–4.6 |
 
 ---
 
-## 八、当前推荐起点
+## 九、当前推荐起点
 
 **立即开始**：Task 1.1（Feature Store）和 Task 1.2（Reconciler）可并行开发，互不依赖。
 
-**顺序建议**：
+**Phase 1-3 顺序建议**：
 ```
 Task 1.1 (Feature Store)  ─┐
 Task 1.2 (Reconciler)     ─┤─► Task 1.5 (监控) ─► Task 1.6 (事件溯源)
@@ -373,3 +576,22 @@ Task 1.4 (时间窗口)        ─┘
 ```
 
 Task 1.3 和 1.4 体量小，可穿插在 1.1/1.2 开发间隙完成。
+
+**Phase 4 顺序建议**（Phase 3 完成后）：
+```
+Task 4.1 (StrategyRunner)  ─┐
+Task 4.2 (StrategyEvaluator) ─┤─► Task 4.3 (热插拔) ─► Task 4.6 (端到端集成)
+                            ─┘
+Task 4.4 (AI生成服务)      ─┐
+Task 4.5 (AI聊天界面)      ─┘─► Task 4.6 (端到端集成)
+```
+
+依赖关系：
+- Task 4.3（热插拔）依赖 4.1（执行器）+ 4.2（评估器）
+- Task 4.5（聊天界面）依赖 4.4（AI生成服务）
+- Task 4.6（端到端集成）依赖全部 4.1–4.5
+
+**技术选型建议**：
+- LLM后端：优先支持 OpenAI API，预留 Anthropic 本地模型接口
+- 代码加载：使用 `importlib` 动态加载，避免 `exec()` 安全风险
+- 会话存储：短期使用内存，长期迁移到 Redis/PG
