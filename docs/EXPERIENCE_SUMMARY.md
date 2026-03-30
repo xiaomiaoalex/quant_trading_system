@@ -325,7 +325,74 @@ Remove-Item test_debug.py
 
 ---
 
-## 七、待补充
+## 七、架构约束经验
+
+### 7.1 Core Plane 无 IO 约束的实现
+
+**场景**：OMS 中的重试逻辑违反了 Core Plane 无 IO 约束
+
+**问题描述**：
+在 `trader/core/application/oms.py` 中，订单提交逻辑包含了 `asyncio.sleep()` 重试机制：
+```python
+for attempt in range(self._max_retries):
+    try:
+        broker_order = await self._broker.place_order(...)
+    except BrokerNetworkError as e:
+        await asyncio.sleep(2 ** attempt)  # 违反无 IO 约束
+```
+
+**问题**：
+- Core Plane 应该是无 IO、完全确定性的
+- `asyncio.sleep()` 是 IO 操作，违反了架构约束
+- 重试逻辑应该由 Adapter 层处理
+
+**解决方案**：
+移除 OMS 中的重试逻辑，简化为单次调用：
+```python
+try:
+    broker_order = await self._broker.place_order(...)
+except BrokerNetworkError as e:
+    order.reject(f"网络错误: {e}")
+    # 不再重试，由 Adapter 层处理
+```
+
+**经验**：
+- Core Plane 必须保持无 IO、完全确定性
+- 重试、超时等 IO 相关逻辑应放在 Adapter 层
+- 架构约束需要在代码审查时重点关注
+
+---
+
+### 7.2 FastAPI Lifespan 管理服务生命周期
+
+**场景**：需要在应用启动/关闭时管理服务生命周期
+
+**问题描述**：
+`ReconcilerService` 需要在应用启动时启动后台任务，在应用关闭时清理资源。
+
+**解决方案**：
+使用 FastAPI 的 `lifespan` 上下文管理器：
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    reconciler_service = reconciler.get_reconciler_service()
+    await reconciler_service.start()
+    yield
+    await reconciler_service.stop()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+**经验**：
+- FastAPI 推荐使用 `lifespan` 管理应用生命周期
+- 避免使用已弃用的 `@app.on_event("startup")` 装饰器
+- 确保所有后台任务在应用关闭时正确停止
+
+---
+
+## 八、待补充
 
 - [ ] 添加更多典型 bug 案例
 - [ ] 补充性能优化经验
