@@ -720,8 +720,8 @@ class HITLGovernance:
         # 同时从待审批队列移除
         for suggestion_id in list(self._pending_suggestions.keys()):
             for record_id in purged_ids:
-                record = self._approval_records.get(record_id)
-                if record and record.suggestion_id == suggestion_id:
+                purged_record = self._approval_records.get(record_id)
+                if purged_record and purged_record.suggestion_id == suggestion_id:
                     self._pending_suggestions.pop(suggestion_id, None)
                     break
 

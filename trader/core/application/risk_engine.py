@@ -161,7 +161,7 @@ class RiskEngine:
     def __init__(
         self,
         broker: BrokerPort,
-        config: RiskConfig = None,
+        config: RiskConfig | None = None,
         pre_trade_plugins: Optional[List[PreTradeRiskPlugin]] = None,
         in_trade_plugins: Optional[List[InTradeRiskPlugin]] = None,
         post_trade_plugins: Optional[List[PostTradeRiskPlugin]] = None

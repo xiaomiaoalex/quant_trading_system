@@ -170,7 +170,7 @@ def create_order_filled_event(order) -> DomainEvent:
     )
 
 
-def create_position_updated_event(position, realized_pnl: Decimal = None) -> DomainEvent:
+def create_position_updated_event(position, realized_pnl: Decimal | None = None) -> DomainEvent:
     """创建持仓更新事件"""
     return DomainEvent(
         event_type=EventType.POSITION_UPDATED,

@@ -104,12 +104,19 @@ Insight Plane
 | 时间窗口风控 | Current | 已进入 Policy 平面 |
 | 下单前深度检查 | Current | 已进入 Policy 平面 |
 | `/v1/events` 与 `/v1/snapshots/latest` 读模型 | Current | 当前以内存读模型运行 |
-| Reconciler 最小版本 | Next | 应升级为主闭环必备能力 |
-| 策略实时监控与告警 | Next | 主闭环生存能力组成部分 |
-| PG 投影读模型 | Next | 替代当前内存读模型 |
-| 逃生时间模拟 | Next | 中低频持仓的重要增强 |
-| AI proposal / approve 治理 API | Target | 保留接口，不先做全自动闭环 |
-| Runner 主执行链路（自动执行） | Target | 在 Reconciler 与监控成熟后推进 |
+| Reconciler 最小版本 | Current | 已升级为主闭环必备能力，定时对账已接入 |
+| 策略实时监控与告警 | Current | 主闭环生存能力组成部分 |
+| PG 投影读模型 | Current | 已完成 Position/Order/Risk Projector |
+| 逃生时间模拟 | Current | EscapeTimeSimulator 已实现 |
+| HITL AI治理接口 | Current | HITLGovernance 已实现 |
+| **StrategyRunner 策略执行器** | **Current** | **策略生命周期控制、异常隔离、资源限制** |
+| **StrategyEvaluator 策略评估器** | **Current** | **回测引擎、实时评估、指标计算** |
+| **StrategyHotSwapper 热插拔** | **Current** | **策略热切换、状态机、回滚保护** |
+| **AIStrategyGenerator AI策略生成** | **Current** | **多LLM后端、代码安全验证、审计日志** |
+| **StrategyChatInterface AI聊天界面** | **Current** | **自然语言策略开发、HITL集成** |
+| **StrategyLifecycleManager 生命周期管理** | **Current** | **完整策略生命周期闭环** |
+| AI proposal / approve 治理 API | Current | 已通过HITL Governance实现 |
+| Runner 主执行链路（自动执行） | Current | StrategyRunner已实现 |
 | 中国 A 股实盘适配器 | Deferred | 当前只保留接口契约 |
 | 多交易所套利 / 高频做市 | Deferred | 明确不纳入当前版本 |
 
@@ -349,9 +356,100 @@ AI 不可以：
 
 ---
 
-## 9. 关键运行流
+## 9. Strategy Management Plane（策略管理层）
 
-### 9.1 市场数据流
+策略管理层负责策略的全生命周期管理、热插拔、评估与AI共创。
+
+### 9.1 职责
+- 策略注册与版本管理
+- 策略执行器（StrategyRunner）生命周期控制
+- 策略评估与回测
+- 策略热插拔与版本切换
+- AI辅助策略生成与审批
+
+### 9.2 核心组件
+
+#### A. StrategyPlugin 协议
+所有可执行策略必须实现统一协议：
+```python
+class StrategyPlugin(Protocol):
+    @property
+    def plugin_id(self) -> str: ...
+    @property
+    def version(self) -> str: ...
+    @property
+    def risk_level(self) -> Literal["LOW", "MEDIUM", "HIGH"]: ...
+    
+    async def initialize(self, config: Dict[str, Any]) -> None: ...
+    async def on_tick(self, market_data: MarketData) -> Optional[Signal]: ...
+    async def on_fill(self, fill_data: Dict[str, Any]) -> None: ...
+    async def on_cancel(self, cancel_data: Dict[str, Any]) -> None: ...
+    async def shutdown(self) -> None: ...
+```
+
+#### B. StrategyRunner（策略执行器）
+- 动态加载策略代码
+- 生命周期控制：start/stop/pause/resume
+- 每个策略运行在独立 asyncio.Task 中
+- 异常隔离：单策略崩溃不影响其他策略
+- 资源限制：内存、并发订单数、订单频率、超时控制
+
+#### C. StrategyEvaluator（策略评估器）
+- BacktestEngine：历史数据回测
+- LiveEvaluator：实时指标计算
+- 指标：PnL、夏普率、最大回撤、胜率、盈亏比
+- 数据质量验证
+
+#### D. StrategyHotSwapper（热插拔管理器）
+- 状态机：IDLE → LOADING → VALIDATING → PREPARING → SWITCHING → ACTIVE
+- 切换模式：IMMEDIATE / GRADUAL / WAIT_ORDERS
+- 挂单处理：切换前自动取消未结订单
+- 持仓迁移：映射持仓到新策略
+- 异常回滚：切换失败自动回滚到旧策略
+
+#### E. AIStrategyGenerator（AI策略生成器）
+- 多LLM后端支持（OpenAI/Anthropic/本地模型）
+- 代码安全验证（AST分析、危险模式检测）
+- 审计日志：输入需求、生成代码、验证结果、审批状态
+
+#### F. StrategyChatInterface（AI聊天界面）
+- 自然语言策略需求描述
+- 意图识别：GENERATE_STRATEGY / MODIFY_PARAMS / CHECK_STATUS
+- 与HITL Governance集成：AI生成策略 → 提交审批 → Trader确认 → 注册部署
+
+### 9.3 策略生命周期状态机
+```
+DRAFT → VALIDATED → BACKTESTED → APPROVED → RUNNING → STOPPED
+   │         │           │           │          │
+   └─────────┴───────────┴───────────┴──────────┴──→ FAILED
+                                                      │
+                                                      └──→ ARCHIVED
+```
+
+### 9.4 与现有系统对接
+```
+StrategyRunner
+     │
+     ├──▶ OMS.submit_order()  ──▶ Broker Adapter
+     │
+     ├──▶ Reconciler.monitor()  ──▶ 定期对账
+     │
+     ├──▶ KillSwitch.check()  ──▶ 风险熔断
+     │
+     └──▶ FeatureStore.read()  ──▶ 特征数据
+```
+
+### 9.5 关键约束
+- AI生成的策略必须经过HITL审批才能部署
+- 策略崩溃不影响系统稳定性（异常隔离）
+- 热插拔切换时挂单必须正确处理
+- 代码安全验证必须拦截危险操作（os/subprocess/eval/exec/网络调用）
+
+---
+
+## 10. 关键运行流
+
+### 10.1 市场数据流
 `Binance WS/REST + Derivatives + On-chain + Event Crawler`
 -> Adapter Normalization
 -> Alignment Gate
@@ -360,7 +458,7 @@ AI 不可以：
 -> Persistence
 -> Insight / Signal Engine
 
-### 9.2 交易决策流
+### 10.2 交易决策流
 `Research Signal / Position Intent`
 -> Policy Gate（时间窗口、深度检查、风险预算）
 -> Target Position

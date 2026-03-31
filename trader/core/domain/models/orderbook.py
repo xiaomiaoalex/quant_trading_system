@@ -16,11 +16,11 @@ from __future__ import annotations
 import builtins
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import List, Optional
+from typing import Callable, List, Optional
 from datetime import datetime
 
 # 使用 lambda 包装 list 调用，确保在运行时从 builtins 获取
-_list_factory = lambda: list()
+_list_factory: Callable[[], List] = lambda: list()
 
 
 @dataclass(frozen=True)

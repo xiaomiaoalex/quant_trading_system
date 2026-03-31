@@ -392,7 +392,121 @@ app = FastAPI(lifespan=lifespan)
 
 ---
 
-## 八、待补充
+## 八、策略参数动态调整实现（Phase 4 Task 4.7）
+
+### 8.1 动态参数调整的协议设计
+
+**场景**：需要在策略运行期间动态调整参数，无需停止或重载策略
+
+**设计方案**：
+在 `StrategyPlugin` 协议中添加 `update_config()` 方法：
+```python
+async def update_config(self, config: Dict[str, Any]) -> ValidationResult:
+    """
+    更新策略配置参数
+    
+    允许在策略运行期间动态调整参数，无需停止策略。
+    参数变更后应调用 validate() 确保配置有效。
+    """
+    ...
+```
+
+**实现经验**：
+- `update_config()` 返回 `ValidationResult`，允许验证参数有效性
+- 支持部分更新（增量更新），只传入需要修改的参数
+- 如果插件不支持 `update_config()`，使用 `initialize()` 作为后备方案
+
+### 8.2 策略运行器的参数更新
+
+**场景**：`StrategyRunner` 需要提供统一的参数更新入口
+
+**设计方案**：
+```python
+async def update_strategy_config(
+    self,
+    strategy_id: str,
+    config: Dict[str, Any],
+) -> StrategyRuntimeInfo:
+    """更新策略配置参数"""
+    plugin = self._plugins[strategy_id]
+    
+    # 调用策略的 update_config 方法
+    validation_result = await plugin.update_config(config)
+    if not validation_result.is_valid:
+        raise ValueError(f"参数验证失败")
+    
+    # 更新存储的配置
+    info.config = {**info.config, **config}
+    return info
+```
+
+**实现经验**：
+- 配置存储在 `StrategyRuntimeInfo.config` 中
+- 合并策略配置时使用 `{**old_config, **new_config}` 实现部分更新
+- 需要处理插件可能使用同步 `update_config()` 的情况
+
+### 8.3 生命周期管理器的参数更新
+
+**场景**：`StrategyLifecycleManager` 需要记录参数变更事件
+
+**设计方案**：
+新增 `PARAMS_UPDATED` 生命周期事件类型：
+```python
+class LifecycleEventType(Enum):
+    ...
+    PARAMS_UPDATED = "PARAMS_UPDATED"
+```
+
+记录参数变更到生命周期历史：
+```python
+lifecycle._transition_to(
+    lifecycle.status,  # 状态不变
+    LifecycleEventType.PARAMS_UPDATED,
+    metadata={
+        "updated_keys": list(new_config.keys()),
+        "new_config": new_config,
+    },
+)
+```
+
+**实现经验**：
+- 参数更新不改变生命周期状态
+- 事件记录包含更新的参数键和新值，便于审计追溯
+- 使用哈希锁保证并发安全
+
+### 8.4 API 端点设计
+
+**场景**：提供 HTTP API 允许外部系统动态调整策略参数
+
+**设计方案**：
+```python
+@router.put("/v1/strategies/{strategy_id}/params")
+async def update_strategy_params(
+    strategy_id: str,
+    request: UpdateStrategyParamsRequest,
+):
+    """
+    Update strategy parameters.
+    
+    Supports partial updates (incremental updates).
+    """
+    runner = get_strategy_runner()
+    info = await runner.update_strategy_config(strategy_id, request.config)
+    return UpdateStrategyParamsResponse(
+        success=True,
+        strategy_id=strategy_id,
+        updated_config=info.config,
+    )
+```
+
+**实现经验**：
+- `PUT` 方法表示完整的替换语义，但实现为部分更新
+- 支持 `validate_only` 模式，仅验证参数不实际更新
+- 错误时返回 400 或 500 状态码
+
+---
+
+## 九、待补充
 
 - [ ] 添加更多典型 bug 案例
 - [ ] 补充性能优化经验
