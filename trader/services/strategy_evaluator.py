@@ -2,6 +2,15 @@
 StrategyEvaluator - 策略评估器
 ================================
 
+.. deprecated::
+    本模块已被 `trader.services.backtesting` 模块替代。
+    请使用新的回测框架，参见 `docs/migration_guide.md`。
+
+迁移指南：
+    1. BacktestEngine -> 使用 QuantConnectLeanBacktestEngine
+    2. StrategyMetrics -> StandardizedBacktestReport
+    3. LiveEvaluator -> Integration with StrategyLifecycleManager
+
 负责策略回测验证和实时表现评估。
 
 核心组件：

@@ -750,7 +750,475 @@ Task 4.5 (AI聊天界面) ─────────────────▶
 - Task 4.5（聊天界面）依赖 4.4（AI生成服务）
 - Task 4.6（端到端集成）依赖全部 0–4.5
 
-**技术选型建议**：
-- LLM后端：优先支持 OpenAI API，预留 Anthropic 本地模型接口
-- 代码加载：使用 `importlib` 动态加载，避免 `exec()` 安全风险
-- 会话存储：短期使用内存，长期迁移到 Redis/PG
+---
+
+## 十、Phase 5 — 回测框架升级（引入成熟开源框架）
+
+**前置条件**：Phase 4 完成，系统具备策略执行和生命周期管理能力。
+
+**背景**：经过专业评估，当前自研回测模块存在以下问题：
+1. **前瞻偏差**：使用当前 bar 收盘价执行而非下一 bar 开盘价
+2. **滑点方向错误**：始终加滑点，而非根据买卖方向调整
+3. **不支持止盈/止损**：无法正确测试带风控的策略
+4. **无样本外验证**：缺乏交叉验证和前向分析支持
+
+这些问题在成熟开源框架（Backtrader/VectorBT）中已被修复和验证。
+
+**原则**：
+- 回测引擎是**基础设施**，应使用成熟方案，不重复造轮子
+- 差异化竞争点在于：策略逻辑、风险管理、交易执行、与项目架构的深度集成
+- 自研组件保持：StrategyLifecycleManager、StrategyRunner、策略协议
+
+---
+
+### Task 5.1 — 成熟回测框架选型与集成架构设计
+
+**优先级**：P0 | **工作量**：1 人天
+
+**交付物**：
+- **框架对比报告**：
+  | 框架 | 语言 | 成熟度 | GitHub Stars | 特点 |
+  |------|------|--------|--------------|------|
+  | Backtrader | Python | ⭐⭐⭐⭐⭐ | 10k+ | 功能完整，文档好，社区活跃 |
+  | VectorBT | Python | ⭐⭐⭐⭐ | 3k+ | 向量化执行，速度快，适合快速原型 |
+
+- **接口契约定义**：
+  ```python
+  class BacktestEnginePort(Protocol):
+      """回测引擎端口 - 统一多框架接口"""
+      async def run_backtest(
+          self,
+          strategy: StrategyPlugin,
+          config: BacktestConfig,
+          data_provider: DataProviderPort,
+      ) -> BacktestReport: ...
+  ```
+
+- **数据模型映射**：现有 `BacktestReport` 与框架输出的映射关系
+
+**验收标准**：
+- [ ] 完成框架选型报告（Backtrader 首选）
+- [ ] 定义 `BacktestEnginePort` 协议
+- [ ] 确定集成架构设计
+
+---
+
+### Task 5.2 — Backtrader 适配层开发
+
+**优先级**：P0 | **工作量**：5 人天
+
+**子任务分解**：
+
+| 子任务 | 工作量 | 说明 |
+|--------|--------|------|
+| 5.2.1 数据源适配器 | 1 人天 | FeatureStore → Backtrader Data Feed |
+| 5.2.2 策略包装器 | 1.5 人天 | StrategyPlugin → Backtrader Strategy |
+| 5.2.3 订单执行模拟 | 1 人天 | 正确实现滑点、手续费、止盈止损 |
+| 5.2.4 结果转换器 | 0.5 人天 | Backtrader 结果 → BacktestReport |
+| 5.2.5 单元测试 | 1 人天 | 适配层测试覆盖 |
+
+**关键技术实现**：
+```python
+# 滑点模型 - 方向感知
+class DirectionAwareSlippage(bt.SlippagePerc):
+    def _apply_slippage(self, data, size, price):
+        if size > 0:  # 买入
+            return price * (1 + self.p.perc)
+        else:  # 卖出
+            return price * (1 - self.p.perc)
+
+# 市价单执行 - 下一 bar 开盘价
+class NextBarOpenExecutor:
+    def next(self):
+        for order in self.get_orders():
+            if order.is_market():
+                # 在下一 bar 开盘价执行
+                self.execute(order, self.data.open[0])
+
+# 数据源适配器
+class BacktraderDataFeedConverter:
+    """FeatureStore → Backtrader Data Feed"""
+    
+    def convert(self, symbol: str, df: pd.DataFrame) -> bt.feeds.PandasData:
+        """转换 K 线数据为 Backtrader 格式"""
+        return bt.feeds.PandasData(
+            dataname=df,
+            datetime='timestamp',
+            open='open',
+            high='high', 
+            low='low',
+            close='close',
+            volume='volume',
+            openinterest=-1
+        )
+
+# 策略包装器
+class StrategyWrapper(bt.Strategy):
+    """StrategyPlugin → Backtrader Strategy"""
+    
+    def __init__(self, plugin: StrategyPlugin, config: Dict):
+        self.plugin = plugin
+        self.config = config
+        self.indicators = self._setup_indicators()
+    
+    def _setup_indicators(self):
+        """设置 Backtrader 指标"""
+        return {
+            'sma20': bt.indicators.SMA(self.data.close, period=20),
+            'sma50': bt.indicators.SMA(self.data.close, period=50),
+        }
+    
+    def next(self):
+        """在每个 bar 执行策略"""
+        market_data = self._convert_to_market_data()
+        signal = self.plugin.on_market_data(market_data)
+        if signal:
+            self._execute_signal(signal)
+```
+
+**交付物**：
+- `services/backtesting/backtrader_adapter.py` - Backtrader 适配层
+- `services/backtesting/performance_aggregator.py` - 结果聚合
+- `services/backtesting/config.py` - 配置数据类
+
+**验收标准**：
+- [ ] 下一 bar 开盘价执行（消除前瞻偏差）
+- [ ] 方向感知滑点
+- [ ] 止盈/止损支持
+- [ ] 单测覆盖适配层
+
+---
+
+### Task 5.3 — 回测结果标准化与可视化
+
+**优先级**：P1 | **工作量**：2-3 人天
+
+**交付物**：
+- `services/backtesting/report_formatter.py`
+  - `StandardizedBacktestReport` 数据类：
+    ```python
+    @dataclass(slots=True)
+    class StandardizedBacktestReport:
+        # 收益指标
+        total_return: float
+        annual_return: float
+        monthly_returns: List[float]
+        
+        # 风险指标
+        max_drawdown: float
+        max_drawdown_duration: int  # days
+        var_95: float  # 95% VaR
+        
+        # 风险调整收益
+        sharpe_ratio: float
+        sortino_ratio: float
+        calmar_ratio: float
+        
+        # 交易统计
+        total_trades: int
+        win_rate: float
+        profit_factor: float
+        avg_trade_duration: float  # hours
+        
+        # 元信息
+        framework: str  # "backtrader" | "vectorbt"
+        data_range: Tuple[datetime, datetime]
+    ```
+
+- `services/backtesting/visualizer.py`
+  - `plot_equity_curve()` - 资金曲线
+  - `plot_drawdown()` - 回撤曲线
+  - `plot_monthly_heatmap()` - 月度收益热力图
+  - `plot_trade_markers()` - 交易标记图
+  - `plot_returns_distribution()` - 收益分布图
+
+- `api/routes/backtest.py` - 回测 API 端点
+
+**验收标准**：
+- [ ] 标准化报告包含所有风险收益指标
+- [ ] 添加 Buy & Hold 基准对比
+- [ ] 可视化图表直观清晰
+
+---
+
+### Task 5.4 — 样本外验证与交叉验证框架
+
+**优先级**：P0 | **工作量**：4 人天
+
+**子任务分解**：
+
+| 子任务 | 工作量 | 说明 |
+|--------|--------|------|
+| 5.4.1 Walk-Forward Analysis | 1.5 人天 | 滚动窗口优化 + 样本外验证 |
+| 5.4.2 K-Fold 交叉验证 | 1 人天 | 时间序列 K-Fold（非随机分割） |
+| 5.4.3 参数敏感性分析 | 1 人天 | 参数网格扫描 + 稳定性评估 |
+| 5.4.4 过拟合检测 | 0.5 人天 | 样本内 vs 样本外差异检测 |
+
+**关键实现**：
+```python
+class WalkForwardAnalyzer:
+    """Walk-Forward 分析器"""
+    
+    def analyze(
+        self,
+        strategy_class: Type[StrategyPlugin],
+        param_grid: Dict[str, List[Any]],
+        train_period: timedelta,
+        test_period: timedelta,
+        n_splits: int = 5,
+    ) -> WalkForwardReport:
+        """
+        时间线: | train1 | test1 | train2 | test2 | ... |
+        """
+        results = []
+        for i in range(n_splits):
+            # 1. 训练期优化参数
+            best_params = self._optimize(strategy_class, param_grid, ...)
+            # 2. 测试期验证
+            test_result = self._backtest(strategy_class, best_params, ...)
+            results.append(test_result)
+        
+        return WalkForwardReport(
+            in_sample_metrics=self._aggregate_train(),
+            out_of_sample_metrics=self._aggregate_test(),
+            overfitting_score=self._calc_overfitting(),
+        )
+```
+
+**验收标准**：
+- [ ] Walk-Forward Analysis 可用
+- [ ] K-Fold 交叉验证可用
+- [ ] 过拟合检测输出
+
+---
+
+### Task 5.5 — 与 StrategyLifecycleManager 集成
+
+**优先级**：P0 | **工作量**：2.5 人天
+
+**交付物**：
+- 状态机扩展：
+  ```
+  DRAFT → VALIDATED → BACKTESTING → BACKTESTED → APPROVED → RUNNING
+                            ↓
+                         FAILED (可重试)
+  ```
+
+- 自动审批规则：
+  ```python
+  @dataclass
+  class AutoApprovalRules:
+      min_sharpe: float = 1.0
+      max_drawdown_pct: float = 20.0
+      min_trades: int = 30
+      min_win_rate: float = 0.4
+      max_overfitting_score: float = 0.3
+  ```
+
+- API 端点：
+  - `POST /v1/strategies/{id}/backtest` - 触发回测
+  - `GET /v1/strategies/{id}/backtest/{backtest_id}` - 获取回测结果
+  - `POST /v1/backtests/parameter_sweep` - 参数扫描
+  - `GET /v1/backtests/compare` - 策略对比
+
+**验收标准**：
+- [ ] 策略生命周期中可触发回测
+- [ ] 回测结果自动关联策略版本
+- [ ] 支持参数扫描和策略对比
+
+---
+
+### Task 5.6 — 回测数据管道优化
+
+**优先级**：P1 | **工作量**：2 人天
+
+**交付物**：
+- `services/backtesting/data_pipeline.py`
+  ```
+  FeatureStore → DataLoader → DataValidator → Cache → BacktestEngine
+                    ↓
+              QualityReport
+  ```
+
+- 数据质量检查：
+  - 数据对齐正确性验证
+  - 缺口数据明确标记
+  - 存活者偏差警告机制
+  - 并行回测支持
+
+**验收标准**：
+- [ ] 数据缓存层避免重复加载
+- [ ] 数据预检验
+- [ ] 多策略并行回测
+
+---
+
+### Task 5.7 — 自研回测模块归档
+
+**优先级**：P2 | **工作量**：1 人天
+
+**交付物**：
+- `services/strategy_evaluator_legacy.py` - 重命名自研模块
+- 迁移指南文档
+- 短期兼容层（避免现有代码 break）
+- `@deprecated` 注释
+
+**验收标准**：
+- [ ] 自研模块标记为 deprecated
+- [ ] 迁移指南完整
+
+---
+
+### Task 5.8 — 回测框架测试套件
+
+**优先级**：P0 | **工作量**：2 人天
+
+**目标**：确保回测结果正确性，验证框架集成质量
+
+**交付物**：
+
+| 测试类型 | 说明 | 验证方法 |
+|----------|------|----------|
+| 前瞻偏差测试 | 验证信号在下一 bar 开盘价执行 | Mock 策略 + 打印执行时间戳 |
+| 滑点方向测试 | 验证买卖滑点方向正确 | 买单执行价>信号价，卖单执行价<信号价 |
+| 止盈止损测试 | 验证 bar 内触发逻辑 | 设置 TP/SL，检查是否在正确 bar 触发 |
+| 手续费计算测试 | 验证手续费计算准确 | 入场+出场手续费 = 配置费率 |
+| 基准对比测试 | 与已知策略结果对比 | 对比简单均线策略的买入持有收益 |
+
+**正确性验证量化标准**：
+```python
+CORRECTNESS_TESTS = {
+    "前瞻偏差测试": "信号在下一bar开盘价执行",
+    "滑点方向测试": "买入加滑点(>0), 卖出减滑点(<0)", 
+    "止盈止损测试": "TP触及返回profit>0, SL触及返回profit<0",
+    "手续费计算测试": "|计算手续费 - 预期手续费| < 0.01",
+    "基准对比测试": "|回测收益 - 基准收益| < 1%"
+}
+```
+
+**验收标准**：
+- [ ] 前瞻偏差测试通过 - 信号在下一 bar 开盘价执行
+- [ ] 滑点方向测试通过 - 买入加滑点，卖出减滑点
+- [ ] 止盈止损逻辑测试通过 - bar 内正确触发
+- [ ] 手续费计算误差 < 0.01
+
+---
+
+### Task 5.9 — 性能基准测试
+
+**优先级**：P1 | **工作量**：1 人天
+
+**目标**：确保回测性能满足生产要求
+
+**性能指标目标**：
+
+| 指标 | 目标 | 验证数据集 |
+|------|------|-----------|
+| 1年数据回测 | < 30秒 | BTC/USDT 1分钟 K 线 |
+| 5年数据回测 | < 2分钟 | 多标的 1H K 线组合 |
+| 参数优化 (100组) | < 10分钟 | EMA 交叉策略参数网格 |
+| 内存占用 | < 2GB | 5年 + 多标的 |
+
+**性能测试方法**：
+```python
+# 性能基准测试用例
+class PerformanceBenchmark:
+    """性能基准测试"""
+    
+    def test_1year_backtest(self):
+        """1年数据回测 < 30秒"""
+        start = time.time()
+        result = backtester.run(strategy, config, "2024-01-01", "2025-01-01")
+        duration = time.time() - start
+        assert duration < 30, f"1年回测耗时 {duration}s，超过30s目标"
+    
+    def test_memory_usage(self):
+        """内存占用 < 2GB"""
+        import tracemalloc
+        tracemalloc.start()
+        backtester.run(strategy, config, "2020-01-01", "2025-01-01")
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert peak < 2 * 1024 * 1024 * 1024, f"内存峰值 {peak/GB:.2f}GB，超过2GB目标"
+```
+
+**验收标准**：
+- [ ] 1年数据回测 < 30秒
+- [ ] 5年数据回测 < 2分钟
+- [ ] 参数优化 (100组) < 10分钟
+- [ ] 内存占用 < 2GB
+- [ ] 性能测试可重复执行
+
+---
+
+## Phase 5 依赖关系与优先级分组
+
+### 优先级分组
+
+```
+Phase 5 — 回测框架升级 (约 20.5 人天)
+├── P0 核心任务 (12.5 人天)
+│   ├── 5.1 框架选型与架构设计 (1 人天)
+│   ├── 5.2 Backtrader 适配层开发 (5 人天)
+│   ├── 5.4 样本外验证框架 (4 人天) 
+│   └── 5.8 回测框架测试套件 (2 人天)
+├── P1 增强任务 (5-6 人天)
+│   ├── 5.3 结果标准化与可视化 (2-3 人天)
+│   ├── 5.5 生命周期管理集成 (2.5 人天)
+│   └── 5.9 性能基准测试 (1 人天)
+└── P2 收尾任务 (1 人天)
+    └── 5.7 自研模块归档 (1 人天)
+```
+
+### 依赖关系图
+
+```
+Task 5.1 (选型与架构设计) ─┐
+                           │
+Task 5.2 (Backtrader适配) ─┼─► Task 5.3 (标准化与可视化) ─► Task 5.5 (集成)
+                           │                                      │
+Task 5.4 (交叉验证框架) ────┘                                      │
+Task 5.8 (测试套件) ───────────────────────────────────────────────┘
+Task 5.6 (数据管道优化) ───────────────────────────────────────────┘
+Task 5.7 (归档自研模块) ───────────────────────────────────────────┘
+```
+
+---
+
+## Phase 5 验收标准
+
+| 里程碑 | 完成条件 | 关联任务 |
+|--------|----------|----------|
+| M9: 回测就绪 | Backtrader 适配层可用，消除前瞻偏差 | 5.1, 5.2, 5.8 |
+| M10: 报告标准化 | 统一回测结果格式，可视化完整 | 5.3 |
+| M11: 验证可信 | 支持样本外验证，过拟合检测 | 5.4, 5.8 |
+| M12: 集成完成 | 与 StrategyLifecycleManager 集成，数据管道优化 | 5.5, 5.6 |
+
+---
+
+## Phase 5 风险与缓解
+
+| 风险 | 影响 | 缓解措施 |
+|------|------|----------|
+| Backtrader 学习曲线 | 延期 | 先完成 POC 验证核心功能 |
+| 数据格式不兼容 | 阻塞 | 优先实现数据适配器 (5.2.1) |
+| 性能不达标 | 需优化 | 预留 Task 5.9 性能测试时间 |
+| 样本外验证复杂 | 延期 | 参考 sklearn 时间序列分割 |
+
+---
+
+## 修订后工作量估算
+
+| Task | 描述 | 工作量 | 优先级 |
+|------|------|--------|--------|
+| 5.1 | 框架选型与架构设计 | 1 人天 | P0 |
+| 5.2 | Backtrader 适配层开发 | 5 人天 | P0 |
+| 5.3 | 结果标准化与可视化 | 2-3 人天 | P1 |
+| 5.4 | 样本外验证框架 | 4 人天 | P0 |
+| 5.5 | 生命周期管理集成 | 2.5 人天 | P0 |
+| 5.6 | 数据管道优化 | 2 人天 | P1 |
+| 5.7 | 自研模块归档 | 1 人天 | P2 |
+| **5.8** | **回测框架测试套件** | **2 人天** | **P0** |
+| **5.9** | **性能基准测试** | **1 人天** | **P1** |
+
+**总计：约 20.5 人天**
