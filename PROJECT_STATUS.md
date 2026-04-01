@@ -14,7 +14,36 @@
 
 ## 最近开发记录（滚动式）
 
-### 本次任务：Phase 4 核心文档更新
+### 本次任务：Phase 5 回测框架升级完成
+- 完成时间: 2026-03-31
+- 分支: main (直接提交)
+- 状态: ✅ 全部完成
+- 主要变更: 
+  - Task 5.7: 自研回测模块归档 - deprecated 标记 + 迁移指南
+  - Task 5.9: 性能基准测试 - PerformanceBenchmark, BenchmarkRunner
+  - Phase 5 全部 9 个 Task 完成
+- 测试结果: 267 tests passing (Phase 5)
+
+### 上次任务：Phase 5 回测框架升级 Week 2
+- 完成时间: 2026-03-31
+- 状态: ✅ 主要任务完成
+- 主要变更: 
+  - Task 5.3: 回测结果标准化与可视化 - StandardizedBacktestReport, BacktestVisualizer
+  - Task 5.4: 样本外验证框架 - WalkForwardAnalyzer, KFoldValidator, SensitivityAnalyzer
+  - Task 5.5: StrategyLifecycleManager 集成 - AutoApprovalRules, BacktestJob
+  - Task 5.6: 数据管道优化 - DataCache, DataValidator, ParallelBacktestRunner
+  - Task 5.8: 回测框架测试套件 - 226 tests passing
+
+### 上次任务：Phase 5 回测框架升级 Week 1
+- 完成时间: 2026-03-31
+- 分支: main (直接提交)
+- 状态: ✅ 架构和适配层完成
+- 主要变更:
+  - Task 5.1: 框架选型完成（QuantConnect Lean - Apache 2.0）
+  - Task 5.2: 核心适配层 - ports, quantconnect_adapter, strategy_adapter, execution_simulator, result_converter
+  - 修复 Task 5.2.4 bug: insight.direction 大小写转换问题
+
+### 上上次任务：Phase 4 核心文档更新
 - 完成时间: 2026-03-31
 - 分支: main (直接提交)
 - 状态: ✅ 文档更新完成
@@ -22,18 +51,6 @@
   - Architecture文档新增第9节 Strategy Management Plane
   - 能力分层表更新，Phase 4所有能力标记为Current
   - 策略生命周期状态机、核心组件、对接架构文档化
-
-### 上次任务：Phase 4 策略管理与AI共创完整实现
-- 完成时间: 2026-03-30
-- 分支: main (直接提交)
-- 状态: ✅ 全部完成
-- 主要变更: Task 4.1-4.6全部实现并通过测试
-  - StrategyRunner: 36测试通过
-  - StrategyEvaluator: 46测试通过
-  - StrategyHotSwapper: 30测试通过
-  - AIStrategyGenerator: 36测试通过
-  - StrategyChatInterface: 37测试通过
-  - StrategyLifecycleManager: 端到端集成完成
 
 ### 上次任务：Task 2.5 资金结构信号
 - 完成时间: 2026-03-25
@@ -47,10 +64,10 @@
 - 状态: ✅ 已合并
 - 主要变更: trend_signals.py, price_volume_signals.py, signal_sandbox.py, 64个测试全部通过
 
-### 下次计划：Phase 5 回测框架升级
-- 目标: 引入成熟开源回测框架（Backtrader），消除前瞻偏差问题
-- 前置条件: Phase 4 完成（✅）
-- 预计工作量: 约 20.5 人天
+### 下次计划：Phase 6 规划
+- 目标: 开始下一个 Phase（待定）
+- 前置条件: Phase 5 全部完成（✅）
+- Phase 5 总结: 成功从自研回测框架迁移到 QuantConnect Lean
 
 **修订内容**（根据专业评估反馈）：
 1. 增加 Task 5.8（回测框架测试套件）和 Task 5.9（性能基准测试）
@@ -598,14 +615,14 @@
 
 ### 推荐方案
 
-**首选框架**：Backtrader
-- 功能完整，文档好，社区活跃（10k+ GitHub Stars）
-- 支持多标的、多策略、多种订单类型
-- 止盈/止损、跟踪止损等高级订单支持
+**首选框架**：QuantConnect Lean (Apache 2.0许可)
+- 功能完整，支持多标的、多策略
+- 主动开发中，机构级质量
+- 支持止盈/止损、滑点模型
 
-**备选框架**：VectorBT
-- 向量化执行，速度极快
-- 适合快速原型验证
+**备选框架**：Backtrader
+- GPLv3许可（考虑许可证风险）
+- 功能完整，文档好，社区活跃
 
 ### 实施计划
 
@@ -650,8 +667,49 @@
               ┌─────────────────┐
               │  统一绩效报告    │
               │  (自研聚合层)    │
-              └─────────────────┘
+               └─────────────────┘
 ```
+
+### Phase 5 实施进度
+
+**更新日期**: 2026-03-31
+
+| Task | 内容 | 状态 | 测试数 | 完成日期 |
+|------|------|------|--------|----------|
+| 5.1 | 框架选型与集成架构设计 | ✅ 完成 | - | 2026-03-31 |
+| 5.2 | QuantConnect Lean 适配层开发 | ✅ 完成 | 95 | 2026-03-31 |
+| 5.3 | 回测结果标准化与可视化 | ✅ 完成 | 29 | 2026-03-31 |
+| 5.4 | 样本外验证与交叉验证框架 | ✅ 完成 | 32 | 2026-03-31 |
+| 5.5 | 与 StrategyLifecycleManager 集成 | ✅ 完成 | 43 | 2026-03-31 |
+| 5.6 | 回测数据管道优化 | ✅ 完成 | 31 | 2026-03-31 |
+| 5.7 | 自研回测模块归档 | ⏳ 待开始 | - | - |
+| **5.8** | **回测框架测试套件** | ✅ 完成 | 226 | 2026-03-31 |
+| 5.9 | 性能基准测试 | ⏳ 待开始 | - | - |
+
+**Phase 5 测试总计**: 267 tests passing (247 backtesting + existing)
+
+**已完成交付物**:
+- `trader/services/backtesting/ports.py` - 协议定义
+- `trader/services/backtesting/quantconnect_adapter.py` - QuantConnect Lean 数据适配器
+- `trader/services/backtesting/strategy_adapter.py` - 策略适配器
+- `trader/services/backtesting/execution_simulator.py` - 执行模拟器（修正滑点方向）
+- `trader/services/backtesting/result_converter.py` - 结果转换器
+- `trader/services/backtesting/report_formatter.py` - 标准化报告
+- `trader/services/backtesting/visualizer.py` - 可视化
+- `trader/services/backtesting/validation.py` - Walk-Forward, K-Fold, 敏感性分析
+- `trader/services/backtesting/lifecycle_integration.py` - 生命周期集成
+- `trader/services/backtesting/data_pipeline.py` - 数据管道优化
+- `trader/services/backtesting/performance_benchmark.py` - 性能基准测试
+- `docs/migration_guide.md` - 自研模块迁移指南
+
+**Task 5.7 完成**:
+- `strategy_evaluator.py` 已标记为 deprecated
+- 迁移指南文档已创建
+
+**Task 5.9 完成**:
+- `PerformanceBenchmark` 实现
+- `BenchmarkRunner` 实现
+- 21 tests 通过
 
 ## 已知问题
 
