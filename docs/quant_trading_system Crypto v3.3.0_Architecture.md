@@ -66,7 +66,7 @@ Insight 不可以直接：
 - REST / WS 基础接入
 - 指标库
 - 调度、日志、监控
-- 基础研究 / 回测底座
+- **回测框架**：优先引入成熟开源框架（Backtrader/VectorBT），避免重复造轮子
 
 **差异化骨干**：
 - Core 状态机
@@ -75,6 +75,14 @@ Insight 不可以直接：
 - Feature Store 版本纪律
 - 审计 / 回放 / Reconciler / Risk 收口
 - AI 治理边界
+- **策略生命周期管理**（自研 StrategyLifecycleManager）
+- **策略执行器**（自研 StrategyRunner）
+
+**回测框架集成原则**：
+- 引入成熟开源框架作为回测引擎，而非自研
+- 自研适配层封装框架差异，统一接口
+- Backtrader 作为首选框架（功能完整、社区活跃）
+- VectorBT 作为备选（适合快速原型验证）
 
 ---
 
@@ -116,6 +124,7 @@ Insight Plane
 | **StrategyChatInterface AI聊天界面** | **Current** | **自然语言策略开发、HITL集成** |
 | **StrategyLifecycleManager 生命周期管理** | **Current** | **完整策略生命周期闭环** |
 | AI proposal / approve 治理 API | Current | 已通过HITL Governance实现 |
+| 回测框架升级（Backtrader集成） | **Next** | Phase 5计划，引入成熟回测框架 |
 | Runner 主执行链路（自动执行） | Current | StrategyRunner已实现 |
 | 中国 A 股实盘适配器 | Deferred | 当前只保留接口契约 |
 | 多交易所套利 / 高频做市 | Deferred | 明确不纳入当前版本 |
@@ -395,10 +404,14 @@ class StrategyPlugin(Protocol):
 - 资源限制：内存、并发订单数、订单频率、超时控制
 
 #### C. StrategyEvaluator（策略评估器）
-- BacktestEngine：历史数据回测
+- **回测引擎**：Phase 5 引入成熟开源框架（Backtrader/VectorBT）
+- 自研适配层：统一接口，封装框架差异
 - LiveEvaluator：实时指标计算
 - 指标：PnL、夏普率、最大回撤、胜率、盈亏比
 - 数据质量验证
+- **消除前瞻偏差**：下一 bar 开盘价执行
+- **方向感知滑点**：买入加滑点，卖出减滑点
+- **止盈/止损支持**：跟随 bar 最高/最低价触发
 
 #### D. StrategyHotSwapper（热插拔管理器）
 - 状态机：IDLE → LOADING → VALIDATING → PREPARING → SWITCHING → ACTIVE
@@ -444,6 +457,88 @@ StrategyRunner
 - 策略崩溃不影响系统稳定性（异常隔离）
 - 热插拔切换时挂单必须正确处理
 - 代码安全验证必须拦截危险操作（os/subprocess/eval/exec/网络调用）
+
+### 9.6 回测框架集成（Phase 5）
+
+**背景**：自研回测模块存在前瞻偏差、滑点方向错误等问题。引入成熟开源框架可获得：
+- 大量用户和场景验证
+- 社区活跃，bug修复快
+- 持续更新，紧跟市场变化
+
+**推荐框架**：
+| 框架 | 特点 | 适用场景 |
+|------|------|----------|
+| Backtrader | 功能完整，文档好 | 生产回测，多标的 |
+| VectorBT | 向量化，速度快 | 快速原型验证 |
+
+**集成架构**：
+```
+┌─────────────────────────────────────────────────────────────┐
+│              StrategyLifecycleManager                        │
+│                  (自研 - 核心业务逻辑)                        │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+          ┌─────────────┴─────────────┐
+          ▼                           ▼
+  ┌───────────────┐         ┌───────────────┐
+  │   Backtrader  │         │   VectorBT    │
+  │   (生产回测)   │         │   (快速原型)   │
+  └───────┬───────┘         └───────┬───────┘
+          │                         │
+          └─────────────┬───────────┘
+                        ▼
+              ┌─────────────────┐
+              │  统一绩效报告    │
+              │  (自研聚合层)    │
+              └─────────────────┘
+```
+
+**关键设计决策**：
+1. **消除前瞻偏差**：下一 bar 开盘价执行
+2. **方向感知滑点**：买入加滑点，卖出减滑点
+3. **止盈/止损支持**：跟随 bar 最高/最低价触发
+4. **样本外验证**：前向分析 + K 折交叉验证
+
+**Phase 5 任务分解**：
+
+| Task | 内容 | 工作量 | 优先级 |
+|------|------|--------|--------|
+| 5.1 | 框架选型与架构设计 | 1 人天 | P0 |
+| 5.2 | Backtrader 适配层开发 | 5 人天 | P0 |
+| 5.3 | 结果标准化与可视化 | 2-3 人天 | P1 |
+| 5.4 | 样本外验证框架 | 4 人天 | P0 |
+| 5.5 | 生命周期管理集成 | 2.5 人天 | P0 |
+| 5.6 | 数据管道优化 | 2 人天 | P1 |
+| 5.7 | 自研模块归档 | 1 人天 | P2 |
+| 5.8 | 回测框架测试套件 | 2 人天 | P0 |
+| 5.9 | 性能基准测试 | 1 人天 | P1 |
+
+**关键技术实现**：
+
+```python
+# 方向感知滑点
+class DirectionAwareSlippage(bt.SlippagePerc):
+    def _apply_slippage(self, data, size, price):
+        if size > 0:  # 买入
+            return price * (1 + self.p.perc)
+        else:  # 卖出
+            return price * (1 - self.p.perc)
+
+# Walk-Forward 分析
+class WalkForwardAnalyzer:
+    def analyze(self, strategy_class, param_grid, train_period, test_period, n_splits=5):
+        # 时间线: | train1 | test1 | train2 | test2 | ...
+        ...
+```
+
+**自研保留组件**：
+- StrategyLifecycleManager（策略生命周期管理）
+- StrategyRunner（策略执行器）
+- StrategyHotSwapper（热插拔管理器）
+- AIStrategyGenerator（AI策略生成）
+- 绩效报告聚合层（统一多框架结果）
+
+**工作量估算：约 20.5 人天**
 
 ---
 
