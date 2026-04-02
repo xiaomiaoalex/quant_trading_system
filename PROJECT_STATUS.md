@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-03-31 (北京时间)
+2026-04-02 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -64,16 +64,23 @@
 - 状态: ✅ 已合并
 - 主要变更: trend_signals.py, price_volume_signals.py, signal_sandbox.py, 64个测试全部通过
 
-### 下次计划：Phase 6 规划
-- 目标: 开始下一个 Phase（待定）
+### 下次计划：Phase 6 Risk Convergence & Allocation
+- 目标: 从“继续扩功能”转为“统一真相源 + 生存风控收敛 + 轻量资本分配”
 - 前置条件: Phase 5 全部完成（✅）
-- Phase 5 总结: 成功从自研回测框架迁移到 QuantConnect Lean
+- Phase 5 总结: 已完成 QuantConnect Lean 集成、验证框架、性能基准与迁移归档，下一阶段不再以回测功能扩张为主线
 
-**修订内容**（根据专业评估反馈）：
-1. 增加 Task 5.8（回测框架测试套件）和 Task 5.9（性能基准测试）
-2. 细化 Task 5.2 拆分为 5 个子任务
-3. 增加关键技术实现细节（滑点模型、Walk-Forward 分析器）
-4. 新增风险评估与缓解措施
+**Phase 6 核心优先级**：
+1. 文档单一真相源收敛：统一 `PROJECT_STATUS.md`、`PLAN.md`、`plans/phase6_risk_convergence.md`
+2. 统一 `risk_sizer`：把时间窗口、流动性、回撤、策略级限额、venue 健康度收敛到一个 sizing 决策
+3. 回撤去杠杆与 venue 健康度联动：先缩仓/close-only，再升级到 KillSwitch
+4. 轻量 `capital_allocator`：处理多策略并发时的净暴露、预算竞争与冲突裁决
+5. 替代数据健康度治理：把 freshness、coverage、delay 纳入信号放行与仓位缩放
+
+**本次文档修订说明**：
+1. 明确 Phase 6 主线为 Risk Convergence，而非继续扩 AI/回测表面功能
+2. 将“个人版生存风控”定义为优先于“机构级组合风控”
+3. 把文档一致性问题提升为 P0 工程任务
+4. 后续执行清单下沉到 `plans/phase6_risk_convergence.md`
 
 ## Phase 1: M1 安全闭环
 
@@ -682,9 +689,9 @@
 | 5.4 | 样本外验证与交叉验证框架 | ✅ 完成 | 32 | 2026-03-31 |
 | 5.5 | 与 StrategyLifecycleManager 集成 | ✅ 完成 | 43 | 2026-03-31 |
 | 5.6 | 回测数据管道优化 | ✅ 完成 | 31 | 2026-03-31 |
-| 5.7 | 自研回测模块归档 | ⏳ 待开始 | - | - |
+| 5.7 | 自研回测模块归档 | ✅ 完成 | 迁移指南 | 2026-03-31 |
 | **5.8** | **回测框架测试套件** | ✅ 完成 | 226 | 2026-03-31 |
-| 5.9 | 性能基准测试 | ⏳ 待开始 | - | - |
+| 5.9 | 性能基准测试 | ✅ 完成 | 21 | 2026-03-31 |
 
 **Phase 5 测试总计**: 267 tests passing (247 backtesting + existing)
 

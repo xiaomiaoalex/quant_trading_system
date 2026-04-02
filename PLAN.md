@@ -7,6 +7,9 @@
 
 ## 一、当前状态快照（As-Is）
 
+> 注：本文件历史阶段计划较长，2026-04-02 起以 “Phase 6 — Risk Convergence & Allocation” 作为当前执行主线。
+> Phase 1-5 视为历史完成记录与架构背景；当前任务排序以本节新增的“当前执行主线”优先。
+
 ### 已完成（可信赖，不得回归）
 
 | 模块 | 文件 | 说明 |
@@ -20,32 +23,57 @@
 | API骨架 | `api/main.py` + `api/routes/` | FastAPI路由已注册，端点为stub |
 | 测试基础设施 | `tests/fakes/` | fake_clock / fake_http / fake_websocket |
 | CI门禁 | `.github/workflows/ci-gate.yml` | 4阶段门禁，P0回归全覆盖 |
+| Feature Store / Reconciler / 深度检查 / 时间窗口 | `adapters/persistence/feature_store.py` 等 | Phase 1 已完成并验证 |
+| 研究信号层 | `core/domain/signals/` | 趋势、价量、资金结构信号已完成 |
+| PG投影 / Replay / HITL | `adapters/persistence/postgres/projectors/` 等 | Phase 3 核心能力已落地 |
+| 策略管理与AI共创 | `services/strategy_runner.py` 等 | Phase 4 已完成 |
+| 回测框架升级 | `services/backtesting/` | Phase 5 已完成 Lean 适配、验证与性能基准 |
 
 ### 部分完成（In-Progress，需推进）
 
 | 模块 | 缺口 |
 |------|------|
-| 事件溯源（PG） | 通用event_log表结构不完整；仅风险事件有PG落地 |
-| 时间窗口风控 | 概念存在于risk_engine，但时段系数体系未实现 |
-| Funding/OI适配器 | 数据结构已定义，Binance API实际集成缺失 |
+| 文档真相源 | `PROJECT_STATUS.md` / `PLAN.md` / 分阶段计划存在状态漂移 |
+| 风险收敛层 | 时间窗口、暴露限制、策略级限额、KillSwitch 已存在，但未形成统一 `risk_sizer` |
+| 多策略分配 | 单策略限额存在，但缺少轻量 `capital_allocator` |
+| 替代数据治理 | 数据质量未系统化接入仓位缩放与信号放行 |
 
 ### 未开始（Target，按优先级推进）
 
-- Feature Store（P0阻塞项）
-- Reconciler（P1阻塞项）
-- On-Chain/宏观数据适配器
-- 事件公告爬虫
-- 深度检查 + 滑点估算
-- 策略监控 + 告警
-- 研究信号层（趋势/价量/资金结构/链上）
-- PG投影读模型
-- Escape Time模拟器
-- Replay Runner
-- **策略执行器（StrategyRunner）** — Phase 4核心
-- **策略评估器（StrategyEvaluator）** — Phase 4核心
-- **策略热插拔机制** — Phase 4核心
-- **AI策略生成服务** — Phase 4核心
-- **AI策略聊天界面** — Phase 4核心
+- `risk_sizer` 统一仓位决策
+- 回撤去杠杆 / close-only / venue_health 联动
+- `capital_allocator` 轻量资本分配
+- alternative data reliability gate
+- 策略元数据治理（edge / failure mode / capacity / conflicts）
+
+## 当前执行主线：Phase 6 — Risk Convergence & Allocation
+
+### 目标
+
+把系统从“功能已经很多，但规则分散”收敛到“文档一致、风控统一、分配可审计”的状态。
+
+### P0 任务
+
+| Task | 目标 | 交付物 |
+|------|------|--------|
+| 6.1 | 文档单一真相源 | 对齐 `PROJECT_STATUS.md`、`PLAN.md`、`plans/phase6_risk_convergence.md` |
+| 6.2 | 统一 `risk_sizer` | 新增纯计算仓位决策模块，统一时间/流动性/回撤/venue 缩放 |
+| 6.3 | 回撤与 venue 联动 | 先缩仓、再 close-only、最后 KillSwitch |
+
+### P1 任务
+
+| Task | 目标 | 交付物 |
+|------|------|--------|
+| 6.4 | 轻量 `capital_allocator` | 多策略预算竞争与冲突裁决 |
+| 6.5 | 替代数据健康度治理 | freshness / coverage / delay / source_quality 模型 |
+| 6.6 | 策略组织学元数据 | edge 来源、失效条件、容量上限、执行前提、冲突关系 |
+
+### 验收原则
+
+1. 不重复建设机构级组合风控平台。
+2. 所有新能力优先服务单账户、小资金、生存风控。
+3. Core Plane 新增能力必须保持无 IO、确定性、可测试。
+4. 文档状态不得再出现“同一任务既完成又未开始”的漂移。
 
 ---
 
