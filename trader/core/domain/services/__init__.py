@@ -41,6 +41,29 @@ from trader.core.domain.services.escape_time_simulator import (
     KillSwitchProviderPort,
     CooldownProviderPort,
 )
+from trader.core.domain.services.risk_sizer import (
+    RiskSizer,
+    SizerConfig,
+    SizerInputs,
+    SizerResult,
+)
+from trader.core.domain.services.drawdown_venue_deleverage import (
+    DrawdownVenueDeleverage,
+    DeLeverageAction,
+    DeLeverageConfig,
+    DeLeverageResult,
+    DrawdownThresholds,
+    VenueHealthThresholds,
+)
+from trader.core.domain.services.alternative_data_health_gate import (
+    AlternativeDataHealthGate,
+    DataHealthConfig,
+    DataHealthLevel,
+    DataHealthMetrics,
+    DataHealthThresholds,
+    DataReliabilityResult,
+    DataSourceType,
+)
 
 __all__ = [
     # DepthChecker
@@ -69,4 +92,24 @@ __all__ = [
     "KillSwitchLevel",
     "KillSwitchProviderPort",
     "CooldownProviderPort",
+    # RiskSizer (Phase 6 M2)
+    "RiskSizer",
+    "SizerConfig",
+    "SizerInputs",
+    "SizerResult",
+    # DrawdownVenueDeleverage (Phase 6 M3)
+    "DrawdownVenueDeleverage",
+    "DeLeverageAction",
+    "DeLeverageConfig",
+    "DeLeverageResult",
+    "DrawdownThresholds",
+    "VenueHealthThresholds",
+    # AlternativeDataHealthGate (Phase 6 M5)
+    "AlternativeDataHealthGate",
+    "DataHealthConfig",
+    "DataHealthLevel",
+    "DataHealthMetrics",
+    "DataHealthThresholds",
+    "DataReliabilityResult",
+    "DataSourceType",
 ]

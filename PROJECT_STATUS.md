@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-02 (北京时间)
+2026-04-03 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -14,7 +14,18 @@
 
 ## 最近开发记录（滚动式）
 
-### 本次任务：Phase 5 回测框架升级完成
+### 本次任务：Phase 6 Risk Convergence & Allocation
+- 完成时间: 2026-04-03
+- 分支: main (直接提交)
+- 状态: ✅ M2-M5 全部完成
+- 主要变更:
+  - M2: `risk_sizer.py` - 统一仓位决策模块，52 tests passing
+  - M3: `drawdown_venue_deleverage.py` - 回撤与 venue 联动去杠杆，Fail-Closed
+  - M4: `capital_allocator.py` - 多策略资本分配器，支持 approved/clipped/rejected
+  - M5: `alternative_data_health_gate.py` - 替代数据健康度评估，纳入信号放行与仓位缩放
+- 测试结果: M2 52 tests, P0 回归 93 tests 全部通过
+
+### 上次任务：Phase 5 回测框架升级完成
 - 完成时间: 2026-03-31
 - 分支: main (直接提交)
 - 状态: ✅ 全部完成
@@ -717,6 +728,52 @@
 - `PerformanceBenchmark` 实现
 - `BenchmarkRunner` 实现
 - 21 tests 通过
+
+## Phase 6: Risk Convergence & Allocation
+
+### 阶段目标
+
+把现有分散的风险控制、仓位限制和文档状态收敛成单一真相源与统一决策面。
+
+### 里程碑
+
+| 里程碑 | 目标 | 状态 | 完成日期 |
+|--------|------|------|----------|
+| M1 | 文档真相源收敛 | ✅ 完成 | 2026-04-03 |
+| M2 | Survival Risk Sizer | ✅ 完成 | 2026-04-03 |
+| M3 | Drawdown/Venue 联动去杠杆 | ✅ 完成 | 2026-04-03 |
+| M4 | Minimal Capital Allocator | ✅ 完成 | 2026-04-03 |
+| M5 | Alternative Data Health Gate | ✅ 完成 | 2026-04-03 |
+
+### 已完成交付物
+
+- `trader/core/domain/services/risk_sizer.py` - 统一仓位决策模块
+  - `SizerInputs` / `SizerResult` / `SizerConfig`
+  - 目标公式: `final_size = min(caps) * coefs`
+  - Fail-Closed: 缺失输入或零系数 → 拒绝
+  - 52 tests passing
+
+- `trader/core/domain/services/drawdown_venue_deleverage.py` - 回撤与 venue 联动
+  - `DeLeverageAction` (NORMAL → HALF_POSITION → CLOSE_ONLY → REDUCE_TO_QUARTER → HARD_HALT)
+  - KillSwitch L2+ 强制 HARD_HALT
+  - Fail-Closed: 无效输入 → HARD_HALT
+
+- `trader/services/capital_allocator.py` - 多策略资本分配
+  - `AllocationDecision` (APPROVED/CLIPPED/REJECTED)
+  - 净暴露/总暴露/同向预算管理
+  - 反向仓位互抵 (allow_opposing_offset)
+
+- `trader/core/domain/services/alternative_data_health_gate.py` - 替代数据健康度
+  - `DataHealthMetrics` / `DataHealthLevel` (HEALTHY → DEGRADED → UNHEALTHY → STALE → UNAVAILABLE)
+  - freshness / coverage / delay / quality 四个系数
+  - 纳入信号放行与仓位缩放
+
+### 设计约束
+
+1. Core Plane 保持无 IO
+2. 所有风险决策必须 Fail-Closed
+3. 不重复建设机构级组合平台
+4. 优先个人版生存风控，再考虑策略扩张
 
 ## 已知问题
 
