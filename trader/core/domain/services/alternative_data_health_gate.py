@@ -162,15 +162,18 @@ class AlternativeDataHealthGate:
                 worst_level = source_level
 
         # Use geometric mean of per-source combined values for consistency
+        # Use log-space computation to avoid float underflow for very small values
         combined_values = [f * c * d * q for f, c, d, q in zip(freshness_coefs, coverage_coefs, delay_coefs, quality_coefs)]
         n = len(combined_values)
         if n == 0:
             reliability_coef = 0.0
         else:
-            product = 1.0
-            for v in combined_values:
-                product *= v
-            reliability_coef = product ** (1.0 / n)  # geometric mean
+            # If any value is 0, geometric mean is 0 (no reliability)
+            if any(v == 0.0 for v in combined_values):
+                reliability_coef = 0.0
+            else:
+                log_sum = sum(math.log(v) for v in combined_values)
+                reliability_coef = math.exp(log_sum / n)
 
         # Individual coefficients are still arithmetic mean for transparency
         avg_freshness = sum(freshness_coefs) / n if n else 0.0

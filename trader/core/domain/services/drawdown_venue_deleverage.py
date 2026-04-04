@@ -80,8 +80,8 @@ class DrawdownVenueDeleverage:
         alignment_health: bool,
         killswitch_level: KillSwitchLevel,
     ) -> DeLeverageResult:
-        if self._config.fail_closed:
-            if not self._is_valid_drawdown(current_drawdown):
+        if not self._is_valid_drawdown(current_drawdown):
+            if self._config.fail_closed:
                 return DeLeverageResult(
                     action=DeLeverageAction.HARD_HALT,
                     drawdown_coef=0.0,
@@ -90,7 +90,20 @@ class DrawdownVenueDeleverage:
                     is_blocked=True,
                     reason="Fail-closed: invalid drawdown (NaN or negative)",
                 )
-            if cascade_state is None:
+            else:
+                # Non-fail-closed mode: still reject NaN/invalid drawdown as conservative measure
+                # because returning NORMAL with invalid input is dangerous
+                return DeLeverageResult(
+                    action=DeLeverageAction.HARD_HALT,
+                    drawdown_coef=0.0,
+                    venue_health_coef=0.0,
+                    combined_coef=0.0,
+                    is_blocked=True,
+                    reason="Invalid drawdown (NaN or negative), conservative reject",
+                )
+
+        if cascade_state is None:
+            if self._config.fail_closed:
                 return DeLeverageResult(
                     action=DeLeverageAction.HARD_HALT,
                     drawdown_coef=0.0,
@@ -98,6 +111,15 @@ class DrawdownVenueDeleverage:
                     combined_coef=0.0,
                     is_blocked=True,
                     reason="Fail-closed: None cascade_state",
+                )
+            else:
+                return DeLeverageResult(
+                    action=DeLeverageAction.HARD_HALT,
+                    drawdown_coef=0.0,
+                    venue_health_coef=0.0,
+                    combined_coef=0.0,
+                    is_blocked=True,
+                    reason="None cascade_state, conservative reject",
                 )
 
         if killswitch_level >= KillSwitchLevel.L2_CANCEL_ALL_AND_HALT:

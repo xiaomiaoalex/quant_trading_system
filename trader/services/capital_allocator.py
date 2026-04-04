@@ -55,6 +55,21 @@ class CapitalAllocatorConfig:
     allow_opposing_offset: bool = True
     fail_closed: bool = True
 
+    def __post_init__(self) -> None:
+        # Validate thresholds are non-negative
+        if self.total_exposure_budget < 0:
+            raise ValueError(f"total_exposure_budget must be >= 0, got {self.total_exposure_budget}")
+        if self.net_exposure_limit < 0:
+            raise ValueError(f"net_exposure_limit must be >= 0, got {self.net_exposure_limit}")
+        if self.same_direction_budget < 0:
+            raise ValueError(f"same_direction_budget must be >= 0, got {self.same_direction_budget}")
+        if self.min_trade_size < 0:
+            raise ValueError(f"min_trade_size must be >= 0, got {self.min_trade_size}")
+        if self.max_request_size is not None and self.max_request_size < 0:
+            raise ValueError(f"max_request_size must be >= 0, got {self.max_request_size}")
+        if not (0.0 <= self.confidence_threshold <= 1.0):
+            raise ValueError(f"confidence_threshold must be in [0, 1], got {self.confidence_threshold}")
+
 
 class PortfolioStateProviderPort(Protocol):
     """Port for providing current portfolio state to the allocator."""
@@ -189,11 +204,27 @@ class CapitalAllocator:
                 limiting_factor="max_request_size",
             )
 
+        # Validate current_state returns are finite (fail-closed on bad adapter data)
         current_net = current_state.get_net_exposure(request.symbol)
         current_total = current_state.get_total_exposure()
         current_same_dir = current_state.get_exposure_by_side(request.side)
         opposite_side: Literal["LONG", "SHORT"] = "SHORT" if request.side == "LONG" else "LONG"
         current_opposite = current_state.get_exposure_by_side(opposite_side)
+
+        for name, value in [
+            ("net_exposure", current_net),
+            ("total_exposure", current_total),
+            ("same_direction_exposure", current_same_dir),
+            ("opposite_direction_exposure", current_opposite),
+        ]:
+            if not math.isfinite(value):
+                return AllocationResult(
+                    decision=AllocationDecision.REJECTED,
+                    approved_size=0.0,
+                    rejected_size=request.requested_size,
+                    reason=f"Invalid current_state.{name}={value} (not finite)",
+                    limiting_factor="current_state",
+                )
 
         net_exposure_after: float
         if request.side == "LONG":
