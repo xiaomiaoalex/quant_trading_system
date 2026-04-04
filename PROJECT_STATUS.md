@@ -75,23 +75,27 @@
 - 状态: ✅ 已合并
 - 主要变更: trend_signals.py, price_volume_signals.py, signal_sandbox.py, 64个测试全部通过
 
-### 下次计划：Phase 6 Risk Convergence & Allocation
-- 目标: 从“继续扩功能”转为“统一真相源 + 生存风控收敛 + 轻量资本分配”
-- 前置条件: Phase 5 全部完成（✅）
-- Phase 5 总结: 已完成 QuantConnect Lean 集成、验证框架、性能基准与迁移归档，下一阶段不再以回测功能扩张为主线
+### 下次计划：Phase 7 风控穿透验证与策略正期望证明
+- 目标: 从"功能齐全但无法证明真的生效"到"风控改变下单结果可量化、策略扣成本后样本外仍正期望"
+- 前置条件: Phase 6 M1-M5 全部完成（✅）
+- Phase 6 总结: 已完成 RiskSizer、Drawdown/Venue 联动、Capital Allocator、替代数据健康度，下一阶段不再以风控模块扩张为主线
 
-**Phase 6 核心优先级**：
-1. 文档单一真相源收敛：统一 `PROJECT_STATUS.md`、`PLAN.md`、`plans/phase6_risk_convergence.md`
-2. 统一 `risk_sizer`：把时间窗口、流动性、回撤、策略级限额、venue 健康度收敛到一个 sizing 决策
-3. 回撤去杠杆与 venue 健康度联动：先缩仓/close-only，再升级到 KillSwitch
-4. 轻量 `capital_allocator`：处理多策略并发时的净暴露、预算竞争与冲突裁决
-5. 替代数据健康度治理：把 freshness、coverage、delay 纳入信号放行与仓位缩放
+**Phase 7 核心优先级**：
+1. 风控穿透测试矩阵：验证风控真的改变订单命运（8+ 场景端到端测试）
+2. RiskInterventionTracker：量化 Risk Intervention Rate 指标
+3. 策略上线前 5 层验证门控：L1 机制假设/L2 回测合规/L3 样本外/L4 成本压测/L5 影子模式
+4. AIAuditLog 持久化：从内存迁移到 PostgreSQL
+5. 统一 DecisionTraceId：全链路 evidence chain
+
+**执行原则**：
+1. 不先写更多分析报告，从可证伪开始
+2. 风控验证看"订单命运是否改变"，不看"代码里有没有 if"
+3. 策略验证看"成本后期望"，不看"回测 Sharpe 多高"
 
 **本次文档修订说明**：
-1. 明确 Phase 6 主线为 Risk Convergence，而非继续扩 AI/回测表面功能
-2. 将“个人版生存风控”定义为优先于“机构级组合风控”
-3. 把文档一致性问题提升为 P0 工程任务
-4. 后续执行清单下沉到 `plans/phase6_risk_convergence.md`
+1. Phase 6 M1-M5 全部标记为已完成
+2. Phase 7 新增为主线，明确两个验证目标
+3. 文档结构与 PLAN.md 保持一致
 
 ## Phase 1: M1 安全闭环
 
@@ -774,6 +778,94 @@
 2. 所有风险决策必须 Fail-Closed
 3. 不重复建设机构级组合平台
 4. 优先个人版生存风控，再考虑策略扩张
+
+## Phase 7: 风控穿透验证与策略正期望证明
+
+### 阶段目标
+
+把系统从"功能齐全但无法证明真的生效"收敛到"风控改变下单结果可量化、策略扣成本后样本外仍正期望"的状态。
+
+### 核心原则
+
+1. **不先写更多分析报告，从可证伪开始**
+2. **风控不是摆设**：证明同一信号进入系统后，风控会让最终结果发生可观察差异
+3. **策略不是回测幻觉**：证明扣掉真实成本后，仍有正期望
+
+### 验证目标 1：风控真的改变量化下单结果
+
+**验证方法**：风控穿透测试矩阵
+
+**成功标准**：
+- 结果必须改变订单命运（没有下单/下单量变小/订单被取消/策略被阻塞）
+- 结果必须可回放（trace_id + strategy_id + symbol + rule_name + action）
+- 必须有反例（深度充足时通过 vs 深度不足时拒绝）
+
+**核心指标**：
+```
+Risk Intervention Rate = 被风控改变命运的信号数 / 总信号数
+  = reject_rate + size_reduction_rate + killswitch_block_rate
+```
+
+### 验证目标 2：策略扣掉真实成本后仍有正期望
+
+**验证方法**：策略上线前 5 层验证门控
+
+**5 层验证结构**：
+```
+Layer 1: 机制假设（必须回答 3 个问题）
+  ├── Q1: 它为什么会赚钱？
+  ├── Q2: 它靠什么市场机制赚钱？
+  └── Q3: 什么情况下会失效？
+  → 未回答的策略拒绝进入回测
+
+Layer 2: 回测合规检查
+  ├── 下一 bar 开盘价执行（消除前瞻偏差）
+  ├── 方向感知滑点（买加/卖减）
+  ├── 止盈/止损支持
+  └── 手续费真实模型
+
+Layer 3: 样本外验证
+  ├── Walk-Forward Analysis（至少 5 split）
+  ├── K-Fold 交叉验证（至少 5 fold）
+  └── Sharpe 衰减 < 20%
+
+Layer 4: 成本压测
+  ├── 1x 成本：Expectancy > 0
+  ├── 1.5x 成本：Expectancy > 0
+  └── 2x 成本：记录边界
+
+Layer 5: 影子模式验证（建议执行）
+  ├── 信号触发率对比（回测 vs 影子）
+  ├── sizing 变化对比
+  └── 成交偏差监控
+```
+
+### P0 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 7.1 | 风控穿透测试矩阵 | `test_risk_intervention_matrix.py` - 8+ 场景端到端测试 | ✅ 完成（15 tests 通过） |
+| 7.2 | RiskInterventionTracker | `risk_intervention_tracker.py` - Risk Intervention Rate 量化指标 | ✅ 完成（36 tests 通过） |
+| 7.3 | 策略上线前 5 层验证门控 | `strategy_validation_gate.py` - 绑定到 LifecycleManager | ✅ 完成（28 tests 通过） |
+
+### P1 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 7.4 | 成本压测标准化入口 | `cost_stress_tester.py` - 1x/1.5x/2x 成本压测 | ✅ 完成（16 tests 通过） |
+| 7.5 | 影子模式验证框架 | `shadow_mode_verifier.py` - 回测/影子/成交偏差比较 | 待开始 |
+| 7.6 | AIAuditLog 持久化 | `ai_audit_storage.py` - 从内存迁移到 PG | ✅ 完成（PG 存储实现） |
+| 7.7 | 控制面快照持久化 | PG 投影读模型替代内存 | ✅ 完成（13 tests 通过） |
+
+### P2 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 7.8 | 统一 DecisionTraceId | `decision_trace.py` - 全链路 evidence chain | 待开始 |
+
+### 与 Phase 6 的关系
+
+Phase 6 解决了"风控规则分散"的问题，Phase 7 要解决"风控是否真的生效"的问题。两个阶段都服务于同一个目标：从"功能齐全"到"可信赖系统"。
 
 ## 已知问题
 

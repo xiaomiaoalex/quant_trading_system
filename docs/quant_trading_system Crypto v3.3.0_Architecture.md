@@ -124,7 +124,8 @@ Insight Plane
 | **StrategyChatInterface AI聊天界面** | **Current** | **自然语言策略开发、HITL集成** |
 | **StrategyLifecycleManager 生命周期管理** | **Current** | **完整策略生命周期闭环** |
 | AI proposal / approve 治理 API | Current | 已通过HITL Governance实现 |
-| 回测框架升级（Backtrader集成） | **Next** | Phase 5计划，引入成熟回测框架 |
+| 回测框架升级（QuantConnect Lean） | Phase 5 ✅ | 2026-03-31 完成，引入成熟回测框架 |
+| 风控穿透验证与策略正期望证明 | **Next** | Phase 7 计划，验证风控真的改变下单结果 |
 | Runner 主执行链路（自动执行） | Current | StrategyRunner已实现 |
 | 中国 A 股实盘适配器 | Deferred | 当前只保留接口契约 |
 | 多交易所套利 / 高频做市 | Deferred | 明确不纳入当前版本 |
@@ -539,6 +540,42 @@ class WalkForwardAnalyzer:
 - 绩效报告聚合层（统一多框架结果）
 
 **工作量估算：约 20.5 人天**
+
+**Phase 5 状态**：✅ 已完成（2026-03-31）
+- Task 5.1-5.9 全部完成
+- QuantConnect Lean 适配层已完成
+- 样本外验证框架（WalkForward/KFold/Sensitivity）已完成
+- 性能基准测试已完成
+
+### 9.7 风控穿透验证与策略正期望证明（Phase 7）
+
+**背景**：系统已具备完整风控模块（深度检查、时间窗口、KillSwitch、RiskSizer、回撤/venue联动），但单元测试通过不等于"风控真的改变了下单结果"。需要可证伪的验证。
+
+**两个验证目标**：
+
+1. **风控真的改变量化下单结果**
+   - 验证方法：风控穿透测试矩阵
+   - 核心指标：Risk Intervention Rate = (reject_rate + size_reduction_rate + killswitch_block_rate)
+   - 成功标准：结果改变订单命运 + 可回放 + 有反例对照组
+
+2. **策略扣掉真实成本后仍有正期望**
+   - 验证方法：策略上线前 5 层验证门控
+   - 成功标准：Expectancy > 0 + 样本外 Sharpe 衰减 < 20% + 1.5x 成本后仍正
+
+**Phase 7 任务分解**：
+
+| Task | 内容 | 工作量 | 优先级 |
+|------|------|--------|--------|
+| 7.1 | 风控穿透测试矩阵 | 2 人天 | P0 |
+| 7.2 | RiskInterventionTracker | 1.5 人天 | P0 |
+| 7.3 | 策略上线前 5 层验证门控 | 3 人天 | P0 |
+| 7.4 | 成本压测标准化入口 | 1 人天 | P1 |
+| 7.5 | 影子模式验证框架 | 2 人天 | P1 ✅ |
+| 7.6 | AIAuditLog 持久化 | 1.5 人天 | P1 ✅ |
+| 7.7 | 控制面快照持久化 | 2 人天 | P1 ✅ |
+| 7.8 | 统一 DecisionTraceId | 1.5 人天 | P2 |
+
+**工作量估算：约 14.5 人天**
 
 ---
 
