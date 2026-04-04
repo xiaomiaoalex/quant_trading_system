@@ -41,6 +41,7 @@ class VenueHealthThresholds:
     degraded_coef: float = 0.5
     self_protection_coef: float = 0.0
     recovering_coef: float = 0.8
+    alignment_unhealthy_coef: float = 0.5  # Penalty when alignment is unhealthy
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,7 +115,7 @@ class DrawdownVenueDeleverage:
         if self._config.enable_venue_linkage:
             venue_health_coef = self._compute_venue_health_coef(cascade_state)
             if not alignment_health:
-                venue_health_coef *= 0.5
+                venue_health_coef *= self._config.venue_health_thresholds.alignment_unhealthy_coef
         else:
             venue_health_coef = 1.0
 

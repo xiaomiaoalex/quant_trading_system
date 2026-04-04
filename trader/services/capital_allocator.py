@@ -50,6 +50,7 @@ class CapitalAllocatorConfig:
     net_exposure_limit: float
     same_direction_budget: float
     min_trade_size: float = 10.0
+    max_request_size: float | None = None  # Optional cap on single request
     confidence_threshold: float = 0.5
     allow_opposing_offset: bool = True
     fail_closed: bool = True
@@ -179,6 +180,15 @@ class CapitalAllocator:
                 limiting_factor="min_trade_size",
             )
 
+        if self._config.max_request_size is not None and request.requested_size > self._config.max_request_size:
+            return AllocationResult(
+                decision=AllocationDecision.REJECTED,
+                approved_size=0.0,
+                rejected_size=request.requested_size,
+                reason=f"Requested size {request.requested_size:.2f} exceeds max_request_size {self._config.max_request_size:.2f}",
+                limiting_factor="max_request_size",
+            )
+
         current_net = current_state.get_net_exposure(request.symbol)
         current_total = current_state.get_total_exposure()
         current_same_dir = current_state.get_exposure_by_side(request.side)
@@ -272,12 +282,20 @@ class CapitalAllocator:
         if self._config.allow_opposing_offset and current_opposite > 0.0:
             offset = min(request.requested_size, current_opposite)
             net_approved = request.requested_size - offset
+            if net_approved <= 0:
+                return AllocationResult(
+                    decision=AllocationDecision.REJECTED,
+                    approved_size=0.0,
+                    rejected_size=request.requested_size,
+                    reason=f"After offset {offset:.2f}, net approved size {net_approved:.2f} is zero or negative",
+                    limiting_factor="opposing_offset",
+                )
             if net_approved < self._config.min_trade_size:
                 return AllocationResult(
                     decision=AllocationDecision.REJECTED,
                     approved_size=0.0,
                     rejected_size=request.requested_size,
-                    reason=f"After offset {offset:.2f}, remaining size below minimum trade",
+                    reason=f"After offset {offset:.2f}, remaining size {net_approved:.2f} below minimum trade",
                     limiting_factor="opposing_offset",
                 )
             if net_approved < request.requested_size:

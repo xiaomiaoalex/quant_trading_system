@@ -120,22 +120,24 @@ class AlternativeDataHealthGate:
 
         for m in metrics:
             if m.freshness_seconds is None:
-                freshness = 1.0  # Unknown freshness = assume healthy
+                freshness = 0.0  # No data = no reliability (fail-closed)
+                source_level_for_none = DataHealthLevel.UNAVAILABLE
             else:
                 freshness = self._compute_freshness_coef(m.freshness_seconds)
+                source_level_for_none = None
 
             if m.coverage_pct is None:
-                coverage = 1.0  # Assume full coverage if unknown
+                coverage = 0.0  # No data = no reliability (fail-closed)
             else:
                 coverage = self._compute_coverage_coef(m.coverage_pct)
 
             if m.delay_seconds is None:
-                delay = 1.0  # Assume no delay if unknown
+                delay = 0.0  # No data = no reliability (fail-closed)
             else:
                 delay = self._compute_delay_coef(m.delay_seconds)
 
             if m.source_quality_score is None:
-                quality = 1.0  # Assume perfect if unknown
+                quality = 0.0  # No data = no reliability (fail-closed)
             else:
                 quality = self._compute_quality_coef(m.source_quality_score)
 
@@ -144,25 +146,37 @@ class AlternativeDataHealthGate:
             delay_coefs.append(delay)
             quality_coefs.append(quality)
 
-            source_level = self._determine_source_level(
-                freshness, coverage, delay, quality
-            )
+            if source_level_for_none is not None:
+                source_level = source_level_for_none
+            else:
+                source_level = self._determine_source_level(
+                    freshness, coverage, delay, quality
+                )
 
             if source_level == DataHealthLevel.STALE:
-                stale_sources.append(m.source.value)
-                stale_sources.append(f"freshness={m.freshness_seconds}s")
+                stale_sources.append(f"{m.source.value}:stale")
             elif source_level == DataHealthLevel.UNAVAILABLE:
-                stale_sources.append(f"{m.source.value}=unavailable")
+                stale_sources.append(f"{m.source.value}:unavailable")
 
             if self._level_to_priority(source_level) > self._level_to_priority(worst_level):
                 worst_level = source_level
 
-        avg_freshness = sum(freshness_coefs) / len(freshness_coefs) if freshness_coefs else 0.0
-        avg_coverage = sum(coverage_coefs) / len(coverage_coefs) if coverage_coefs else 0.0
-        avg_delay = sum(delay_coefs) / len(delay_coefs) if delay_coefs else 0.0
-        avg_quality = sum(quality_coefs) / len(quality_coefs) if quality_coefs else 0.0
+        # Use geometric mean of per-source combined values for consistency
+        combined_values = [f * c * d * q for f, c, d, q in zip(freshness_coefs, coverage_coefs, delay_coefs, quality_coefs)]
+        n = len(combined_values)
+        if n == 0:
+            reliability_coef = 0.0
+        else:
+            product = 1.0
+            for v in combined_values:
+                product *= v
+            reliability_coef = product ** (1.0 / n)  # geometric mean
 
-        reliability_coef = avg_freshness * avg_coverage * avg_delay * avg_quality
+        # Individual coefficients are still arithmetic mean for transparency
+        avg_freshness = sum(freshness_coefs) / n if n else 0.0
+        avg_coverage = sum(coverage_coefs) / n if n else 0.0
+        avg_delay = sum(delay_coefs) / n if n else 0.0
+        avg_quality = sum(quality_coefs) / n if n else 0.0
 
         is_blocked = (
             worst_level in (DataHealthLevel.STALE, DataHealthLevel.UNAVAILABLE)

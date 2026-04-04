@@ -166,7 +166,8 @@ class TestAlternativeDataHealthGate:
         # FUNDING: healthy → worst should be UNAVAILABLE
         assert result.health_level == DataHealthLevel.UNAVAILABLE
 
-    def test_none_values_treated_as_unknown(self):
+    def test_none_values_treated_as_unavailable(self):
+        """None values = no data = UNAVAILABLE (fail-closed)"""
         gate = AlternativeDataHealthGate()
         metrics = [
             DataHealthMetrics(
@@ -178,8 +179,8 @@ class TestAlternativeDataHealthGate:
             ),
         ]
         result = gate.evaluate(metrics)
-        assert result.health_level == DataHealthLevel.HEALTHY
-        assert result.reliability_coef == 1.0
+        assert result.health_level == DataHealthLevel.UNAVAILABLE
+        assert result.reliability_coef == 0.0
 
     def test_negative_freshness_zero_coef(self):
         gate = AlternativeDataHealthGate()
