@@ -4,17 +4,29 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-04 (北京时间)
+2026-04-05 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
 - **工作树**：干净
-- **最新提交**：Phase 8 Task 8 Multi-Agent Portfolio Committee bug fix
+- **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
 
-### 本次任务：Phase 8 Task 8 Bug Fix - PostgreSQL Storage API Mismatch
+### 本次任务：FastAPI 测试覆盖补全
+- 完成时间: 2026-04-05
+- 分支: main (直接提交)
+- 状态: ✅ 测试覆盖完成
+- 主要变更:
+  - 新增 Chat API 测试 (test_api_chat.py) - 18个测试用例
+  - 新增 Portfolio Research API 测试 (test_api_portfolio_research.py) - 19个测试用例
+  - 修复 main.py 路由注册缺失问题
+  - 修复 portfolio_research.py Pydantic 模型继承问题
+  - 修复 Mock 类实现以匹配真实枚举行为
+- 测试结果: 107 tests passing
+
+### 上次任务：Phase 8 Task 8 Bug Fix - PostgreSQL Storage API Mismatch
 - 完成时间: 2026-04-04
 - 分支: main (直接提交)
 - 状态: ✅ Bug Fix 完成
