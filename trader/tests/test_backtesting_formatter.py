@@ -744,31 +744,22 @@ class TestBacktestVisualizer(unittest.TestCase):
             avg_trades_per_day=Decimal("0.5"),
         )
         
-        report = StandardizedBacktestReport(
-            returns=returns,
-            risk=risk,
-            risk_adjusted=risk_adj,
-            trades=trades,
-        )
-        
-        # Add equity curve to result
+        # Create a mock report with equity_curve and trades for visualizer
+        # StandardizedBacktestReport uses slots=True, so we use a simple mock object
         base_time = datetime(2023, 1, 1, tzinfo=timezone.utc)
-        report.result = MockBacktestResult(
-            total_return=15.5,
-            sharpe_ratio=1.5,
-            max_drawdown=5.0,
-            win_rate=60.0,
-            profit_factor=1.5,
-            num_trades=10,
-            final_capital=115500,
-            equity_curve=[
-                {"timestamp": base_time + timedelta(days=i), "equity": 100000 + i * 100}
-                for i in range(50)
-            ],
-            trades=[
-                {"entry_time": base_time, "exit_time": base_time + timedelta(days=5), "pnl": 500}
-            ],
-        )
+        
+        class MockReportForVisualizer:
+            """Mock report object for visualizer testing."""
+            def __init__(self):
+                self.equity_curve = [
+                    {"timestamp": base_time + timedelta(days=i), "equity": 100000 + i * 100}
+                    for i in range(50)
+                ]
+                self.trades = [
+                    {"entry_time": base_time, "exit_time": base_time + timedelta(days=5), "pnl": 500}
+                ]
+        
+        report = MockReportForVisualizer()
         
         viz = BacktestVisualizer()
         
