@@ -1,0 +1,660 @@
+好，那我直接把 phase 8 / Task 8 展开成可执行版本。
+
+先给一句总纲：
+
+Task 8 不是“做一个会聊天的多 agent 系统”，而是“把多视角研究，收敛成可审计、可回测、可审批的组合 proposal 流水线”。 这必须复用你现有的 AI-clean、HITL、StrategyLifecycleManager、Lean 主回测和审计追溯链路，而不是另起一套平行系统。         
+
+另外先点一个必须处理的现实问题：
+
+你现在文档里仍存在 Lean Primary 与旧 Backtrader-first 残留 的冲突，所以 Task 7.0 必须先清文档真相源，否则 agent 会把这种漂移放大成错误 proposal。
+
+ 
+
+ 
+
+ 
+
+phase 8 / Task 8 开发计划
+
+ 
+
+ 
+
+Task 8.0 — 真相源冻结
+
+ 
+
+目标
+
+给所有 agent 一个唯一可信的上下文包，避免读到旧路线。
+
+新增文件
+
+docs/PHASE8_TASK8_MULTI_AGENT_PORTFOLIO.md
+docs/adr/ADR_008_task8_multi_agent_boundary.md
+docs/context_packs/task8_context_manifest.yaml
+ 
+
+必须写死
+
+AI 只在 Insight Plane 活动
+agent 输出只能是 proposal，不是订单
+Proposal 必须进入 HITL 和 Lifecycle
+Backtesting: Lean primary, VectorBT secondary
+现有执行主链路不变：Risk/OMS/Reconciler/KillSwitch 保持确定性 veto
+ 
+
+接口/结构
+
+@dataclass(slots=True)
+
+class Task8ContextManifest:
+
+    version: str
+
+    docs: list[str]
+
+    backtest_primary: Literal["lean"]
+
+    backtest_secondary: Literal["vectorbt"]
+
+    ai_boundary: Literal["proposal_only"]
+
+测试
+
+tests/test_task8_context_manifest.py
+
+缺少核心文档时报错
+出现 backtrader-primary 文本时报错
+缺少 ai_boundary 时报错
+ 
+
+验收
+
+所有 task8 agent 只引用 manifest 中列出的文档
+文档不再出现 Lean/Backtrader 主路线冲突
+任一 agent prompt 都明确声明“禁止直接下单”
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.1 — 定义组合研究工件                 
+
+ 
+
+目标
+
+先把“输出物”定清楚，再写 agent。
+
+新增文件
+
+trader/insight/committee/schemas.py
+trader/insight/committee/enums.py
+trader/adapters/persistence/portfolio_proposal_store.py
+trader/adapters/persistence/postgres/migrations/004_committee_tables.sql
+ 
+
+核心数据结构
+
+@dataclass(slots=True)
+
+class SleeveProposal:
+
+    proposal_id: str
+
+    trace_id: str
+
+    sleeve_type: Literal["trend", "price_volume", "funding_oi", "onchain", "event_regime"]
+
+    hypothesis: str
+
+    required_features: list[str]
+
+    feature_versions: dict[str, str]
+
+    regime: str
+
+    entry_logic: str
+
+    exit_logic: str
+
+    failure_modes: list[str]
+
+    liquidity_notes: str
+
+    cost_assumptions: dict[str, float]
+
+    evidence_refs: list[str]
+
+    confidence: float
+
+@dataclass(slots=True)
+
+class ReviewReport:
+
+    trace_id: str
+
+    orthogonality_score: float
+
+    overlap_notes: list[str]
+
+    risk_flags: list[str]
+
+    reject_reasons: list[str]
+
+    recommended_action: Literal["advance", "revise", "reject"]
+
+@dataclass(slots=True)
+
+class PortfolioProposal:
+
+    portfolio_id: str
+
+    trace_id: str
+
+    sleeves: list[str]
+
+    capital_caps: dict[str, float]
+
+    regime_switch_rules: list[str]
+
+    conflict_rules: list[str]
+
+    portfolio_risks: list[str]
+
+    evaluation_plan_id: str
+
+@dataclass(slots=True)
+
+class CommitteeRun:
+
+    run_id: str
+
+    trace_id: str
+
+    prompt_version: str
+
+    context_manifest_version: str
+
+    input_requirement: str
+
+    status: Literal["created", "reviewed", "approved", "rejected", "submitted_for_backtest"]
+
+数据库表
+
+committee_runs
+sleeve_proposals
+review_reports
+portfolio_proposals
+ 
+
+测试
+
+tests/test_committee_schemas.py
+tests/test_portfolio_proposal_store.py
+ 
+
+验收
+
+任意 agent 输出不符合 schema 直接拒绝
+每个 proposal 必须带 trace_id / prompt_version / feature_versions
+Proposal 可持久化、可查询、可回放
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.2 — Router + 五个 Specialist Agents
+
+ 
+
+目标
+
+按研究主线拆专长，不做大而全 agent。你现有正式研究主线就是趋势、量价、资金结构、链上、事件驱动。
+
+新增文件
+
+trader/insight/committee/router.py
+trader/insight/committee/base.py
+trader/insight/committee/specialists/trend_agent.py
+trader/insight/committee/specialists/price_volume_agent.py
+trader/insight/committee/specialists/funding_oi_agent.py
+trader/insight/committee/specialists/onchain_agent.py
+trader/insight/committee/specialists/event_regime_agent.py
+ 
+
+接口
+
+class SpecialistAgent(Protocol):
+
+    @property
+
+    def sleeve_type(self) -> str: ...
+
+    async def propose(
+
+        self,
+
+        requirement: str,
+
+        available_features: list[str],
+
+        context: dict[str, Any],
+
+    ) -> SleeveProposal: ...
+
+class CommitteeRouter:
+
+    async def route(self, requirement: str) -> list[str]:
+
+        """Return specialist agent names to invoke."""
+
+规则
+
+每个 specialist 只输出 SleeveProposal
+不生成订单、不生成 live config
+只能引用 Feature Store 中存在的 feature/version
+只读自己相关的上下文包
+ 
+
+测试
+
+tests/test_committee_router.py
+tests/test_committee_specialists.py
+ 
+
+验收
+
+同一输入可被 router 分发到多个 specialist
+每个 specialist 至少返回一个结构化 SleeveProposal
+引用不存在特征时失败并记录 reject reason
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.3 — 两个反对派：Orthogonality + RiskCost Red Team
+
+ 
+
+目标
+
+把“多想法”变成“少错误”。
+
+新增文件
+
+trader/insight/committee/orthogonality.py
+trader/insight/committee/red_team.py
+ 
+
+接口
+
+class OrthogonalityAgent:
+
+    async def review(
+
+        self,
+
+        new_proposals: list[SleeveProposal],
+
+        existing_portfolio: list[PortfolioProposal],
+
+    ) -> ReviewReport: ...
+
+class RiskCostRedTeamAgent:
+
+    async def review(
+
+        self,
+
+        proposals: list[SleeveProposal],
+
+        market_constraints: dict[str, Any],
+
+    ) -> ReviewReport: ...
+
+检查项
+
+是否只是现有风险暴露换壳
+是否与现有 sleeves 高度重复
+是否缺失 failure modes
+是否对成本/滑点脆弱
+是否依赖脏数据
+是否暗中越过 AI-clean / HITL 边界
+ 
+
+测试
+
+tests/test_committee_orthogonality.py
+tests/test_committee_red_team.py
+ 
+
+验收
+
+缺少 failure_modes 的 proposal 不得进入下一步
+高重叠 proposal 会被标记 revise/reject
+任何 direct-trading wording 触发 reject
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.4 — Portfolio Constructor
+
+ 
+
+目标
+
+真正把多个 sleeve proposal 组合成候选组合。
+
+新增文件
+
+trader/insight/committee/portfolio_constructor.py
+trader/services/portfolio_research_workflow.py
+ 
+
+接口
+
+class PortfolioConstructor:
+
+    async def construct(
+
+        self,
+
+        approved_sleeves: list[SleeveProposal],
+
+        review_reports: list[ReviewReport],
+
+    ) -> list[PortfolioProposal]: ...
+
+构造规则
+
+每个 sleeve 设初始 capital_cap
+必须定义 regime 启停条件
+必须定义冲突优先级
+必须定义组合级暴露与风险说明
+每个组合自动生成 evaluation plan
+ 
+
+测试
+
+tests/test_portfolio_constructor.py
+ 
+
+验收
+
+至少能从 3 个 sleeve proposal 生成 1 个 PortfolioProposal
+组合内每个 sleeve 都有 capital cap
+若两个 sleeve 被判高度重复，不可同时进入同一 proposal
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.5 — 自动生成评估任务，接入现有 Lean 回测栈
+
+ 
+
+目标
+
+Proposal 不是终点，必须自动进入评估。你现有 Lean 主回测、Lifecycle 集成、WalkForward/KFold/Sensitivity 都已经是现成资产。
+
+新增文件
+
+trader/services/backtesting/portfolio_backtest_batch_job.py
+trader/services/backtesting/portfolio_validation_plan.py
+trader/services/committee_to_backtest_adapter.py
+ 
+
+接口
+
+@dataclass(slots=True)
+
+class PortfolioBacktestBatchJob:
+
+    job_id: str
+
+    portfolio_id: str
+
+    trace_id: str
+
+    scenarios: list[str]  # base_cost, cost_1_5x, cost_2x, oos, walkforward
+
+class CommitteeToBacktestAdapter:
+
+    async def create_batch_job(
+
+        self,
+
+        proposal: PortfolioProposal,
+
+    ) -> PortfolioBacktestBatchJob: ...
+
+默认评估计划
+
+baseline cost
+1.5x cost
+2x cost
+in-sample
+out-of-sample
+walk-forward
+sensitivity
+ 
+
+测试
+
+tests/test_committee_to_backtest_adapter.py
+tests/test_portfolio_backtest_batch_job.py
+ 
+
+验收
+
+每个 PortfolioProposal 自动生成 batch job
+job 可直接调用现有 backtesting ports / lifecycle integration
+评估计划缺少 OOS 或 cost stress 时拒绝提交
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.6 — 接入 HITL + Lifecycle，不另起炉灶
+
+ 
+
+目标
+
+直接复用现有 StrategyLifecycleManager / HITLGovernance，不创建第二套审批体系。你现有 lifecycle 已支持 DRAFT→VALIDATED→BACKTESTED→APPROVED→RUNNING，AI 工作流也已要求审批和审计追溯。
+
+新增文件
+
+trader/services/committee_to_lifecycle_adapter.py
+trader/api/routes/portfolio_research.py
+ 
+
+接口
+
+class CommitteeToLifecycleAdapter:
+
+    async def submit_for_review(
+
+        self,
+
+        proposal: PortfolioProposal,
+
+    ) -> str:  # lifecycle_id
+
+    async def create_strategy_drafts(
+
+        self,
+
+        proposal: PortfolioProposal,
+
+    ) -> list[str]:
+
+        """Create strategy drafts, not live strategies."""
+
+API
+
+POST /api/v1/portfolio-research/runs
+GET /api/v1/portfolio-research/runs/{run_id}
+POST /api/v1/portfolio-research/proposals/{portfolio_id}/submit
+POST /api/v1/portfolio-research/proposals/{portfolio_id}/approve-for-backtest
+POST /api/v1/portfolio-research/proposals/{portfolio_id}/reject
+ 
+
+测试
+
+tests/test_portfolio_research_api.py
+tests/test_committee_to_lifecycle_adapter.py
+tests/test_portfolio_research_e2e.py
+ 
+
+验收
+
+Proposal 能进入 HITL 审批
+审批通过后创建 backtest batch job 或 strategy drafts
+未审批 proposal 不得进入运行链路
+ 
+
+ 
+
+ 
+
+ 
+
+Task 8.7 — 审计、回放、价值证明
+
+ 
+
+目标
+
+让 Task 8 不是“更贵的 brainstorm”。
+
+新增文件
+
+trader/services/committee_audit_service.py
+scripts/evaluate_committee_vs_baseline.py
+reports/phase8_task8_eval.md
+ 
+
+审计记录必须包含
+
+input requirement
+context manifest version
+specialist outputs
+review outputs
+human decision
+backtest job ids
+final keep/reject decision
+ 
+
+这要沿用你现有 AI 审计结构里 trace_id + input + output + validation + approval timestamps 的思路。
+
+评估指标
+
+proposal 通过率
+orthogonality 平均分
+成本后 OOS 通过率
+人工审查耗时
+边界违规次数
+ 
+
+测试
+
+tests/test_committee_audit.py
+tests/test_committee_value_eval.py
+ 
+
+验收
+
+任意一次 committee run 可完整追溯
+能对比 single-agent / manual baseline
+如果多 agent 没提升 post-cost OOS 通过率，就不继续扩张
+ 
+
+ 
+
+ 
+
+ 
+
+推荐开发顺序
+
+ 
+
+就按这个顺序，不要改：
+
+8.0 真相源冻结
+8.1 工件 schema
+8.2 Router + specialists
+8.3 Orthogonality + Red Team
+8.4 Portfolio Constructor
+8.5 Backtest batch integration
+8.6 HITL + Lifecycle integration
+8.7 Audit + value proof
+ 
+
+原因很简单：
+
+没有 8.1，你得到的不是系统资产，只是聊天记录。
+
+没有 8.3，你得到的是更多重复策略。          
+
+没有 8.7，你无法证明这套复杂度值得留下。
+
+ 
+
+ 
+
+ 
+
+每阶段里程碑
+
+ 
+
+M1：Research Proposal Ready
+
+完成 8.0–8.2。系统能从一个需求生成结构化 SleeveProposal。
+
+M2：Committee Review Ready
+
+完成 8.3–8.4。系统能从多个 sleeve proposal 生成 PortfolioProposal。
+
+M3：Evaluation Ready
+
+完成 8.5–8.6。Proposal 能进入现有 Lean/HITL/Lifecycle 链路。
+
+M4：Keep-or-Kill Ready
+
+完成 8.7。系统能证明多 agent 是否真的提高组合开发质量。     
+
+ 
+
+ 
+
+ 
+
+你现在最该先开的分支是 8.0。
+
+ 
+
+ 
