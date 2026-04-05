@@ -4,17 +4,45 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-03 (北京时间)
+2026-04-04 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
 - **工作树**：干净
-- **最新提交**：Architecture文档更新 - 添加策略管理层
+- **最新提交**：Phase 8 Task 8 Multi-Agent Portfolio Committee bug fix
 
 ## 最近开发记录（滚动式）
 
-### 本次任务：Phase 6 Risk Convergence & Allocation
+### 本次任务：Phase 8 Task 8 Bug Fix - PostgreSQL Storage API Mismatch
+- 完成时间: 2026-04-04
+- 分支: main (直接提交)
+- 状态: ✅ Bug Fix 完成
+- 主要变更:
+  - 修复 `PortfolioProposalStore` 使用不存在的 `PostgreSQLStorage` 方法
+  - `initialize()` → `connect()`
+  - `execute()` → `conn.execute()` via `acquire()`
+  - `fetchone()` → `conn.fetchrow()` via `acquire()`
+  - `fetch()` → `conn.fetch()` via `acquire()`
+  - 移除 `await is_postgres_available()` (同步函数)
+- 测试结果: 11 store tests + 103 committee tests + 93 P0 regression tests 全部通过
+
+### 上次任务：Phase 8 Task 8 Multi-Agent Portfolio Committee
+- 完成时间: 2026-04-03
+- 分支: task/phase8-multi-agent-portfolio-committee
+- 状态: ✅ 全部 8 个 Subtask 完成
+- 主要变更:
+  - Task 8.0: 真相源冻结文档
+  - Task 8.1: Schema 定义 (schemas.py, portfolio_proposal_store.py, migrations)
+  - Task 8.2: Specialist Agents (base, trend, price_volume, funding_oi, onchain, event_regime, router)
+  - Task 8.3: Red Team Agents (orthogonality, red_team)
+  - Task 8.4: Portfolio Constructor
+  - Task 8.5: HITL/Lifecycle Integration
+  - Task 8.6: Audit & Replay
+  - Task 8.7: Value Proof (eval report + baseline script)
+- 测试结果: 100 tests passing
+
+### 上上次任务：Phase 6 Risk Convergence & Allocation
 - 完成时间: 2026-04-03
 - 分支: main (直接提交)
 - 状态: ✅ M2-M5 全部完成

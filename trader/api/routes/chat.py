@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from insight.chat_interface import (
@@ -220,7 +220,7 @@ async def create_session(
 )
 async def send_message(
     session_id: str,
-    message: str = Field(..., description="用户消息"),
+    message: str = Query(..., description="用户消息"),
 ) -> SendMessageResponse:
     """
     发送消息
@@ -369,8 +369,8 @@ async def delete_session(
     description="列出所有聊天会话。",
 )
 async def list_sessions(
-    limit: int = Field(100, ge=1, le=1000, description="返回数量"),
-    offset: int = Field(0, ge=0, description="偏移量"),
+    limit: int = Query(100, ge=1, le=1000, description="返回数量"),
+    offset: int = Query(0, ge=0, description="偏移量"),
 ) -> List[SessionResponse]:
     """
     列出所有会话

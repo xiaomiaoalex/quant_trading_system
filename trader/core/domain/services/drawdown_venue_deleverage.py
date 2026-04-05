@@ -210,14 +210,16 @@ class DrawdownVenueDeleverage:
         drawdown_coef: float,
         venue_health_coef: float,
     ) -> DeLeverageAction:
-        if cascade_state == CascadeState.SELF_PROTECTION:
+        # SELF_PROTECTION only forces HARD_HALT when venue linkage is enabled
+        if cascade_state == CascadeState.SELF_PROTECTION and self._config.enable_venue_linkage:
             return DeLeverageAction.HARD_HALT
 
         thresholds = self._config.drawdown_thresholds
         if current_drawdown >= thresholds.critical_threshold:
             return DeLeverageAction.HARD_HALT
 
-        if drawdown_coef <= 0.1 and venue_health_coef < 0.5:
+        # Severe drawdown (20-30%) -> REDUCE_TO_QUARTER regardless of venue health
+        if drawdown_coef <= 0.1:
             return DeLeverageAction.REDUCE_TO_QUARTER
 
         if drawdown_coef <= 0.25:

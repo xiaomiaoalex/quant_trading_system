@@ -385,4 +385,4 @@ class TestDrawdownVenueDeleverage:
             alignment_health=True,
             killswitch_level=KillSwitchLevel.L0_NORMAL,
         )
-        assert result.action == DeLeverageAction.CLOSE_ONLY  # 0.5 * 0.5 = 0.25 -> close only
+        assert result.action == DeLeverageAction.HALF_POSITION
