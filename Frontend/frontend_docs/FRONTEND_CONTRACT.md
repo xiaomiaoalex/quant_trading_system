@@ -2,6 +2,15 @@
 
 本文档定义前后端之间的数据契约，用于生成 TypeScript 类型定义和 API 调用代码。
 
+## 文档拆分导航（新增）
+
+为降低单文件维护成本，新增以下拆分文档作为优先阅读入口：
+- [contract_models.md](./contract_models.md) - 核心模型与状态枚举
+- [contract_endpoints.md](./contract_endpoints.md) - 页面/API 对照与关键请求响应
+- [contract_realtime_and_errors.md](./contract_realtime_and_errors.md) - 实时语义、轮询策略、错误处理规范
+
+本文件继续保留为“兼容版全集”，后续以拆分文档为主维护。
+
 ---
 
 ## 1. 核心数据模型 (Core Data Models)
