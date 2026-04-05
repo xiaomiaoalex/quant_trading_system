@@ -7,7 +7,7 @@ PostgresSnapshotStorage - PostgreSQL Snapshot 持久化存储
 实现 EventService 所需的快照存储协议，提供生产级持久化。
 
 表结构：
-    snapshots (
+    control_plane_snapshots (
         id BIGSERIAL PRIMARY KEY,
         stream_key VARCHAR(255) NOT NULL,
         snapshot_type VARCHAR(100) NOT NULL,
@@ -18,8 +18,8 @@ PostgresSnapshotStorage - PostgreSQL Snapshot 持久化存储
     )
 
 索引：
-    - idx_snapshots_stream_key: (stream_key)
-    - idx_snapshots_stream_key_ts: (stream_key, ts_ms DESC)
+    - idx_control_plane_snapshots_stream_key: (stream_key)
+    - idx_control_plane_snapshots_stream_key_ts: (stream_key, ts_ms DESC)
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class PostgresSnapshotStorage:
     
     依赖：
     - 需要 PostgreSQL 数据库
-    - 需要创建 snapshots 表
+    - 需要创建 control_plane_snapshots 表
     """
     
     def __init__(
@@ -60,12 +60,16 @@ class PostgresSnapshotStorage:
     
     def _envelope_to_row(self, envelope: SnapshotEnvelope) -> dict:
         """将 SnapshotEnvelope 转换为数据库行"""
+        created_at_value = envelope.created_at or datetime.now(timezone.utc)
+        if isinstance(created_at_value, str):
+            created_at_value = datetime.fromisoformat(created_at_value)
+        
         return {
             "stream_key": envelope.stream_key,
             "snapshot_type": envelope.snapshot_type,
             "ts_ms": envelope.ts_ms,
             "payload": json.dumps(envelope.payload) if envelope.payload else {},
-            "created_at": envelope.created_at or datetime.now(timezone.utc).isoformat(),
+            "created_at": created_at_value,
         }
     
     def _row_to_envelope(self, row: dict) -> SnapshotEnvelope:
@@ -94,11 +98,9 @@ class PostgresSnapshotStorage:
         row = self._envelope_to_row(envelope)
         
         query = """
-            INSERT INTO snapshots (
+            INSERT INTO control_plane_snapshots (
                 stream_key, snapshot_type, ts_ms, payload, created_at
-            ) VALUES (
-                %(stream_key)s, %(snapshot_type)s, %(ts_ms)s, %(payload)s, %(created_at)s
-            )
+            ) VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (stream_key) DO UPDATE SET
                 snapshot_type = EXCLUDED.snapshot_type,
                 ts_ms = EXCLUDED.ts_ms,
@@ -108,7 +110,14 @@ class PostgresSnapshotStorage:
         """
         
         async with self._pool.acquire() as conn:
-            result = await conn.fetchrow(query, row)
+            result = await conn.fetchrow(
+                query,
+                row["stream_key"],
+                row["snapshot_type"],
+                row["ts_ms"],
+                row["payload"],
+                row["created_at"],
+            )
         
         # Return with updated id and created_at
         return SnapshotEnvelope(
@@ -135,7 +144,7 @@ class PostgresSnapshotStorage:
         
         query = """
             SELECT id, stream_key, snapshot_type, ts_ms, payload, created_at
-            FROM snapshots
+            FROM control_plane_snapshots
             WHERE stream_key = $1
         """
         
@@ -167,7 +176,7 @@ class PostgresSnapshotStorage:
         
         query = """
             SELECT id, stream_key, snapshot_type, ts_ms, payload, created_at
-            FROM snapshots
+            FROM control_plane_snapshots
             WHERE stream_key = $1
             ORDER BY ts_ms DESC
             LIMIT $2
@@ -193,7 +202,7 @@ class PostgresSnapshotStorage:
         
         query = """
             SELECT id, stream_key, snapshot_type, ts_ms, payload, created_at
-            FROM snapshots
+            FROM control_plane_snapshots
             ORDER BY updated_at DESC
             LIMIT $1
         """
@@ -216,7 +225,7 @@ class PostgresSnapshotStorage:
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
         
-        query = "DELETE FROM snapshots WHERE stream_key = $1"
+        query = "DELETE FROM control_plane_snapshots WHERE stream_key = $1"
         
         async with self._pool.acquire() as conn:
             result = await conn.execute(query, stream_key)
@@ -233,7 +242,7 @@ class PostgresSnapshotStorage:
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
         
-        query = "SELECT COUNT(*) as cnt FROM snapshots"
+        query = "SELECT COUNT(*) as cnt FROM control_plane_snapshots"
         
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(query)
@@ -244,10 +253,11 @@ class PostgresSnapshotStorage:
 # ==================== 迁移脚本 ====================
 
 MIGRATION_SQL = """
--- Snapshots 表迁移脚本
--- 创建 snapshots 表用于存储 Control Plane 快照
+-- Control Plane Snapshots 表迁移脚本
+-- 创建 control_plane_snapshots 表用于存储 Control Plane 快照
+-- 注意：使用独立表名以避免与 Event Sourcing 的 snapshots 表冲突
 
-CREATE TABLE IF NOT EXISTS snapshots (
+CREATE TABLE IF NOT EXISTS control_plane_snapshots (
     id BIGSERIAL PRIMARY KEY,
     stream_key VARCHAR(255) NOT NULL UNIQUE,
     snapshot_type VARCHAR(100) NOT NULL,
@@ -258,15 +268,15 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 
 -- 索引
-CREATE INDEX IF NOT EXISTS idx_snapshots_stream_key ON snapshots(stream_key);
-CREATE INDEX IF NOT EXISTS idx_snapshots_stream_key_ts ON snapshots(stream_key, ts_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_control_plane_snapshots_stream_key ON control_plane_snapshots(stream_key);
+CREATE INDEX IF NOT EXISTS idx_control_plane_snapshots_stream_key_ts ON control_plane_snapshots(stream_key, ts_ms DESC);
 
 -- 注释
-COMMENT ON TABLE snapshots IS 'Control Plane snapshots - stores latest state snapshots per stream_key';
-COMMENT ON COLUMN snapshots.stream_key IS 'Unique stream identifier (e.g., strategy:{name}, account:{id})';
-COMMENT ON COLUMN snapshots.snapshot_type IS 'Snapshot type (e.g., state_snapshot, risk_snapshot)';
-COMMENT ON COLUMN snapshots.ts_ms IS 'Event timestamp in milliseconds';
-COMMENT ON COLUMN snapshots.payload IS 'Snapshot data as JSON';
+COMMENT ON TABLE control_plane_snapshots IS 'Control Plane snapshots - stores latest state snapshots per stream_key';
+COMMENT ON COLUMN control_plane_snapshots.stream_key IS 'Unique stream identifier (e.g., strategy:{name}, account:{id})';
+COMMENT ON COLUMN control_plane_snapshots.snapshot_type IS 'Snapshot type (e.g., state_snapshot, risk_snapshot)';
+COMMENT ON COLUMN control_plane_snapshots.ts_ms IS 'Event timestamp in milliseconds';
+COMMENT ON COLUMN control_plane_snapshots.payload IS 'Snapshot data as JSON';
 """
 
 

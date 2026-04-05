@@ -60,7 +60,7 @@ class MockSnapshotConnection:
     
     async def execute(self, query, *args):
         """Handle INSERT ... ON CONFLICT DO UPDATE"""
-        if "INSERT INTO snapshots" in query:
+        if "INSERT INTO control_plane_snapshots" in query:
             if "ON CONFLICT (stream_key) DO UPDATE" in query:
                 # Upsert operation
                 stream_key = args[0]
@@ -92,7 +92,7 @@ class MockSnapshotConnection:
                             "updated_at": datetime.now(timezone.utc),
                         }
                         return 1
-        elif "DELETE FROM snapshots" in query:
+        elif "DELETE FROM control_plane_snapshots" in query:
             stream_key = args[0]
             if stream_key in self._snapshots:
                 del self._snapshots[stream_key]
@@ -102,13 +102,13 @@ class MockSnapshotConnection:
     
     async def fetchrow(self, query, *args):
         """Handle SELECT queries and INSERT ... RETURNING"""
-        if "INSERT INTO snapshots" in query and "RETURNING" in query:
-            row = args[0]
-            stream_key = row["stream_key"]
-            snapshot_type = row["snapshot_type"]
-            ts_ms = row["ts_ms"]
-            payload = row["payload"]
-            created_at = row["created_at"]
+        if "INSERT INTO control_plane_snapshots" in query and "RETURNING" in query:
+            # Now using positional parameters ($1, $2, $3, $4, $5)
+            stream_key = args[0]
+            snapshot_type = args[1]
+            ts_ms = args[2]
+            payload = args[3]
+            created_at = args[4]
 
             if stream_key in self._snapshots:
                 self._snapshots[stream_key].update({
@@ -397,7 +397,7 @@ class TestSnapshotStorageIntegration:
         except Exception:
             return False
     
-    @pytest.mark.skip(reason="Integration test requires Docker/PostgreSQL - run manually with docker compose up")
+    @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_full_snapshot_persistence_workflow(self, pg_connection_string):
         """Test full workflow: create storage, save, retrieve, update, delete"""
