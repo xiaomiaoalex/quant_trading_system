@@ -1,44 +1,34 @@
-import { useState, useCallback } from 'react';
-import {
-  useMonitorSnapshot,
-  useMonitorAlerts,
-  useClearAllAlerts,
-} from '@/hooks';
-import {
-  LoadingState,
-  ErrorState,
-  EmptyState,
-  ConfirmDialog,
-  HealthBadge,
-} from '@/components/ui';
+import { useState, useCallback } from 'react'
+import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts } from '@/hooks'
+import { LoadingState, ErrorState, EmptyState, ConfirmDialog, HealthBadge } from '@/components/ui'
 import {
   MetricCard,
   AdapterHealthTable,
   AlertList,
   KillSwitchIndicator,
   StaleBanner,
-} from '@/components/monitor';
+} from '@/components/monitor'
 
 export function Monitor() {
   // Data hooks
   const { snapshot, isLoading, isError, error, isStale, healthState, refetch } =
-    useMonitorSnapshot();
-  const { alerts } = useMonitorAlerts();
-  const { clearAllAlerts, isPending: isClearingAlerts } = useClearAllAlerts();
+    useMonitorSnapshot()
+  const { alerts } = useMonitorAlerts()
+  const { clearAllAlerts, isPending: isClearingAlerts } = useClearAllAlerts()
 
   // UI state
-  const [showClearAllDialog, setShowClearAllDialog] = useState(false);
-  const [clearSuccess, setClearSuccess] = useState<string | null>(null);
+  const [showClearAllDialog, setShowClearAllDialog] = useState(false)
+  const [clearSuccess, setClearSuccess] = useState<string | null>(null)
 
   // Handle clear all alerts
   const handleClearAllAlerts = useCallback(async () => {
-    const success = await clearAllAlerts('Manually cleared by user');
+    const success = await clearAllAlerts('Manually cleared by user')
     if (success) {
-      setClearSuccess('All alerts cleared successfully');
-      setTimeout(() => setClearSuccess(null), 3000);
+      setClearSuccess('All alerts cleared successfully')
+      setTimeout(() => setClearSuccess(null), 3000)
     }
-    setShowClearAllDialog(false);
-  }, [clearAllAlerts]);
+    setShowClearAllDialog(false)
+  }, [clearAllAlerts])
 
   // Loading state
   if (isLoading) {
@@ -46,20 +36,16 @@ export function Monitor() {
       <div className="p-6">
         <LoadingState message="Loading monitor snapshot..." />
       </div>
-    );
+    )
   }
 
   // Error state
   if (isError) {
     return (
       <div className="p-6">
-        <ErrorState
-          title="Failed to load monitor data"
-          message={error}
-          onRetry={refetch}
-        />
+        <ErrorState title="Failed to load monitor data" message={error} onRetry={refetch} />
       </div>
-    );
+    )
   }
 
   // No snapshot data
@@ -72,7 +58,7 @@ export function Monitor() {
           action={{ label: 'Retry', onClick: refetch }}
         />
       </div>
-    );
+    )
   }
 
   return (
@@ -125,7 +111,8 @@ export function Monitor() {
         {healthState === 'down' && (
           <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-3">
             <p className="text-sm text-red-300">
-              System is not fully operational. Trading may be restricted. Check adapter status below.
+              System is not fully operational. Trading may be restricted. Check adapter status
+              below.
             </p>
           </div>
         )}
@@ -187,10 +174,7 @@ export function Monitor() {
         {/* Two Column Layout: Adapters & Alerts */}
         <div className="grid gap-6 lg:grid-cols-2">
           <AdapterHealthTable adapters={snapshot.adapters} />
-          <AlertList
-            alerts={snapshot.active_alerts}
-            onClearAlert={undefined}
-          />
+          <AlertList alerts={snapshot.active_alerts} onClearAlert={undefined} />
         </div>
 
         {/* Danger Zone - Clear All Alerts */}
@@ -200,8 +184,8 @@ export function Monitor() {
               <div>
                 <h3 className="text-sm font-medium text-red-300">Clear All Alerts</h3>
                 <p className="text-xs text-red-400/70 mt-1">
-                  This will clear {alerts.length} active alert{alerts.length !== 1 ? 's' : ''}.
-                  This action requires confirmation.
+                  This will clear {alerts.length} active alert{alerts.length !== 1 ? 's' : ''}. This
+                  action requires confirmation.
                 </p>
               </div>
               <button
@@ -232,5 +216,5 @@ export function Monitor() {
         onCancel={() => setShowClearAllDialog(false)}
       />
     </div>
-  );
+  )
 }

@@ -1,1 +1,1 @@
-export * from './stale';
+export * from './stale'

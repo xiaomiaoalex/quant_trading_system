@@ -1,17 +1,17 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { clsx } from 'clsx';
-import { LoadingSpinner } from './LoadingSpinner';
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { clsx } from 'clsx'
+import { LoadingSpinner } from './LoadingSpinner'
 
 interface ConfirmDialogProps {
-  isOpen: boolean;
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
-  variant?: 'danger' | 'warning' | 'info';
-  isLoading?: boolean;
-  onConfirm: () => void | Promise<void>;
-  onCancel: () => void;
+  isOpen: boolean
+  title: string
+  message: string
+  confirmLabel?: string
+  cancelLabel?: string
+  variant?: 'danger' | 'warning' | 'info'
+  isLoading?: boolean
+  onConfirm: () => void | Promise<void>
+  onCancel: () => void
 }
 
 const VARIANT_CONFIG = {
@@ -30,7 +30,12 @@ const VARIANT_CONFIG = {
   },
   warning: {
     icon: (
-      <svg className="h-6 w-6 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg
+        className="h-6 w-6 text-yellow-500"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+      >
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -54,7 +59,7 @@ const VARIANT_CONFIG = {
     ),
     confirmClass: 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500',
   },
-};
+}
 
 export function ConfirmDialog({
   isOpen,
@@ -67,57 +72,57 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  const [isConfirming, setIsConfirming] = useState(false);
-  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const [isConfirming, setIsConfirming] = useState(false)
+  const cancelButtonRef = useRef<HTMLButtonElement>(null)
 
-  const config = VARIANT_CONFIG[variant];
+  const config = VARIANT_CONFIG[variant]
 
   // Focus cancel button when dialog opens
   useEffect(() => {
     if (isOpen) {
-      cancelButtonRef.current?.focus();
+      cancelButtonRef.current?.focus()
     }
-  }, [isOpen]);
+  }, [isOpen])
 
   // Handle escape key
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && isOpen && !isLoading) {
-        onCancel();
+        onCancel()
       }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isLoading, onCancel]);
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isLoading, onCancel])
 
   // Prevent body scroll when dialog is open
   useEffect(() => {
     if (isOpen) {
-      document.body.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden'
     } else {
-      document.body.style.overflow = '';
+      document.body.style.overflow = ''
     }
     return () => {
-      document.body.style.overflow = '';
-    };
-  }, [isOpen]);
+      document.body.style.overflow = ''
+    }
+  }, [isOpen])
 
   const handleConfirm = useCallback(async () => {
-    setIsConfirming(true);
+    setIsConfirming(true)
     try {
-      await onConfirm();
+      await onConfirm()
     } finally {
-      setIsConfirming(false);
+      setIsConfirming(false)
     }
-  }, [onConfirm]);
+  }, [onConfirm])
 
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
   return (
     <div className="dialog-backdrop" onClick={onCancel}>
       <div
         className="dialog-panel max-w-md"
-        onClick={(e) => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
@@ -137,20 +142,21 @@ export function ConfirmDialog({
 
         <div className="mt-6 flex justify-end gap-3">
           <button
-            ref={cancelButtonRef}
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {cancelLabel}
-          </button>
+        ref={cancelButtonRef}
+        type="button"
+        onClick={onCancel}
+        disabled={isLoading}
+        className="rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50" // prettier-ignore
+      >
+        {cancelLabel}
+      </button>
           <button
             type="button"
             onClick={handleConfirm}
             disabled={isLoading}
-            className={clsx('rounded-md px-4 py-2 text-sm font-medium text-white transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50',
-              config.confirmClass,
+            className={clsx(
+              'rounded-md px-4 py-2 text-sm font-medium text-white transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50', // prettier-ignore
+              config.confirmClass
             )}
           >
             {isLoading || isConfirming ? (
@@ -165,5 +171,5 @@ export function ConfirmDialog({
         </div>
       </div>
     </div>
-  );
+  )
 }

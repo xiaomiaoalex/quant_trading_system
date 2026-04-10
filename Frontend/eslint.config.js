@@ -49,7 +49,17 @@ export default tseslint.config(
         'error',
         { prefer: 'type-imports' },
       ],
-      'max-len': ['error', { code: 120, ignoreUrls: true }],
+      'max-len': [
+        'warn',
+        {
+          code: 120,
+          ignoreStrings: true,
+          ignoreTemplateLiterals: true,
+          ignoreComments: true,
+          ignoreTrailingComments: true,
+          ignorePattern: '^\\s*d=.*// prettier-ignore',
+        },
+      ],
     },
   },
 );

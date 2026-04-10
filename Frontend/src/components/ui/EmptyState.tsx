@@ -1,14 +1,14 @@
-import { clsx } from 'clsx';
+import { clsx } from 'clsx'
 
 interface EmptyStateProps {
-  title?: string;
-  message?: string;
+  title?: string
+  message?: string
   action?: {
-    label: string;
-    onClick: () => void;
-  };
-  icon?: React.ReactNode;
-  className?: string;
+    label: string
+    onClick: () => void
+  }
+  icon?: React.ReactNode
+  className?: string
 }
 
 export function EmptyState({
@@ -20,8 +20,9 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <div
-      className={clsx('flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-3 rounded-lg border border-gray-700/50 bg-gray-800/20 p-6',
-        className,
+      className={clsx(
+        'flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-3 rounded-lg border border-gray-700/50 bg-gray-800/20 p-6', // prettier-ignore
+        className
       )}
       role="status"
     >
@@ -44,18 +45,16 @@ export function EmptyState({
         </svg>
       )}
       <h3 className="text-lg font-medium text-gray-300">{title}</h3>
-      {message && (
-        <p className="max-w-md text-center text-sm text-gray-500">{message}</p>
-      )}
+      {message && <p className="max-w-md text-center text-sm text-gray-500">{message}</p>}
       {action && (
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-2 rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+          className="mt-2 rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900" // prettier-ignore
         >
           {action.label}
         </button>
       )}
     </div>
-  );
+  )
 }

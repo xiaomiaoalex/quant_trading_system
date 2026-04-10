@@ -1,15 +1,15 @@
-import { clsx } from 'clsx';
+import { clsx } from 'clsx'
 
 interface LoadingSpinnerProps {
-  size?: 'sm' | 'md' | 'lg';
-  className?: string;
+  size?: 'sm' | 'md' | 'lg'
+  className?: string
 }
 
 const sizeClasses = {
   sm: 'w-4 h-4',
   md: 'w-8 h-8',
   lg: 'w-12 h-12',
-};
+}
 
 export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) {
   return (
@@ -17,7 +17,7 @@ export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) 
       <div
         className={clsx(
           'animate-spin rounded-full border-2 border-gray-600 border-t-blue-500',
-          sizeClasses[size],
+          sizeClasses[size]
         )}
         role="status"
         aria-label="Loading"
@@ -25,12 +25,12 @@ export function LoadingSpinner({ size = 'md', className }: LoadingSpinnerProps) 
         <span className="sr-only">Loading...</span>
       </div>
     </div>
-  );
+  )
 }
 
 // Full page loading state
 interface LoadingStateProps {
-  message?: string;
+  message?: string
 }
 
 export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
@@ -39,5 +39,5 @@ export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
       <LoadingSpinner size="lg" />
       <p className="text-gray-400">{message}</p>
     </div>
-  );
+  )
 }

@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { Monitor } from './pages/Monitor';
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { Monitor } from './pages/Monitor'
 
 function App() {
   return (
@@ -17,7 +17,7 @@ function App() {
         */}
       </Routes>
     </div>
-  );
+  )
 }
 
-export default App;
+export default App

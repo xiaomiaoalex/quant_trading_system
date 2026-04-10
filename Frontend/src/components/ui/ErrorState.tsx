@@ -1,22 +1,18 @@
-import { clsx } from 'clsx';
+import { clsx } from 'clsx'
 
 interface ErrorStateProps {
-  title?: string;
-  message: string | null;
-  onRetry?: () => void;
-  className?: string;
+  title?: string
+  message: string | null
+  onRetry?: () => void
+  className?: string
 }
 
-export function ErrorState({
-  title = 'Error',
-  message,
-  onRetry,
-  className,
-}: ErrorStateProps) {
+export function ErrorState({ title = 'Error', message, onRetry, className }: ErrorStateProps) { // prettier-ignore
   return (
     <div
-      className={clsx('flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-4 rounded-lg border border-red-900/50 bg-red-950/20 p-6',
-        className,
+      className={clsx(
+        'flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-4 rounded-lg border border-red-900/50 bg-red-950/20 p-6', // prettier-ignore
+        className
       )}
       role="alert"
     >
@@ -37,18 +33,16 @@ export function ErrorState({
         </svg>
         <h3 className="text-lg font-semibold text-red-400">{title}</h3>
       </div>
-      {message && (
-        <p className="max-w-md text-center text-sm text-gray-400">{message}</p>
-      )}
+      {message && <p className="max-w-md text-center text-sm text-gray-400">{message}</p>}
       {onRetry && (
         <button
           type="button"
           onClick={onRetry}
-          className="mt-2 rounded-md bg-red-900/30 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-900"
+          className="mt-2 rounded-md bg-red-900/30 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-900" // prettier-ignore
         >
           Retry
         </button>
       )}
     </div>
-  );
+  )
 }

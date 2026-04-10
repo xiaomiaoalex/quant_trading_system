@@ -1,20 +1,25 @@
-import { clsx } from 'clsx';
+import { clsx } from 'clsx'
 
 interface StaleBannerProps {
-  lastUpdate: string | null;
-  onRefresh?: () => void;
+  lastUpdate: string | null
+  onRefresh?: () => void
 }
 
 export function StaleBanner({ lastUpdate, onRefresh }: StaleBannerProps) {
   return (
     <div
       className={clsx(
-        'flex items-center justify-between gap-4 rounded-lg border border-yellow-900/50 bg-yellow-950/20 px-4 py-2',
+        'flex items-center justify-between gap-4 rounded-lg border border-yellow-900/50 bg-yellow-950/20 px-4 py-2'
       )}
       role="alert"
     >
       <div className="flex items-center gap-2">
-        <svg className="h-4 w-4 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg
+          className="h-4 w-4 text-yellow-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
           <path
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -43,5 +48,5 @@ export function StaleBanner({ lastUpdate, onRefresh }: StaleBannerProps) {
         </button>
       )}
     </div>
-  );
+  )
 }

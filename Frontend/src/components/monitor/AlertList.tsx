@@ -1,11 +1,11 @@
-import type { Alert } from '@/types';
-import { SeverityBadge } from '@/components/ui';
-import { formatTimestamp } from '@/utils';
+import type { Alert } from '@/types'
+import { SeverityBadge } from '@/components/ui'
+import { formatTimestamp } from '@/utils'
 
 interface AlertListProps {
-  alerts: Alert[];
-  isLoading?: boolean;
-  onClearAlert?: (ruleName: string) => void;
+  alerts: Alert[]
+  isLoading?: boolean
+  onClearAlert?: (ruleName: string) => void
 }
 
 export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
@@ -17,13 +17,13 @@ export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
         </div>
         <div className="p-4">
           <div className="space-y-3">
-            {[1, 2].map((i) => (
+            {[1, 2].map(i => (
               <div key={i} className="h-16 animate-pulse rounded bg-gray-700/50" />
             ))}
           </div>
         </div>
       </div>
-    );
+    )
   }
 
   return (
@@ -41,7 +41,12 @@ export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
       {alerts.length === 0 ? (
         <div className="p-8 text-center">
           <div className="flex justify-center">
-            <svg className="h-12 w-12 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg
+              className="h-12 w-12 text-gray-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -54,7 +59,7 @@ export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
         </div>
       ) : (
         <ul className="divide-y divide-gray-700/30">
-          {alerts.map((alert) => (
+          {alerts.map(alert => (
             <li key={alert.alert_id} className="p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
@@ -64,9 +69,7 @@ export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
                       {alert.rule_name}
                     </span>
                   </div>
-                  <p className="mt-1 text-sm text-gray-400 line-clamp-2">
-                    {alert.message}
-                  </p>
+                  <p className="mt-1 text-sm text-gray-400 line-clamp-2">{alert.message}</p>
                   <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
                     <span>
                       <span className="font-medium text-gray-400">{alert.metric_key}</span>:{' '}
@@ -92,5 +95,5 @@ export function AlertList({ alerts, isLoading, onClearAlert }: AlertListProps) {
         </ul>
       )}
     </div>
-  );
+  )
 }
