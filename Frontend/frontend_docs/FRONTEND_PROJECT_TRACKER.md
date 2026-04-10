@@ -29,7 +29,7 @@
 | ID | 修复项 | 优先级 | 执行状态 | 主责任域 | 协同责任域 | 审核门禁 | 预计完成 | 实际完成 |
 |----|--------|--------|----------|----------|------------|----------|----------|----------|
 | Task 9.1 | 统一 API 前缀与文档路径 | P0 | 🔄 执行中 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.6 天 | - |
-| Task 9.2 | Monitor Snapshot 真聚合化 | P0 | 🔄 执行中 | backend-api | contract-doc, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.25 天 | - |
+| Task 9.2 | Monitor Snapshot 真聚合化 | P0 | ✅ 已完成 (前端适配) | frontend-console | backend-api, contract-doc, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.25 天 | 2026-04-10 |
 | Task 9.3 | Reconciler 无参触发 | P0 | 🔄 执行中 | backend-api | frontend-console, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1 天 | - |
 | Task 9.8 | strategies/running 语义 | P2 | 🔄 执行中 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.4 天 | - |
 
@@ -83,14 +83,14 @@
 | `AppShell` | 应用主框架 | 中 | ⏳ 待开始 | 无 | 导航、状态条 |
 | `Sidebar` | 侧边导航栏 | 低 | ⏳ 待开始 | 无 | 路由导航 |
 | `Topbar` | 顶部工具栏 | 低 | ⏳ 待开始 | 无 | 全局操作 |
-| `StatusBadge` | 状态徽章 | 低 | ⏳ 待开始 | 无 | normal/degraded/stale/blocked |
-| `MetricCard` | 指标卡片 | 低 | ⏳ 待开始 | Monitor | 监控指标展示 |
-| `AdapterHealthTable` | 适配器健康表 | 中 | ⏳ 待开始 | Monitor | 健康状态表格 |
+| `StatusBadge` | 状态徽章 | 低 | ✅ 已完成 | 无 | normal/degraded/stale/blocked |
+| `MetricCard` | 指标卡片 | 低 | ✅ 已完成 | Monitor | 监控指标展示 |
+| `AdapterHealthTable` | 适配器健康表 | 中 | ✅ 已完成 | Monitor | 健康状态表格 |
 | `StrategyTable` | 策略列表 | 中 | ⏳ 待开始 | Strategies | 策略管理 |
 | `StrategyActionPanel` | 策略操作面板 | 中 | ⏳ 待开始 | Strategies | 危险操作确认 |
 | `ReconcileSummaryCard` | 对账摘要卡片 | 低 | ⏳ 待开始 | Reconcile | 漂移统计 |
 | `ReconcileDriftTable` | 漂移明细表 | 中 | ⏳ 待开始 | Reconcile | 漂移详情 |
-| `ConfirmDialog` | 确认对话框 | 低 | ⏳ 待开始 | 无 | 危险操作二次确认 |
+| `ConfirmDialog` | 确认对话框 | 低 | ✅ 已完成 | 无 | 危险操作二次确认 |
 
 ### API 依赖状态
 
@@ -98,12 +98,12 @@
 
 | API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
 |-----|------|----------|----------|----------|------|
-| `/v1/monitor/snapshot` | GET | 🔴 需修复 (Task 9.2) | ⏳ 待开始 | ⏸️ 阻塞 | 真聚合化 |
-| `/v1/monitor/alerts` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
+| `/v1/monitor/snapshot` | GET | 🔴 需修复 (Task 9.2) | ✅ 已完成 | ⏸️ 阻塞 | 真聚合化（前端已适配） |
+| `/v1/monitor/alerts` | GET | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | - |
 | `/v1/monitor/rules` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
 | `/v1/monitor/rules/{rule_name}` | DELETE | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/monitor/alerts/{rule_name}/clear` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/monitor/alerts/clear-all` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
+| `/v1/monitor/alerts/{rule_name}/clear` | POST | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | 危险操作 |
+| `/v1/monitor/alerts/clear-all` | POST | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | 危险操作 |
 | `/health/ready` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 | `/health/dependency` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 | `/v1/killswitch` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
