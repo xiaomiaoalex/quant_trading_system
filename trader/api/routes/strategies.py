@@ -491,15 +491,29 @@ async def get_strategy_status(
 
 
 @router.get(
-    "/v1/strategies/running",
+    "/v1/strategies/loaded",
     response_model=List[StrategyStatusResponse],
 )
-async def list_running_strategies():
+async def list_loaded_strategies():
     """
-    List all loaded strategies.
+    List all loaded strategies (Task 9.8 - rename from /running to /loaded).
 
     Returns a list of all loaded strategies with their runtime status.
+    Note: This returns loaded strategies, not just RUNNING ones.
     """
     runner = get_strategy_runner()
     infos = runner.list_strategies()
     return [_info_to_response(info) for info in infos]
+
+
+# 向后兼容：保留 /running 作为 /loaded 的别名
+@router.get(
+    "/v1/strategies/running",
+    response_model=List[StrategyStatusResponse],
+    include_in_schema=False,  # 不在 OpenAPI 文档中显示
+)
+async def list_running_strategies_deprecated():
+    """
+    [DEPRECATED] Use /v1/strategies/loaded instead.
+    """
+    return await list_loaded_strategies()

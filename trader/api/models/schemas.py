@@ -170,6 +170,33 @@ class BacktestRun(BaseModel):
     metrics: Optional[Dict[str, Any]] = None
     artifact_ref: Optional[str] = None
     created_at: Optional[str] = None
+    # 进度追踪字段 (Task 9.4)
+    progress: Optional[float] = Field(default=0.0, ge=0.0, le=1.0, description="完成进度 0.0-1.0")
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+class BacktestReport(BaseModel):
+    """回测报告详情 (Task 9.5)"""
+    run_id: str
+    status: str
+    strategy_id: str
+    version: int
+    symbols: List[str]
+    start_ts_ms: int
+    end_ts_ms: int
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    error: Optional[str] = None
+    # 报告详情
+    returns: Optional[Dict[str, Any]] = None
+    risk: Optional[Dict[str, Any]] = None
+    trades: Optional[List[Dict[str, Any]]] = None
+    equity_curve: Optional[List[Dict[str, Any]]] = None
+    metrics: Optional[Dict[str, Any]] = None
+    artifact_ref: Optional[str] = None
 
 
 # ==================== Order & Execution Models ====================
@@ -263,6 +290,19 @@ class ReplayRequest(BaseModel):
     from_ts_ms: Optional[int] = None
     to_ts_ms: Optional[int] = None
     requested_by: str
+
+
+class ReplayJob(BaseModel):
+    """Replay 任务状态 (Task 9.7)"""
+    job_id: str
+    stream_key: str
+    status: str = Field(..., description="PENDING/RUNNING/COMPLETED/FAILED")
+    requested_by: str
+    requested_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    result_summary: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 # ==================== KillSwitch Models ====================
@@ -401,3 +441,30 @@ class MonitorSnapshot(BaseModel):
     # 告警信息
     active_alerts: List[Alert] = Field(default_factory=list)
     alert_count_by_severity: Dict[str, int] = Field(default_factory=dict)
+    
+    # 元信息 (Task 9.2 - 真聚合化)
+    snapshot_source: Optional[str] = Field(default="aggregated", description="数据来源: aggregated/query")
+    freshness: Optional[str] = Field(default=None, description="数据新鲜度时间戳")
+
+
+# ==================== Audit Models (Task 9.6) ====================
+
+class AuditEntry(BaseModel):
+    """AI 审计条目"""
+    entry_id: str
+    strategy_id: str
+    strategy_name: Optional[str] = None
+    version: Optional[str] = None
+    event_type: str
+    status: str
+    prompt: Optional[str] = None
+    generated_code: Optional[str] = None
+    code_hash: Optional[str] = None
+    llm_backend: Optional[str] = None
+    llm_model: Optional[str] = None
+    execution_result: Optional[Dict[str, Any]] = None
+    approver: Optional[str] = None
+    approval_comment: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None

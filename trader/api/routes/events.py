@@ -1,15 +1,57 @@
 """
 Event API Routes
 ================
-Event log, snapshot, and replay endpoints.
+Event log, snapshot, and replay endpoints (Task 9.7, 9.11).
 """
-from typing import Optional
-from fastapi import APIRouter, Query
+import uuid
+import asyncio
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
-from trader.api.models.schemas import EventEnvelope, SnapshotEnvelope, ReplayRequest, ActionResult
+from trader.api.models.schemas import EventEnvelope, SnapshotEnvelope, ReplayRequest, ActionResult, ReplayJob
 from trader.services import EventService
 
 router = APIRouter(tags=["Events", "Snapshots", "Replay"])
+
+# Replay job storage
+_replay_jobs: Dict[str, ReplayJob] = {}
+_replay_jobs_lock = asyncio.Lock()
+
+
+async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
+    """
+    后台执行 replay 任务。
+    
+    更新 job 状态为 RUNNING，执行完成后更新为 COMPLETED/FAILED。
+    """
+    global _replay_jobs
+    
+    async with _replay_jobs_lock:
+        if job_id in _replay_jobs:
+            job = _replay_jobs[job_id]
+            job.status = "RUNNING"
+            job.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    service = EventService()
+    
+    try:
+        # 执行 replay
+        service.trigger_replay(request)
+        
+        async with _replay_jobs_lock:
+            if job_id in _replay_jobs:
+                job = _replay_jobs[job_id]
+                job.status = "COMPLETED"
+                job.finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                job.result_summary = {"stream_key": request.stream_key, "message": "Replay completed"}
+    except Exception as e:
+        async with _replay_jobs_lock:
+            if job_id in _replay_jobs:
+                job = _replay_jobs[job_id]
+                job.status = "FAILED"
+                job.finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                job.error = str(e)
 
 
 @router.get("/v1/events", response_model=list[EventEnvelope])
@@ -40,12 +82,63 @@ async def get_latest_snapshot(stream_key: str = Query(..., description="Stream k
     return service.get_latest_snapshot(stream_key)
 
 
-@router.post("/v1/replay", response_model=ActionResult)
-async def trigger_replay(request: ReplayRequest):
+@router.post("/v1/replay", response_model=ReplayJob)
+async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTasks):
     """
-    Trigger a replay/rebuild for a stream.
+    Trigger a replay/rebuild for a stream (Task 9.7)。
 
-    Triggers a replay of events for the specified stream (admin operation).
+    返回 job_id，前端可据此查询任务状态。
+    实际 replay 在后台异步执行。
+    """
+    # 创建 job 记录
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    job = ReplayJob(
+        job_id=job_id,
+        stream_key=request.stream_key,
+        status="PENDING",
+        requested_by=request.requested_by,
+        requested_at=now,
+        started_at=None,
+        finished_at=None,
+        result_summary=None,
+        error=None,
+    )
+    
+    # 存储 job
+    _replay_jobs[job_id] = job
+    
+    # 使用 BackgroundTasks 异步执行
+    background_tasks.add_task(_run_replay_task, job_id, request)
+    
+    return job
+
+
+@router.get("/v1/replay/{job_id}", response_model=ReplayJob)
+async def get_replay_status(job_id: str = Path(..., description="Replay job ID")):
+    """
+    Get replay job status (Task 9.7)。
+    
+    返回任务的当前状态和结果摘要。
+    """
+    if job_id not in _replay_jobs:
+        raise HTTPException(status_code=404, detail=f"Replay job {job_id} not found")
+    return _replay_jobs[job_id]
+
+
+# Task 9.11: 快照历史查询接口
+@router.get("/v1/snapshots", response_model=list[SnapshotEnvelope])
+async def list_snapshots(
+    stream_key: str = Query(..., description="Stream key"),
+    since_ts_ms: Optional[int] = Query(None, description="Filter by start timestamp (ms)"),
+    until_ts_ms: Optional[int] = Query(None, description="Filter by end timestamp (ms)"),
+    limit: int = Query(100, le=500, description="Max results"),
+):
+    """
+    List snapshots for a stream (Task 9.11)。
+    
+    支持按时间范围筛选。
     """
     service = EventService()
-    return service.trigger_replay(request)
+    return service.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit)
