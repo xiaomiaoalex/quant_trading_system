@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { LoadingSpinner } from './LoadingSpinner'
 
 interface ConfirmDialogProps {
   isOpen: boolean
   title: string
-  message: string
+  message: ReactNode
   confirmLabel?: string
   cancelLabel?: string
   variant?: 'danger' | 'warning' | 'info'
@@ -134,9 +135,9 @@ export function ConfirmDialog({
             <h2 id="dialog-title" className="text-lg font-semibold text-white">
               {title}
             </h2>
-            <p id="dialog-message" className="mt-2 text-sm text-gray-400">
+            <div id="dialog-message" className="mt-2 text-sm text-gray-400">
               {message}
-            </p>
+            </div>
           </div>
         </div>
 

@@ -1,3 +1,5 @@
 export * from './Monitor'
 export * from './Strategies'
 export * from './Reconcile'
+export * from './Backtests'
+export * from './Reports'
