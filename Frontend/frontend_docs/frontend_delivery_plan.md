@@ -13,6 +13,10 @@
 - 后端存在“文档与代码不一致”的 truth gap，`TypeScript + Zod` 能降低契约漂移风险。
 - 页面优先级明确，适合按路由增量交付，不需要先引入重型状态框架。
 
+任务编号约定（与后端一致）：
+- 统一使用 `Task X.Y` 风格；前端控制台主线使用 `Task 9.x`
+- `P0/P1/P2` 仅表示优先级，不作为任务编号
+
 ---
 
 ## Phase A：App Shell + Monitor + Strategies + Reconcile
@@ -167,13 +171,13 @@
 
 ---
 
-## Truth Gap 收敛顺序（建议并行后端补齐）
+## Truth Gap 收敛顺序（建议并行由 `backend-api` 责任域补齐）
 
-1. 统一 API 前缀与文档（`/v1` vs `/api/v1`）
-2. 补回测列表与报告详情 API（支撑 Phase B）
-3. 补 Audit API 与 replay job API（支撑 Phase C）
-4. 为 Monitor 提供真实聚合 snapshot（去掉 query 拼装）
-5. 统一 stale/degraded 枚举语义（减少前端推导歧义）
+1. Task 9.1：统一 API 前缀与文档（`/v1` vs `/api/v1`）
+2. Task 9.4 + Task 9.5：补回测列表与报告详情 API（支撑 Phase B）
+3. Task 9.6 + Task 9.7：补 Audit API 与 replay job API（支撑 Phase C）
+4. Task 9.2：为 Monitor 提供真实聚合 snapshot（去掉 query 拼装）
+5. Task 9.10：统一 stale/degraded 枚举语义（减少前端推导歧义）
 
 ---
 

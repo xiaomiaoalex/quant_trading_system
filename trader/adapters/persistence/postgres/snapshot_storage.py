@@ -212,6 +212,61 @@ class PostgresSnapshotStorage:
         
         return [self._row_to_envelope(dict(row)) for row in rows]
     
+    async def list_snapshots(
+        self,
+        stream_key: str,
+        since_ts_ms: Optional[int] = None,
+        until_ts_ms: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        列出指定 stream_key 的快照（支持时间范围过滤）
+        
+        Args:
+            stream_key: 流键
+            since_ts_ms: 开始时间戳（毫秒）
+            until_ts_ms: 结束时间戳（毫秒）
+            limit: 最大返回数量
+            
+        Returns:
+            快照字典列表
+        """
+        if self._pool is None:
+            raise RuntimeError("Database pool not initialized")
+        
+        query = """
+            SELECT id, stream_key, snapshot_type, ts_ms, payload, created_at
+            FROM control_plane_snapshots
+            WHERE stream_key = $1
+        """
+        params = [stream_key]
+        
+        if since_ts_ms is not None:
+            query += " AND ts_ms >= $${len(params) + 1}"
+            params.append(since_ts_ms)
+        
+        if until_ts_ms is not None:
+            query += " AND ts_ms <= $${len(params) + 1}"
+            params.append(until_ts_ms)
+        
+        query += " ORDER BY ts_ms DESC LIMIT $" + str(len(params) + 1)
+        params.append(limit)
+        
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        
+        return [
+            {
+                "snapshot_id": row["id"],
+                "stream_key": row["stream_key"],
+                "snapshot_type": row["snapshot_type"],
+                "ts_ms": row["ts_ms"],
+                "payload": json.loads(row["payload"]) if row["payload"] else {},
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+            for row in rows
+        ]
+    
     async def delete(self, stream_key: str) -> bool:
         """
         删除指定 stream_key 的快照

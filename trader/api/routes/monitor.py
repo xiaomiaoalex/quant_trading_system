@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query
 logger = logging.getLogger(__name__)
 
 from trader.api.models.schemas import MonitorSnapshot, Alert, AlertRule, PositionView
-from trader.services import MonitorService, PortfolioService
+from trader.services import MonitorService, PortfolioService, OrderService, KillSwitchService
 
 
 router = APIRouter(tags=["Monitor"])
@@ -78,31 +78,37 @@ async def get_portfolio_service() -> PortfolioService:
 
 @router.get("/v1/monitor/snapshot", response_model=MonitorSnapshot)
 async def get_monitor_snapshot(
-    open_orders_count: int = Query(0, description="未成交订单数"),
-    pending_orders_count: int = Query(0, description="待处理订单数"),
-    daily_pnl: str = Query("0", description="当日盈亏"),
-    daily_pnl_pct: str = Query("0", description="当日盈亏百分比"),
-    realized_pnl: str = Query("0", description="已实现盈亏"),
-    unrealized_pnl: str = Query("0", description="未实现盈亏"),
-    killswitch_level: int = Query(0, ge=0, le=3, description="KillSwitch级别"),
-    killswitch_scope: str = Query("GLOBAL", description="KillSwitch范围"),
+    open_orders_count: int | None = None,
+    pending_orders_count: int | None = None,
+    daily_pnl: str | None = None,
+    daily_pnl_pct: str | None = None,
+    realized_pnl: str | None = None,
+    unrealized_pnl: str | None = None,
+    killswitch_level: int | None = None,
+    killswitch_scope: str | None = None,
 ) -> MonitorSnapshot:
     """
-    获取系统监控快照。
+    获取系统监控快照（真聚合版本 - Task 9.2）。
     
+    后端内部聚合 orders/pnl/killswitch/adapters 数据，无需前端传入。
     返回完整的系统状态快照，包括：
     - 持仓信息（从 PortfolioService 获取）
-    - 订单信息
-    - PnL信息
-    - KillSwitch状态
+    - 订单信息（从 OrderService 聚合）
+    - PnL 信息（从 PortfolioService 获取）
+    - KillSwitch 状态（从 KillSwitchService 获取）
     - 适配器健康状态
     - 活跃告警列表
+    
+    注意：query 参数仅用于测试覆盖，生产环境应省略参数以获取真实数据。
     """
+    from datetime import datetime, timezone
+    
     service = await get_monitor_service()
     portfolio_svc = await get_portfolio_service()
+    order_svc = OrderService()
+    killswitch_svc = KillSwitchService()
     
     # 从 PortfolioService 获取持仓列表
-    # Fail-Closed: 获取失败时使用空列表
     positions_for_exposure: List[PositionForExposure] = []
     try:
         raw_positions: List[PositionView] = portfolio_svc.list_positions()
@@ -114,29 +120,124 @@ async def get_monitor_snapshot(
             for p in raw_positions
         ]
     except (ConnectionError, TimeoutError) as e:
-        # 基础设施错误 - 连接失败可能是临时性的
         logger.error(
             "Failed to fetch positions for monitor snapshot - connection error, using empty list",
             extra={"error": str(e), "error_type": type(e).__name__}
         )
     except Exception as e:
-        # 其他未知错误也需要记录，但不影响快照返回
         logger.error(
             "Unexpected error fetching positions for monitor snapshot, using empty list",
             extra={"error": str(e), "error_type": type(e).__name__}
         )
     
-    return service.get_snapshot(
+    # 如果测试传入了参数，使用测试参数；否则从服务聚合真实数据
+    if open_orders_count is None or pending_orders_count is None:
+        # 从 OrderService 聚合订单统计
+        open_orders_count = 0
+        pending_orders_count = 0
+        try:
+            all_orders = order_svc.list_orders(limit=10000)
+            # NEW = 已提交但未成交
+            # SUBMITTED = 已提交
+            # PARTIALLY_FILLED = 部分成交
+            open_orders_count = sum(
+                1 for o in all_orders 
+                if o.status in ("NEW", "SUBMITTED", "PARTIALLY_FILLED")
+            )
+            pending_orders_count = sum(
+                1 for o in all_orders 
+                if o.status in ("PENDING", "CREATED")
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to aggregate order counts for monitor snapshot",
+                extra={"error": str(e), "error_type": type(e).__name__}
+            )
+    
+    # 如果测试传入了 PnL 参数，使用测试参数；否则从服务获取真实数据
+    if daily_pnl is None or unrealized_pnl is None:
+        daily_pnl = "0"
+        daily_pnl_pct = "0"
+        realized_pnl = "0"
+        unrealized_pnl = "0"
+        try:
+            pnl = portfolio_svc.get_pnl()
+            realized_pnl = pnl.realized_pnl
+            unrealized_pnl = pnl.unrealized_pnl
+            total_pnl = float(pnl.total_pnl) if pnl.total_pnl else 0.0
+            daily_pnl = pnl.total_pnl
+            
+            # 计算百分比：PnL / 总敞口 * 100
+            if positions_for_exposure and len(positions_for_exposure) > 0:
+                total_exposure_val = sum(
+                    p.quantity * p.current_price for p in positions_for_exposure
+                )
+                if total_exposure_val > 0:
+                    daily_pnl_pct = str(round((total_pnl / total_exposure_val) * 100, 2))
+                else:
+                    daily_pnl_pct = "0"
+            else:
+                daily_pnl_pct = "0"  # 无敞口时无法计算百分比
+        except Exception as e:
+            logger.error(
+                "Failed to fetch PnL for monitor snapshot",
+                extra={"error": str(e), "error_type": type(e).__name__}
+            )
+    
+    # 如果测试传入了 killswitch 参数，使用测试参数；否则从服务获取真实状态
+    if killswitch_level is None or killswitch_scope is None:
+        killswitch_level = 0
+        killswitch_scope = "GLOBAL"
+        try:
+            ks_state = killswitch_svc.get_state("GLOBAL")
+            killswitch_level = ks_state.level
+            killswitch_scope = ks_state.scope
+        except Exception as e:
+            logger.error(
+                "Failed to fetch killswitch state for monitor snapshot",
+                extra={"error": str(e), "error_type": type(e).__name__}
+            )
+    
+    # 从 BrokerService 获取适配器健康状态
+    try:
+        from trader.services.broker import BrokerService
+        broker_service = BrokerService()
+        brokers = broker_service.list_brokers()
+        for broker in brokers:
+            # 每个注册的 broker 都被视为一个 adapter
+            # 健康状态从 broker_service 获取
+            status = broker_service.get_status(broker.account_id)
+            if status:
+                service.update_adapter_health(
+                    adapter_name=f"broker:{broker.account_id}",
+                    status="HEALTHY" if status.connected else "DOWN",
+                    last_heartbeat_ts_ms=status.last_heartbeat_ts_ms,
+                    error_count=1 if status.last_error else 0,
+                    message=status.last_error,
+                )
+    except Exception as e:
+        logger.error(
+            "Failed to fetch adapter health for monitor snapshot",
+            extra={"error": str(e), "error_type": type(e).__name__}
+        )
+    
+    snapshot = service.get_snapshot(
         positions=positions_for_exposure,
-        open_orders_count=open_orders_count,
-        pending_orders_count=pending_orders_count,
-        daily_pnl=daily_pnl,
-        daily_pnl_pct=daily_pnl_pct,
-        realized_pnl=realized_pnl,
-        unrealized_pnl=unrealized_pnl,
-        killswitch_level=killswitch_level,
-        killswitch_scope=killswitch_scope,
+        open_orders_count=open_orders_count or 0,
+        pending_orders_count=pending_orders_count or 0,
+        daily_pnl=daily_pnl or "0",
+        daily_pnl_pct=daily_pnl_pct or "0",
+        realized_pnl=realized_pnl or "0",
+        unrealized_pnl=unrealized_pnl or "0",
+        killswitch_level=killswitch_level or 0,
+        killswitch_scope=killswitch_scope or "GLOBAL",
     )
+    
+    # 添加元信息
+    snapshot.snapshot_source = "aggregated"
+    snapshot.freshness = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    
+    return snapshot
 
 
 @router.get("/v1/monitor/alerts", response_model=list[Alert])

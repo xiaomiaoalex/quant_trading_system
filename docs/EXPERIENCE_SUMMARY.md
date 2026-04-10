@@ -771,3 +771,167 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 | 2026-03-25 | Kilo Code | 添加 PostgreSQL 投影读模型优化经验：索引查询优化、EventType 枚举设计、重构模式 |
 | 2026-04-04 | Kilo Code | 添加 Phase 7 风控穿透验证与策略正期望证明经验：从"功能齐全"到"可信赖系统"的认知转变 |
 | 2026-04-05 | Kilo Code | 添加 FastAPI 测试覆盖经验：路由注册、Pydantic 模型、Mock 枚举、Mock 路径 |
+| 2026-04-10 | Kilo Code | 添加 Truth Gap 后端修复经验：API 契约优先、后端聚合模式、Bug 审计与修复方法论 |
+
+---
+
+## 十五、Truth Gap 修复经验
+
+### 15.1 API 契约优先原则
+
+**问题**：
+Truth Gap 产生的原因往往是前端基于"期望"而非"实际实现的 API"进行开发。
+
+**经验**：
+- 开发新 API 时，先写 OpenAPI 文档或契约测试
+- 前端不允许基于 TODO 或猜测调用 API，必须有实际端点支撑
+- 缺失能力必须标注 `// TODO: BLOCKED BY BACKEND API`，而不是脑补实现
+
+### 15.2 后端真聚合 vs 前端聚合
+
+**问题**：
+`GET /v1/monitor/snapshot` 使用 query 参数传递数据，前端需要自己聚合多个 API 调用结果。
+
+**修复方案**：
+- 后端内部聚合 orders/pnl/killswitch/adapters 数据
+- 前端只需调用一个端点即可获得完整快照
+- 添加 `snapshot_source` 和 `freshness` 元信息
+
+**经验**：
+- 控制面 API 应提供"聚合视图"，而不是让前端做数据组合
+- 元信息（来源、新鲜度）对于前端判断数据可用性至关重要
+
+### 15.3 无参触发模式设计
+
+**问题**：
+`POST /v1/reconciler/trigger` 要求前端提交完整的 local_orders 和 exchange_orders，导致联调困难。
+
+**修复方案**：
+- 支持无参触发：后端自动从 OrderService 和 BinanceSpotDemoBroker 获取数据
+- 保留带参模式用于测试场景
+- 使用 Optional 请求体设计
+- 交易所 broker 配置从环境变量读取 (BINANCE_API_KEY, BINANCE_SECRET_KEY)
+
+**经验**：
+- "一键触发"类操作应默认自动聚合，后端自行获取所需数据
+- 前端只需关心操作结果，不应要求其理解内部数据来源
+- 使用真实 broker 而非 fake broker，确保联调时数据真实
+
+### 15.4 Bug 审计方法论
+
+**审计发现**：
+- Critical: exchange_orders 始终为空（对账无法工作）
+- Critical: reports 详情全为 null（曲线无法展示）
+- High: daily_pnl_pct 计算错误（百分比计算缺少分母）
+- High: adapters 健康状态未获取
+
+**经验**：
+- 代码修改后必须进行"完整性检查"：不仅验证修改本身，还要验证相关数据流
+- 特别注意"临时实现"（TODO comment）是否会导致功能不可用
+- 使用 stub 数据时，至少要保证数据结构完整性和类型正确性
+
+### 15.5 代码审计检查清单
+
+```
+1. 数据流完整性
+   - 数据从哪里来？（OrderService/BrokerAdapter/Storage）
+   - 数据如何传递？（函数调用/事件/存储）
+   - 是否有缺失环节？（TODO BLOCKED BY INFRA）
+
+2. 计算正确性
+   - 百分比计算：分子/分母是否正确？
+   - 单位转换：时间戳/币种精度是否一致？
+   - 空值处理：None/空列表/空字符串是否区分？
+
+3. 状态同步
+   - 单例状态是否在多请求间正确共享？
+   - 异步操作是否正确等待？
+   - 错误是否被正确捕获并降级？
+
+4. API 契约
+   - 请求可选字段是否真的可选？
+   - 响应字段是否有稳定的默认值？
+   - 错误码是否符合 HTTP 语义？
+```
+
+### 15.6 后台任务实现模式
+
+**问题**：
+同步执行后台任务会导致 HTTP 请求阻塞，且无法追踪任务状态。
+
+**解决方案**：
+使用 FastAPI BackgroundTasks + 状态存储：
+```python
+from fastapi import BackgroundTasks
+
+@router.post("/v1/replay", response_model=ReplayJob)
+async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTasks):
+    job = ReplayJob(job_id=job_id, status="PENDING", ...)
+    _replay_jobs[job_id] = job
+    background_tasks.add_task(_run_replay_task, job_id, request)
+    return job
+
+async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
+    # 更新状态为 RUNNING
+    # 执行任务
+    # 更新状态为 COMPLETED/FAILED
+```
+
+**经验**：
+- BackgroundTasks 适用于轻量级后台任务
+- 状态存储使用 Dict + asyncio.Lock 保证线程安全
+- 前端通过 job_id 轮询获取状态
+
+### 15.7 存储分层降级设计
+
+**问题**：
+PostgreSQL 存储不可用时需要优雅降级。
+
+**解决方案**：
+```python
+def get_storage():
+    if _postgres_storage is None:
+        # 尝试初始化 PG
+        try:
+            _postgres_storage = create_postgres_storage()
+        except Exception:
+            _postgres_storage = None
+    
+    if _postgres_storage is not None:
+        return _postgres_storage
+    return _in_memory_storage  # 降级方案
+```
+
+**经验**：
+- 存储层应该有统一的接口
+- 降级时要有清晰的数据一致性语义
+- 生产环境优先使用持久化存储
+
+### 15.8 快照历史存储设计
+
+**问题**：
+InMemory 存储使用 Dict[str, Dict] 只保留最新值，不支持历史查询。
+
+**解决方案**：
+```python
+# 改为 List 结构支持历史
+self.snapshots: Dict[str, List[Dict[str, Any]]] = {}
+
+def save_snapshot(self, snapshot_data: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot["snapshot_id"] = self._snapshot_counter
+    stream_key = snapshot_data.get("stream_key")
+    if stream_key not in self.snapshots:
+        self.snapshots[stream_key] = []
+    self.snapshots[stream_key].append(snapshot)
+    return snapshot
+
+def list_snapshots(self, stream_key: str, since_ts_ms: int = None, limit: int = 100):
+    history = self.snapshots.get(stream_key, [])
+    if since_ts_ms:
+        history = [s for s in history if s.get("ts_ms", 0) >= since_ts_ms]
+    return history[-limit:]
+```
+
+**经验**：
+- 需要历史查询的存储应该用 List 而不是 Dict
+- 时间范围过滤在存储层实现，减少应用层过滤

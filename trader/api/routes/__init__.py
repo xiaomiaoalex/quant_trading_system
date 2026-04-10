@@ -17,6 +17,7 @@ from trader.api.routes import (
     reconciler,
     monitor,
     chat,
+    audit,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "reconciler",
     "monitor",
     "chat",
+    "audit",
 ]
