@@ -59,7 +59,7 @@ class ControlPlaneInMemoryStorage:
 
         # Events & Snapshots
         self.events: List[Dict[str, Any]] = []
-        self.snapshots: Dict[str, Dict[str, Any]] = {}
+        self.snapshots: Dict[str, List[Dict[str, Any]]] = {}  # List to support history
 
         # Kill Switch
         self.kill_switch_states: Dict[str, Dict[str, Any]] = {}
@@ -228,6 +228,22 @@ class ControlPlaneInMemoryStorage:
     def get_backtest(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get a backtest run by ID"""
         return self.backtests.get(run_id)
+
+    def list_backtests(
+        self,
+        status: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List backtest runs with filters (Task 9.4)"""
+        backtests = list(self.backtests.values())
+        if status:
+            backtests = [b for b in backtests if b.get("status") == status]
+        if strategy_id:
+            backtests = [b for b in backtests if b.get("strategy_id") == strategy_id]
+        # 按创建时间倒序
+        backtests.sort(key=lambda b: b.get("created_at", ""), reverse=True)
+        return backtests[:limit]
 
     def update_backtest(self, run_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update backtest status/metrics"""
@@ -582,7 +598,7 @@ class ControlPlaneInMemoryStorage:
     # ==================== Snapshot Methods ====================
 
     def save_snapshot(self, snapshot_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save a snapshot"""
+        """Save a snapshot (appends to history)"""
         self._snapshot_counter += 1
         snapshot = {
             **snapshot_data,
@@ -590,12 +606,32 @@ class ControlPlaneInMemoryStorage:
             "created_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
         stream_key = snapshot.get("stream_key")
-        self.snapshots[stream_key] = snapshot
+        if stream_key not in self.snapshots:
+            self.snapshots[stream_key] = []
+        self.snapshots[stream_key].append(snapshot)
         return snapshot
 
     def get_latest_snapshot(self, stream_key: str) -> Optional[Dict[str, Any]]:
         """Get latest snapshot for a stream"""
-        return self.snapshots.get(stream_key)
+        history = self.snapshots.get(stream_key)
+        if history:
+            return history[-1]
+        return None
+
+    def list_snapshots(
+        self,
+        stream_key: str,
+        since_ts_ms: Optional[int] = None,
+        until_ts_ms: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List snapshots for a stream with time range filter"""
+        history = self.snapshots.get(stream_key, [])
+        if since_ts_ms:
+            history = [s for s in history if s.get("ts_ms", 0) >= since_ts_ms]
+        if until_ts_ms:
+            history = [s for s in history if s.get("ts_ms", 0) <= until_ts_ms]
+        return history[-limit:] if history else []
 
     # ==================== KillSwitch Methods ====================
 

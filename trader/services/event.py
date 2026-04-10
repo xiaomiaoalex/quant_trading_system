@@ -103,6 +103,45 @@ class EventService:
             return SnapshotEnvelope(**snapshot_dict)
         return None
 
+    def list_snapshots(
+        self,
+        stream_key: str,
+        since_ts_ms: Optional[int] = None,
+        until_ts_ms: Optional[int] = None,
+        limit: int = 100,
+    ) -> List[SnapshotEnvelope]:
+        """
+        List snapshots for a stream with time range filter (Task 9.11).
+        
+        Priority:
+        1. PostgresSnapshotStorage (production)
+        2. InMemoryStorage (fallback)
+        """
+        # Try PG storage first if available
+        if self._snapshot_storage is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._snapshot_storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit),
+                        loop
+                    )
+                    snapshots = future.result(timeout=5.0)
+                else:
+                    snapshots = loop.run_until_complete(
+                        self._snapshot_storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit)
+                    )
+                if snapshots:
+                    return [SnapshotEnvelope(**s) for s in snapshots]
+            except Exception:
+                pass
+        
+        # Fallback to InMemoryStorage
+        snapshot_dicts = self._storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit)
+        return [SnapshotEnvelope(**s) for s in snapshot_dicts]
+
     def trigger_replay(self, request: ReplayRequest) -> ActionResult:
         """Trigger a replay"""
         return ActionResult(ok=True, message=f"Replay triggered for stream {request.stream_key}")

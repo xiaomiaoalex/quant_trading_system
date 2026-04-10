@@ -845,7 +845,7 @@ class TestEventEndpoints:
         # Returns None when no snapshot exists
 
     def test_trigger_replay(self):
-        """Test triggering replay"""
+        """Test triggering replay (Task 9.7 - returns ReplayJob)"""
         payload = {
             "stream_key": "orders",
             "requested_by": "admin"
@@ -853,7 +853,11 @@ class TestEventEndpoints:
         response = self.client.post("/v1/replay", json=payload)
         assert response.status_code == 200
         data = response.json()
-        assert data["ok"] is True
+        # 新 API 返回 ReplayJob 格式
+        assert "job_id" in data
+        assert data["status"] in ("PENDING", "RUNNING", "COMPLETED", "FAILED")
+        assert data["stream_key"] == "orders"
+        assert data["requested_by"] == "admin"
 
 
 class TestKillSwitchEndpoints:

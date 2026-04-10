@@ -79,6 +79,16 @@ class BacktestService:
             return BacktestRun(**backtest)
         return None
 
+    def list_backtests(
+        self,
+        status: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[BacktestRun]:
+        """List backtest runs with filters (Task 9.4)"""
+        backtests = self._storage.list_backtests(status=status, strategy_id=strategy_id, limit=limit)
+        return [BacktestRun(**b) for b in backtests]
+
     def complete_backtest(self, run_id: str, metrics: Dict[str, Any], artifact_ref: str) -> Optional[BacktestRun]:
         """Mark backtest as completed"""
         updates = {
