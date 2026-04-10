@@ -14,7 +14,32 @@
 
 ## 最近开发记录（滚动式）
 
-### 本次任务：FastAPI 测试覆盖补全
+### 本次任务：Truth Gap 后端修复 (Task 9.x)
+- 完成时间: 2026-04-10
+- 分支: main (直接提交)
+- 状态: ✅ 全部完成
+- 主要变更:
+  - Task 9.2: Monitor Snapshot 真聚合化 - 移除 query 参数，后端内部聚合 orders/pnl/killswitch/adapters
+  - Task 9.3: Reconciler 无参触发 - 支持空 body 触发，使用 BinanceSpotDemoBroker 获取真实 exchange_orders
+  - Task 9.4: Backtests 列表接口 - 新增 `GET /v1/backtests` 带 status/strategy_id 筛选
+  - Task 9.5: Reports 详情接口 - 新增 `GET /v1/backtests/{run_id}/report`，支持 artifact 存储读取
+  - Task 9.6: Audit 查询接口 - 新增 `GET /api/audit/entries` 及 `GET /api/audit/entries/{id}`
+  - Task 9.7: Replay 任务状态 - 新增 `GET /v1/replay/{job_id}`，使用 BackgroundTasks 异步执行
+  - Task 9.8: strategies/running → loaded - 重命名并保留旧路由作为别名
+  - Task 9.11: 快照历史查询 - 新增 `GET /v1/snapshots`，使用 List 结构存储
+- 审计修复:
+  - Task 9.3 Critical: 修复 exchange_orders 始终为空 - 改用 BinanceSpotDemoBroker 真实获取
+  - Task 9.2 High: 修复 daily_pnl_pct 计算错误（除以总敞口）
+  - Task 9.2 High: 接入 adapter 健康状态从 BrokerService
+  - Task 9.5 Critical: 修复 reports 详情全为 null - 新增 artifact_storage.py
+  - Task 9.6: Audit PostgreSQL 集成 - 添加 PG 存储检测
+  - Task 9.7: Replay 同步改异步 - 使用 BackgroundTasks
+  - Task 9.11: Snapshots 历史查询 - 改为 List 结构存储
+- 新增文件:
+  - `trader/storage/artifact_storage.py` - 回测报告产物存储
+- 测试结果: P0 回归 77 tests passing
+
+### 上次任务：FastAPI 测试覆盖补全
 - 完成时间: 2026-04-05
 - 分支: main (直接提交)
 - 状态: ✅ 测试覆盖完成

@@ -33,10 +33,11 @@
 - Gap：`POST /v1/reconciler/trigger` 需要前端提交 `local_orders + exchange_orders`。
 - 影响：Reconcile 页难以提供真实"手动触发对账"操作。
 - **修复状态**: ✅ 已完成
-  - 支持无参触发模式：后端自动从 OrderService 和 BrokerAdapter 获取数据
+  - 支持无参触发模式：后端自动从 OrderService 和 BinanceSpotDemoBroker 获取数据
   - 保留带参模式用于测试
+  - 使用环境变量 `BINANCE_API_KEY`/`BINANCE_SECRET_KEY` 配置
 - **修改文件**: `trader/api/routes/reconciler.py`
-- **审计修复**: 修复 exchange_orders 始终为空问题（从 broker adapter 获取）
+- **审计修复**: 修复 exchange_orders 始终为空问题（使用真实 BinanceSpotDemoBroker）
 
 ---
 
@@ -120,6 +121,44 @@
 - Gap：stale 主要依赖前端推导，degraded 多来源字符串语义。
 - 影响：跨页状态表达不一致。
 - **状态**: ⏳ 待处理
+
+---
+
+## ✅ 额外修复
+
+### Task 9.5 — Artifact 存储 ✅
+- **修复状态**: ✅ 已完成
+  - 新增 `trader/storage/artifact_storage.py` - 文件存储实现
+  - 支持保存/加载 backtest_report:{run_id} 格式的完整报告
+  - 支持 returns/risk/trades/equity_curve 数据
+- **修改文件**: 
+  - `trader/storage/artifact_storage.py` (新建)
+  - `trader/api/routes/backtests.py`
+
+### Task 9.6 — Audit PostgreSQL 集成 ✅
+- **修复状态**: ✅ 已完成
+  - 添加 PostgreSQL 存储检测逻辑
+  - 优先使用 PG 存储，降级到内存存储
+- **修改文件**: `trader/api/routes/audit.py`
+
+### Task 9.7 — Replay 后台任务 ✅
+- **修复状态**: ✅ 已完成
+  - 使用 FastAPI BackgroundTasks 实现真正异步执行
+  - 新增 `_run_replay_task` 后台任务函数
+  - 使用 asyncio.Lock 保证线程安全
+- **修改文件**: `trader/api/routes/events.py`
+
+### Task 9.11 — Snapshots 历史查询 ✅
+- **修复状态**: ✅ 已完成
+  - `in_memory.py`: 快照存储改为 List 结构
+  - `PostgresSnapshotStorage`: 新增 `list_snapshots` 方法
+  - `EventService`: 新增 `list_snapshots` 方法
+  - `events.py`: 使用真实的历史查询方法
+- **修改文件**: 
+  - `trader/storage/in_memory.py`
+  - `trader/adapters/persistence/postgres/snapshot_storage.py`
+  - `trader/services/event.py`
+  - `trader/api/routes/events.py`
 
 ---
 
