@@ -4,15 +4,26 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-05 (北京时间)
+2026-04-16 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
-- **工作树**：干净
+- **工作树**：有变更（文档更新）
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：v3.4.0 文档刷新与 Qlib/Hermes 落地计划
+- 完成时间: 2026-04-16
+- 分支: main (文档更新)
+- 状态: ✅ 已完成
+- 主要变更:
+  - 文档版本升级：`docs/` 主文档由 v3.3.0 升级为 v3.4.0
+  - 新增落地计划：`docs/V3.4.0_HERMES_QLIB_INTEGRATION_PLAN.md`
+  - 主文档对齐：README / 项目说明 / 架构 / 优先级文档均补充 Qlib+Hermes 边界与顺序
+  - 计划同步：`PLAN.md` 当前执行主线更新为 Phase 8（Qlib/Hermes 集成）
+- 测试结果: 本次仅文档更新，未触发代码测试
 
 ### 本次任务：Truth Gap 后端修复 (Task 9.x)
 - 完成时间: 2026-04-10
@@ -140,17 +151,15 @@
 - 状态: ✅ 已合并
 - 主要变更: trend_signals.py, price_volume_signals.py, signal_sandbox.py, 64个测试全部通过
 
-### 下次计划：Phase 7 风控穿透验证与策略正期望证明
-- 目标: 从"功能齐全但无法证明真的生效"到"风控改变下单结果可量化、策略扣成本后样本外仍正期望"
-- 前置条件: Phase 6 M1-M5 全部完成（✅）
-- Phase 6 总结: 已完成 RiskSizer、Drawdown/Venue 联动、Capital Allocator、替代数据健康度，下一阶段不再以风控模块扩张为主线
-
-**Phase 7 核心优先级**：
-1. 风控穿透测试矩阵：验证风控真的改变订单命运（8+ 场景端到端测试）
-2. RiskInterventionTracker：量化 Risk Intervention Rate 指标
-3. 策略上线前 5 层验证门控：L1 机制假设/L2 回测合规/L3 样本外/L4 成本压测/L5 影子模式
-4. AIAuditLog 持久化：从内存迁移到 PostgreSQL
-5. 统一 DecisionTraceId：全链路 evidence chain
+### 下次计划：Phase 8 v3.4.0 Qlib + Hermes 研究编排集成
+- 目标: 构建“Qlib 离线研究 + Hermes 编排 + 既有执行链路”的受控闭环
+- 前置条件: Phase 6 完成（✅），Phase 7 能力并行维护
+- 关键优先级:
+  1. 研究数据契约冻结（feature/model 版本纪律）
+  2. Qlib 数据转换 + 训练流水线
+  3. Qlib 预测到 Strategy Signal 的桥接层
+  4. Hermes 研究编排 SOP（数据→训练→评估→报告）
+  5. 五层门控 + 影子验证联调后再上线
 
 **执行原则**：
 1. 不先写更多分析报告，从可证伪开始

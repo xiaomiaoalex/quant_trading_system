@@ -1,8 +1,8 @@
 ## 1. 文档目的
 
-本文档定义 `quant_trading_system Crypto v3.3.0` 的总体技术架构、模块边界、运行时职责划分、外部依赖准入规则、市场适配原则与关键非功能性约束。
+本文档定义 `quant_trading_system Crypto v3.4.0` 的总体技术架构、模块边界、运行时职责划分、外部依赖准入规则、市场适配原则与关键非功能性约束。
 
-本版本相较于 v3.2.1 的核心变化不是“多加几个模块”，而是：
+本版本相较于 v3.3.0 的核心变化不是“多加几个模块”，而是：
 
 - 明确 **哪些层属于系统护城河，必须自研**
 - 明确 **哪些层属于商品化基础设施，应优先复用**
@@ -126,6 +126,8 @@ Insight Plane
 | AI proposal / approve 治理 API | Current | 已通过HITL Governance实现 |
 | 回测框架升级（QuantConnect Lean） | Phase 5 ✅ | 2026-03-31 完成，引入成熟回测框架 |
 | 风控穿透验证与策略正期望证明 | **Next** | Phase 7 计划，验证风控真的改变下单结果 |
+| Qlib 离线研究引擎接入 | **Next** | 仅用于 Insight 研究域，输出版本化预测信号 |
+| Hermes 研究编排接入 | **Next** | 仅用于研发自动化，不进入生产执行链路 |
 | Runner 主执行链路（自动执行） | Current | StrategyRunner已实现 |
 | 中国 A 股实盘适配器 | Deferred | 当前只保留接口契约 |
 | 多交易所套利 / 高频做市 | Deferred | 明确不纳入当前版本 |
@@ -351,6 +353,16 @@ Insight Plane 是研究、信号、实验、洞察与 AI 增强层。
 未来用于：
 - A 股研究主线
 - 券商接入后的研究与信号
+
+### D. Qlib / Hermes Integration Domain（v3.4.0）
+定位：
+- Qlib：离线研究引擎（训练/预测/因子重要性分析）
+- Hermes：研发编排中枢（流程调度与自动化）
+
+边界纪律：
+- 不允许直接触发 OMS 下单
+- 不允许绕过 RiskEngine / KillSwitch
+- 输出必须标准化为系统 Signal 并附带 `model_version/feature_version/trace_id`
 
 ### 8.1 AI 边界纪律
 AI 可以：
