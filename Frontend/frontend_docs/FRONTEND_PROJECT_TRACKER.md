@@ -59,7 +59,7 @@
 
 ---
 
-## 🏗️ Phase A：App Shell + Monitor + Strategies + Reconcile
+## 🏗️ Phase A：App Shell + Monitor + Strategies + Reconcile + Chat
 
 ### 工期预估
 - **预计**: 2-3 周
@@ -74,6 +74,7 @@
 | Monitor | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
 | Strategies | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
 | Reconcile | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
+| Chat | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ⏳ 待测试 | ✅ 完成 | frontend-console |
 
 ## 🏗️ Phase B：Backtests + Reports + AI Lab
 
@@ -188,7 +189,7 @@
 | `GET /v1/backtests/{run_id}` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 | `GET /v1/backtests` | GET | 🔴 缺失 (Task 9.4) | ⏳ 待开始 | ⏸️ 阻塞 | 列表接口 |
 | `GET /v1/backtests/{run_id}/report` | GET | 🔴 缺失 (Task 9.5) | ⏳ 待开始 | ⏸️ 阻塞 | 报告详情 |
-| `/api/chat/sessions/*` | Various | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
+| `/api/chat/sessions/*` | Various | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | - |
 | `/api/portfolio-research/*` | Various | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 
 ---
@@ -341,6 +342,7 @@
 | Monitor | 查看监控快照、清除告警 | ⏳ 待开始 |
 | Strategies | 加载/卸载策略、修改参数 | ⏳ 待开始 |
 | Reconcile | 触发对账、查看漂移 | ⏳ 待开始 |
+| Chat | 创建会话、发送消息、审批策略 | ⏳ 待开始 |
 | Backtests | 创建回测、查看进度 | ⏳ 待开始 |
 | Reports | 查看报告详情 | ⏳ 待开始 |
 | Audit | 检索审计条目 | ⏳ 待开始 |
