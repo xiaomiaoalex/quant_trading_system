@@ -1,4 +1,4 @@
-# PLAN.md — quant_trading_system Crypto v3.3.0 工程推进计划
+# PLAN.md — quant_trading_system Crypto v3.4.0 工程推进计划
 
 > 总架构师视角。本文件描述当前项目状态、各阶段任务优先级与验收标准，供工程师执行参考。
 > 执行优先级遵循 `.traerules`：As-Is > In-Progress > Target。
@@ -7,8 +7,9 @@
 
 ## 一、当前状态快照（As-Is）
 
-> 注：本文件历史阶段计划较长，2026-04-02 起以 “Phase 6 — Risk Convergence & Allocation” 作为当前执行主线。
-> Phase 1-5 视为历史完成记录与架构背景；当前任务排序以本节新增的“当前执行主线”优先。
+> 注：本文件历史阶段计划较长。自 2026-04-16 起，当前执行主线切换为  
+> “Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成”。  
+> Phase 1-7 视为历史完成记录与并行维护项；任务排序以本节“当前执行主线”优先。
 
 ### 已完成（可信赖，不得回归）
 
@@ -41,10 +42,62 @@
 
 ### 未开始（Target，按优先级推进）
 
-- **Phase 7**: 风控穿透验证与策略正期望证明（新增主线）
+- **Phase 9**: 下一阶段规划（待定义）
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
-## 当前执行主线：Phase 7 — 风控穿透验证与策略正期望证明
+## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成
+
+### 目标
+
+在不破坏既有五平面与确定性约束的前提下，完成“Qlib 离线研究 + Hermes 研发编排 + 现有执行链路”的闭环集成。
+
+### Phase 8 P0 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.1 | 研究数据契约冻结 | 数据字段/时区/对齐/缺失值规则文档化 | ✅ 已完成 |
+| 8.2 | Qlib 数据转换与训练流水线 | `qlib_data_converter` + `qlib_train_workflow` | ✅ 已完成 |
+| 8.3 | 模型版本治理 | `model_version/feature_version` 注册规范 | ✅ 已完成 |
+
+### Phase 8 P1 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.4 | Qlib 预测信号桥接 | `qlib_to_strategy_bridge` 标准化 Signal 输出 | ✅ 已完成 |
+| 8.5 | Hermes 研究编排 SOP | 数据→训练→评估→报告自动化 | ✅ 已完成 |
+| 8.6 | 五层门控联调 | 与 `strategy_validation_gate` 集成 | 进行中 |
+
+### Phase 8 P2 任务
+
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.7 | 影子验证与上线收敛 | 回测/影子/成交偏差报告 | ✅ 已完成 |
+| 8.8 | 运行观测与回滚方案 | 模型漂移检测、模型级回滚策略 | ✅ 已完成 |
+
+### 已完成交付物
+
+- `scripts/qlib_data_converter.py` - 数据转换器 (Phase A)
+- `docs/DATA_CONTRACT.md` - 数据契约文档 (Phase A)
+- `scripts/qlib_train_workflow.py` - 训练工作流 (Phase B)
+- `scripts/qlib_factor_miner.py` - 因子挖掘器 (Phase B)
+- `scripts/qlib_to_strategy_bridge.py` - 信号桥接 (Phase C)
+- `docs/HERMES_ORCHESTRATION_TEMPLATES.md` - Hermes 编排模板 (Phase D)
+- `scripts/qlib_model_validator.py` - 模型验证器 (Phase E)
+- `scripts/model_drift_detector.py` - 模型漂移检测 (Phase F)
+- `scripts/model_rollback_manager.py` - 回滚管理器 (Phase F)
+
+### 验收原则
+
+1. Qlib 与 Hermes 只在研究/编排域运行，不直连执行下单。
+2. AI 信号必须带版本与 trace 信息（model/feature/signal）。
+3. 未通过五层门控的策略不得进入 RUNNING。
+4. 文档、计划、状态三者同步更新。
+
+### 计划文档入口
+
+- 详细拆解见：`docs/V3.4.0_HERMES_QLIB_INTEGRATION_PLAN.md`
+
+## 并行维护主线：Phase 7 — 风控穿透验证与策略正期望证明
 
 ### 目标
 
@@ -92,8 +145,8 @@
 ## 二、阶段划分
 
 ```
-Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6 ──► Phase 7
-基础设施稳固       闭环安全层    研究信号层    增强与自动化  策略管理与AI共创  回测框架升级   风险收敛      风控穿透验证
+Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3 ──► Phase 4 ──► Phase 5 ──► Phase 6 ──► Phase 7 ──► Phase 8
+基础设施稳固       闭环安全层    研究信号层    增强与自动化  策略管理与AI共创  回测框架升级   风险收敛      风控穿透验证    Qlib/Hermes 集成
 ```
 
 ---
@@ -1816,3 +1869,4 @@ Task 7.8 (统一DecisionTraceId)
 2. Task 7.3 依赖 Phase 6 的 `StrategyLifecycleManager`（已完成）
 3. Task 7.4-7.5 依赖 Task 7.3 的验证门控
 4. Task 7.6-7.8 可并行执行，不依赖其他 Task
+

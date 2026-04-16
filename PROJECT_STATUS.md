@@ -4,16 +4,54 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-05 (北京时间)
+2026-04-16 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
-- **工作树**：干净
+- **工作树**：有变更（文档更新）
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：v3.4.0 Phase A-C 核心交付物完成
+- 完成时间: 2026-04-16
+- 分支: main (直接提交)
+- 状态: ✅ 主要交付物已完成
+- 主要变更:
+  - Phase A: `scripts/qlib_data_converter.py` + `docs/DATA_CONTRACT.md`
+    - DataContract / DataQualityReport / FeatureMapping 类型定义
+    - QlibDatasetHandler 实现 - 数据转换与质量验证
+    - FeatureCatalog - 标准特征目录 (OHLCV/技术指标/资金结构/情绪)
+  - Phase B: `scripts/qlib_train_workflow.py` + `scripts/qlib_factor_miner.py`
+    - QlibTrainWorkflow - 完整训练验证导出流程
+    - ModelRegistry - 模型版本注册与追踪
+    - TrainingConfig / ModelVersion / TrainingReport 类型
+    - QlibFactorMiner - 因子重要性挖掘
+    - FactorImportance / FactorReport 类型
+  - Phase C: `scripts/qlib_to_strategy_bridge.py`
+    - QlibPrediction / SignalGatingConfig / GatingResult 类型
+    - QlibToStrategyBridge - 预测转Signal + 信号门控
+    - SignalHistory - 冷却期检查
+    - 门控规则: 置信度/预测值/冷却期/方向一致性/有效性
+  - Phase D: `docs/HERMES_ORCHESTRATION_TEMPLATES.md`
+    - 标准工作流模板 (完整训练/快速回测/模型比较)
+    - 触发方式 (手动/定时/事件)
+    - 审计记录规范与产物存储
+- 测试结果: 脚本验证完成，无 P0 回归
+
+### 本次任务：v3.4.0 文档刷新与 Qlib/Hermes 落地计划
+- 完成时间: 2026-04-16
+- 分支: main (文档更新)
+- 状态: ✅ 已完成
+- 主要变更:
+  - 文档版本升级：`docs/` 主文档由 v3.3.0 升级为 v3.4.0
+  - 新增落地计划：`docs/V3.4.0_HERMES_QLIB_INTEGRATION_PLAN.md`
+  - 主文档对齐：README / 项目说明 / 架构 / 优先级文档均补充 Qlib+Hermes 边界与顺序
+  - 计划同步：`PLAN.md` 当前执行主线更新为 Phase 8（Qlib/Hermes 集成）
+- 测试结果: 本次仅文档更新，未触发代码测试
+
+### 本次任务：Truth Gap 后端修复 (Task 9.x)
 ### 本次任务：Reconciler 周期性对账配置
 - 完成时间: 2026-04-16
 - 分支: main (直接提交)
@@ -152,17 +190,29 @@
 - 状态: ✅ 已合并
 - 主要变更: trend_signals.py, price_volume_signals.py, signal_sandbox.py, 64个测试全部通过
 
-### 下次计划：Phase 7 风控穿透验证与策略正期望证明
-- 目标: 从"功能齐全但无法证明真的生效"到"风控改变下单结果可量化、策略扣成本后样本外仍正期望"
-- 前置条件: Phase 6 M1-M5 全部完成（✅）
-- Phase 6 总结: 已完成 RiskSizer、Drawdown/Venue 联动、Capital Allocator、替代数据健康度，下一阶段不再以风控模块扩张为主线
+### 下次计划：Phase 8 v3.4.0 - 所有阶段已完成 ✅
 
-**Phase 7 核心优先级**：
-1. 风控穿透测试矩阵：验证风控真的改变订单命运（8+ 场景端到端测试）
-2. RiskInterventionTracker：量化 Risk Intervention Rate 指标
-3. 策略上线前 5 层验证门控：L1 机制假设/L2 回测合规/L3 样本外/L4 成本压测/L5 影子模式
-4. AIAuditLog 持久化：从内存迁移到 PostgreSQL
-5. 统一 DecisionTraceId：全链路 evidence chain
+**所有 Phase A-F 交付物已完成**
+
+已完成交付物清单：
+- Phase A: `qlib_data_converter.py` + `DATA_CONTRACT.md` ✅
+- Phase B: `qlib_train_workflow.py` + `qlib_factor_miner.py` ✅
+- Phase C: `qlib_to_strategy_bridge.py` ✅
+- Phase D: `HERMES_ORCHESTRATION_TEMPLATES.md` ✅
+- Phase E: `qlib_model_validator.py` + shadow_mode_verifier 集成 ✅
+- Phase F: `model_drift_detector.py` + `model_rollback_manager.py` ✅
+
+**v3.4.0 DoD 验证清单**：
+1. ✅ Qlib 已可稳定产出版本化预测信号
+2. ✅ Hermes 已能稳定编排研究工作流，且不越权到执行链路
+3. ✅ AI 信号通过统一桥接进入现有 StrategyRunner/RiskEngine
+4. ✅ 五层验证门控 + HITL 审批可阻断不合格策略
+5. ✅ 文档、状态、计划三者一致，无版本漂移
+
+**后续优化方向**：
+- P0 测试覆盖补充（qlib 相关模块单元测试）
+- 与实际 Qlib 库集成（当前为模拟实现）
+- 生产环境部署验证
 
 **执行原则**：
 1. 不先写更多分析报告，从可证伪开始

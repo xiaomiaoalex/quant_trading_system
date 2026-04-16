@@ -1,4 +1,4 @@
-# Code Review 计划 — quant_trading_system v3.3.0
+# Code Review 计划 — quant_trading_system v3.4.0
 
 > 基于经验：代码从完成到可达控程度需要 5-6 轮 review。本计划定义系统性 review 策略，确保每轮 review 有明确目标、覆盖范围和验收标准。
 
@@ -350,3 +350,4 @@ Review 完成的标志：
 ---
 
 *本文档应随项目进展更新，每完成一个模块的 Review 后记录结果。*
+
