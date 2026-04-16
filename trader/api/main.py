@@ -5,7 +5,11 @@ Main application entry point for the Systematic Trader Control Plane API.
 
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
+import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import List, Dict, Any
+
 from fastapi import FastAPI
 
 from trader.api.routes import (
@@ -27,7 +31,10 @@ from trader.api.routes import (
 )
 from trader.services.reconciler_service import ReconcilerService
 from trader.services.strategy import StrategyService
+from trader.services.order import OrderService
 from trader.api.models.schemas import StrategyRegisterRequest
+
+logger = logging.getLogger(__name__)
 
 _BUILTIN_STRATEGIES = [
     StrategyRegisterRequest(
@@ -62,7 +69,78 @@ def _seed_strategies() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _seed_strategies()
+
+    async def _local_orders_getter() -> List[Dict[str, Any]]:
+        try:
+            order_svc = OrderService()
+            orders = order_svc.list_orders(limit=10000)
+            return [
+                {
+                    "client_order_id": o.cl_ord_id,
+                    "status": o.status,
+                    "symbol": o.instrument or "",
+                    "quantity": o.qty or "0",
+                    "filled_quantity": o.filled_qty or "0",
+                    "created_at": (
+                        datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc)
+                        if o.created_ts_ms else datetime.now(timezone.utc)
+                    ),
+                    "updated_at": (
+                        datetime.fromtimestamp(o.updated_ts_ms / 1000, tz=timezone.utc)
+                        if o.updated_ts_ms else datetime.now(timezone.utc)
+                    ),
+                }
+                for o in orders
+            ]
+        except Exception as e:
+            logger.error(f"[Reconciler] local_orders_getter failed: {e}")
+            return []
+
+    async def _exchange_orders_getter() -> List[Dict[str, Any]]:
+        try:
+            import os
+            from trader.adapters.broker.binance_spot_demo_broker import (
+                BinanceSpotDemoBroker,
+                BinanceSpotDemoBrokerConfig,
+            )
+
+            api_key = os.environ.get("BINANCE_API_KEY")
+            secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+            if not api_key or not secret_key:
+                logger.warning(
+                    "[Reconciler] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, "
+                    "exchange_orders_getter returning empty list"
+                )
+                return []
+
+            config = BinanceSpotDemoBrokerConfig.for_demo(api_key, secret_key)
+            broker = BinanceSpotDemoBroker(config)
+            await broker.connect()
+            try:
+                broker_orders = await broker.get_open_orders()
+                return [
+                    {
+                        "client_order_id": order.client_order_id,
+                        "status": order.status.value,
+                        "symbol": order.symbol,
+                        "quantity": str(order.quantity),
+                        "filled_quantity": str(order.filled_quantity),
+                        "updated_at": order.created_at,
+                    }
+                    for order in broker_orders
+                ]
+            finally:
+                await broker.disconnect()
+        except Exception as e:
+            logger.error(f"[Reconciler] exchange_orders_getter failed: {e}")
+            return []
+
     reconciler_service = reconciler.get_reconciler_service()
+    reconciler_service.configure_periodic_reconciliation(
+        _local_orders_getter,
+        _exchange_orders_getter,
+    )
     await reconciler_service.start()
     yield
     await reconciler_service.stop()
