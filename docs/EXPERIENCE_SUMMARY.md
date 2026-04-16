@@ -772,6 +772,7 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 | 2026-04-04 | Kilo Code | 添加 Phase 7 风控穿透验证与策略正期望证明经验：从"功能齐全"到"可信赖系统"的认知转变 |
 | 2026-04-05 | Kilo Code | 添加 FastAPI 测试覆盖经验：路由注册、Pydantic 模型、Mock 枚举、Mock 路径 |
 | 2026-04-10 | Kilo Code | 添加 Truth Gap 后端修复经验：API 契约优先、后端聚合模式、Bug 审计与修复方法论 |
+| 2026-04-16 | Kilo Code | 添加 Reconciler 周期性对账配置经验：后台服务启动时配置的重要性、异常 Fail-Closed 处理 |
 
 ---
 
@@ -935,3 +936,73 @@ def list_snapshots(self, stream_key: str, since_ts_ms: int = None, limit: int = 
 **经验**：
 - 需要历史查询的存储应该用 List 而不是 Dict
 - 时间范围过滤在存储层实现，减少应用层过滤
+
+---
+
+## 十六、Reconciler 周期性对账配置经验
+
+### 16.1 后台服务启动时配置的重要性
+
+**问题**：
+`ReconcilerService` 启动后周期性执行对账时，会检查 `_local_orders_getter` 和 `_exchange_orders_getter` 是否已配置。但从未调用 `configure_periodic_reconciliation()` 方法来设置它们，导致每次执行都跳过并记录警告。
+
+**解决方案**：
+在 FastAPI `lifespan` 函数中，启动 `ReconcilerService` 前配置这两个 getter：
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    reconciler_service = reconciler.get_reconciler_service()
+    
+    async def local_orders_getter() -> List[Dict[str, Any]]:
+        order_svc = OrderService()
+        orders = order_svc.list_orders(limit=10000)
+        return [
+            {
+                "client_order_id": o.cl_ord_id,
+                "status": o.status,
+                "symbol": o.instrument or "",
+                "quantity": o.qty or "0",
+                "filled_quantity": o.filled_qty or "0",
+                "created_at": datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc) if o.created_ts_ms else datetime.now(timezone.utc),
+                "updated_at": datetime.fromtimestamp(o.updated_ts_ms / 1000, tz=timezone.utc) if o.updated_ts_ms else datetime.now(timezone.utc),
+            }
+            for o in orders
+        ]
+    
+    async def exchange_orders_getter() -> List[Dict[str, Any]]:
+        api_key = os.environ.get("BINANCE_API_KEY")
+        secret_key = os.environ.get("BINANCE_SECRET_KEY")
+        if not api_key or not secret_key:
+            return []
+        config = BinanceSpotDemoBrokerConfig.for_demo(api_key, secret_key)
+        broker = BinanceSpotDemoBroker(config)
+        await broker.connect()
+        try:
+            broker_orders = await broker.get_open_orders()
+            return [
+                {
+                    "client_order_id": order.client_order_id,
+                    "status": order.status.value,
+                    "symbol": order.symbol,
+                    "quantity": str(order.quantity),
+                    "filled_quantity": str(order.filled_quantity),
+                    "updated_at": order.created_at,
+                }
+                for order in broker_orders
+            ]
+        finally:
+            await broker.disconnect()
+    
+    reconciler_service.configure_periodic_reconciliation(
+        local_orders_getter,
+        exchange_orders_getter,
+    )
+    await reconciler_service.start()
+    yield
+    await reconciler_service.stop()
+```
+
+**经验**：
+- 依赖外部配置的后台服务，应在启动时完成配置，而不是期望调用者事后配置
+- 异常处理应 Fail-Closed：getter 失败时返回空列表并记录错误
+- 环境变量缺失时应记录明确警告，便于排查
