@@ -1,5 +1,5 @@
 import { APIClient } from './client'
-import type { RegisteredStrategy, StrategyRuntimeInfo, StrategyParams, StrategyEventEnvelope } from '@/types'
+import type { RegisteredStrategy, StrategyRuntimeInfo, StrategyParams } from '@/types'
 
 export class StrategiesAPI extends APIClient {
   async getRegistry(): Promise<RegisteredStrategy[]> {
@@ -52,6 +52,11 @@ export class StrategiesAPI extends APIClient {
 
   async getStrategyEvents(strategyId: string, eventType?: string, limit = 100): Promise<StrategyEventEnvelope[]> {
     return this.get<StrategyEventEnvelope[]>(`/v1/strategies/${strategyId}/events`, {
+
+
+
+
+
       params: { event_type: eventType, limit },
     })
   }
