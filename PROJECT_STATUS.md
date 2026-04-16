@@ -4,16 +4,25 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
+<<<<<<< HEAD
 2026-04-16 22:41 (北京时间)
+=======
+2026-04-16 (北京时间)
+>>>>>>> origin/main
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
+<<<<<<< HEAD
 - **工作树**：有变更（策略模块恢复 + 文档更新）
+=======
+- **工作树**：有变更（文档更新）
+>>>>>>> origin/main
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
 
+<<<<<<< HEAD
 ### 本次任务：恢复内置策略模块（误删修复）
 - 完成时间: 2026-04-16
 - 分支: main (工作区修复)
@@ -33,6 +42,8 @@
   - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 7 passed
   - `python -m pytest -q trader/tests/test_strategy_runner.py --tb=short` → 41 passed
 
+=======
+>>>>>>> origin/main
 ### 本次任务：v3.4.0 Phase A-C 核心交付物完成
 - 完成时间: 2026-04-16
 - 分支: main (直接提交)
@@ -71,6 +82,19 @@
 - 测试结果: 本次仅文档更新，未触发代码测试
 
 ### 本次任务：Truth Gap 后端修复 (Task 9.x)
+### 本次任务：Reconciler 周期性对账配置
+- 完成时间: 2026-04-16
+- 分支: main (直接提交)
+- 状态: ✅ 完成
+- 主要变更:
+  - 配置 `ReconcilerService` 周期性对账的 `local_orders_getter` 和 `exchange_orders_getter`
+  - `local_orders_getter`: 从 `OrderService.list_orders()` 获取本地订单
+  - `exchange_orders_getter`: 从 `BinanceSpotDemoBroker.get_open_orders()` 获取交易所订单
+- 涉及文件:
+  - `trader/api/main.py` - 在 lifespan 中配置 periodic reconciliation getters
+- 测试结果: reconciler tests 全部通过
+
+### 上次任务：Truth Gap 后端修复 (Task 9.x)
 - 完成时间: 2026-04-10
 - 分支: main (直接提交)
 - 状态: ✅ 全部完成
