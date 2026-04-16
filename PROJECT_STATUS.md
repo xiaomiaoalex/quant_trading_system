@@ -4,16 +4,46 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
+<<<<<<< HEAD
+2026-04-16 22:41 (北京时间)
+=======
 2026-04-16 (北京时间)
+>>>>>>> origin/main
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
+<<<<<<< HEAD
+- **工作树**：有变更（策略模块恢复 + 文档更新）
+=======
 - **工作树**：有变更（文档更新）
+>>>>>>> origin/main
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
 
+<<<<<<< HEAD
+### 本次任务：恢复内置策略模块（误删修复）
+- 完成时间: 2026-04-16
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `trader/strategies/` 仅剩 `__pycache__/`，内置策略入口 `trader.strategies.ema_cross_btc` / `rsi_grid` / `dca_btc` 缺失
+  - 默认策略注册仍指向上述 entrypoint，存在运行时加载失败风险
+- 开发后状态:
+  - 新增 `trader/strategies/ema_cross_btc.py`（EMA 交叉策略插件）
+  - 新增 `trader/strategies/rsi_grid.py`（RSI 网格策略插件）
+  - 新增 `trader/strategies/dca_btc.py`（DCA 定投策略插件）
+  - 新增 `trader/strategies/__init__.py`（内置策略导出）
+  - 新增 `trader/tests/test_builtin_strategies.py`（协议合规 + 信号行为测试）
+- Issue 状态迁移:
+  - 内置策略模块误删：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 7 passed
+  - `python -m pytest -q trader/tests/test_strategy_runner.py --tb=short` → 41 passed
+
+=======
+>>>>>>> origin/main
 ### 本次任务：v3.4.0 Phase A-C 核心交付物完成
 - 完成时间: 2026-04-16
 - 分支: main (直接提交)

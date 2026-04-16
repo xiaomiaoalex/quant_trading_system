@@ -773,7 +773,11 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 | 2026-04-05 | Kilo Code | 添加 FastAPI 测试覆盖经验：路由注册、Pydantic 模型、Mock 枚举、Mock 路径 |
 | 2026-04-10 | Kilo Code | 添加 Truth Gap 后端修复经验：API 契约优先、后端聚合模式、Bug 审计与修复方法论 |
 | 2026-04-16 | Kilo Code | 添加 v3.4.0 文档升级与 Qlib/Hermes 集成规划经验：研究编排与执行链路隔离原则 |
+<<<<<<< HEAD
+| 2026-04-16 | Codex | 添加内置策略误删恢复经验：插件协议对齐、单测护栏与入口一致性检查 |
+=======
 | 2026-04-16 | Kilo Code | 添加 Reconciler 周期性对账配置经验：后台服务启动时配置的重要性、异常 Fail-Closed 处理 |
+>>>>>>> origin/main
 
 ---
 
@@ -974,6 +978,60 @@ def list_snapshots(self, stream_key: str, since_ts_ms: int = None, limit: int = 
 4. 最后做 Hermes 编排自动化和上线门控联调
 
 这个顺序的价值是：先保证可复现，再追求自动化；先保证可治理，再追求“看起来智能”。
+<<<<<<< HEAD
+
+---
+
+## 十七、内置策略误删恢复经验（策略插件重建）
+
+### 17.1 插件入口可注册不代表插件可加载
+
+**场景**：
+`trader/api/main.py` 中已注册默认策略 entrypoint，但 `trader/strategies/` 目录下对应模块被误删。
+
+**问题**：
+- 控制面“注册成功”不等于运行时可加载
+- 真正失败点发生在 `StrategyRunner.load_strategy()` 的动态导入阶段
+
+**经验**：
+- 每次维护默认策略时，必须同时检查：
+  1. `strategy_id` 与 entrypoint 是否存在
+  2. 对应模块是否暴露 `get_plugin()`
+  3. `validate_strategy_plugin()` 是否通过
+- “元数据存在 + 模块缺失”属于高风险隐藏故障，必须用测试兜底
+
+### 17.2 策略重建必须优先满足协议闭环
+
+**场景**：
+重建 `ema_cross_btc` / `rsi_grid` / `dca_btc` 时，需要快速恢复运行能力并保持与 Runner 协议兼容。
+
+**设计模式**：
+- 每个策略均实现统一结构：
+  - `initialize(config)`：清理状态并接收配置
+  - `on_market_data(data)`：纯计算生成 `Signal | None`
+  - `update_config(config)`：支持热更新并带回滚
+  - `validate()`：参数边界校验
+  - `get_plugin()`：模块级单例工厂
+
+**经验**：
+- `update_config()` 推荐“先快照、后应用、失败回滚”，防止运行时落入半更新状态
+- 所有策略都应只依赖 `market_data.timestamp`，避免引入 `datetime.now()` 导致回放不可重复
+
+### 17.3 给默认策略加“存在性测试”比事后排查更便宜
+
+**场景**：
+策略模块缺失在常规 API 单测中不一定暴露，因为 API 注册不触发动态导入。
+
+**解决方案**：
+新增 `trader/tests/test_builtin_strategies.py`，覆盖：
+- 三个默认模块可导入
+- `get_plugin()` 存在且协议校验通过
+- 关键信号路径（EMA 交叉、RSI 超买超卖、DCA 定时/回撤买入）
+
+**经验**：
+- 入口存在性测试应作为默认策略的最小护栏
+- 这类测试运行快、收益高，能在“误删类故障”发生时第一时间报警
+=======
 ## 十六、Reconciler 周期性对账配置经验
 
 ### 16.1 后台服务启动时配置的重要性
@@ -1041,3 +1099,4 @@ async def lifespan(app: FastAPI):
 - 依赖外部配置的后台服务，应在启动时完成配置，而不是期望调用者事后配置
 - 异常处理应 Fail-Closed：getter 失败时返回空列表并记录错误
 - 环境变量缺失时应记录明确警告，便于排查
+>>>>>>> origin/main
