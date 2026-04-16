@@ -10,6 +10,9 @@ export const strategyKeys = {
   loaded: () => [...strategyKeys.all, 'loaded'] as const,
   status: (id: string) => [...strategyKeys.all, 'status', id] as const,
   params: (id: string) => [...strategyKeys.all, 'params', id] as const,
+  events: (id: string) => [...strategyKeys.all, 'events', id] as const,
+  signals: (id: string) => [...strategyKeys.all, 'signals', id] as const,
+  errors: (id: string) => [...strategyKeys.all, 'errors', id] as const,
 }
 
 // Fetch registered strategies (metadata only, no runtime status)
@@ -19,6 +22,7 @@ export function useStrategyRegistry() {
     queryFn: () => strategiesAPI.getRegistry(),
     staleTime: 30_000,
     retry: 2,
+    throwOnError: false,
   })
 }
 
@@ -29,6 +33,7 @@ export function useLoadedStrategies() {
     queryFn: () => strategiesAPI.getLoaded(),
     staleTime: 15_000,
     retry: 2,
+    throwOnError: false,
   })
 }
 
@@ -149,4 +154,40 @@ export function useUpdateStrategyParams(strategyId: string) {
     isPending: mutation.isPending,
     error: mutation.error ? formatAPIError(mutation.error) : null,
   }
+}
+
+// Strategy events hooks
+export function useStrategyEvents(strategyId: string, eventType?: string) {
+  return useQuery({
+    queryKey: [...strategyKeys.events(strategyId), { eventType }],
+    queryFn: () => strategiesAPI.getStrategyEvents(strategyId, eventType),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 2,
+    enabled: !!strategyId,
+    throwOnError: false,
+  })
+}
+
+export function useStrategySignals(strategyId: string) {
+  return useQuery({
+    queryKey: strategyKeys.signals(strategyId),
+    queryFn: () => strategiesAPI.getStrategySignals(strategyId),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 2,
+    enabled: !!strategyId,
+    throwOnError: false,
+  })
+}
+
+export function useStrategyErrors(strategyId: string) {
+  return useQuery({
+    queryKey: strategyKeys.errors(strategyId),
+    queryFn: () => strategiesAPI.getStrategyErrors(strategyId),
+    staleTime: 10_000,
+    retry: 2,
+    enabled: !!strategyId,
+    throwOnError: false,
+  })
 }

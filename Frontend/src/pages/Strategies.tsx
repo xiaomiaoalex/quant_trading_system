@@ -5,6 +5,7 @@ import type { RegisteredStrategy, StrategyRuntimeInfo } from '@/types'
 import { STRATEGY_STATUS_DISPLAY } from '@/types'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { MetricCard } from '@/components/monitor'
+import { StrategyDetailModal } from '@/components/strategies'
 import { formatAPIError } from '@/api/client'
 
 // Normalize backend status to lowercase
@@ -24,6 +25,7 @@ export function Strategies() {
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
   const [actionType, setActionType] = useState<string | null>(null)
   const [selectedStrategy, setSelectedStrategy] = useState<RegisteredStrategy | null>(null)
+  const [detailStrategy, setDetailStrategy] = useState<RegisteredStrategy | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -40,6 +42,7 @@ export function Strategies() {
   // Get status for a strategy
   const getStatus = (strategyId: string) => runtimeMap.get(strategyId)?.status ?? 'stopped'
   const getBlockedReason = (strategyId: string) => runtimeMap.get(strategyId)?.blocked_reason
+  const getRuntimeInfo = (strategyId: string) => runtimeMap.get(strategyId)
 
   // Mutation hooks
   const loadMutation = useLoadStrategy(selectedStrategy?.strategy_id ?? '', selectedStrategy?.entrypoint ?? 'strategies.default')
@@ -142,25 +145,45 @@ export function Strategies() {
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Name</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">ID</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Blocked Reason</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Ticks</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Signals</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Errors</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Blocked</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
               {registeredStrategies.map(strategy => {
+                const runtime = getRuntimeInfo(strategy.strategy_id)
                 const status = getStatus(strategy.strategy_id)
                 const statusConfig = STRATEGY_STATUS_DISPLAY[status] ?? STRATEGY_STATUS_DISPLAY.stopped
                 const blockedReason = getBlockedReason(strategy.strategy_id)
                 return (
                   <tr key={strategy.strategy_id} className="hover:bg-gray-700/30">
-                    <td className="px-4 py-3 text-sm text-white font-medium">{strategy.name}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => setDetailStrategy(strategy)}
+                        className="text-sm text-white font-medium hover:text-blue-400 hover:underline"
+                      >
+                        {strategy.name}
+                      </button>
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-400 font-mono">{strategy.strategy_id}</td>
                     <td className="px-4 py-3">
                       <span className={clsx('inline-flex rounded-full px-2 py-0.5 text-xs font-medium', statusConfig.color, statusConfig.bgColor)}>
                         {statusConfig.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-red-400">{blockedReason ?? '-'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-300">{runtime?.tick_count ?? '-'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-300">{runtime?.signal_count ?? '-'}</td>
+                    <td className="px-4 py-3">
+                      {runtime?.error_count && runtime.error_count > 0 ? (
+                        <span className="text-sm text-red-400">{runtime.error_count}</span>
+                      ) : (
+                        <span className="text-sm text-gray-500">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-red-400 max-w-[150px] truncate">{blockedReason ?? '-'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {status === 'stopped' && (
@@ -204,6 +227,13 @@ export function Strategies() {
         isLoading={loadMutation.isPending || unloadMutation.isPending || startMutation.isPending || stopMutation.isPending || pauseMutation.isPending || resumeMutation.isPending}
         onConfirm={confirmAction}
         onCancel={() => { setShowConfirm(null); setActionType(null); setSelectedStrategy(null) }}
+      />
+
+      <StrategyDetailModal
+        strategy={detailStrategy!}
+        runtime={detailStrategy ? (getRuntimeInfo(detailStrategy.strategy_id) ?? null) : null}
+        isOpen={!!detailStrategy}
+        onClose={() => setDetailStrategy(null)}
       />
     </div>
   )

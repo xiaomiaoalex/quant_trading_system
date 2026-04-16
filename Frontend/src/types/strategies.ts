@@ -29,6 +29,48 @@ export interface StrategyRuntimeInfo {
   blocked_reason?: string
 }
 
+// Strategy event types
+export type StrategyEventType = 
+  | 'strategy.signal'
+  | 'strategy.order.submitted'
+  | 'strategy.order.filled'
+  | 'strategy.order.cancelled'
+  | 'strategy.order.rejected'
+  | 'strategy.error'
+  | 'strategy.tick'
+
+export interface StrategyEventEnvelope {
+  event_id?: number
+  stream_key: string
+  event_type: StrategyEventType
+  schema_version: number
+  trace_id?: string
+  ts_ms: number
+  payload: Record<string, unknown>
+}
+
+export interface SignalPayload {
+  symbol?: string
+  direction?: string
+  signal_type?: string
+  quantity?: string
+  price?: string
+  reason?: string
+}
+
+export interface OrderPayload {
+  symbol?: string
+  side?: string
+  quantity?: string
+  price?: string
+  order_id?: string
+}
+
+export interface ErrorPayload {
+  error_message?: string
+  error_details?: Record<string, unknown>
+}
+
 export interface StrategyParams {
   [key: string]: unknown
 }
