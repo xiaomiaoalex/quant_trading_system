@@ -17,6 +17,7 @@ export function useReconcileReport() {
     staleTime: 15_000,
     refetchInterval: 30_000,
     retry: 2,
+    throwOnError: false,
   })
 }
 

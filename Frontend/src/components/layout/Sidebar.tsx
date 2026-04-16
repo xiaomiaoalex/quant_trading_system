@@ -11,6 +11,7 @@ const navItems: NavItem[] = [
   { path: '/monitor', label: 'Monitor', phase: 'P0' },
   { path: '/strategies', label: 'Strategies', phase: 'P0' },
   { path: '/reconcile', label: 'Reconcile', phase: 'P0' },
+  { path: '/chat', label: 'AI Chat', phase: 'P0' },
   { path: '/backtests', label: 'Backtests', phase: 'P1' },
   { path: '/reports', label: 'Reports', phase: 'P1' },
   { path: '/audit', label: 'Audit', phase: 'P2' },

@@ -142,6 +142,7 @@ class StrategyRunner:
         signal_callback: Optional[Callable[[str, Signal], Any]] = None,
         oms_callback: Optional[Callable[[str, Signal], Any]] = None,
         killswitch_callback: Optional[Callable[[str], KillSwitchLevel]] = None,
+        event_callback: Optional[Callable[[str, str, Dict[str, Any]], Any]] = None,
         max_errors_before_error_state: int = 10,
     ):
         """
@@ -151,6 +152,7 @@ class StrategyRunner:
             signal_callback: 信号回调函数，接收 (strategy_id, signal)
             oms_callback: OMS 执行回调，接收 (strategy_id, signal)，返回订单
             killswitch_callback: KillSwitch 查询回调，返回当前 KillSwitch 级别
+            event_callback: 事件发布回调，接收 (strategy_id, event_type, payload)
             max_errors_before_error_state: 错误次数阈值，超过此值策略进入ERROR状态
         """
         self._plugins: Dict[str, StrategyPlugin] = {}
@@ -159,6 +161,7 @@ class StrategyRunner:
         self._signal_callback = signal_callback
         self._oms_callback = oms_callback
         self._killswitch_callback = killswitch_callback
+        self._event_callback = event_callback
         self._max_errors_before_error_state = max_errors_before_error_state
         self._running = True
         # 策略级别的锁，用于保护并发更新
@@ -465,6 +468,20 @@ class StrategyRunner:
                 if not signal.strategy_name:
                     signal.strategy_name = strategy_id
 
+                # 发布信号事件
+                if self._event_callback:
+                    try:
+                        self._event_callback(strategy_id, "strategy.signal", {
+                            "symbol": signal.symbol,
+                            "direction": str(signal.direction) if signal.direction else None,
+                            "signal_type": signal.signal_type,
+                            "quantity": str(signal.quantity) if signal.quantity else None,
+                            "price": str(signal.price) if signal.price else None,
+                            "reason": signal.reason,
+                        })
+                    except Exception as e:
+                        logger.error(f"事件发布失败: {strategy_id}, 错误: {e}")
+
                 # ==================== 资源限制检查 ====================
                 if limits:
                     # 检查订单频率限制（使用滑动窗口）
@@ -488,7 +505,15 @@ class StrategyRunner:
                 # ==================== OMS 执行 ====================
                 if signal is not None and self._oms_callback:
                     try:
-                        await self._oms_callback(strategy_id, signal)
+                        order_result = await self._oms_callback(strategy_id, signal)
+                        # 发布订单提交事件
+                        if self._event_callback and order_result:
+                            self._event_callback(strategy_id, "strategy.order.submitted", {
+                                "symbol": signal.symbol,
+                                "side": str(signal.direction) if signal.direction else None,
+                                "quantity": str(signal.quantity) if signal.quantity else None,
+                                "price": str(signal.price) if signal.price else None,
+                            })
                     except Exception as e:
                         logger.error(f"OMS 执行失败: {strategy_id}, 错误: {e}")
                         signal = None
