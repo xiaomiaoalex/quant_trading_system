@@ -26,10 +26,42 @@ from trader.api.routes import (
     audit,
 )
 from trader.services.reconciler_service import ReconcilerService
+from trader.services.strategy import StrategyService
+from trader.api.models.schemas import StrategyRegisterRequest
+
+_BUILTIN_STRATEGIES = [
+    StrategyRegisterRequest(
+        strategy_id="ema_cross_btc",
+        name="EMA Cross BTC",
+        description="EMA 交叉趋势跟踪策略 - 快线上穿慢线买入，下穿卖出",
+        entrypoint="trader.strategies.ema_cross_btc",
+    ),
+    StrategyRegisterRequest(
+        strategy_id="rsi_grid",
+        name="RSI Grid",
+        description="RSI 超买超卖网格策略 - 超卖买入，超买卖出，带网格间距过滤",
+        entrypoint="trader.strategies.rsi_grid",
+    ),
+    StrategyRegisterRequest(
+        strategy_id="dca_btc",
+        name="DCA BTC",
+        description="BTC 定投策略 - 定期定额买入，带价格偏离和持仓上限保护",
+        entrypoint="trader.strategies.dca_btc",
+    ),
+]
+
+
+def _seed_strategies() -> None:
+    service = StrategyService()
+    for req in _BUILTIN_STRATEGIES:
+        existing = service.get_strategy(req.strategy_id)
+        if existing is None:
+            service.register_strategy(req)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _seed_strategies()
     reconciler_service = reconciler.get_reconciler_service()
     await reconciler_service.start()
     yield

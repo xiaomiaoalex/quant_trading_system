@@ -7,7 +7,7 @@ import asyncio
 import threading
 from functools import lru_cache
 from typing import Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from trader.api.models.schemas import (
@@ -51,7 +51,9 @@ def get_strategy_runner() -> StrategyRunner:
         with _runner_lock:
             # 双重检查锁定模式
             if _strategy_runner_instance is None:
-                _strategy_runner_instance = StrategyRunner()
+                _strategy_runner_instance = StrategyRunner(
+                    event_callback=_create_event_callback()
+                )
     return _strategy_runner_instance
 
 
@@ -504,16 +506,3 @@ async def list_loaded_strategies():
     runner = get_strategy_runner()
     infos = runner.list_strategies()
     return [_info_to_response(info) for info in infos]
-
-
-# 向后兼容：保留 /running 作为 /loaded 的别名
-@router.get(
-    "/v1/strategies/running",
-    response_model=List[StrategyStatusResponse],
-    include_in_schema=False,  # 不在 OpenAPI 文档中显示
-)
-async def list_running_strategies_deprecated():
-    """
-    [DEPRECATED] Use /v1/strategies/loaded instead.
-    """
-    return await list_loaded_strategies()

@@ -49,6 +49,29 @@ export class StrategiesAPI extends APIClient {
   async resumeStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
     return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/resume`)
   }
+
+  async getStrategyEvents(strategyId: string, eventType?: string, limit = 100): Promise<StrategyEventEnvelope[]> {
+    return this.get<StrategyEventEnvelope[]>(`/v1/strategies/${strategyId}/events`, {
+
+
+
+
+
+      params: { event_type: eventType, limit },
+    })
+  }
+
+  async getStrategySignals(strategyId: string, limit = 50): Promise<StrategyEventEnvelope[]> {
+    return this.get<StrategyEventEnvelope[]>(`/v1/strategies/${strategyId}/events/signals`, {
+      params: { limit },
+    })
+  }
+
+  async getStrategyErrors(strategyId: string, limit = 50): Promise<StrategyEventEnvelope[]> {
+    return this.get<StrategyEventEnvelope[]>(`/v1/strategies/${strategyId}/events/errors`, {
+      params: { limit },
+    })
+  }
 }
 
 export const strategiesAPI = new StrategiesAPI()

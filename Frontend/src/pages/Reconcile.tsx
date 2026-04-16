@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useReconcileReport, useDriftEvents, useTriggerReconciliation } from '@/hooks'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { ReconcileSummaryCard, ReconcileDriftTable } from '@/components/reconcile'
-import { formatAPIError } from '@/api/client'
+import { formatAPIError, isAPIError } from '@/api/client'
 
 export function Reconcile() {
   const { data: report, isLoading, isError, error, refetch, isFetching } = useReconcileReport()
@@ -21,9 +21,11 @@ export function Reconcile() {
     setShowTriggerConfirm(false)
   }, [trigger, refetch])
 
+  const is404 = isAPIError(error) && error.code === 'HTTP_404'
+
   if (isLoading) return <div className="p-6"><LoadingState message="Loading reconciliation report..." /></div>
-  if (isError) return <div className="p-6"><ErrorState title="Failed to load reconciliation data" message={formatAPIError(error)} onRetry={() => refetch()} /></div>
-  if (!report) return <div className="p-6"><EmptyState title="No Reconciliation Data" message="Unable to load reconciliation report." action={{ label: 'Retry', onClick: () => refetch() }} /></div>
+  if (isError && !is404) return <div className="p-6"><ErrorState title="Failed to load reconciliation data" message={formatAPIError(error)} onRetry={() => refetch()} /></div>
+  if (!report) return <div className="p-6"><EmptyState title="No Reconciliation Data" message="Trigger a reconciliation to generate a report." action={{ label: 'Trigger', onClick: () => setShowTriggerConfirm(true) }} /></div>
 
   const drifts = driftEvents?.map(e => e.data) ?? report.drifts ?? []
 

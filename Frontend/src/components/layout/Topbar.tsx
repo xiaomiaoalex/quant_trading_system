@@ -7,6 +7,7 @@ const pageTitles: Record<string, string> = {
   '/monitor': 'System Monitor',
   '/strategies': 'Strategy Management',
   '/reconcile': 'Reconciliation',
+  '/chat': 'AI Strategy Chat',
   '/backtests': 'Backtests',
   '/reports': 'Reports',
   '/audit': 'Audit Log',

@@ -11,12 +11,13 @@
 ### 最后更新时间
 - **更新日期**: 2026-04-10 (北京时间)
 - **更新人**: AI Agent
-- **当前阶段**: Phase A - App Shell + Monitor + Strategies + Reconcile
+- **当前阶段**: Phase B - Backtests + Reports + AI Lab
 
 ### 分支状态
-- **主分支**: `frontend/main` (待创建)
-- **开发分支**: `frontend/phase-a-shell` (待创建)
-- **最新提交**: 待更新
+- **主分支**: `main` ✅
+- **Phase A 分支**: `feat/phase-a-frontend` ✅ (已合并)
+- **开发分支**: `feat/phase-b-backtests` (当前)
+- **最新提交**: cd53216 (Phase A 完成)
 
 ---
 
@@ -28,23 +29,23 @@
 
 | ID | 修复项 | 优先级 | 执行状态 | 主责任域 | 协同责任域 | 审核门禁 | 预计完成 | 实际完成 |
 |----|--------|--------|----------|----------|------------|----------|----------|----------|
-| Task 9.1 | 统一 API 前缀与文档路径 | P0 | 🔄 执行中 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.6 天 | - |
-| Task 9.2 | Monitor Snapshot 真聚合化 | P0 | ✅ 已完成 (前端适配) | frontend-console | backend-api, contract-doc, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.25 天 | 2026-04-10 |
-| Task 9.3 | Reconciler 无参触发 | P0 | 🔄 执行中 | backend-api | frontend-console, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1 天 | - |
-| Task 9.8 | strategies/running 语义 | P2 | 🔄 执行中 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.4 天 | - |
+| Task 9.1 | 统一 API 前缀与文档路径 | P0 | ✅ 已完成 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.6 天 | 2026-04-10 |
+| Task 9.2 | Monitor Snapshot 真聚合化 | P0 | ✅ 已完成 | frontend-console | backend-api, contract-doc, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.25 天 | 2026-04-10 |
+| Task 9.3 | Reconciler 无参触发 | P0 | ✅ 已完成 | backend-api | frontend-console, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1 天 | 2026-04-10 |
+| Task 9.8 | strategies/running 语义 | P2 | ✅ 已完成 | contract-doc | backend-api, frontend-console | 自测通过 + 契约一致 + 联调通过 | 0.4 天 | 2026-04-10 |
 
-**Week 1 状态**: 🟡 进行中 (0/4 完成)
+**Week 1 状态**: ✅ 完成 (4/4 完成)
 
 ### Week 2（P1 功能补全）- 2026-04-17 至 2026-04-24
 
 | ID | 修复项 | 优先级 | 执行状态 | 主责任域 | 协同责任域 | 审核门禁 | 预计完成 | 实际完成 |
 |----|--------|--------|----------|----------|------------|----------|----------|----------|
-| Task 9.4 | Backtests 列表与进度 | P1 | ⏳ 待执行 | backend-api | frontend-console, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
-| Task 9.5 | Reports 详情接口 | P1 | ⏳ 待执行 | backend-api | frontend-console, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
-| Task 9.6 | Audit 专用查询接口 | P1 | ⏳ 待执行 | backend-api | frontend-console, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
-| Task 9.7 | Replay 任务状态接口 | P1 | ⏳ 待执行 | backend-api | frontend-console, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.4 | Backtests 列表与进度 | P1 | 🔄 执行中 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.5 | Reports 详情接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.6 | Audit 专用查询接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.7 | Replay 任务状态接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
 
-**Week 2 状态**: ⚪ 未开始 (0/4 完成)
+**Week 2 状态**: 🔄 进行中 (0/4 完成)
 
 ### 并行推进（P2 一致性优化）
 
@@ -58,21 +59,37 @@
 
 ---
 
-## 🏗️ Phase A：App Shell + Monitor + Strategies + Reconcile
+## 🏗️ Phase A：App Shell + Monitor + Strategies + Reconcile + Chat
 
 ### 工期预估
 - **预计**: 2-3 周
 - **前提**: 仅消费现有 API，不等待新增后端接口
-- **当前状态**: 🟡 准备中
+- **当前状态**: ✅ 已完成
 
 ### 页面范围与状态
 
 | 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
 |------|--------|------|------|------|------|------|----------|
-| App Shell | P0 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
-| Monitor | P0 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
-| Strategies | P0 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
-| Reconcile | P0 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| App Shell | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
+| Monitor | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
+| Strategies | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
+| Reconcile | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ✅ 完成 | frontend-console |
+| Chat | P0 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | ⏳ 待测试 | ✅ 完成 | frontend-console |
+
+## 🏗️ Phase B：Backtests + Reports + AI Lab
+
+### 工期预估
+- **预计**: 2 周
+- **前提**: 接受"缺失接口先占位"的交付方式
+- **当前状态**: 🔄 开发中
+
+### 页面范围与状态
+
+| 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
+|------|--------|------|------|------|------|------|----------|
+| Backtests | P1 | 🔄 执行中 | 🔄 执行中 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| Reports | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| AI Lab | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 
 ### 组件开发清单
 
@@ -80,16 +97,16 @@
 
 | 组件名 | 用途 | 复杂度 | 状态 | 依赖 API | 备注 |
 |--------|------|--------|------|----------|------|
-| `AppShell` | 应用主框架 | 中 | ⏳ 待开始 | 无 | 导航、状态条 |
-| `Sidebar` | 侧边导航栏 | 低 | ⏳ 待开始 | 无 | 路由导航 |
-| `Topbar` | 顶部工具栏 | 低 | ⏳ 待开始 | 无 | 全局操作 |
+| `AppShell` | 应用主框架 | 中 | ✅ 已完成 | 无 | 导航、状态条 |
+| `Sidebar` | 侧边导航栏 | 低 | ✅ 已完成 | 无 | 路由导航 |
+| `Topbar` | 顶部工具栏 | 低 | ✅ 已完成 | 无 | 全局操作 |
 | `StatusBadge` | 状态徽章 | 低 | ✅ 已完成 | 无 | normal/degraded/stale/blocked |
 | `MetricCard` | 指标卡片 | 低 | ✅ 已完成 | Monitor | 监控指标展示 |
 | `AdapterHealthTable` | 适配器健康表 | 中 | ✅ 已完成 | Monitor | 健康状态表格 |
-| `StrategyTable` | 策略列表 | 中 | ⏳ 待开始 | Strategies | 策略管理 |
-| `StrategyActionPanel` | 策略操作面板 | 中 | ⏳ 待开始 | Strategies | 危险操作确认 |
-| `ReconcileSummaryCard` | 对账摘要卡片 | 低 | ⏳ 待开始 | Reconcile | 漂移统计 |
-| `ReconcileDriftTable` | 漂移明细表 | 中 | ⏳ 待开始 | Reconcile | 漂移详情 |
+| `StrategyTable` | 策略列表 | 中 | ✅ 已完成 | Strategies | 策略管理 |
+| `StrategyActionPanel` | 策略操作面板 | 中 | ✅ 已完成 | Strategies | 危险操作确认 |
+| `ReconcileSummaryCard` | 对账摘要卡片 | 低 | ✅ 已完成 | Reconcile | 漂移统计 |
+| `ReconcileDriftTable` | 漂移明细表 | 中 | ✅ 已完成 | Reconcile | 漂移详情 |
 | `ConfirmDialog` | 确认对话框 | 低 | ✅ 已完成 | 无 | 危险操作二次确认 |
 
 ### API 依赖状态
@@ -98,40 +115,40 @@
 
 | API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
 |-----|------|----------|----------|----------|------|
-| `/v1/monitor/snapshot` | GET | 🔴 需修复 (Task 9.2) | ✅ 已完成 | ⏸️ 阻塞 | 真聚合化（前端已适配） |
-| `/v1/monitor/alerts` | GET | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | - |
-| `/v1/monitor/rules` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/monitor/rules/{rule_name}` | DELETE | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/monitor/alerts/{rule_name}/clear` | POST | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/monitor/alerts/clear-all` | POST | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | 危险操作 |
-| `/health/ready` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/health/dependency` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/v1/killswitch` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
+| `/v1/monitor/snapshot` | GET | ✅ 已完成 (Task 9.2) | ✅ 已完成 | ✅ 已完成 | 真聚合化 |
+| `/v1/monitor/alerts` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/monitor/rules` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/monitor/rules/{rule_name}` | DELETE | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/monitor/alerts/{rule_name}/clear` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/monitor/alerts/clear-all` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/health/ready` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/health/dependency` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/killswitch` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
 
 #### Strategies API
 
 | API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
 |-----|------|----------|----------|----------|------|
-| `/v1/strategies/registry` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/v1/strategies/registry` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/versions` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/v1/strategies/{id}/params` | GET/POST/PUT | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/load` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/unload` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/start` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/stop` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/pause` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/resume` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | 危险操作 |
-| `/v1/strategies/{id}/status` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/v1/strategies/running` | GET | 🟡 需澄清 (Task 9.8) | ⏳ 待开始 | ⏸️ 阻塞 | 语义澄清 |
+| `/v1/strategies/registry` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/strategies/registry` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/versions` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/strategies/{id}/params` | GET/POST/PUT | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/load` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/unload` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/start` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/stop` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/pause` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/resume` | POST | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | 危险操作 |
+| `/v1/strategies/{id}/status` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/strategies/loaded` | GET | ✅ 已完成 (Task 9.8) | ✅ 已完成 | ✅ 已完成 | 原 running 语义 |
 
 #### Reconcile API
 
 | API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
 |-----|------|----------|----------|----------|------|
-| `/v1/reconciler/report` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `/v1/reconciler/trigger` | POST | 🔴 需修复 (Task 9.3) | ⏳ 待开始 | ⏸️ 阻塞 | 无参触发 |
-| `/v1/events?stream_key=order_drifts` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
+| `/v1/reconciler/report` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+| `/v1/reconciler/trigger` | POST | ✅ 已完成 (Task 9.3) | ✅ 已完成 | ✅ 已完成 | 无参触发 |
+| `/v1/events?stream_key=order_drifts` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
 
 ---
 
@@ -140,13 +157,13 @@
 ### 工期预估
 - **预计**: 2 周
 - **前提**: 后端补齐 P1 接口
-- **当前状态**: ⚪ 未开始
+- **当前状态**: 🔄 开发中
 
 ### 页面范围与状态
 
 | 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
 |------|--------|------|------|------|------|------|----------|
-| Backtests | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| Backtests | P1 | 🔄 执行中 | 🔄 执行中 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 | Reports | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 | AI Lab | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 
@@ -172,7 +189,7 @@
 | `GET /v1/backtests/{run_id}` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 | `GET /v1/backtests` | GET | 🔴 缺失 (Task 9.4) | ⏳ 待开始 | ⏸️ 阻塞 | 列表接口 |
 | `GET /v1/backtests/{run_id}/report` | GET | 🔴 缺失 (Task 9.5) | ⏳ 待开始 | ⏸️ 阻塞 | 报告详情 |
-| `/api/chat/sessions/*` | Various | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
+| `/api/chat/sessions/*` | Various | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | - |
 | `/api/portfolio-research/*` | Various | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 
 ---
@@ -325,6 +342,7 @@
 | Monitor | 查看监控快照、清除告警 | ⏳ 待开始 |
 | Strategies | 加载/卸载策略、修改参数 | ⏳ 待开始 |
 | Reconcile | 触发对账、查看漂移 | ⏳ 待开始 |
+| Chat | 创建会话、发送消息、审批策略 | ⏳ 待开始 |
 | Backtests | 创建回测、查看进度 | ⏳ 待开始 |
 | Reports | 查看报告详情 | ⏳ 待开始 |
 | Audit | 检索审计条目 | ⏳ 待开始 |
