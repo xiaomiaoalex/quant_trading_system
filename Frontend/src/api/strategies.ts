@@ -23,7 +23,7 @@ export class StrategiesAPI extends APIClient {
   }
 
   async loadStrategy(strategyId: string, modulePath: string, version = 'v1', config: Record<string, unknown> = {}): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/load`, {
+    return this.post<{ ok: boolean; message?: string; status?: string }>(`/v1/strategies/${strategyId}/load`, {
       module_path: modulePath,
       version,
       config,

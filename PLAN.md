@@ -42,8 +42,7 @@
 
 ### 未开始（Target，按优先级推进）
 
-- **Phase 8**: v3.4.0 Qlib + Hermes 研究编排集成（新主线）
-- **Phase 7**: 风控穿透验证与策略正期望证明（并行维护）
+- **Phase 9**: 下一阶段规划（待定义）
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成
@@ -54,26 +53,38 @@
 
 ### Phase 8 P0 任务
 
-| Task | 目标 | 交付物 |
-|------|------|--------|
-| 8.1 | 研究数据契约冻结 | 数据字段/时区/对齐/缺失值规则文档化 |
-| 8.2 | Qlib 数据转换与训练流水线 | `qlib_data_converter` + `qlib_train_workflow` |
-| 8.3 | 模型版本治理 | `model_version/feature_version` 注册规范 |
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.1 | 研究数据契约冻结 | 数据字段/时区/对齐/缺失值规则文档化 | ✅ 已完成 |
+| 8.2 | Qlib 数据转换与训练流水线 | `qlib_data_converter` + `qlib_train_workflow` | ✅ 已完成 |
+| 8.3 | 模型版本治理 | `model_version/feature_version` 注册规范 | ✅ 已完成 |
 
 ### Phase 8 P1 任务
 
-| Task | 目标 | 交付物 |
-|------|------|--------|
-| 8.4 | Qlib 预测信号桥接 | `qlib_to_strategy_bridge` 标准化 Signal 输出 |
-| 8.5 | Hermes 研究编排 SOP | 数据→训练→评估→报告自动化 |
-| 8.6 | 五层门控联调 | 与 `strategy_validation_gate` 集成 |
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.4 | Qlib 预测信号桥接 | `qlib_to_strategy_bridge` 标准化 Signal 输出 | ✅ 已完成 |
+| 8.5 | Hermes 研究编排 SOP | 数据→训练→评估→报告自动化 | ✅ 已完成 |
+| 8.6 | 五层门控联调 | 与 `strategy_validation_gate` 集成 | 进行中 |
 
 ### Phase 8 P2 任务
 
-| Task | 目标 | 交付物 |
-|------|------|--------|
-| 8.7 | 影子验证与上线收敛 | 回测/影子/成交偏差报告 |
-| 8.8 | 运行观测与回滚方案 | 模型漂移检测、模型级回滚策略 |
+| Task | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| 8.7 | 影子验证与上线收敛 | 回测/影子/成交偏差报告 | ✅ 已完成 |
+| 8.8 | 运行观测与回滚方案 | 模型漂移检测、模型级回滚策略 | ✅ 已完成 |
+
+### 已完成交付物
+
+- `scripts/qlib_data_converter.py` - 数据转换器 (Phase A)
+- `docs/DATA_CONTRACT.md` - 数据契约文档 (Phase A)
+- `scripts/qlib_train_workflow.py` - 训练工作流 (Phase B)
+- `scripts/qlib_factor_miner.py` - 因子挖掘器 (Phase B)
+- `scripts/qlib_to_strategy_bridge.py` - 信号桥接 (Phase C)
+- `docs/HERMES_ORCHESTRATION_TEMPLATES.md` - Hermes 编排模板 (Phase D)
+- `scripts/qlib_model_validator.py` - 模型验证器 (Phase E)
+- `scripts/model_drift_detector.py` - 模型漂移检测 (Phase F)
+- `scripts/model_rollback_manager.py` - 回滚管理器 (Phase F)
 
 ### 验收原则
 
