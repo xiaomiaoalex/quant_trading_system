@@ -278,7 +278,9 @@ class BinanceConnector:
 
         public_healthy = public_state == StreamState.CONNECTED
         private_healthy = private_state == StreamState.CONNECTED
-        rest_healthy = self._rest_coordinator.get_metrics()["total_alignments"] > 0
+        rest_metrics = self._rest_coordinator.get_metrics()
+        last_rest_success_ts = rest_metrics.get("last_rest_success_ts_ms", 0)
+        rest_healthy = last_rest_success_ts > 0 and (time.time() * 1000 - last_rest_success_ts) < 60000
 
         if public_healthy and private_healthy and rest_healthy:
             overall = AdapterHealth.HEALTHY
@@ -302,7 +304,7 @@ class BinanceConnector:
             metrics={
                 "public": self._public_manager.get_status(),
                 "private": self._private_manager.get_status(),
-                "rest": self._rest_coordinator.get_metrics(),
+                "rest": rest_metrics,
             }
         )
 

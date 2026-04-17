@@ -447,6 +447,42 @@ class MonitorSnapshot(BaseModel):
     freshness: Optional[str] = Field(default=None, description="数据新鲜度时间戳")
 
 
+# ==================== Heartbeat Models ====================
+
+class ProcessHeartbeatSchema(BaseModel):
+    """进程心跳"""
+    event_loop_lag_ms: float
+    last_event_loop_check_ts_ms: int
+    active_tasks: int
+    uptime_seconds: float
+    memory_usage_mb: Optional[float] = None
+    is_healthy: bool = True
+
+
+class ExchangeConnectivitySchema(BaseModel):
+    """交易所连接状态"""
+    public_stream_state: str
+    private_stream_state: str
+    last_pong_ts_ms: Optional[int] = None
+    last_rest_success_ts_ms: Optional[int] = None
+    overall: str = Field(description="HEALTHY/DEGRADED/UNHEALTHY")
+
+
+class FrontendConnectionSchema(BaseModel):
+    """前端连接状态"""
+    active_sessions: int = 0
+    last_seen_ts_ms: Optional[int] = None
+    status: str = Field(description="IDLE/HEALTHY/DEGRADED")
+
+
+class HeartbeatResponse(BaseModel):
+    """三层心跳响应"""
+    timestamp: str = Field(default_factory=_utc_time)
+    process: ProcessHeartbeatSchema
+    exchange: ExchangeConnectivitySchema
+    frontend: FrontendConnectionSchema
+
+
 # ==================== Audit Models (Task 9.6) ====================
 
 class AuditEntry(BaseModel):

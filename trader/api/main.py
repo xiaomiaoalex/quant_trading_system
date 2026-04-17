@@ -6,9 +6,10 @@ Main application entry point for the Systematic Trader Control Plane API.
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI
 
@@ -32,7 +33,10 @@ from trader.api.routes import (
 from trader.services.reconciler_service import ReconcilerService
 from trader.services.strategy import StrategyService
 from trader.services.order import OrderService
+from trader.services.heartbeat import ProcessHeartbeatService
+from trader.api.connections import ConnectionManager
 from trader.api.models.schemas import StrategyRegisterRequest
+from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
@@ -136,13 +140,54 @@ async def lifespan(app: FastAPI):
             logger.error(f"[Reconciler] exchange_orders_getter failed: {e}")
             return []
 
+    _connector: Optional[BinanceConnector] = None
+
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if api_key and secret_key:
+        try:
+            _connector = BinanceConnector(
+                api_key=api_key,
+                secret_key=secret_key,
+                streams=["btcusdt@trade", "btcusdt@kline_1m"],
+            )
+            await _connector.start()
+            logger.info("[Main] BinanceConnector started")
+        except Exception as e:
+            logger.error(f"[Main] Failed to start BinanceConnector: {e}")
+            _connector = None
+    else:
+        logger.warning("[Main] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping BinanceConnector")
+
+    def _connector_getter() -> Optional[BinanceConnector]:
+        return _connector
+
     reconciler_service = reconciler.get_reconciler_service()
     reconciler_service.configure_periodic_reconciliation(
         _local_orders_getter,
         _exchange_orders_getter,
     )
     await reconciler_service.start()
+
+    _heartbeat_service = ProcessHeartbeatService()
+    await _heartbeat_service.start()
+
+    _connection_manager = ConnectionManager()
+    await _connection_manager.start()
+
+    health.configure_heartbeat(
+        heartbeat_service=_heartbeat_service,
+        connection_manager=_connection_manager,
+        connector_getter=_connector_getter,
+    )
+
     yield
+    if _connector:
+        await _connector.stop()
+        logger.info("[Main] BinanceConnector stopped")
+    await _heartbeat_service.stop()
+    await _connection_manager.stop()
     await reconciler_service.stop()
 
 

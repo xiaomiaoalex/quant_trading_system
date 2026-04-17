@@ -277,6 +277,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 url,
                 ping_interval=None,
                 ping_timeout=self._config.pong_timeout,
+                pong_callback=self.on_pong,
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
@@ -533,7 +534,7 @@ class PrivateStreamManager(BaseStreamFSM):
             except Exception as e:
                 logger.error(f"[{self._name}] Stale check error: {e}")
 
-    def on_pong(self) -> None:
+    def on_pong(self, data: bytes = b"") -> None:
         """处理 Pong 响应"""
         self._pong_timeout_counter = 0
 
