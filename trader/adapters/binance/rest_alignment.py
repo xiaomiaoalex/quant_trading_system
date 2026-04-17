@@ -60,6 +60,7 @@ class AlignmentMetrics:
     last_alignment_ts: float = 0.0
     last_alignment_reason: str = ""
     last_error: Optional[str] = None
+    last_rest_success_ts_ms: int = 0
 
 
 class RESTAlignmentCoordinator:
@@ -206,6 +207,7 @@ class RESTAlignmentCoordinator:
             self._metrics.last_alignment_ts = time.time()
             self._metrics.last_alignment_reason = reason
             self._metrics.last_error = None
+            self._metrics.last_rest_success_ts_ms = int(time.time() * 1000)
 
             self._backoff.reset("alignment")
 
@@ -344,5 +346,6 @@ class RESTAlignmentCoordinator:
             "last_alignment_ts": self._metrics.last_alignment_ts,
             "last_alignment_reason": self._metrics.last_alignment_reason,
             "last_error": self._metrics.last_error,
+            "last_rest_success_ts_ms": self._metrics.last_rest_success_ts_ms,
             "rate_budget": self._rate_budget.get_state(),
         }
