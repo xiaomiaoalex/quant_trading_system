@@ -6,9 +6,17 @@ Main application entry point for the Systematic Trader Control Plane API.
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Dict, Any
+
+# 自动加载项目根目录的 .env 文件
+_env_file = Path(__file__).parent.parent.parent / ".env"
+if _env_file.exists():
+    from dotenv import load_dotenv
+    load_dotenv(_env_file)
 
 from fastapi import FastAPI
 
@@ -33,6 +41,7 @@ from trader.services.reconciler_service import ReconcilerService
 from trader.services.strategy import StrategyService
 from trader.services.order import OrderService
 from trader.api.models.schemas import StrategyRegisterRequest
+from trader.api.env_config import get_binance_recv_window
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +107,11 @@ async def lifespan(app: FastAPI):
 
     async def _exchange_orders_getter() -> List[Dict[str, Any]]:
         try:
-            import os
+            # 检查是否禁用交易所对账
+            if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
+                logger.info("[Reconciler] exchange_orders_getter disabled by DISABLE_EXCHANGE_RECONCILIATION=true")
+                return []
+
             from trader.adapters.broker.binance_spot_demo_broker import (
                 BinanceSpotDemoBroker,
                 BinanceSpotDemoBrokerConfig,
@@ -114,7 +127,12 @@ async def lifespan(app: FastAPI):
                 )
                 return []
 
-            config = BinanceSpotDemoBrokerConfig.for_demo(api_key, secret_key)
+            recv_window = get_binance_recv_window()
+            config = BinanceSpotDemoBrokerConfig.for_demo(
+                api_key,
+                secret_key,
+                recv_window=recv_window,
+            )
             broker = BinanceSpotDemoBroker(config)
             await broker.connect()
             try:
@@ -137,11 +155,16 @@ async def lifespan(app: FastAPI):
             return []
 
     reconciler_service = reconciler.get_reconciler_service()
-    reconciler_service.configure_periodic_reconciliation(
-        _local_orders_getter,
-        _exchange_orders_getter,
-    )
-    await reconciler_service.start()
+    
+    # 检查是否启用交易所对账
+    if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
+        logger.info("[Reconciler] Exchange reconciliation disabled")
+    else:
+        reconciler_service.configure_periodic_reconciliation(
+            _local_orders_getter,
+            _exchange_orders_getter,
+        )
+        await reconciler_service.start()
     yield
     await reconciler_service.stop()
 
