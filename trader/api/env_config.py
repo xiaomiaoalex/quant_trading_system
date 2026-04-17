@@ -14,6 +14,7 @@ BINANCE_RECV_WINDOW_ENV = "BINANCE_RECV_WINDOW"
 BINANCE_RECV_WINDOW_DEFAULT = 5000
 BINANCE_RECV_WINDOW_MIN = 1
 BINANCE_RECV_WINDOW_MAX = 60000
+RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES_ENV = "RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES"
 
 
 def get_binance_recv_window(env: Mapping[str, str] | None = None) -> int:
@@ -56,3 +57,30 @@ def get_binance_recv_window(env: Mapping[str, str] | None = None) -> int:
 
     return value
 
+
+def get_reconciler_exchange_client_order_prefixes(
+    env: Mapping[str, str] | None = None,
+) -> list[str]:
+    """
+    解析 Reconciler 交易所订单前缀过滤配置。
+
+    环境变量:
+    - RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES
+      逗号分隔前缀列表（如 "fire_test_,mybot_"）
+    """
+    source = env if env is not None else os.environ
+    raw = source.get(RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES_ENV)
+    if raw is None or str(raw).strip() == "":
+        return []
+
+    seen: set[str] = set()
+    prefixes: list[str] = []
+    for item in str(raw).split(","):
+        prefix = item.strip()
+        if not prefix:
+            continue
+        if prefix in seen:
+            continue
+        seen.add(prefix)
+        prefixes.append(prefix)
+    return prefixes

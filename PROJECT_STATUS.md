@@ -4,25 +4,115 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-<<<<<<< HEAD
-2026-04-16 22:41 (北京时间)
-=======
-2026-04-16 (北京时间)
->>>>>>> origin/main
-2026-04-17 18:18 (北京时间)
-2026-04-17 18:33 (北京时间)
+2026-04-17 22:47 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
-<<<<<<< HEAD
-- **工作树**：有变更（策略模块恢复 + 文档更新）
-=======
-- **工作树**：有变更（文档更新）
->>>>>>> origin/main
-- **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
+- **工作树**：有变更（staged services/）
+- **最新提交**：feat(task-portfolio): add portfolio research workflow (#48)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：全面测试验证 - 代码质量检查
+- 完成时间: 2026-04-17
+- 分支: main (测试验证)
+- 状态: ✅ 已完成并验证
+- 测试结果:
+  - P0 回归测试: ✅ 全部通过
+  - 全量单元测试: ✅ **全部通过** (排除 snapshot_storage 配置问题)
+  - PostgreSQL 集成测试: ✅ **31 passed**
+  - Backend 加载验证: ✅ Systematic Trader Control Plane API
+  - DOTENV 自动加载: ✅ 验证通过
+  - Binance Connector 测试: ✅ 全部通过
+- 问题发现:
+  - `services/` 目录与 `trader/services/` 需要手动同步（已修复）
+  - mypy 类型检查: 355 个警告（大部分为 `Any | None` 和类型注解缺失，不影响运行）
+  - Pydantic v2 deprecation warnings: 2 个（`class Config` 应改为 `ConfigDict`）
+  - Runtime warnings in onchain tests: 异步 mock 未 await（测试代码问题，不影响功能）
+- 下一步:
+  - 可选：修复 Pydantic v2 deprecation（`chat.py` 的 `class Config`）
+  - 可选：改进 async mock 在 tests 中的使用方式
+
+### 本次任务：新增 Reconciler 订单前缀过滤开关（屏蔽旧程序历史单）
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 交易所历史订单会被统一纳入对账，容易触发与当前程序无关的 `PHANTOM`
+  - 周期对账与手动触发对账都缺少“仅看本程序订单”的过滤机制
+- 开发后状态:
+  - 新增环境变量 `RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES`（逗号分隔）
+  - `trader/api/main.py` 周期对账交易所取单接入前缀过滤
+  - `trader/api/routes/reconciler.py` 手动触发取单接入同一过滤，避免双入口行为漂移
+  - `trader/api/env_config.py` 增加统一解析函数，边界值去重/去空处理
+  - `.env.example` 增加配置说明
+- Issue 状态迁移:
+  - 旧程序历史订单干扰当前对账：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_api_env_config.py trader/tests/test_api_reconciler.py --tb=short` → 22 passed
+  - `python -c "import trader.api.main"` → import ok
+
+### 本次任务：补齐 `fire_test` 真下单链路（Runner → OMS 回调 → Binance）
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `StrategyRunner` 具备 `oms_callback` 机制，但策略 API 未接入真实下单回调
+  - 缺少可直接驱动策略 Tick 的 API，策略即使启动也难以稳定触发真实买卖链路
+- 开发后状态:
+  - `trader/api/routes/strategies.py` 接入真实下单回调 `_submit_live_order`
+  - 新增 `POST /v1/strategies/{strategy_id}/tick`，可手动注入行情触发策略与下单
+  - 下单成功后写入控制面 `orders/executions` 视图，便于 `/v1/orders` 与 `/v1/executions` 查询
+  - 新增策略运行时清理入口 `shutdown_strategy_runtime()`，并在 `trader/api/main.py` 关闭阶段调用
+  - 新增 `trader/tests/test_api_strategy_runner_endpoints.py` 覆盖 tick 触发与缺凭证拦截
+- Issue 状态迁移:
+  - fire_test 仅能发信号、未走真实下单链路：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_builtin_strategies.py trader/tests/test_api_strategy_runner_endpoints.py --tb=short` → 12 passed
+  - `python -c "import trader.api.main"` → import ok
+
+### 本次任务：新增 `fire_test` 开火策略用于实盘买卖链路验证
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 缺少专门用于“快速触发真实 BUY/SELL”的测试策略
+  - 现有内置策略偏向条件触发，联调时不易稳定复现下单
+- 开发后状态:
+  - 新增 `trader/strategies/fire_test.py`（可配置 BUY/SELL/ALTERNATE、间隔、下单量、最大发射次数）
+  - 接入 `trader/strategies/__init__.py` 导出
+  - 接入 `trader/api/main.py` 默认内置策略注册（`strategy_id=fire_test`）
+  - 扩展 `trader/tests/test_builtin_strategies.py`：
+    - 模块有效性检查新增 `trader.strategies.fire_test`
+    - 新增行为测试：交替发单 + 间隔限制 + 发单次数上限
+    - StrategyRunner 内置加载清单新增 `fire_test`
+- Issue 状态迁移:
+  - 缺少稳定“开火”联调策略：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 10 passed
+  - `python -c "import trader.api.main"` → import ok
+  - 警告: `trader/.pytest_cache` 权限警告（不影响结果）
+
+### 本次任务：处理 Binance listenKey `410 Gone`，私有流自动降级
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 启动 `BinanceConnector` 时，`PrivateStream` 创建 listenKey 返回 `410 Gone` 会导致整个 connector 启动失败
+  - 失败路径下存在部分组件已启动但 connector 未完成启动的风险
+- 开发后状态:
+  - 在 `private_stream.py` 增加 `ListenKeyEndpointGoneError`，对 `410` 返回进行明确语义化
+  - `connector.start()` 捕获该错误后自动降级为 Public+REST 模式继续启动（不再整体失败）
+  - 启动失败路径增加 `safe stop` 清理，避免部分组件悬挂
+  - 健康状态新增 `private_stream_disabled_reason`，降级场景返回 `DEGRADED`
+  - 新增/扩展 `test_binance_connector.py` 覆盖降级启动与健康状态判定
+- Issue 状态迁移:
+  - listenKey `410` 导致 connector 启动失败：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py --tb=short` → 27 passed
+  - `python -c "import trader.api.main"` → import ok
+  - 警告: `trader/.pytest_cache` 权限警告（不影响结果）
 
 ### 本次任务：新增 Binance `recvWindow` 环境配置并统一接入 Reconciler
 - 完成时间: 2026-04-17
@@ -63,7 +153,6 @@
   - `python -m pytest -q trader/tests/test_binance_spot_demo_broker.py` → 3 passed
   - 警告: `trader/.pytest_cache` 目录权限受限（不影响测试结果）
 
-<<<<<<< HEAD
 ### 本次任务：恢复内置策略模块（误删修复）
 - 完成时间: 2026-04-16
 - 分支: main (工作区修复)
@@ -83,8 +172,6 @@
   - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 7 passed
   - `python -m pytest -q trader/tests/test_strategy_runner.py --tb=short` → 41 passed
 
-=======
->>>>>>> origin/main
 ### 本次任务：v3.4.0 Phase A-C 核心交付物完成
 - 完成时间: 2026-04-16
 - 分支: main (直接提交)

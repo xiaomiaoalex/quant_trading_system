@@ -43,7 +43,10 @@ from trader.services.order import OrderService
 from trader.services.heartbeat import ProcessHeartbeatService
 from trader.api.connections import ConnectionManager
 from trader.api.models.schemas import StrategyRegisterRequest
-from trader.api.env_config import get_binance_recv_window
+from trader.api.env_config import (
+    get_binance_recv_window,
+    get_reconciler_exchange_client_order_prefixes,
+)
 from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
@@ -140,6 +143,21 @@ async def lifespan(app: FastAPI):
             await broker.connect()
             try:
                 broker_orders = await broker.get_open_orders()
+                prefixes = get_reconciler_exchange_client_order_prefixes()
+                if prefixes:
+                    before_count = len(broker_orders)
+                    broker_orders = [
+                        order
+                        for order in broker_orders
+                        if order.client_order_id
+                        and any(order.client_order_id.startswith(prefix) for prefix in prefixes)
+                    ]
+                    logger.info(
+                        "[Reconciler] Applied exchange order prefix filter: prefixes=%s, before=%s, after=%s",
+                        prefixes,
+                        before_count,
+                        len(broker_orders),
+                    )
                 return [
                     {
                         "client_order_id": order.client_order_id,
