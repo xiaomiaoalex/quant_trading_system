@@ -1,117 +1,88 @@
 """
-Portfolio Research Workflow - 组合研究工作流
-==========================================
+Portfolio Research Workflow - 研究工作流编排器
+============================================
 
-整合 Committee 各组件的研究工作流。
+负责协调 Portfolio Committee 的完整研究流程。
 
 流程：
 1. 接收研究请求
-2. 并行运行 Specialist Agents
-3. 对每个 proposal 运行 Red Team Agents
-4. 选择通过审查的 proposals
-5. 构建 PortfolioProposal
-6. 进入 HITL 审批流程
+2. 通过 Router 路由到合适的 Specialist Agents
+3. Specialist Agents 并行生成 SleeveProposal
+4. Red Team Agents 审查 proposals
+5. Portfolio Constructor 构建组合
+6. 保存 CommitteeRun 到存储
 
 设计原则：
-1. 所有步骤必须可追踪（trace_id）
-2. 所有操作必须记录审计日志
-3. 失败时必须 Fail-Closed
+1. 所有 Agent 只做研究与 proposal，不直接下单
+2. 必须经过 HITL 审批才能进入 backtest
+3. 所有操作可审计回放
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+import time
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from insight.committee.orthogonality import OrthogonalityAgent
-from insight.committee.portfolio_constructor import PortfolioConstructor
-from insight.committee.red_team import RiskCostRedTeamAgent
-from insight.committee.router import CommitteeRouter
-from insight.committee.schemas import (
-    AgentOutput,
+from insight.committee import (
     CommitteeRun,
     CommitteeRunStatus,
-    PortfolioProposal,
     ProposalStatus,
     ReviewReport,
     ReviewResult,
     ReviewVerdict,
     SleeveProposal,
-    SpecialistType,
-    generate_trace_id,
 )
-from insight.committee.specialists import SpecialistConfig
+from insight.committee.orthogonality import OrthogonalityAgent
+from insight.committee.portfolio_constructor import PortfolioConstructor
+from insight.committee.red_team import RiskCostRedTeamAgent
+from insight.committee.router import CommitteeRouter
+from insight.committee.schemas import SpecialistType
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class WorkflowConfig:
     """工作流配置"""
-    # Specialist 配置
-    specialist_feature_version: str = "v1.0.0"
-    specialist_prompt_version: str = "v1.0.0"
-    
-    # 正交性阈值
-    min_orthogonality_score: float = 0.7
-    
-    # 风险成本阈值
-    min_risk_score: float = 0.5
-    min_cost_score: float = 0.5
-    
-    # 组合构建
-    max_sleeves_per_portfolio: int = 5
-    default_total_capital: Decimal = Decimal("10000")
-    
-    # 并行执行
+    feature_version: str = "v1.0.0"
+    prompt_version: str = "v1.0.0"
+    context_package_version: str = "v1.0.0"
     max_parallel_specialists: int = 5
-    specialist_timeout_seconds: float = 60.0
+    enable_red_team: bool = True
+    enable_orthogonality_check: bool = True
+    store_results: bool = True
 
 
-@dataclass
+@dataclass(slots=True)
 class WorkflowResult:
-    """工作流结果"""
+    """工作流执行结果"""
     success: bool
     committee_run: CommitteeRun
-    portfolio_proposal: Optional[PortfolioProposal]
-    error_message: Optional[str]
     execution_time_seconds: float
+    error_message: Optional[str] = None
 
 
 class PortfolioResearchWorkflow:
     """
-    Portfolio Research Workflow
-    
-    整合 Committee 各组件的完整研究工作流。
+    Portfolio Committee 研究工作流编排器
+
+    负责协调完整的委员会研究流程。
     """
-    
+
     def __init__(self, config: Optional[WorkflowConfig] = None):
         self.config = config or WorkflowConfig()
-        
-        # 初始化组件
-        specialist_config = SpecialistConfig(
-            feature_version=self.config.specialist_feature_version,
-            prompt_version=self.config.specialist_prompt_version,
-        )
-        self.router = CommitteeRouter(specialist_config)
-        self.orthogonality_agent = OrthogonalityAgent(
-            min_score=self.config.min_orthogonality_score
-        )
-        self.risk_cost_agent = RiskCostRedTeamAgent(
-            min_cost_score=self.config.min_cost_score,
-        )
-        self.portfolio_constructor = PortfolioConstructor(
-            max_sleeves=self.config.max_sleeves_per_portfolio,
-            default_total_capital=self.config.default_total_capital,
-        )
-        
-        # 状态
-        self._active_runs: Dict[str, CommitteeRun] = {}
-    
+        self._router = CommitteeRouter()
+        self._portfolio_constructor = PortfolioConstructor()
+        self._risk_cost_red_team = RiskCostRedTeamAgent()
+        self._orthogonality_agent = OrthogonalityAgent()
+        self._initialized_at = datetime.now(timezone.utc)
+
     async def run(
         self,
         research_request: str,
@@ -119,267 +90,281 @@ class PortfolioResearchWorkflow:
         total_capital: Optional[Decimal] = None,
     ) -> WorkflowResult:
         """
-        运行完整的研究工作流
-        
+        执行完整的研究工作流
+
         Args:
             research_request: 研究请求
-            context: 上下文信息（可选）
-            total_capital: 总资金（可选）
-            
+            context: 上下文信息（市场数据、特征等）
+            total_capital: 总资金
+
         Returns:
-            WorkflowResult: 工作流结果
+            WorkflowResult: 工作流执行结果
         """
-        start_time = datetime.now(timezone.utc)
-        trace_id = generate_trace_id()
-        
-        logger.info(f"Starting portfolio research workflow: trace_id={trace_id}")
-        
-        # 创建 CommitteeRun
-        run = CommitteeRun(
-            run_id=f"run_{trace_id}",
+        run_id = str(uuid.uuid4())
+        trace_id = str(uuid.uuid4())
+        start_time = time.time()
+
+        committee_run = CommitteeRun(
+            run_id=run_id,
             research_request=research_request,
-            context_package_version=self.config.specialist_feature_version,
-            status=CommitteeRunStatus.RUNNING,
+            context_package_version=self.config.context_package_version,
+            feature_version=self.config.feature_version,
+            prompt_version=self.config.prompt_version,
             trace_id=trace_id,
+            status=CommitteeRunStatus.RUNNING,
         )
-        self._active_runs[run.run_id] = run
-        
+
         try:
-            # Step 1: 运行 Specialist Agents（并行）
-            specialist_outputs = await self._run_specialists(
+            context = context or {}
+
+            logger.info(
+                f"Starting portfolio research workflow: run_id={run_id}, "
+                f"request={research_request[:50]}..., trace_id={trace_id}"
+            )
+
+            specialist_outputs = self._run_specialists(
                 research_request, context
             )
-            run.sleeve_proposals = [
-                SleeveProposal(**output.content)
-                for output in specialist_outputs
-                if output.validation_result.is_valid
+
+            proposals = self._extract_proposals(specialist_outputs)
+
+            if not proposals:
+                raise ValueError("No valid proposals generated from specialists")
+
+            committee_run.sleeve_proposals = proposals
+
+            review_reports = self._run_red_team(proposals, context)
+            committee_run.review_results = [
+                ReviewResult(
+                    reviewer_type=r.reviewer_type,
+                    verdict=r.verdict,
+                    concerns=r.concerns,
+                    suggestions=r.suggestions,
+                    scores={
+                        "risk_score": r.risk_score or 0.0,
+                        "cost_score": r.cost_score or 0.0,
+                        "orthogonality_score": getattr(r, 'orthogonality_score', None) or 0.0,
+                    },
+                )
+                for r in review_reports
             ]
-            
-            if not run.sleeve_proposals:
-                return self._create_error_result(
-                    run, start_time,
-                    "No valid sleeve proposals generated"
+
+            valid_proposals = self._filter_valid_proposals(proposals, review_reports)
+
+            if valid_proposals:
+                construction_result = self._portfolio_constructor.construct(
+                    approved_proposals=valid_proposals,
+                    review_reports=review_reports,
+                    total_capital=total_capital,
                 )
-            
-            # Step 2: 运行 Red Team Agents（串行，每个 proposal）
-            review_results = await self._run_red_teams(run.sleeve_proposals, context)
-            run.review_results = review_results
-            
-            # Step 3: 选择通过审查的 proposals
-            approved_proposals = self._select_approved_proposals(
-                run.sleeve_proposals, review_results
+                committee_run.portfolio_proposal = construction_result.portfolio_proposal
+
+            committee_run.status = CommitteeRunStatus.COMPLETED
+            committee_run.final_status = ProposalStatus.PASSED
+
+            execution_time = time.time() - start_time
+
+            if self.config.store_results:
+                await self._save_committee_run(committee_run)
+
+            logger.info(
+                f"Portfolio research workflow completed: run_id={run_id}, "
+                f"sleeves={len(proposals)}, execution_time={execution_time:.2f}s"
             )
-            
-            if not approved_proposals:
-                return self._create_error_result(
-                    run, start_time,
-                    "No proposals passed review"
-                )
-            
-            # Step 4: 构建 PortfolioProposal
-            construction_result = self.portfolio_constructor.construct(
-                approved_proposals,
-                self._get_review_reports_for_proposals(review_results, approved_proposals),
-                total_capital,
-            )
-            run.portfolio_proposal = construction_result.portfolio_proposal
-            
-            # Step 5: 完成
-            run.status = CommitteeRunStatus.COMPLETED
-            run.final_status = ProposalStatus.PASSED
-            
-            execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
-            result = WorkflowResult(
+
+            return WorkflowResult(
                 success=True,
-                committee_run=run,
-                portfolio_proposal=run.portfolio_proposal,
-                error_message=None,
+                committee_run=committee_run,
                 execution_time_seconds=execution_time,
             )
-            
-            logger.info(
-                f"Portfolio research workflow completed: "
-                f"run_id={run.run_id}, sleeves={len(run.sleeve_proposals)}, "
-                f"approved={len(approved_proposals)}, "
-                f"execution_time={execution_time:.2f}s"
-            )
-            
-            return result
-            
+
         except Exception as e:
-            logger.error(f"Portfolio research workflow failed: {e}", exc_info=True)
-            run.status = CommitteeRunStatus.FAILED
-            run.final_status = ProposalStatus.REJECTED
-            
-            execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-            
+            logger.error(f"Portfolio research workflow failed: run_id={run_id}, error={e}", exc_info=True)
+
+            committee_run.status = CommitteeRunStatus.FAILED
+            committee_run.final_status = ProposalStatus.REJECTED
+
+            execution_time = time.time() - start_time
+
             return WorkflowResult(
                 success=False,
-                committee_run=run,
-                portfolio_proposal=None,
-                error_message=str(e),
+                committee_run=committee_run,
                 execution_time_seconds=execution_time,
+                error_message=str(e),
             )
-        finally:
-            # 清理活跃运行
-            if run.run_id in self._active_runs:
-                del self._active_runs[run.run_id]
-    
-    async def _run_specialists(
+
+    def _run_specialists(
         self,
         research_request: str,
-        context: Optional[Dict[str, Any]],
-    ) -> List[AgentOutput]:
-        """
-        运行 Specialist Agents
-        """
-        # 路由到合适的 specialist
-        specialist_types = self.router.route(research_request)
-        
+        context: Dict[str, Any],
+    ) -> List[Any]:
+        """运行 Specialist Agents - agent.research() 是同步方法"""
+
+        matched_types = self._router.route(research_request)
+
         logger.info(
-            f"Routed to specialists: {[t.value for t in specialist_types]}"
+            f"Routing to specialists: {[t.value for t in matched_types]}"
         )
-        
-        # 异步并行运行
-        tasks = [
-            self.router.get_agent(st).research(research_request, context)
-            for st in specialist_types
-        ]
-        
-        outputs = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # 处理异常
-        valid_outputs: List[AgentOutput] = []
-        for i, output in enumerate(outputs):
-            if isinstance(output, Exception):
-                logger.warning(
-                    f"Specialist {list(specialist_types)[i].value} failed: {output}"
-                )
-            else:
-                valid_outputs.append(output)
-        
-        return valid_outputs
-    
-    async def _run_red_teams(
+
+        outputs = []
+        for specialist_type in matched_types:
+            agent = self._router.get_agent(specialist_type)
+            try:
+                output = agent.research(research_request, context)
+                outputs.append(output)
+            except Exception as e:
+                logger.error(f"Specialist {specialist_type} failed: {e}")
+
+        return outputs
+
+    def _extract_proposals(self, outputs: List[Any]) -> List[SleeveProposal]:
+        """从 Agent 输出中提取有效的 SleeveProposal"""
+        proposals = []
+
+        for output in outputs:
+            if not hasattr(output, 'validation_result') or not output.validation_result.is_valid:
+                logger.warning(f"Skipping invalid output: {output.trace_id if hasattr(output, 'trace_id') else 'unknown'}")
+                continue
+
+            if not output.content:
+                continue
+
+            try:
+                proposal_data = output.content
+
+                if isinstance(proposal_data, dict):
+                    proposal = SleeveProposal(
+                        proposal_id=proposal_data.get("proposal_id", str(uuid.uuid4())),
+                        specialist_type=SpecialistType(proposal_data.get("specialist_type", "trend")),
+                        hypothesis=proposal_data.get("hypothesis", ""),
+                        required_features=proposal_data.get("required_features", []),
+                        regime=proposal_data.get("regime", ""),
+                        failure_modes=proposal_data.get("failure_modes", []),
+                        evidence_refs=proposal_data.get("evidence_refs", []),
+                        feature_version=output.feature_version,
+                        prompt_version=output.prompt_version,
+                        trace_id=output.trace_id,
+                    )
+                    proposals.append(proposal)
+                elif isinstance(proposal_data, SleeveProposal):
+                    proposals.append(proposal_data)
+            except Exception as e:
+                logger.error(f"Failed to extract proposal: {e}")
+
+        return proposals
+
+    def _run_red_team(
         self,
         proposals: List[SleeveProposal],
-        context: Optional[Dict[str, Any]],
-    ) -> List[ReviewResult]:
-        """
-        运行 Red Team Agents
-        """
-        review_results: List[ReviewResult] = []
-        
-        for proposal in proposals:
-            # 1. Orthogonality 检查
-            ortho_report = self.orthogonality_agent.review(
-                proposal,
-                []  # 暂时不传 existing proposals
-            )
-            
-            # 2. Risk/Cost 检查
-            risk_report = self.risk_cost_agent.review(proposal, context)
-            
-            # 合并结果
-            review_results.append(ReviewResult(
-                reviewer_type="orthogonality",
-                verdict=ortho_report.verdict,
-                concerns=ortho_report.concerns,
-                suggestions=ortho_report.suggestions,
-                scores={"orthogonality": ortho_report.orthogonality_score or 0.0},
-            ))
-            
-            review_results.append(ReviewResult(
-                reviewer_type="risk_cost",
-                verdict=risk_report.verdict,
-                concerns=risk_report.concerns,
-                suggestions=risk_report.suggestions,
-                scores={
-                    "risk": risk_report.risk_score or 0.0,
-                    "cost": risk_report.cost_score or 0.0,
-                },
-            ))
-        
-        return review_results
-    
-    def _select_approved_proposals(
-        self,
-        proposals: List[SleeveProposal],
-        review_results: List[ReviewResult],
-    ) -> List[SleeveProposal]:
-        """
-        选择通过审查的 proposals
-        """
-        approved: List[SleeveProposal] = []
-        
-        for proposal in proposals:
-            # 获取该 proposal 的 review results
-            proposal_reviews = [
-                r for r in review_results
-                # 这里需要通过其他方式关联，暂时简化处理
-            ]
-            
-            # 检查是否所有 review 都通过
-            # 简化：只要有一个 review 是 FAIL 就排除
-            all_passed = True
-            for result in review_results:
-                if result.verdict == ReviewVerdict.FAIL:
-                    all_passed = False
-                    break
-            
-            if all_passed:
-                approved.append(proposal)
-        
-        return approved
-    
-    def _get_review_reports_for_proposals(
-        self,
-        review_results: List[ReviewResult],
-        proposals: List[SleeveProposal],
+        context: Dict[str, Any],
     ) -> List[ReviewReport]:
-        """
-        将 ReviewResult 转换为 ReviewReport
-        """
-        reports: List[ReviewReport] = []
-        
+        """运行 Red Team Agents 审查 - review() 是同步方法"""
+        if not self.config.enable_red_team:
+            return []
+
+        review_reports = []
+
         for proposal in proposals:
-            for result in review_results:
-                report = ReviewReport(
-                    report_id=f"report_{generate_trace_id()}",
-                    proposal_id=proposal.proposal_id,
-                    reviewer_type=result.reviewer_type,
-                    verdict=result.verdict,
-                    concerns=result.concerns,
-                    suggestions=result.suggestions,
-                    orthogonality_score=result.scores.get("orthogonality"),
-                    risk_score=result.scores.get("risk"),
-                    cost_score=result.scores.get("cost"),
-                )
-                reports.append(report)
-        
-        return reports
-    
-    def _create_error_result(
+            risk_cost_report = self._risk_cost_red_team.review(proposal, context)
+            review_reports.append(risk_cost_report)
+
+            if self.config.enable_orthogonality_check and len(proposals) > 1:
+                other_proposals = [p for p in proposals if p.proposal_id != proposal.proposal_id]
+                ortho_report = self._orthogonality_agent.review(proposal, other_proposals)
+                review_reports.append(ortho_report)
+
+        return review_reports
+
+    def _filter_valid_proposals(
         self,
-        run: CommitteeRun,
-        start_time: datetime,
-        error_message: str,
-    ) -> WorkflowResult:
-        """创建错误结果"""
-        run.status = CommitteeRunStatus.FAILED
-        run.final_status = ProposalStatus.REJECTED
-        
-        execution_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-        
-        return WorkflowResult(
-            success=False,
-            committee_run=run,
-            portfolio_proposal=None,
-            error_message=error_message,
-            execution_time_seconds=execution_time,
-        )
-    
-    def get_active_run(self, run_id: str) -> Optional[CommitteeRun]:
-        """获取活跃的运行"""
-        return self._active_runs.get(run_id)
+        proposals: List[SleeveProposal],
+        review_reports: List[ReviewReport],
+    ) -> List[SleeveProposal]:
+        """根据审查结果过滤有效的 proposals"""
+        valid_proposals = []
+
+        for proposal in proposals:
+            proposal_reviews = [r for r in review_reports if r.proposal_id == proposal.proposal_id]
+
+            all_passed = all(
+                r.verdict in (ReviewVerdict.PASS, ReviewVerdict.SKIP, ReviewVerdict.CONDITIONAL)
+                for r in proposal_reviews
+            )
+
+            if all_passed or not proposal_reviews:
+                valid_proposals.append(proposal)
+            else:
+                logger.info(
+                    f"Proposal {proposal.proposal_id[:8]} rejected by red team: "
+                    f"verdicts={[r.verdict.value for r in proposal_reviews]}"
+                )
+
+        return valid_proposals
+
+    async def _save_committee_run(self, run: CommitteeRun) -> None:
+        """保存 CommitteeRun 到存储"""
+        try:
+            from trader.adapters.persistence.portfolio_proposal_store import PortfolioProposalStore
+
+            store = PortfolioProposalStore()
+            await store.save_committee_run(run.to_dict())
+
+            logger.info(f"CommitteeRun saved: run_id={run.run_id}")
+        except Exception as e:
+            logger.error(f"Failed to save CommitteeRun: {e}")
+
+    async def get_run(self, run_id: str) -> Optional[WorkflowResult]:
+        """获取指定 run 的结果"""
+        try:
+            from trader.adapters.persistence.portfolio_proposal_store import PortfolioProposalStore
+
+            store = PortfolioProposalStore()
+            run_data = await store.get_committee_run(run_id)
+
+            if not run_data:
+                return None
+
+            from insight.committee.schemas import SpecialistType
+
+            sleeves = []
+            for sleeve_data in run_data.get("sleeve_proposals", []):
+                sleeve_data["specialist_type"] = SpecialistType(sleeve_data.get("specialist_type", "trend"))
+                sleeves.append(SleeveProposal(**sleeve_data))
+
+            portfolio = None
+            if run_data.get("portfolio_proposal"):
+                from insight.committee.schemas import PortfolioProposal
+                portfolio = PortfolioProposal(**run_data["portfolio_proposal"])
+
+            reviews = []
+            for review_data in run_data.get("review_results", []):
+                review_data["verdict"] = ReviewVerdict(review_data.get("verdict", "skip"))
+                reviews.append(ReviewResult(**review_data))
+
+            run = CommitteeRun(
+                run_id=run_data.get("run_id", ""),
+                research_request=run_data.get("research_request", ""),
+                context_package_version=run_data.get("context_package_version", ""),
+                sleeve_proposals=sleeves,
+                portfolio_proposal=portfolio,
+                review_results=reviews,
+                human_decision=run_data.get("human_decision"),
+                approver=run_data.get("approver"),
+                decision_reason=run_data.get("decision_reason"),
+                backtest_job_id=run_data.get("backtest_job_id"),
+                final_status=ProposalStatus(run_data.get("final_status", "pending")),
+                feature_version=run_data.get("feature_version", ""),
+                prompt_version=run_data.get("prompt_version", ""),
+                trace_id=run_data.get("trace_id", ""),
+                status=CommitteeRunStatus(run_data.get("status", "pending")),
+            )
+
+            return WorkflowResult(
+                success=run.status == CommitteeRunStatus.COMPLETED,
+                committee_run=run,
+                execution_time_seconds=0.0,
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to get run: {e}")
+            return None

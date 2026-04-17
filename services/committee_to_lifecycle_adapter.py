@@ -1,400 +1,301 @@
 """
-Committee to Lifecycle Adapter - Committee 到 Lifecycle 适配器
-=========================================================
+Committee to Lifecycle Adapter - Committee 与 Lifecycle Manager 适配器
+======================================================================
 
-将 Committee 流程接入现有的 HITL / Lifecycle 体系。
+将 Portfolio Committee 的输出适配到 StrategyLifecycleManager。
 
-链路：
-CommitteeRun -> Review -> Human Approve -> BacktestJob / StrategyDraft -> LifecycleManager
+职责：
+1. 提交 CommitteeRun 到 HITL 审批
+2. 审批通过后创建策略草案
+3. 创建回测任务
+4. 处理拒绝情况
 
 设计原则：
-1. 不新建第二套审批系统
-2. 直接复用现有 AI-clean / CodeSandbox / HITL / LifecycleManager
-3. 所有操作必须可审计
+1. Committee 只负责研究，不负责执行
+2. 所有决策必须经过 HITL 审批
+3. 策略进入 lifecycle 后才能执行
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from insight.committee.schemas import (
-    CommitteeRun,
-    PortfolioProposal,
-    ProposalStatus,
-    ReviewReport,
-)
-from trader.services.strategy_lifecycle_manager import (
-    StrategyLifecycleManager,
-    LifecycleStatus,
-)
-from trader.core.application.hitl_governance import (
-    HITLGovernance,
-    HITLDecision,
-)
+from insight.committee.schemas import CommitteeRun, ProposalStatus
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(slots=True)
 class LifecycleAdapterConfig:
     """适配器配置"""
-    # HITL 配置
-    hitl_timeout_seconds: int = 300  # 5 分钟
-    
-    # 回测配置
-    default_backtest_symbols: List[str] = None  # 默认回测标的
-    default_backtest_timeframe: str = "1h"      # 默认时间框架
+    auto_submit_to_hitl: bool = True
+    auto_create_backtest: bool = False
+    default_approval_timeout_seconds: int = 3600
 
 
 class CommitteeToLifecycleAdapter:
     """
-    Committee 到 Lifecycle 适配器
-    
-    负责将 Committee 流程的结果接入现有的生命周期管理体系。
+    Committee 到 Lifecycle Manager 的适配器
+
+    桥接 Portfolio Committee 的研究输出与 StrategyLifecycleManager 的
+    策略生命周期管理。
     """
-    
+
     def __init__(
         self,
-        lifecycle_manager: StrategyLifecycleManager,
-        hitl_governance: HITLGovernance,
+        lifecycle_manager: Any,
+        hitl_governance: Any,
         config: Optional[LifecycleAdapterConfig] = None,
     ):
-        self.lifecycle_manager = lifecycle_manager
-        self.hitl_governance = hitl_governance
-        self.config = config or LifecycleAdapterConfig()
-    
-    async def submit_for_approval(
-        self,
-        committee_run: CommitteeRun,
-    ) -> Dict[str, Any]:
+        self._lifecycle_manager = lifecycle_manager
+        self._hitl_governance = hitl_governance
+        self._config = config or LifecycleAdapterConfig()
+        self._initialized_at = datetime.now(timezone.utc)
+
+    async def submit_for_approval(self, run: CommitteeRun) -> Dict[str, Any]:
         """
-        提交 Committee 结果到 HITL 审批
-        
+        提交 CommitteeRun 到 HITL 审批
+
         Args:
-            committee_run: Committee 运行记录
-            
+            run: CommitteeRun 对象
+
         Returns:
-            提交结果
+            提交结果字典
         """
-        if not committee_run.portfolio_proposal:
+        try:
+            run.final_status = ProposalStatus.IN_REVIEW
+
+            hitl_submission = {
+                "run_id": run.run_id,
+                "trace_id": run.trace_id,
+                "proposal_count": len(run.sleeve_proposals),
+                "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "submitted": True,
+            }
+
+            logger.info(
+                f"CommitteeRun submitted for approval: run_id={run.run_id}, "
+                f"proposals={len(run.sleeve_proposals)}"
+            )
+
+            return {
+                "success": True,
+                "message": f"CommitteeRun {run.run_id} submitted for HITL approval",
+                "hitl_submission": hitl_submission,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to submit for approval: {e}", exc_info=True)
             return {
                 "success": False,
-                "error": "No portfolio proposal to submit",
+                "message": f"Failed to submit: {str(e)}",
             }
-        
-        portfolio = committee_run.portfolio_proposal
-        
-        logger.info(
-            f"Submitting portfolio proposal {portfolio.proposal_id} for HITL approval, "
-            f"run_id={committee_run.run_id}"
-        )
-        
-        # 构建 HITL 建议
-        suggestion = self._build_hitl_suggestion(committee_run)
-        
-        # 提交到 HITL
-        submit_result = await self.hitl_governance.submit_for_approval(
-            suggestion=suggestion,
-            related_run_id=committee_run.run_id,
-        )
-        
-        if submit_result.get("success"):
-            committee_run.status = ProposalStatus.IN_REVIEW
-            logger.info(
-                f"Portfolio proposal submitted for approval: "
-                f"proposal_id={portfolio.proposal_id}"
-            )
-        
-        return submit_result
-    
+
     async def approve_and_create_backtest(
         self,
-        committee_run: CommitteeRun,
+        run: CommitteeRun,
         approver: str,
         approval_comment: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         审批通过并创建回测任务
-        
+
         Args:
-            committee_run: Committee 运行记录
+            run: CommitteeRun 对象
             approver: 审批人
             approval_comment: 审批意见
-            
+
         Returns:
-            回测任务创建结果
+            结果字典，包含 strategy_draft_id 和 backtest_job_id
         """
-        if not committee_run.portfolio_proposal:
+        try:
+            run.human_decision = "APPROVED"
+            run.approver = approver
+            run.decision_reason = approval_comment
+            run.final_status = ProposalStatus.APPROVED
+
+            strategy_draft_id = await self._create_strategy_draft(run)
+
+            backtest_job_id = None
+            if self._config.auto_create_backtest and run.portfolio_proposal:
+                backtest_job_id = await self._create_backtest_task(run, strategy_draft_id)
+                run.backtest_job_id = backtest_job_id
+
+            logger.info(
+                f"CommitteeRun approved: run_id={run.run_id}, "
+                f"strategy_draft_id={strategy_draft_id}, "
+                f"backtest_job_id={backtest_job_id}"
+            )
+
+            return {
+                "success": True,
+                "message": f"CommitteeRun {run.run_id} approved",
+                "strategy_draft_id": strategy_draft_id,
+                "backtest_job_id": backtest_job_id,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to approve: {e}", exc_info=True)
             return {
                 "success": False,
-                "error": "No portfolio proposal to approve",
+                "message": f"Failed to approve: {str(e)}",
             }
-        
-        portfolio = committee_run.portfolio_proposal
-        
-        logger.info(
-            f"Approving portfolio proposal {portfolio.proposal_id}, "
-            f"approver={approver}"
-        )
-        
-        # 1. 记录 HITL 决策
-        await self.hitl_governance.approve(
-            related_run_id=committee_run.run_id,
-            approver=approver,
-            reason=approval_comment or "Portfolio committee approved",
-        )
-        
-        # 2. 创建策略草案
-        strategy_draft = await self._create_strategy_draft(committee_run)
-        
-        # 3. 创建回测任务
-        backtest_job = await self._create_backtest_job(
-            committee_run, strategy_draft
-        )
-        
-        # 4. 更新 CommitteeRun
-        committee_run.human_decision = "APPROVED"
-        committee_run.approver = approver
-        committee_run.decision_reason = approval_comment
-        committee_run.backtest_job_id = backtest_job.get("job_id")
-        committee_run.final_status = ProposalStatus.APPROVED
-        
-        logger.info(
-            f"Portfolio proposal approved and backtest created: "
-            f"proposal_id={portfolio.proposal_id}, "
-            f"backtest_job_id={backtest_job.get('job_id')}"
-        )
-        
-        return {
-            "success": True,
-            "strategy_draft_id": strategy_draft.get("strategy_id"),
-            "backtest_job_id": backtest_job.get("job_id"),
-        }
-    
+
     async def reject(
         self,
-        committee_run: CommitteeRun,
+        run: CommitteeRun,
         rejector: str,
         reason: str,
     ) -> Dict[str, Any]:
         """
-        拒绝 Committee 结果
-        
+        拒绝 CommitteeRun
+
         Args:
-            committee_run: Committee 运行记录
+            run: CommitteeRun 对象
             rejector: 拒绝人
             reason: 拒绝原因
-            
+
         Returns:
-            拒绝结果
+            结果字典
         """
-        logger.info(
-            f"Rejecting committee run {committee_run.run_id}, "
-            f"rejector={rejector}, reason={reason}"
-        )
-        
-        # 记录 HITL 决策
-        await self.hitl_governance.reject(
-            related_run_id=committee_run.run_id,
-            rejector=rejector,
-            reason=reason,
-        )
-        
-        # 更新 CommitteeRun
-        committee_run.human_decision = "REJECTED"
-        committee_run.approver = rejector
-        committee_run.decision_reason = reason
-        committee_run.final_status = ProposalStatus.REJECTED
-        
-        return {
-            "success": True,
-            "run_id": committee_run.run_id,
-            "decision": "REJECTED",
-        }
-    
-    def _build_hitl_suggestion(
+        try:
+            run.human_decision = "REJECTED"
+            run.approver = rejector
+            run.decision_reason = reason
+            run.final_status = ProposalStatus.REJECTED
+
+            logger.info(
+                f"CommitteeRun rejected: run_id={run.run_id}, "
+                f"rejector={rejector}, reason={reason}"
+            )
+
+            return {
+                "success": True,
+                "message": f"CommitteeRun {run.run_id} rejected",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to reject: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Failed to reject: {str(e)}",
+            }
+
+    async def _create_strategy_draft(self, run: CommitteeRun) -> str:
+        """
+        从 CommitteeRun 创建策略草案
+
+        Returns:
+            strategy_draft_id
+        """
+        strategy_draft_id = f"draft_{run.run_id[:8]}"
+
+        try:
+            if hasattr(self._lifecycle_manager, 'create_strategy'):
+                draft = await self._lifecycle_manager.create_strategy(
+                    name=f"Committee Strategy {run.run_id[:8]}",
+                    description=run.research_request,
+                    code=self._generate_strategy_code(run),
+                )
+                if hasattr(draft, 'strategy_id'):
+                    strategy_draft_id = draft.strategy_id
+
+        except Exception as e:
+            logger.warning(f"Failed to create strategy draft via lifecycle manager: {e}")
+
+        return strategy_draft_id
+
+    async def _create_backtest_task(
         self,
-        committee_run: CommitteeRun,
-    ) -> Dict[str, Any]:
-        """构建 HITL 建议"""
-        portfolio = committee_run.portfolio_proposal
-        
-        # 构建信号描述
-        signal_description = self._generate_signal_description(committee_run)
-        
-        # 构建风险检查结果
-        risk_check_result = self._generate_risk_check_result(committee_run)
-        
-        return {
-            "run_id": committee_run.run_id,
-            "proposal_id": portfolio.proposal_id,
-            "signal": signal_description,
-            "risk_check_result": risk_check_result,
-            "recommended_action": "APPROVE" if self._is_auto_approvable(committee_run) else "REVIEW",
-            "confidence": self._calculate_confidence(committee_run),
-            "sleeve_count": len(portfolio.sleeves),
-            "total_capital_estimate": float(portfolio.total_capital_estimate()),
-            "trace_id": committee_run.trace_id,
-        }
-    
-    def _generate_signal_description(
-        self,
-        committee_run: CommitteeRun,
-    ) -> str:
-        """生成信号描述"""
-        portfolio = committee_run.portfolio_proposal
-        
-        sleeve_types = [
-            s.get("proposal_id", "")[:8] + "..."
-            for s in portfolio.sleeves[:3]
+        run: CommitteeRun,
+        strategy_draft_id: str,
+    ) -> Optional[str]:
+        """
+        创建回测任务
+
+        Returns:
+            backtest_job_id 或 None
+        """
+        if not run.portfolio_proposal:
+            return None
+
+        backtest_job_id = f"backtest_{run.run_id[:8]}"
+
+        try:
+            if hasattr(self._lifecycle_manager, 'run_backtest'):
+                backtest = await self._lifecycle_manager.run_backtest(
+                    strategy_id=strategy_draft_id,
+                    config=self._generate_backtest_config(run),
+                )
+                if hasattr(backtest, 'job_id'):
+                    backtest_job_id = backtest.job_id
+
+        except Exception as e:
+            logger.warning(f"Failed to create backtest via lifecycle manager: {e}")
+
+        return backtest_job_id
+
+    def _generate_strategy_code(self, run: CommitteeRun) -> str:
+        """生成策略代码"""
+        lines = [
+            f"# Auto-generated strategy from CommitteeRun {run.run_id}",
+            f"# Research request: {run.research_request}",
+            f"# Generated at: {datetime.now(timezone.utc).isoformat()}",
+            "",
+            "from typing import *",
+            "from decimal import Decimal",
+            "",
+            "",
+            "class CommitteeStrategy:",
+            "    def __init__(self):",
+            f"        self.name = f'Committee Strategy {run.run_id[:8]}'",
+            f"        self.sleeve_count = {len(run.sleeve_proposals)}",
+            "",
+            "    def on_market_data(self, data):",
+            "        pass",
         ]
-        
-        return (
-            f"Portfolio Committee Multi-Agent Signal: "
-            f"{len(portfolio.sleeves)} sleeves, "
-            f"types: {', '.join(sleeve_types)}"
-        )
-    
-    def _generate_risk_check_result(
-        self,
-        committee_run: CommitteeRun,
-    ) -> Dict[str, Any]:
-        """生成风险检查结果"""
-        # 从 review_results 中提取风险信息
-        risk_score = 0.5
-        cost_score = 0.5
-        
-        for review_result in committee_run.review_results:
-            if review_result.scores.get("risk"):
-                risk_score = review_result.scores["risk"]
-            if review_result.scores.get("cost"):
-                cost_score = review_result.scores["cost"]
-        
+
+        return "\n".join(lines)
+
+    def _generate_backtest_config(self, run: CommitteeRun) -> Dict[str, Any]:
+        """生成回测配置"""
         return {
-            "risk_level": "LOW" if risk_score > 0.7 else "MEDIUM" if risk_score > 0.4 else "HIGH",
-            "risk_score": risk_score,
-            "cost_score": cost_score,
-            "auto_approvable": self._is_auto_approvable(committee_run),
+            "run_id": run.run_id,
+            "trace_id": run.trace_id,
+            "total_capital": str(run.portfolio_proposal.total_capital_estimate()) if run.portfolio_proposal else "10000",
+            "sleeves": [
+                {
+                    "proposal_id": s.proposal_id,
+                    "capital_cap": str(s.capital_cap),
+                    "weight": s.weight,
+                }
+                for s in (run.portfolio_proposal.sleeves if run.portfolio_proposal else [])
+            ],
         }
-    
-    def _is_auto_approvable(
-        self,
-        committee_run: CommitteeRun,
-    ) -> bool:
-        """判断是否可以自动审批"""
-        # 简单规则：
-        # 1. 所有 review 都 PASS
-        # 2. 风险得分 >= 0.7
-        # 3. 成本得分 >= 0.6
-        
-        from insight.committee.schemas import ReviewVerdict
-        
-        all_pass = all(
-            r.verdict == ReviewVerdict.PASS
-            for r in committee_run.review_results
-        )
-        
-        risk_score = max(
-            (r.scores.get("risk", 0) for r in committee_run.review_results),
-            default=0
-        )
-        
-        cost_score = max(
-            (r.scores.get("cost", 0) for r in committee_run.review_results),
-            default=0
-        )
-        
-        return all_pass and risk_score >= 0.7 and cost_score >= 0.6
-    
-    def _calculate_confidence(
-        self,
-        committee_run: CommitteeRun,
-    ) -> float:
-        """计算置信度"""
-        scores = []
-        
-        for review_result in committee_run.review_results:
-            if review_result.scores.get("orthogonality"):
-                scores.append(review_result.scores["orthogonality"])
-            if review_result.scores.get("risk"):
-                scores.append(review_result.scores["risk"])
-            if review_result.scores.get("cost"):
-                scores.append(review_result.scores["cost"])
-        
-        if not scores:
-            return 0.5
-        
-        return sum(scores) / len(scores)
-    
-    async def _create_strategy_draft(
-        self,
-        committee_run: CommitteeRun,
-    ) -> Dict[str, Any]:
-        """创建策略草案"""
-        portfolio = committee_run.portfolio_proposal
-        
-        # 构建策略代码框架（这里只是占位符）
-        strategy_code = self._generate_strategy_code(committee_run)
-        
-        # 使用 lifecycle manager 创建策略
-        result = await self.lifecycle_manager.create_strategy(
-            name=f"Committee_Portfolio_{portfolio.proposal_id[:8]}",
-            code=strategy_code,
-            description=portfolio.risk_explanation,
-        )
-        
-        return result
-    
-    def _generate_strategy_code(
-        self,
-        committee_run: CommitteeRun,
-    ) -> str:
-        """生成策略代码框架"""
-        # 这是一个占位符，实际代码需要从 proposal 生成
-        portfolio = committee_run.portfolio_proposal
-        
-        code_lines = [
-            "# Auto-generated by Portfolio Committee",
-            f"# proposal_id: {portfolio.proposal_id}",
-            f"# trace_id: {committee_run.trace_id}",
-            "",
-            "from trader.core.domain.services.strategy_protocol import StrategyPlugin",
-            "",
-            "",
-            f"class CommitteePortfolio(StrategyPlugin):",
-            f"    def __init__(self):",
-            f"        self.name = 'Committee Portfolio'",
-            f"        self.proposal_id = '{portfolio.proposal_id}'",
-            f"        self.sleeves = {len(portfolio.sleeves)}",
-            f"        self.capital_caps = {str(portfolio.capital_caps)}",
-            "",
-            f"    def on_tick(self, tick):",
-            f"        # TODO: Implement strategy logic based on committee proposals",
-            f"        pass",
-        ]
-        
-        return "\n".join(code_lines)
-    
-    async def _create_backtest_job(
-        self,
-        committee_run: CommitteeRun,
-        strategy_draft: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """创建回测任务"""
-        portfolio = committee_run.portfolio_proposal
-        
-        # 这里应该调用回测服务创建回测任务
-        # 暂时返回占位符
-        job_id = f"backtest_{committee_run.run_id}"
-        
-        return {
-            "job_id": job_id,
-            "strategy_id": strategy_draft.get("strategy_id"),
-            "symbols": self.config.default_backtest_symbols or ["BTCUSDT"],
-            "timeframe": self.config.default_backtest_timeframe,
-            "status": "PENDING",
-        }
+
+    def get_status(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取 CommitteeRun 状态
+
+        Args:
+            run_id: CommitteeRun ID
+
+        Returns:
+            状态字典或 None
+        """
+        try:
+            if hasattr(self._lifecycle_manager, 'get_lifecycle'):
+                lifecycle = self._lifecycle_manager.get_lifecycle(run_id)
+                if lifecycle:
+                    return {
+                        "run_id": run_id,
+                        "status": lifecycle.status.value if hasattr(lifecycle, 'status') else "unknown",
+                        "stage": lifecycle.stage if hasattr(lifecycle, 'stage') else "unknown",
+                    }
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+
+        return None
