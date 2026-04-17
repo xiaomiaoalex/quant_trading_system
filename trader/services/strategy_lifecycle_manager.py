@@ -224,6 +224,7 @@ class StopOutcome:
     final_metrics: Optional[StrategyMetrics] = None
     error: Optional[str] = None
     duration_ms: float = 0.0
+    resource_unloaded: bool = False  # 是否释放了资源
 
 
 @dataclass(slots=True)
@@ -385,6 +386,10 @@ class RunnerPort(Protocol):
 
     async def stop_strategy(self, strategy_id: str) -> Any:
         """停止策略"""
+        ...
+
+    async def unload_strategy(self, strategy_id: str) -> None:
+        """卸载策略并释放资源"""
         ...
 
     async def tick_strategy(self, strategy_id: str, market_data: MarketData) -> Optional[Signal]:
@@ -994,12 +999,17 @@ class StrategyLifecycleManager:
     # 策略停止
     # =========================================================================
 
-    async def stop_strategy(self, lifecycle: StrategyLifecycle) -> StopOutcome:
+    async def stop_strategy(
+        self,
+        lifecycle: StrategyLifecycle,
+        unload: bool = False,
+    ) -> StopOutcome:
         """
         停止策略
 
         Args:
             lifecycle: 策略生命周期
+            unload: 是否在停止后卸载策略并释放资源（默认False，仅停止执行）
 
         Returns:
             StopOutcome: 停止结果
@@ -1022,18 +1032,33 @@ class StrategyLifecycleManager:
                 lifecycle._transition_to(
                     LifecycleStatus.STOPPED,
                     LifecycleEventType.STOPPED,
-                    metadata={"final_metrics": str(final_metrics) if final_metrics else None},
+                    metadata={
+                        "final_metrics": str(final_metrics) if final_metrics else None,
+                        "unload": unload,
+                    },
                 )
                 await self._store.save_lifecycle(lifecycle)
 
                 duration_ms = (time.monotonic() - start_time) * 1000
                 await self._record_duration("stop_strategy", duration_ms)
 
+                # 如果需要卸载，释放资源
+                resource_unloaded = False
+                if unload:
+                    try:
+                        if self._runner:
+                            await self._runner.unload_strategy(lifecycle.strategy_id)
+                            resource_unloaded = True
+                        logger.info(f"策略已卸载并释放资源: {lifecycle.strategy_id}")
+                    except Exception as e:
+                        logger.error(f"卸载策略失败: {lifecycle.strategy_id}, 错误: {e}")
+
                 return StopOutcome(
                     success=True,
                     status=lifecycle.status,
                     final_metrics=final_metrics,
                     duration_ms=duration_ms,
+                    resource_unloaded=resource_unloaded,
                 )
 
             except Exception as e:
