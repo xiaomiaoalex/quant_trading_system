@@ -33,6 +33,7 @@ def _market_data(price: str, ts: datetime) -> MarketData:
         "trader.strategies.ema_cross_btc",
         "trader.strategies.rsi_grid",
         "trader.strategies.dca_btc",
+        "trader.strategies.fire_test",
     ],
 )
 def test_builtin_strategy_modules_expose_valid_plugin(module_path: str) -> None:
@@ -136,12 +137,39 @@ async def test_dca_btc_rejects_invalid_update_config() -> None:
     assert plugin.interval_seconds == 60
 
 
+async def test_fire_test_alternates_and_respects_interval_and_max_signals() -> None:
+    plugin = importlib.import_module("trader.strategies.fire_test").get_plugin()
+    await plugin.initialize(
+        {
+            "mode": "ALTERNATE",
+            "start_with": "BUY",
+            "interval_seconds": 10,
+            "order_size": "0.001",
+            "max_signals": 3,
+        }
+    )
+
+    start = datetime(2026, 1, 4, tzinfo=timezone.utc)
+    first = await plugin.on_market_data(_market_data("100", start))
+    too_early = await plugin.on_market_data(_market_data("101", start + timedelta(seconds=5)))
+    second = await plugin.on_market_data(_market_data("102", start + timedelta(seconds=10)))
+    third = await plugin.on_market_data(_market_data("103", start + timedelta(seconds=20)))
+    exceeded = await plugin.on_market_data(_market_data("104", start + timedelta(seconds=30)))
+
+    assert first is not None and first.signal_type == SignalType.BUY
+    assert too_early is None
+    assert second is not None and second.signal_type == SignalType.SELL
+    assert third is not None and third.signal_type == SignalType.BUY
+    assert exceeded is None
+
+
 async def test_strategy_runner_loads_all_builtin_strategies() -> None:
     runner = StrategyRunner()
     builtins = [
         ("ema_cross_btc", "trader.strategies.ema_cross_btc"),
         ("rsi_grid", "trader.strategies.rsi_grid"),
         ("dca_btc", "trader.strategies.dca_btc"),
+        ("fire_test", "trader.strategies.fire_test"),
     ]
     for strategy_id, module_path in builtins:
         info = await runner.load_strategy(

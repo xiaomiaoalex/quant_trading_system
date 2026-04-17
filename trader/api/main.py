@@ -67,6 +67,12 @@ _BUILTIN_STRATEGIES = [
         description="BTC 定投策略 - 定期定额买入，带价格偏离和持仓上限保护",
         entrypoint="trader.strategies.dca_btc",
     ),
+    StrategyRegisterRequest(
+        strategy_id="fire_test",
+        name="Fire Test",
+        description="开火测试策略 - 固定节奏发 BUY/SELL，用于验证真实下单链路",
+        entrypoint="trader.strategies.fire_test",
+    ),
 ]
 
 
@@ -205,6 +211,10 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+    try:
+        await strategies.shutdown_strategy_runtime()
+    except Exception as e:
+        logger.error(f"[Main] Failed to shutdown strategy runtime: {e}")
     if _connector:
         await _connector.stop()
         logger.info("[Main] BinanceConnector stopped")

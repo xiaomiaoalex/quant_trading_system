@@ -471,10 +471,11 @@ class StrategyRunner:
                 # 发布信号事件
                 if self._event_callback:
                     try:
+                        direction = signal.signal_type.value if signal.signal_type else None
                         self._event_callback(strategy_id, "strategy.signal", {
                             "symbol": signal.symbol,
-                            "direction": str(signal.direction) if signal.direction else None,
-                            "signal_type": signal.signal_type,
+                            "direction": direction,
+                            "signal_type": signal.signal_type.value if signal.signal_type else None,
                             "quantity": str(signal.quantity) if signal.quantity else None,
                             "price": str(signal.price) if signal.price else None,
                             "reason": signal.reason,
@@ -508,9 +509,10 @@ class StrategyRunner:
                         order_result = await self._oms_callback(strategy_id, signal)
                         # 发布订单提交事件
                         if self._event_callback and order_result:
+                            side = signal.get_order_side().value if signal.signal_type else None
                             self._event_callback(strategy_id, "strategy.order.submitted", {
                                 "symbol": signal.symbol,
-                                "side": str(signal.direction) if signal.direction else None,
+                                "side": side,
                                 "quantity": str(signal.quantity) if signal.quantity else None,
                                 "price": str(signal.price) if signal.price else None,
                             })

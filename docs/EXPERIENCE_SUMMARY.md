@@ -773,14 +773,13 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 | 2026-04-05 | Kilo Code | 添加 FastAPI 测试覆盖经验：路由注册、Pydantic 模型、Mock 枚举、Mock 路径 |
 | 2026-04-10 | Kilo Code | 添加 Truth Gap 后端修复经验：API 契约优先、后端聚合模式、Bug 审计与修复方法论 |
 | 2026-04-16 | Kilo Code | 添加 v3.4.0 文档升级与 Qlib/Hermes 集成规划经验：研究编排与执行链路隔离原则 |
-<<<<<<< HEAD
 | 2026-04-16 | Codex | 添加内置策略误删恢复经验：插件协议对齐、单测护栏与入口一致性检查 |
-=======
 | 2026-04-16 | Kilo Code | 添加 Reconciler 周期性对账配置经验：后台服务启动时配置的重要性、异常 Fail-Closed 处理 |
->>>>>>> origin/main
 | 2026-04-17 | Codex | 添加 Binance `-1021` 时间偏移修复经验：服务端时间校准、自动重签重试与单测护栏 |
 | 2026-04-17 | Codex | 添加 `BINANCE_RECV_WINDOW` 配置经验：统一解析、双入口接线与边界校验 |
 | 2026-04-17 | Codex | 添加 listenKey `410` 降级经验：私有流不可用时自动降级为 Public+REST 并持续服务 |
+| 2026-04-17 | Codex | 添加 Fire Test 开火策略经验：可控节奏触发 BUY/SELL 并带安全护栏 |
+| 2026-04-17 | Codex | 添加 fire_test 真下单接线经验：StrategyRunner OMS 回调接入、手动 Tick 驱动与实盘安全闸门 |
 
 ---
 
@@ -981,60 +980,6 @@ def list_snapshots(self, stream_key: str, since_ts_ms: int = None, limit: int = 
 4. 最后做 Hermes 编排自动化和上线门控联调
 
 这个顺序的价值是：先保证可复现，再追求自动化；先保证可治理，再追求“看起来智能”。
-<<<<<<< HEAD
-
----
-
-## 十七、内置策略误删恢复经验（策略插件重建）
-
-### 17.1 插件入口可注册不代表插件可加载
-
-**场景**：
-`trader/api/main.py` 中已注册默认策略 entrypoint，但 `trader/strategies/` 目录下对应模块被误删。
-
-**问题**：
-- 控制面“注册成功”不等于运行时可加载
-- 真正失败点发生在 `StrategyRunner.load_strategy()` 的动态导入阶段
-
-**经验**：
-- 每次维护默认策略时，必须同时检查：
-  1. `strategy_id` 与 entrypoint 是否存在
-  2. 对应模块是否暴露 `get_plugin()`
-  3. `validate_strategy_plugin()` 是否通过
-- “元数据存在 + 模块缺失”属于高风险隐藏故障，必须用测试兜底
-
-### 17.2 策略重建必须优先满足协议闭环
-
-**场景**：
-重建 `ema_cross_btc` / `rsi_grid` / `dca_btc` 时，需要快速恢复运行能力并保持与 Runner 协议兼容。
-
-**设计模式**：
-- 每个策略均实现统一结构：
-  - `initialize(config)`：清理状态并接收配置
-  - `on_market_data(data)`：纯计算生成 `Signal | None`
-  - `update_config(config)`：支持热更新并带回滚
-  - `validate()`：参数边界校验
-  - `get_plugin()`：模块级单例工厂
-
-**经验**：
-- `update_config()` 推荐“先快照、后应用、失败回滚”，防止运行时落入半更新状态
-- 所有策略都应只依赖 `market_data.timestamp`，避免引入 `datetime.now()` 导致回放不可重复
-
-### 17.3 给默认策略加“存在性测试”比事后排查更便宜
-
-**场景**：
-策略模块缺失在常规 API 单测中不一定暴露，因为 API 注册不触发动态导入。
-
-**解决方案**：
-新增 `trader/tests/test_builtin_strategies.py`，覆盖：
-- 三个默认模块可导入
-- `get_plugin()` 存在且协议校验通过
-- 关键信号路径（EMA 交叉、RSI 超买超卖、DCA 定时/回撤买入）
-
-**经验**：
-- 入口存在性测试应作为默认策略的最小护栏
-- 这类测试运行快、收益高，能在“误删类故障”发生时第一时间报警
-=======
 ## 十六、Reconciler 周期性对账配置经验
 
 ### 16.1 后台服务启动时配置的重要性
@@ -1102,7 +1047,43 @@ async def lifespan(app: FastAPI):
 - 依赖外部配置的后台服务，应在启动时完成配置，而不是期望调用者事后配置
 - 异常处理应 Fail-Closed：getter 失败时返回空列表并记录错误
 - 环境变量缺失时应记录明确警告，便于排查
->>>>>>> origin/main
+
+---
+
+## 十七、内置策略误删恢复经验（策略插件重建）
+
+### 17.1 插件入口可注册不代表插件可加载
+
+**场景**：
+`trader/api/main.py` 中已注册默认策略 entrypoint，但 `trader/strategies/` 目录下对应模块被误删。
+
+**问题**：
+- 控制面“注册成功”不等于运行时可加载
+- 真正失败点发生在 `StrategyRunner.load_strategy()` 的动态导入阶段
+
+**经验**：
+- 每次维护默认策略时，必须同时检查：
+  1. `strategy_id` 与 entrypoint 是否存在
+  2. 对应模块是否暴露 `get_plugin()`
+  3. `validate_strategy_plugin()` 是否通过
+- “元数据存在 + 模块缺失”属于高风险隐藏故障，必须用测试兜底
+
+### 17.2 策略重建必须优先满足协议闭环
+
+**场景**：
+重建 `ema_cross_btc` / `rsi_grid` / `dca_btc` 时，需要快速恢复运行能力并保持与 Runner 协议兼容。
+
+**设计模式**：
+- 每个策略均实现统一结构：
+  - `initialize(config)`：清理状态并接收配置
+  - `on_market_data(data)`：纯计算生成 `Signal | None`
+  - `update_config(config)`：支持热更新并带回滚
+  - `validate()`：参数边界校验
+  - `get_plugin()`：模块级单例工厂
+
+**经验**：
+- `update_config()` 推荐“先快照、后应用、失败回滚”，防止运行时落入半更新状态
+- 所有策略都应只依赖 `market_data.timestamp`，避免引入 `datetime.now()` 导致回放不可重复
 
 ---
 
@@ -1218,3 +1199,78 @@ Broker 在连接时已经调用过 `GET /v3/time`，但签名请求仍直接用 
 - health 状态在该场景返回 `DEGRADED`
 
 这能避免后续重构把降级逻辑意外删掉。
+
+---
+
+## 二十二、Fire Test 开火策略经验（真实买卖链路验证）
+
+### 22.1 踩坑记录：普通策略不适合做“执行链路冒烟测试”
+
+**场景**：
+联调时想验证“策略 -> OMS -> 下单”是否通畅，但 EMA/RSI/DCA 这类策略依赖特定行情条件，不容易稳定触发。
+
+**问题**：
+- 很难判断“没下单”是链路坏了，还是策略条件没满足
+- 现场验证成本高，回放难度大
+
+**经验**：
+- 需要一个专门的“开火策略”，用于稳定触发 BUY/SELL，不掺杂复杂 alpha 逻辑
+
+### 22.2 设计模式：可控发单节奏 + 安全护栏
+
+**实现模式**（`trader/strategies/fire_test.py`）：
+1. 支持 `mode=BUY/SELL/ALTERNATE` 控制方向
+2. 支持 `interval_seconds` 控制最小发单间隔
+3. 支持 `max_signals` 限制最大发射次数（防止无限下单）
+4. 默认小仓位 `order_size=0.0001`，降低联调风险
+
+**收益**：
+- 把“策略条件不满足”的干扰剥离掉
+- 让下单链路验证从“偶发”变为“可重复”
+
+### 22.3 测试护栏：行为测试必须覆盖节奏与上限
+
+扩展 `test_builtin_strategies.py` 覆盖：
+- `fire_test` 模块协议有效性
+- `ALTERNATE` 模式下 BUY/SELL 交替
+- 间隔限制生效（过早 tick 不发单）
+- 超过 `max_signals` 后停止发单
+
+这样可以防止后续改动把“安全护栏”悄悄破坏掉。
+
+---
+
+## 二十三、StrategyRunner 真下单接线经验（Tick 驱动）
+
+### 23.1 踩坑记录：Runner 有 OMS 回调能力，不代表 API 已经打通执行链路
+
+**场景**：
+`StrategyRunner.tick()` 已支持 `oms_callback`，但策略路由初始化 Runner 时未传入回调，且没有手动喂行情入口。
+
+**问题**：
+- 策略看起来“已启动”，但不会走到真实下单
+- 联调阶段很难判断断点是在“策略没信号”还是“执行链路没接上”
+
+**经验**：
+- 不要只看组件能力，要核对控制面的实际接线路径（API -> Runner 构造 -> OMS 回调）
+
+### 23.2 设计模式：手动 Tick 触发 + 白名单策略放行 + 订单视图落库
+
+**实现模式**：
+1. 在 `trader/api/routes/strategies.py` 初始化 `StrategyRunner` 时注入 `_submit_live_order`
+2. 新增 `POST /v1/strategies/{strategy_id}/tick` 手动注入 `MarketData`
+3. 通过 `LIVE_ORDER_STRATEGIES`（默认 `fire_test`）限制可真实下单的策略
+4. 下单成功后同步写入控制面 `orders/executions`，让 `/v1/orders` 可直接观察结果
+
+### 23.3 隐蔽兼容性问题：`Signal` 模型没有 `direction` 字段
+
+**问题**：
+`StrategyRunner` 事件发布曾访问 `signal.direction`，而 `Signal` 真实字段是 `signal_type`，导致事件发布异常并中断 OMS 回调路径。
+
+**修复**：
+- 统一改为 `signal.signal_type.value` 表示方向
+- 下单事件中的 `side` 使用 `signal.get_order_side().value`
+
+**经验**：
+- 在“接线任务”里，字段命名漂移比业务逻辑错误更常见
+- 端到端测试应覆盖“信号产生 + 回调执行 + 订单结果可见”全链路，才能尽早暴露这类错误

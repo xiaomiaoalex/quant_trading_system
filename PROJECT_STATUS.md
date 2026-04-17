@@ -4,26 +4,61 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-<<<<<<< HEAD
 2026-04-16 22:41 (北京时间)
-=======
-2026-04-16 (北京时间)
->>>>>>> origin/main
 2026-04-17 18:18 (北京时间)
 2026-04-17 18:33 (北京时间)
 2026-04-17 19:19 (北京时间)
+2026-04-17 19:31 (北京时间)
+2026-04-17 20:10 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
-<<<<<<< HEAD
-- **工作树**：有变更（策略模块恢复 + 文档更新）
-=======
-- **工作树**：有变更（文档更新）
->>>>>>> origin/main
+- **工作树**：有变更（fire_test 真下单链路接线 + 文档更新）
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：补齐 `fire_test` 真下单链路（Runner → OMS 回调 → Binance）
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `StrategyRunner` 具备 `oms_callback` 机制，但策略 API 未接入真实下单回调
+  - 缺少可直接驱动策略 Tick 的 API，策略即使启动也难以稳定触发真实买卖链路
+- 开发后状态:
+  - `trader/api/routes/strategies.py` 接入真实下单回调 `_submit_live_order`
+  - 新增 `POST /v1/strategies/{strategy_id}/tick`，可手动注入行情触发策略与下单
+  - 下单成功后写入控制面 `orders/executions` 视图，便于 `/v1/orders` 与 `/v1/executions` 查询
+  - 新增策略运行时清理入口 `shutdown_strategy_runtime()`，并在 `trader/api/main.py` 关闭阶段调用
+  - 新增 `trader/tests/test_api_strategy_runner_endpoints.py` 覆盖 tick 触发与缺凭证拦截
+- Issue 状态迁移:
+  - fire_test 仅能发信号、未走真实下单链路：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_builtin_strategies.py trader/tests/test_api_strategy_runner_endpoints.py --tb=short` → 12 passed
+  - `python -c "import trader.api.main"` → import ok
+
+### 本次任务：新增 `fire_test` 开火策略用于实盘买卖链路验证
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 缺少专门用于“快速触发真实 BUY/SELL”的测试策略
+  - 现有内置策略偏向条件触发，联调时不易稳定复现下单
+- 开发后状态:
+  - 新增 `trader/strategies/fire_test.py`（可配置 BUY/SELL/ALTERNATE、间隔、下单量、最大发射次数）
+  - 接入 `trader/strategies/__init__.py` 导出
+  - 接入 `trader/api/main.py` 默认内置策略注册（`strategy_id=fire_test`）
+  - 扩展 `trader/tests/test_builtin_strategies.py`：
+    - 模块有效性检查新增 `trader.strategies.fire_test`
+    - 新增行为测试：交替发单 + 间隔限制 + 发单次数上限
+    - StrategyRunner 内置加载清单新增 `fire_test`
+- Issue 状态迁移:
+  - 缺少稳定“开火”联调策略：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 10 passed
+  - `python -c "import trader.api.main"` → import ok
+  - 警告: `trader/.pytest_cache` 权限警告（不影响结果）
 
 ### 本次任务：处理 Binance listenKey `410 Gone`，私有流自动降级
 - 完成时间: 2026-04-17
@@ -84,7 +119,6 @@
   - `python -m pytest -q trader/tests/test_binance_spot_demo_broker.py` → 3 passed
   - 警告: `trader/.pytest_cache` 目录权限受限（不影响测试结果）
 
-<<<<<<< HEAD
 ### 本次任务：恢复内置策略模块（误删修复）
 - 完成时间: 2026-04-16
 - 分支: main (工作区修复)
@@ -104,8 +138,6 @@
   - `python -m pytest -q trader/tests/test_builtin_strategies.py --tb=short` → 7 passed
   - `python -m pytest -q trader/tests/test_strategy_runner.py --tb=short` → 41 passed
 
-=======
->>>>>>> origin/main
 ### 本次任务：v3.4.0 Phase A-C 核心交付物完成
 - 完成时间: 2026-04-16
 - 分支: main (直接提交)
