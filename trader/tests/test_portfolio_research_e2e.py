@@ -61,17 +61,19 @@ class TestPortfolioResearchWorkflow:
     def workflow(self):
         """创建工作流"""
         config = WorkflowConfig(
-            specialist_feature_version="test_v1",
-            specialist_prompt_version="test_v1",
+            feature_version="test_v1",
+            prompt_version="test_v1",
+            store_results=False,
         )
         return PortfolioResearchWorkflow(config)
 
     def test_workflow_config_defaults(self):
         """测试默认配置"""
         config = WorkflowConfig()
-        assert config.specialist_feature_version == "v1.0.0"
-        assert config.min_orthogonality_score == 0.7
-        assert config.max_sleeves_per_portfolio == 5
+        assert config.feature_version == "v1.0.0"
+        assert config.prompt_version == "v1.0.0"
+        assert config.max_parallel_specialists == 5
+        assert config.enable_red_team is True
 
     @pytest.mark.asyncio
     async def test_run_single_specialist(self, workflow):
@@ -128,19 +130,19 @@ class TestWorkflowConfig:
     def test_default_config(self):
         """测试默认配置"""
         config = WorkflowConfig()
-        assert config.specialist_feature_version == "v1.0.0"
-        assert config.specialist_prompt_version == "v1.0.0"
+        assert config.feature_version == "v1.0.0"
+        assert config.prompt_version == "v1.0.0"
         assert config.max_parallel_specialists == 5
-        assert config.specialist_timeout_seconds == 60.0
+        assert config.enable_red_team is True
 
     def test_custom_config(self):
         """测试自定义配置"""
         config = WorkflowConfig(
-            min_orthogonality_score=0.8,
-            min_risk_score=0.6,
+            enable_red_team=False,
+            store_results=False,
         )
-        assert config.min_orthogonality_score == 0.8
-        assert config.min_risk_score == 0.6
+        assert config.enable_red_team is False
+        assert config.store_results is False
 
 
 # ==================== 路由器集成测试 ====================

@@ -144,6 +144,9 @@ class BinanceSpotDemoBroker(BrokerPort):
         self._session: Optional[aiohttp.ClientSession] = None
         self._callbacks: List[Callable[..., Any]] = []
         self._account_cache: Optional[Dict[str, Any]] = None
+        self._time_offset_ms: int = 0
+        self._time_offset_synced: bool = False
+        self._time_sync_lock = asyncio.Lock()
 
     @property
     def broker_name(self) -> str:
@@ -232,12 +235,28 @@ class BinanceSpotDemoBroker(BrokerPort):
 
     def _signed_params(self, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         payload: Dict[str, Any] = dict(params or {})
-        payload["timestamp"] = int(time.time() * 1000)
+        payload["timestamp"] = self._current_timestamp_ms()
         payload["recvWindow"] = self._config.recv_window
 
         query_string = urlencode(payload, doseq=True)
         payload["signature"] = self._sign(query_string)
         return payload
+
+    def _current_timestamp_ms(self) -> int:
+        return int(time.time() * 1000) + self._time_offset_ms
+
+    async def _ensure_time_offset(self) -> None:
+        if self._time_offset_synced:
+            return
+        await self._refresh_time_offset()
+
+    async def _refresh_time_offset(self) -> int:
+        async with self._time_sync_lock:
+            server_time_ms = await self.get_server_time()
+            local_time_ms = int(time.time() * 1000)
+            self._time_offset_ms = server_time_ms - local_time_ms
+            self._time_offset_synced = True
+            return self._time_offset_ms
 
     async def _ensure_session(self) -> None:
         if self._session is not None:
@@ -268,23 +287,25 @@ class BinanceSpotDemoBroker(BrokerPort):
         await self._ensure_session()
         assert self._session is not None
 
-        req_params = self._signed_params(params) if signed else (params or {})
         req_headers = headers or (self._headers() if signed else None)
         url = self._build_url(endpoint)
 
         last_error: Optional[Exception] = None
+        did_resync_for_1021 = False
 
         for attempt in range(1, self._config.max_retries + 1):
             try:
                 if signed:
+                    await self._ensure_time_offset()
                     req_params = dict(params or {})
-                    req_params["timestamp"] = int(time.time() * 1000)
+                    req_params["timestamp"] = self._current_timestamp_ms()
                     req_params["recvWindow"] = self._config.recv_window
 
                     query_string = urlencode(req_params, doseq=True)
                     signature = self._sign(query_string)
                     final_url = f"{url}?{query_string}&signature={signature}"
                 else:
+                    req_params = params or {}
                     if req_params:
                         final_url = f"{url}?{urlencode(req_params, doseq=True)}"
                     else:
@@ -305,6 +326,10 @@ class BinanceSpotDemoBroker(BrokerPort):
                     if resp.status >= 400:
                         msg = data.get("msg", str(data))
                         code = data.get("code")
+                        if signed and str(code) == "-1021" and not did_resync_for_1021:
+                            did_resync_for_1021 = True
+                            await self._refresh_time_offset()
+                            continue
                         raise BrokerBusinessError(
                             f"{method} {endpoint} failed: status={resp.status}, code={code}, msg={msg}"
                         )
@@ -354,7 +379,7 @@ class BinanceSpotDemoBroker(BrokerPort):
 
         try:
             await self.ping()
-            await self.get_server_time()
+            await self._refresh_time_offset()
             await self._fetch_account()
             self._connected = True
         except Exception as exc:
@@ -366,6 +391,7 @@ class BinanceSpotDemoBroker(BrokerPort):
     async def disconnect(self) -> None:
         self._connected = False
         self._account_cache = None
+        self._time_offset_synced = False
 
         if self._session is not None:
             await self._session.close()

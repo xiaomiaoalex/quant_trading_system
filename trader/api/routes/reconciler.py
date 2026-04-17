@@ -23,6 +23,7 @@ from trader.core.application.reconciler import (
 from trader.services.reconciler_service import ReconcilerService
 from trader.services.order import OrderService
 from trader.api.models.schemas import OrderView
+from trader.api.env_config import get_binance_recv_window
 
 router = APIRouter(tags=["Reconciler"])
 
@@ -120,7 +121,11 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
             return []
         
         # 创建真实的 Binance broker
-        config = BinanceSpotDemoBrokerConfig.create(api_key, secret_key)
+        config = BinanceSpotDemoBrokerConfig.for_demo(
+            api_key,
+            secret_key,
+            recv_window=get_binance_recv_window(),
+        )
         broker = BinanceSpotDemoBroker(config)
         
         # 连接并获取开放订单

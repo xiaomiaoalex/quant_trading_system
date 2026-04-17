@@ -9,6 +9,8 @@
 =======
 2026-04-16 (北京时间)
 >>>>>>> origin/main
+2026-04-17 18:18 (北京时间)
+2026-04-17 18:33 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -21,6 +23,45 @@
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：新增 Binance `recvWindow` 环境配置并统一接入 Reconciler
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `recvWindow` 固定为代码默认值，无法通过环境变量调整
+  - `main.py` 与 `reconciler` 路由在 broker 配置上存在漂移，路由侧使用了不存在的 `BinanceSpotDemoBrokerConfig.create(...)`
+- 开发后状态:
+  - 新增 `trader/api/env_config.py`，统一解析 `BINANCE_RECV_WINDOW`（默认 5000，非法值回退，超大值上限 60000）
+  - `trader/api/main.py` 的周期对账交易所抓取路径接入 `BINANCE_RECV_WINDOW`
+  - `trader/api/routes/reconciler.py` 的手动触发路径同步接入 `BINANCE_RECV_WINDOW`
+  - 修复路由侧 broker 配置工厂调用：`create(...)` → `for_demo(...)`
+  - `.env.example` 新增 `BINANCE_RECV_WINDOW=5000`
+  - 新增 `trader/tests/test_api_env_config.py` 覆盖环境变量解析边界
+- Issue 状态迁移:
+  - Binance `recvWindow` 可调性缺失：`待确认` → `已验证`
+  - Reconciler broker 配置工厂调用错误：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_api_env_config.py trader/tests/test_api_reconciler.py --tb=short` → 17 passed
+  - 警告: Pydantic v2 deprecation 与 `trader/.pytest_cache` 权限警告（不影响结果）
+
+### 本次任务：修复 Binance `-1021` 时间偏移导致的对账失败
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `BinanceSpotDemoBroker` 对签名请求直接使用本机时间戳
+  - 本机时钟快于交易所约 1000ms 时，`GET /v3/account` 返回 `code=-1021`，Reconciler 交易所侧抓取失败
+- 开发后状态:
+  - 在 `trader/adapters/broker/binance_spot_demo_broker.py` 增加服务端时间偏移同步（`/v3/time`）
+  - 签名请求统一使用“本机时间 + 偏移量”生成 `timestamp`
+  - 遇到 `code=-1021` 自动执行一次重校准并重签名重试
+  - 新增 `trader/tests/test_binance_spot_demo_broker.py` 覆盖偏移计算、签名时间戳与 `-1021` 重试
+- Issue 状态迁移:
+  - Binance 签名时间偏移（`-1021`）：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_spot_demo_broker.py` → 3 passed
+  - 警告: `trader/.pytest_cache` 目录权限受限（不影响测试结果）
 
 <<<<<<< HEAD
 ### 本次任务：恢复内置策略模块（误删修复）
