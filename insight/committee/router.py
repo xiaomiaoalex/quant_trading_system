@@ -13,6 +13,7 @@ Committee Router - Specialist Agents 路由
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Dict, List, Optional, Set
 
 from insight.committee.schemas import (
@@ -243,12 +244,25 @@ class CommitteeRouter:
             
             # 尝试从 content 构建 SleeveProposal
             try:
-                # content 已经是 dict 格式
                 proposal_data = output.content
                 
-                # 创建 SleeveProposal 对象（如果需要）
-                # 这里简化处理，直接使用 dict
-                proposals.append(proposal_data)
+                if isinstance(proposal_data, dict):
+                    from insight.committee.schemas import SpecialistType
+                    proposal = SleeveProposal(
+                        proposal_id=proposal_data.get("proposal_id", str(uuid.uuid4())),
+                        specialist_type=SpecialistType(proposal_data.get("specialist_type", "trend")),
+                        hypothesis=proposal_data.get("hypothesis", ""),
+                        required_features=proposal_data.get("required_features", []),
+                        regime=proposal_data.get("regime", ""),
+                        failure_modes=proposal_data.get("failure_modes", []),
+                        evidence_refs=proposal_data.get("evidence_refs", []),
+                        feature_version=output.feature_version,
+                        prompt_version=output.prompt_version,
+                        trace_id=output.trace_id,
+                    )
+                    proposals.append(proposal)
+                elif isinstance(proposal_data, SleeveProposal):
+                    proposals.append(proposal_data)
             except Exception as e:
                 logger.error(f"Failed to parse proposal: {e}")
                 continue
