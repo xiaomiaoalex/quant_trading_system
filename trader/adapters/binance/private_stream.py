@@ -36,6 +36,10 @@ from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
 logger = logging.getLogger(__name__)
 
 
+class ListenKeyEndpointGoneError(Exception):
+    """Raised when Binance listenKey REST endpoint is no longer available."""
+
+
 @dataclass
 class BinanceCredentials:
     """Binance API 凭证"""
@@ -206,6 +210,11 @@ class PrivateStreamManager(BaseStreamFSM):
                 else:
                     error = await resp.text()
                     logger.error(f"[{self._name}] Failed to create listenKey: {error}")
+                    if resp.status == 410:
+                        raise ListenKeyEndpointGoneError(
+                            "Binance listenKey endpoint returned 410 Gone. "
+                            "Legacy userDataStream REST endpoints are unavailable."
+                        )
                     raise Exception(f"Failed to create listenKey: {resp.status}")
 
         except Exception as e:

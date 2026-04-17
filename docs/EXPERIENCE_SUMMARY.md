@@ -780,6 +780,7 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 >>>>>>> origin/main
 | 2026-04-17 | Codex | 添加 Binance `-1021` 时间偏移修复经验：服务端时间校准、自动重签重试与单测护栏 |
 | 2026-04-17 | Codex | 添加 `BINANCE_RECV_WINDOW` 配置经验：统一解析、双入口接线与边界校验 |
+| 2026-04-17 | Codex | 添加 listenKey `410` 降级经验：私有流不可用时自动降级为 Public+REST 并持续服务 |
 
 ---
 
@@ -1180,3 +1181,40 @@ Broker 在连接时已经调用过 `GET /v3/time`，但签名请求仍直接用 
 **经验**：
 - 配置工厂名称变化属于高隐蔽性故障，只有走到该路径才会暴露
 - 这类问题适合用“导入 + 最小路径测试”提早兜住
+
+---
+
+## 二十一、listenKey `410 Gone` 降级经验（Binance 私有流）
+
+### 21.1 踩坑记录：上游接口下线会把“可选能力”变成“启动硬失败”
+
+**场景**：
+私有流启动阶段调用 `POST /v3/userDataStream` 创建 listenKey，但 Binance 返回 `410 Gone`。
+
+**问题**：
+- 旧实现里该异常直接向上抛出，导致 `BinanceConnector.start()` 失败
+- 即便 Public/REST 能正常工作，也会被私有流拖垮
+- 启动失败时可能出现“部分组件已启动”但整体失败的悬挂风险
+
+**经验**：
+- 对上游“能力退役”类错误，应该做语义化识别与受控降级，而不是一刀切失败
+
+### 21.2 设计模式：语义化异常 + 降级启动 + 失败清理
+
+**实现模式**：
+1. 在 `private_stream.py` 里把 HTTP 410 映射为 `ListenKeyEndpointGoneError`
+2. 在 `connector.start()` 捕获该异常并降级为 Public+REST 模式继续启动
+3. 对非预期异常仍按失败处理，并执行 `safe stop` 清理已启动组件
+4. 在 health metrics 增加 `private_stream_disabled_reason`，明确降级原因
+
+**收益**：
+- 上游接口退役时，系统从“不可用”变为“降级可用”
+- 运维能直接从健康指标看到降级原因，不必靠猜
+
+### 21.3 测试护栏：降级路径必须是可测试的一等路径
+
+扩展 `test_binance_connector.py` 覆盖：
+- `ListenKeyEndpointGoneError` 触发时 connector 仍可启动
+- health 状态在该场景返回 `DEGRADED`
+
+这能避免后续重构把降级逻辑意外删掉。

@@ -11,6 +11,7 @@
 >>>>>>> origin/main
 2026-04-17 18:18 (北京时间)
 2026-04-17 18:33 (北京时间)
+2026-04-17 19:19 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -23,6 +24,26 @@
 - **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：处理 Binance listenKey `410 Gone`，私有流自动降级
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 启动 `BinanceConnector` 时，`PrivateStream` 创建 listenKey 返回 `410 Gone` 会导致整个 connector 启动失败
+  - 失败路径下存在部分组件已启动但 connector 未完成启动的风险
+- 开发后状态:
+  - 在 `private_stream.py` 增加 `ListenKeyEndpointGoneError`，对 `410` 返回进行明确语义化
+  - `connector.start()` 捕获该错误后自动降级为 Public+REST 模式继续启动（不再整体失败）
+  - 启动失败路径增加 `safe stop` 清理，避免部分组件悬挂
+  - 健康状态新增 `private_stream_disabled_reason`，降级场景返回 `DEGRADED`
+  - 新增/扩展 `test_binance_connector.py` 覆盖降级启动与健康状态判定
+- Issue 状态迁移:
+  - listenKey `410` 导致 connector 启动失败：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py --tb=short` → 27 passed
+  - `python -c "import trader.api.main"` → import ok
+  - 警告: `trader/.pytest_cache` 权限警告（不影响结果）
 
 ### 本次任务：新增 Binance `recvWindow` 环境配置并统一接入 Reconciler
 - 完成时间: 2026-04-17
