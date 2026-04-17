@@ -23,7 +23,10 @@ from trader.core.application.reconciler import (
 from trader.services.reconciler_service import ReconcilerService
 from trader.services.order import OrderService
 from trader.api.models.schemas import OrderView
-from trader.api.env_config import get_binance_recv_window
+from trader.api.env_config import (
+    get_binance_recv_window,
+    get_reconciler_exchange_client_order_prefixes,
+)
 
 router = APIRouter(tags=["Reconciler"])
 
@@ -96,6 +99,14 @@ def _report_to_response(report: ReconcileReport) -> ReconcileReportResponse:
     )
 
 
+def _matches_client_order_id_prefix(client_order_id: Optional[str], prefixes: List[str]) -> bool:
+    if not prefixes:
+        return True
+    if not client_order_id:
+        return False
+    return any(client_order_id.startswith(prefix) for prefix in prefixes)
+
+
 async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
     """
     从交易所 adapter 获取当前交易所订单快照。
@@ -132,6 +143,22 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
         await broker.connect()
         try:
             broker_orders = await broker.get_open_orders()
+            prefixes = get_reconciler_exchange_client_order_prefixes()
+            if prefixes:
+                before_count = len(broker_orders)
+                broker_orders = [
+                    order
+                    for order in broker_orders
+                    if _matches_client_order_id_prefix(order.client_order_id, prefixes)
+                ]
+                logger.info(
+                    "EXCHANGE_ORDERS_PREFIX_FILTER_APPLIED",
+                    extra={
+                        "prefixes": prefixes,
+                        "before_count": before_count,
+                        "after_count": len(broker_orders),
+                    },
+                )
             
             exchange_orders: List[ExchangeOrderSnapshot] = [
                 ExchangeOrderSnapshot(

@@ -394,3 +394,16 @@ class TestReconcilerAPIEndpoints:
         assert data["phantom_count"] == 1
         assert data["ghost_count"] == 0
         assert data["drifts"][0]["cl_ord_id"] == "second-order"
+
+
+def test_matches_client_order_id_prefix_allows_all_when_prefixes_empty():
+    assert reconciler._matches_client_order_id_prefix("any-order", []) is True
+    assert reconciler._matches_client_order_id_prefix(None, []) is True
+
+
+def test_matches_client_order_id_prefix_filters_by_prefixes():
+    prefixes = ["fire_test_", "mybot_"]
+    assert reconciler._matches_client_order_id_prefix("fire_test_123", prefixes) is True
+    assert reconciler._matches_client_order_id_prefix("mybot_abc", prefixes) is True
+    assert reconciler._matches_client_order_id_prefix("legacy_order_1", prefixes) is False
+    assert reconciler._matches_client_order_id_prefix(None, prefixes) is False

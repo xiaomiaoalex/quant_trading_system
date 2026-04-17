@@ -1,12 +1,15 @@
 """
  Strategy API Routes
- ==================
- Strategy registry, version management, and runner control endpoints.
- """
+==================
+Strategy registry, version management, and runner control endpoints.
+"""
 import asyncio
+import os
 import threading
-from functools import lru_cache
-from typing import Dict, List, Optional
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
@@ -15,6 +18,11 @@ from trader.api.models.schemas import (
     StrategyVersion, StrategyVersionCreateRequest,
     VersionedConfig, VersionedConfigUpsertRequest,
 )
+from trader.api.env_config import get_binance_recv_window
+from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.core.domain.models.order import OrderType
+from trader.core.domain.models.signal import Signal
+from trader.storage.in_memory import get_storage
 from trader.services import StrategyService
 from trader.services.strategy_runner import (
     StrategyRunner,
@@ -30,6 +38,169 @@ router = APIRouter(tags=["Strategies"])
 # 注意：每个策略在独立的 asyncio.Task 中运行，实现异常隔离。
 _strategy_runner_instance: StrategyRunner | None = None
 _runner_lock: threading.Lock = threading.Lock()
+_live_broker = None
+_live_broker_lock = asyncio.Lock()
+_last_order_results: Dict[str, Dict[str, Any]] = {}
+
+
+def _create_event_callback():
+    """
+    创建 StrategyRunner 事件回调：
+    - 将策略信号/下单事件写入控制面事件流，便于 /v1/events 可观测
+    """
+    storage = get_storage()
+
+    def _event_callback(strategy_id: str, event_type: str, payload: Dict[str, Any]) -> None:
+        ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        storage.append_event(
+            {
+                "stream_key": f"strategy.{strategy_id}",
+                "event_type": event_type,
+                "trace_id": str(uuid.uuid4()),
+                "ts_ms": ts_ms,
+                "payload": {
+                    "strategy_id": strategy_id,
+                    **payload,
+                },
+            }
+        )
+
+    return _event_callback
+
+
+def _is_live_order_strategy_allowed(strategy_id: str) -> bool:
+    raw = os.environ.get("LIVE_ORDER_STRATEGIES", "fire_test")
+    allowed = {item.strip() for item in raw.split(",") if item.strip()}
+    return strategy_id in allowed
+
+
+def _build_binance_broker_config():
+    from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
+
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+    if not api_key or not secret_key:
+        raise RuntimeError("缺少 BINANCE_API_KEY 或 BINANCE_SECRET_KEY，无法执行真实下单")
+
+    recv_window = get_binance_recv_window()
+    mode = os.environ.get("BINANCE_BROKER_ENV", "demo").strip().lower()
+    if mode == "testnet":
+        return BinanceSpotDemoBrokerConfig.for_testnet(
+            api_key=api_key,
+            secret_key=secret_key,
+            recv_window=recv_window,
+        )
+    return BinanceSpotDemoBrokerConfig.for_demo(
+        api_key=api_key,
+        secret_key=secret_key,
+        recv_window=recv_window,
+    )
+
+
+async def _get_live_broker():
+    from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
+
+    global _live_broker
+    async with _live_broker_lock:
+        if _live_broker is None:
+            _live_broker = BinanceSpotDemoBroker(_build_binance_broker_config())
+            await _live_broker.connect()
+            return _live_broker
+
+        if not await _live_broker.is_connected():
+            await _live_broker.connect()
+        return _live_broker
+
+
+async def _submit_live_order(strategy_id: str, signal: Signal) -> Dict[str, Any] | None:
+    """
+    策略信号 -> 真实下单桥接：
+    - 默认仅允许 LIVE_ORDER_STRATEGIES（默认 fire_test）
+    - 成功后写入控制面 order/execution 视图，便于 API 查询与对账
+    """
+    if not _is_live_order_strategy_allowed(strategy_id):
+        return None
+
+    if signal.signal_type.value == "NONE":
+        return None
+
+    if signal.quantity <= 0:
+        raise ValueError(f"非法下单数量: {signal.quantity}")
+
+    broker = await _get_live_broker()
+    client_order_id = f"{strategy_id}_{signal.signal_id.replace('-', '')[:18]}"
+    order = await broker.place_order(
+        symbol=signal.symbol,
+        side=signal.get_order_side(),
+        order_type=OrderType.MARKET,
+        quantity=signal.quantity,
+        client_order_id=client_order_id,
+    )
+
+    storage = get_storage()
+    storage.create_order(
+        {
+            "cl_ord_id": order.client_order_id or client_order_id,
+            "trace_id": signal.signal_id,
+            "account_id": os.environ.get("TRADING_ACCOUNT_ID", "binance_spot_demo"),
+            "strategy_id": strategy_id,
+            "deployment_id": None,
+            "venue": broker.broker_name.upper(),
+            "instrument": order.symbol,
+            "side": order.side.value,
+            "order_type": order.order_type.value,
+            "qty": str(order.quantity),
+            "limit_price": None,
+            "tif": "GTC",
+            "status": order.status.value,
+            "broker_order_id": order.broker_order_id,
+            "filled_qty": str(order.filled_quantity),
+            "avg_price": str(order.average_price) if order.average_price is not None else None,
+        }
+    )
+
+    if order.filled_quantity > Decimal("0"):
+        storage.create_execution(
+            {
+                "cl_ord_id": order.client_order_id or client_order_id,
+                "exec_id": order.broker_order_id or str(uuid.uuid4()),
+                "ts_ms": int(order.created_at.timestamp() * 1000),
+                "fill_qty": str(order.filled_quantity),
+                "fill_price": str(order.average_price),
+            }
+        )
+
+    result = {
+        "client_order_id": order.client_order_id or client_order_id,
+        "broker_order_id": order.broker_order_id,
+        "symbol": order.symbol,
+        "side": order.side.value,
+        "status": order.status.value,
+        "filled_quantity": str(order.filled_quantity),
+        "avg_price": str(order.average_price),
+    }
+    _last_order_results[strategy_id] = result
+    return result
+
+
+async def shutdown_strategy_runtime() -> None:
+    """
+    应用关闭时清理策略运行时资源，避免连接泄漏。
+    """
+    global _strategy_runner_instance, _live_broker
+
+    runner = _strategy_runner_instance
+    _strategy_runner_instance = None
+    if runner is not None:
+        await runner.shutdown()
+
+    async with _live_broker_lock:
+        broker = _live_broker
+        _live_broker = None
+        if broker is not None:
+            await broker.disconnect()
+
+    _last_order_results.clear()
 
 
 def get_strategy_runner() -> StrategyRunner:
@@ -52,6 +223,7 @@ def get_strategy_runner() -> StrategyRunner:
             # 双重检查锁定模式
             if _strategy_runner_instance is None:
                 _strategy_runner_instance = StrategyRunner(
+                    oms_callback=_submit_live_order,
                     event_callback=_create_event_callback()
                 )
     return _strategy_runner_instance
@@ -288,6 +460,28 @@ class StrategyStatusResponse(BaseModel):
     blocked_reason: Optional[str] = None
 
 
+class StrategyTickRequest(BaseModel):
+    """手动驱动策略 Tick 请求"""
+
+    symbol: str = Field(default="BTCUSDT", description="交易对")
+    price: Decimal = Field(..., description="当前价格")
+    volume: Decimal = Field(default=Decimal("0"), description="成交量")
+    data_type: str = Field(default="TICKER", description="MarketDataType 名称")
+    timestamp: Optional[datetime] = Field(default=None, description="数据时间（UTC）；为空则用当前时间")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展字段")
+
+
+class StrategyTickResponse(BaseModel):
+    """手动驱动策略 Tick 响应"""
+
+    strategy_id: str
+    signal_generated: bool
+    signal_type: Optional[str] = None
+    signal_reason: Optional[str] = None
+    order_submitted: bool = False
+    order_result: Optional[Dict[str, Any]] = None
+
+
 def _info_to_response(info: StrategyRuntimeInfo) -> StrategyStatusResponse:
     """转换运行时信息为响应模型"""
     return StrategyStatusResponse(
@@ -404,6 +598,78 @@ async def start_strategy(
         return _info_to_response(info)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/v1/strategies/{strategy_id}/tick",
+    response_model=StrategyTickResponse,
+)
+async def tick_strategy_once(
+    strategy_id: str = Path(..., description="Strategy ID"),
+    request: StrategyTickRequest | None = None,
+):
+    """
+    手动向策略注入一次行情 Tick。
+
+    这是 fire_test 的验证入口：
+    1. 策略产出 BUY/SELL 信号
+    2. StrategyRunner 调用 OMS 回调
+    3. OMS 回调通过 BinanceSpotDemoBroker 发真实订单
+    """
+    if request is None:
+        raise HTTPException(status_code=400, detail="Request body is required")
+
+    if _is_live_order_strategy_allowed(strategy_id):
+        api_key = os.environ.get("BINANCE_API_KEY")
+        secret_key = os.environ.get("BINANCE_SECRET_KEY")
+        if not api_key or not secret_key:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "策略已配置为真实下单，但未检测到 BINANCE_API_KEY/BINANCE_SECRET_KEY。"
+                    "请先配置环境变量。"
+                ),
+            )
+
+    runner = get_strategy_runner()
+    try:
+        data_type = MarketDataType[request.data_type.upper()]
+    except KeyError:
+        valid_types = [item.name for item in MarketDataType]
+        raise HTTPException(
+            status_code=422,
+            detail=f"data_type 非法: {request.data_type}，可选值: {valid_types}",
+        )
+
+    timestamp = request.timestamp or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    market_data = MarketData(
+        symbol=request.symbol.upper(),
+        data_type=data_type,
+        price=request.price,
+        volume=request.volume,
+        timestamp=timestamp,
+        metadata=request.metadata,
+    )
+
+    try:
+        signal = await runner.tick(strategy_id, market_data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Tick failed: {e}")
+
+    order_result = _last_order_results.pop(strategy_id, None)
+    return StrategyTickResponse(
+        strategy_id=strategy_id,
+        signal_generated=signal is not None,
+        signal_type=signal.signal_type.value if signal else None,
+        signal_reason=signal.reason if signal else None,
+        order_submitted=order_result is not None,
+        order_result=order_result,
+    )
 
 
 @router.post(

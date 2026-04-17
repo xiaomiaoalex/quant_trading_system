@@ -29,7 +29,7 @@ from trader.adapters.binance.public_stream import (
 )
 from trader.adapters.binance.private_stream import (
     PrivateStreamManager, PrivateStreamConfig,
-    BinanceCredentials, RawOrderUpdate, RawFillUpdate
+    BinanceCredentials, RawOrderUpdate, RawFillUpdate, ListenKeyEndpointGoneError
 )
 from trader.adapters.binance.rest_alignment import (
     RESTAlignmentCoordinator, AlignmentConfig, RestAlignmentSnapshot
@@ -150,6 +150,7 @@ class BinanceConnector:
         self._health_handlers: List[Callable[[AdapterHealthReport], None]] = []
 
         self._health_check_task: Optional[asyncio.Task] = None
+        self._private_stream_disabled_reason: Optional[str] = None
 
     def register_order_handler(self, handler: Callable[[RawOrderUpdate], None]) -> None:
         """注册订单更新处理器"""
@@ -179,13 +180,34 @@ class BinanceConnector:
         self._running = True
         logger.info("[BinanceConnector] Starting...")
 
-        await self._rest_coordinator.start()
-        await self._public_manager.start()
-        await self._private_manager.start()
+        try:
+            await self._rest_coordinator.start()
+            await self._public_manager.start()
+            try:
+                await self._private_manager.start()
+            except ListenKeyEndpointGoneError as e:
+                # Binance legacy listenKey endpoints are retired; continue with Public+REST in degraded mode.
+                self._private_stream_disabled_reason = str(e)
+                await self._private_manager.stop()
+                logger.warning(
+                    "[BinanceConnector] Private stream disabled due to listenKey endpoint retirement: %s",
+                    e,
+                )
+            except Exception:
+                # Ensure partially started private manager resources are released before bubbling up.
+                await self._private_manager.stop()
+                raise
 
-        self._health_check_task = asyncio.create_task(self._health_check_loop())
+            self._health_check_task = asyncio.create_task(self._health_check_loop())
 
-        logger.info("[BinanceConnector] Started")
+            if self._private_stream_disabled_reason:
+                logger.info("[BinanceConnector] Started in DEGRADED mode (private stream unavailable)")
+            else:
+                logger.info("[BinanceConnector] Started")
+        except Exception:
+            await self._safe_stop_started_components()
+            self._running = False
+            raise
 
     async def stop(self) -> None:
         """停止连接器"""
@@ -207,6 +229,18 @@ class BinanceConnector:
         await self._rest_coordinator.stop()
 
         logger.info("[BinanceConnector] Stopped")
+
+    async def _safe_stop_started_components(self) -> None:
+        """Best-effort cleanup after partial startup failure."""
+        for stop_coro in (
+            self._private_manager.stop(),
+            self._public_manager.stop(),
+            self._rest_coordinator.stop(),
+        ):
+            try:
+                await stop_coro
+            except Exception:
+                pass
 
     def _on_public_data(self, event: MarketEvent) -> None:
         """处理公有流数据"""
@@ -282,14 +316,22 @@ class BinanceConnector:
         last_rest_success_ts = rest_metrics.get("last_rest_success_ts_ms", 0)
         rest_healthy = last_rest_success_ts > 0 and (time.time() * 1000 - last_rest_success_ts) < 60000
 
-        if public_healthy and private_healthy and rest_healthy:
-            overall = AdapterHealth.HEALTHY
-        elif not private_healthy:
-            overall = AdapterHealth.UNHEALTHY
-        elif not public_healthy or not rest_healthy:
-            overall = AdapterHealth.DEGRADED
+        if self._private_stream_disabled_reason:
+            if public_healthy and rest_healthy:
+                overall = AdapterHealth.DEGRADED
+            elif not public_healthy and not rest_healthy:
+                overall = AdapterHealth.UNHEALTHY
+            else:
+                overall = AdapterHealth.DEGRADED
         else:
-            overall = AdapterHealth.DISCONNECTED
+            if public_healthy and private_healthy and rest_healthy:
+                overall = AdapterHealth.HEALTHY
+            elif not private_healthy:
+                overall = AdapterHealth.UNHEALTHY
+            elif not public_healthy or not rest_healthy:
+                overall = AdapterHealth.DEGRADED
+            else:
+                overall = AdapterHealth.DISCONNECTED
 
         return AdapterHealthReport(
             public_stream_state=public_state,
@@ -305,6 +347,7 @@ class BinanceConnector:
                 "public": self._public_manager.get_status(),
                 "private": self._private_manager.get_status(),
                 "rest": rest_metrics,
+                "private_stream_disabled_reason": self._private_stream_disabled_reason,
             }
         )
 

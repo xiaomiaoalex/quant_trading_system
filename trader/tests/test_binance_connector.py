@@ -5,6 +5,8 @@ Binance Connector Unit Tests
 """
 import pytest
 import asyncio
+import time
+from unittest.mock import AsyncMock
 
 from trader.adapters.binance.connector import (
     BinanceConnector,
@@ -12,6 +14,7 @@ from trader.adapters.binance.connector import (
     AdapterHealth,
     AdapterHealthReport,
 )
+from trader.adapters.binance.private_stream import ListenKeyEndpointGoneError
 from trader.adapters.binance.private_stream import RawOrderUpdate, RawFillUpdate
 from trader.adapters.binance.public_stream import MarketEvent
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
@@ -240,6 +243,47 @@ class TestConnectorIntegration:
         connector._on_order_update(test_order)
 
         assert len(order_updates) == 1
+
+
+class TestBinanceConnectorStartupDegrade:
+    """Binance Connector 启动降级测试"""
+
+    @pytest.mark.asyncio
+    async def test_start_degrades_when_listen_key_endpoint_gone(self):
+        connector = BinanceConnector(
+            api_key="test_api_key",
+            secret_key="test_secret_key"
+        )
+
+        connector._rest_coordinator.start = AsyncMock(return_value=None)
+        connector._public_manager.start = AsyncMock(return_value=None)
+        connector._private_manager.start = AsyncMock(
+            side_effect=ListenKeyEndpointGoneError("410 Gone")
+        )
+        connector._private_manager.stop = AsyncMock(return_value=None)
+
+        await connector.start()
+
+        assert connector._running is True
+        assert connector._private_stream_disabled_reason is not None
+        connector._private_manager.stop.assert_awaited_once()
+        await connector.stop()
+
+    def test_get_health_degraded_when_private_stream_disabled(self):
+        connector = BinanceConnector(
+            api_key="test_api_key",
+            secret_key="test_secret_key"
+        )
+        connector._private_stream_disabled_reason = "listenkey gone"
+        connector._public_manager._set_state(StreamState.CONNECTED)
+        connector._private_manager._set_state(StreamState.DISCONNECTED)
+
+        connector._rest_coordinator.get_metrics = lambda: {
+            "last_rest_success_ts_ms": int(time.time() * 1000)
+        }
+
+        report = connector.get_health()
+        assert report.overall_health == AdapterHealth.DEGRADED
 
 
 if __name__ == "__main__":
