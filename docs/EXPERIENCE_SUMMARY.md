@@ -780,6 +780,7 @@ with patch("trader.adapters.persistence.portfolio_proposal_store.PortfolioPropos
 | 2026-04-17 | Codex | 添加 listenKey `410` 降级经验：私有流不可用时自动降级为 Public+REST 并持续服务 |
 | 2026-04-17 | Codex | 添加 Fire Test 开火策略经验：可控节奏触发 BUY/SELL 并带安全护栏 |
 | 2026-04-17 | Codex | 添加 fire_test 真下单接线经验：StrategyRunner OMS 回调接入、手动 Tick 驱动与实盘安全闸门 |
+| 2026-04-17 | Codex | 添加 Reconciler 前缀过滤经验：按 client_order_id 前缀屏蔽历史订单干扰，保证双入口一致性 |
 
 ---
 
@@ -1274,3 +1275,42 @@ Broker 在连接时已经调用过 `GET /v3/time`，但签名请求仍直接用 
 **经验**：
 - 在“接线任务”里，字段命名漂移比业务逻辑错误更常见
 - 端到端测试应覆盖“信号产生 + 回调执行 + 订单结果可见”全链路，才能尽早暴露这类错误
+
+---
+
+## 二十四、Reconciler 历史订单隔离经验（前缀过滤）
+
+### 24.1 踩坑记录：共享账户历史单会污染当前程序对账信号
+
+**场景**：
+同一个 Binance 账户曾被其他程序使用，交易所里存在旧 `client_order_id` 订单。
+
+**问题**：
+- 当前程序本地没有这些订单，Reconciler 会持续报 `PHANTOM`
+- 告警噪声高，难以判断“新问题”还是“历史遗留”
+
+**经验**：
+- 对账要支持“范围收敛”，否则共享账户的历史状态会干扰当前系统可观测性
+
+### 24.2 设计模式：按 `client_order_id` 前缀做交易所订单白名单
+
+**实现模式**：
+1. 新增环境变量 `RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES`
+2. 解析为逗号分隔前缀列表（去空、去重）
+3. 仅保留 `client_order_id` 命中前缀的交易所订单进入对账
+
+示例：
+```env
+RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES=fire_test_,mybot_
+```
+
+### 24.3 关键约束：双入口必须同策略，避免行为漂移
+
+**场景**：
+系统里存在两条交易所取单路径：
+- 周期性对账（`main.py`）
+- 手动触发对账（`routes/reconciler.py`）
+
+**经验**：
+- 同一配置必须同时接入两个入口
+- 否则会出现“定时对账安静、手动触发仍报 PHANTOM”的伪故障

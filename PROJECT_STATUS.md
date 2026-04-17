@@ -4,20 +4,54 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-16 22:41 (北京时间)
-2026-04-17 18:18 (北京时间)
-2026-04-17 18:33 (北京时间)
-2026-04-17 19:19 (北京时间)
-2026-04-17 19:31 (北京时间)
-2026-04-17 20:10 (北京时间)
+2026-04-17 22:47 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
 - **基于**：`main`
-- **工作树**：有变更（fire_test 真下单链路接线 + 文档更新）
-- **最新提交**：feat(task-8.0): 实现多Agent组合开发委员会功能
+- **工作树**：有变更（staged services/）
+- **最新提交**：feat(task-portfolio): add portfolio research workflow (#48)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：全面测试验证 - 代码质量检查
+- 完成时间: 2026-04-17
+- 分支: main (测试验证)
+- 状态: ✅ 已完成并验证
+- 测试结果:
+  - P0 回归测试: ✅ 全部通过
+  - 全量单元测试: ✅ **全部通过** (排除 snapshot_storage 配置问题)
+  - PostgreSQL 集成测试: ✅ **31 passed**
+  - Backend 加载验证: ✅ Systematic Trader Control Plane API
+  - DOTENV 自动加载: ✅ 验证通过
+  - Binance Connector 测试: ✅ 全部通过
+- 问题发现:
+  - `services/` 目录与 `trader/services/` 需要手动同步（已修复）
+  - mypy 类型检查: 355 个警告（大部分为 `Any | None` 和类型注解缺失，不影响运行）
+  - Pydantic v2 deprecation warnings: 2 个（`class Config` 应改为 `ConfigDict`）
+  - Runtime warnings in onchain tests: 异步 mock 未 await（测试代码问题，不影响功能）
+- 下一步:
+  - 可选：修复 Pydantic v2 deprecation（`chat.py` 的 `class Config`）
+  - 可选：改进 async mock 在 tests 中的使用方式
+
+### 本次任务：新增 Reconciler 订单前缀过滤开关（屏蔽旧程序历史单）
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 交易所历史订单会被统一纳入对账，容易触发与当前程序无关的 `PHANTOM`
+  - 周期对账与手动触发对账都缺少“仅看本程序订单”的过滤机制
+- 开发后状态:
+  - 新增环境变量 `RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES`（逗号分隔）
+  - `trader/api/main.py` 周期对账交易所取单接入前缀过滤
+  - `trader/api/routes/reconciler.py` 手动触发取单接入同一过滤，避免双入口行为漂移
+  - `trader/api/env_config.py` 增加统一解析函数，边界值去重/去空处理
+  - `.env.example` 增加配置说明
+- Issue 状态迁移:
+  - 旧程序历史订单干扰当前对账：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_api_env_config.py trader/tests/test_api_reconciler.py --tb=short` → 22 passed
+  - `python -c "import trader.api.main"` → import ok
 
 ### 本次任务：补齐 `fire_test` 真下单链路（Runner → OMS 回调 → Binance）
 - 完成时间: 2026-04-17
