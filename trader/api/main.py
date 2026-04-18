@@ -46,6 +46,11 @@ from trader.api.models.schemas import StrategyRegisterRequest
 from trader.api.env_config import (
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
+    get_system_order_namespace_prefix,
+)
+from trader.core.domain.services.order_ownership_registry import (
+    get_order_ownership_registry,
+    OrderOwnership,
 )
 from trader.adapters.binance.connector import BinanceConnector
 
@@ -206,6 +211,19 @@ async def lifespan(app: FastAPI):
 
     reconciler_service = reconciler.get_reconciler_service()
 
+    # 获取订单归属注册表
+    ownership_registry = get_order_ownership_registry()
+
+    # 外部订单 ID getter
+    def _external_order_ids_getter() -> set[str]:
+        """获取当前已识别的外部订单 ID 集合"""
+        # 从注册表获取所有标记为 EXTERNAL 的订单 ID
+        stats = ownership_registry.get_statistics()
+        external_count = stats.get("external", 0)
+        if external_count > 0:
+            return ownership_registry.get_external_order_ids()
+        return set()
+
     # 检查是否启用交易所对账
     if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
         logger.info("[Reconciler] Exchange reconciliation disabled")
@@ -213,6 +231,7 @@ async def lifespan(app: FastAPI):
         reconciler_service.configure_periodic_reconciliation(
             _local_orders_getter,
             _exchange_orders_getter,
+            _external_order_ids_getter,
         )
         await reconciler_service.start()
 

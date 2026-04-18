@@ -2,8 +2,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import List, Optional, Dict, Any, Callable
 import logging
+from typing import List, Optional, Dict, Any, Callable, Set
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,8 @@ class OrderDrift:
     quantity: Optional[str] = None
     filled_quantity: Optional[str] = None
     exchange_filled_quantity: Optional[str] = None
+    # 订单归属类型（用于区分 OWNED/EXTERNAL/UNKNOWN）
+    ownership: Optional[str] = None  # "OWNED" / "EXTERNAL" / "UNKNOWN"
 
 
 @dataclass
@@ -47,6 +49,8 @@ class ReconcileReport:
     phantom_count: int = 0
     diverged_count: int = 0
     within_grace_period_count: int = 0
+    # 新增统计字段：外部订单数（不触发 PHANTOM 告警）
+    external_count: int = 0
 
     def __post_init__(self):
         self.ghost_count = sum(1 for d in self.drifts if d.drift_type == DriftType.GHOST)
@@ -88,13 +92,31 @@ class Reconciler:
         self,
         local_orders: List[LocalOrderSnapshot],
         exchange_orders: List[ExchangeOrderSnapshot],
+        external_order_ids: Optional[Set[str]] = None,
     ) -> ReconcileReport:
+        """
+        执行对账。
+
+        参数:
+        - local_orders: 本地订单快照
+        - exchange_orders: 交易所订单快照
+        - external_order_ids: 外部订单 ID 集合（不触发 PHANTOM 告警）
+
+        返回:
+        - ReconcileReport: 包含漂移检测结果和统计信息
+        """
         now = datetime.now(timezone.utc)
 
         local_by_id = {o.cl_ord_id: o for o in local_orders}
         exchange_by_id = {o.cl_ord_id: o for o in exchange_orders}
 
         drifts: List[OrderDrift] = []
+        external_count = 0
+
+        # 外部/unknown订单集合（由调用方根据归属分类传入）
+        # 如果为空，表示未启用归属分类（向后兼容旧行为）
+        # 如果非空，只跳过在这个集合中的订单
+        skipped_external = set() if external_order_ids is None else external_order_ids
 
         local_ids = set(local_by_id.keys())
         exchange_ids = set(exchange_by_id.keys())
@@ -104,6 +126,14 @@ class Reconciler:
             drifts.append(self._create_ghost_drift(local, now))
 
         for cl_ord_id in exchange_ids - local_ids:
+            # 跳过外部/unknown订单（不触发 PHANTOM 告警）
+            # 只有当归属分类启用时（非空集合）才跳过
+            if skipped_external and cl_ord_id in skipped_external:
+                external_count += 1
+                logger.debug(
+                    f"[Reconciler] skipping PHANTOM for external/unknown order: {cl_ord_id}"
+                )
+                continue
             exchange = exchange_by_id[cl_ord_id]
             drifts.append(self._create_phantom_drift(exchange, now))
 
@@ -114,11 +144,13 @@ class Reconciler:
             if drift:
                 drifts.append(drift)
 
-        return ReconcileReport(
+        report = ReconcileReport(
             timestamp=now,
             total_orders_checked=len(local_orders) + len(exchange_orders),
             drifts=drifts,
+            external_count=external_count,
         )
+        return report
 
     def _create_ghost_drift(self, local: LocalOrderSnapshot, now: datetime) -> OrderDrift:
         grace_remaining = self._calculate_grace_period(local.created_at, now)

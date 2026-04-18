@@ -1,6 +1,7 @@
 from trader.api.env_config import (
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
+    get_system_order_namespace_prefix,
 )
 
 
@@ -35,3 +36,16 @@ def test_get_reconciler_exchange_client_order_prefixes_deduplicates_and_ignores_
     assert get_reconciler_exchange_client_order_prefixes(
         env={"RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES": "fire_,,fire_,other_"}
     ) == ["fire_", "other_"]
+
+
+def test_get_system_order_namespace_prefix_default() -> None:
+    assert get_system_order_namespace_prefix(env={}) == "QTS1_"
+
+
+def test_get_system_order_namespace_prefix_uses_custom_value() -> None:
+    assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "CUSTOM_"}) == "CUSTOM_"
+
+
+def test_get_system_order_namespace_prefix_ignores_empty() -> None:
+    assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": ""}) == "QTS1_"
+    assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "   "}) == "QTS1_"
