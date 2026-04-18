@@ -215,6 +215,8 @@ Thumbs.db
 mcp_mission_control.json
 *.lock
 
+# Artifacts - generated output (backtest reports, etc.)
+artifacts/
 
 .mcp_bridge_test_tmp/
 .mcp_smoke_*/
