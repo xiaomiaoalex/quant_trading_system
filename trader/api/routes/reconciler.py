@@ -27,6 +27,11 @@ from trader.api.env_config import (
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
 )
+from trader.core.domain.services.order_ownership_registry import (
+    OrderOwnershipRegistry,
+    OrderOwnership,
+    get_order_ownership_registry,
+)
 
 router = APIRouter(tags=["Reconciler"])
 
@@ -60,6 +65,7 @@ class DriftResponse(BaseModel):
     filled_quantity: Optional[str]
     exchange_filled_quantity: Optional[str]
     grace_period_remaining_sec: Optional[float]
+    ownership: Optional[str] = None  # "OWNED" / "EXTERNAL" / "UNKNOWN"
 
 
 class ReconcileReportResponse(BaseModel):
@@ -70,6 +76,7 @@ class ReconcileReportResponse(BaseModel):
     phantom_count: int
     diverged_count: int
     within_grace_period_count: int
+    external_count: int = 0  # 外部订单数（不触发告警）
 
 
 def _drift_to_response(drift: OrderDrift) -> DriftResponse:
@@ -84,6 +91,7 @@ def _drift_to_response(drift: OrderDrift) -> DriftResponse:
         filled_quantity=drift.filled_quantity,
         exchange_filled_quantity=drift.exchange_filled_quantity,
         grace_period_remaining_sec=drift.grace_period_remaining_sec,
+        ownership=drift.ownership,
     )
 
 
@@ -96,6 +104,7 @@ def _report_to_response(report: ReconcileReport) -> ReconcileReportResponse:
         phantom_count=report.phantom_count,
         diverged_count=report.diverged_count,
         within_grace_period_count=report.within_grace_period_count,
+        external_count=report.external_count,
     )
 
 
@@ -217,7 +226,15 @@ async def trigger_reconciliation(
     支持两种模式：
     1. 无参模式（request=None）：后端自动拉取本地与交易所订单快照
     2. 带参模式：前端提交 local_orders + exchange_orders（用于测试）
+    
+    订单归属分类：
+    - OWNED: 本系统订单，参与对账
+    - EXTERNAL: 外部订单，只统计不触发 PHANTOM 告警
+    - UNKNOWN: 未识别，保守处理
     """
+    # 获取订单归属注册表
+    ownership_registry = get_order_ownership_registry()
+    
     # 无参触发模式：后端自动聚合数据
     if request is None or (request.local_orders is None and request.exchange_orders is None):
         order_svc = OrderService()
@@ -237,8 +254,19 @@ async def trigger_reconciliation(
             for o in local_orders_raw
         ]
         
+        # 回填本地订单到归属注册表
+        if local_orders_raw:
+            order_dicts = [
+                {
+                    "cl_ord_id": o.cl_ord_id,
+                    "strategy_id": getattr(o, 'strategy_id', None),
+                    "created_at": datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc).isoformat() if o.created_ts_ms else None,
+                }
+                for o in local_orders_raw
+            ]
+            ownership_registry.bootstrap_from_local_orders(order_dicts)
+        
         # 从交易所 adapter 拉取订单（真实交易所状态）
-        # 注意：这需要 LiveExchangeAdapter 支持，目前使用模拟方式
         exchange_orders: List[ExchangeOrderSnapshot] = await _fetch_exchange_orders()
         
         logger.info(
@@ -272,7 +300,35 @@ async def trigger_reconciliation(
             for o in (request.exchange_orders or [])
         ]
 
-    report = reconciler.reconcile(local_orders, exchange_orders)
+    # Only apply ownership filtering when explicitly configured (backward compatibility)
+    # If no external prefixes configured and no registered origins, use legacy behavior
+    has_explicit_config = bool(
+        ownership_registry._external_prefixes or
+        ownership_registry._origins
+    )
+    
+    # 识别外部/unknown订单 ID 集合（不触发 PHANTOM 告警）
+    # 只有当明确配置了归属分类时才启用过滤
+    skipped_order_ids: set[str] | None = None
+    if has_explicit_config:
+        skipped_order_ids = set()
+        for ex_order in exchange_orders:
+            ownership = ownership_registry.classify_order(ex_order.cl_ord_id)
+            if ownership in (OrderOwnership.EXTERNAL, OrderOwnership.UNKNOWN):
+                skipped_order_ids.add(ex_order.cl_ord_id)
+            # 将归属信息附加到订单对象上（通过临时属性）
+            ex_order._ownership = ownership.value
+
+    report = reconciler.reconcile(local_orders, exchange_orders, skipped_order_ids)
+    
+    # 在返回前为每个 drift 设置 ownership 属性
+    for drift in report.drifts:
+        if drift.drift_type == DriftType.PHANTOM:
+            if skipped_order_ids and drift.cl_ord_id in skipped_order_ids:
+                drift.ownership = OrderOwnership.UNKNOWN.value
+            else:
+                drift.ownership = OrderOwnership.OWNED.value
+    
     service.set_last_report(report)
     return _report_to_response(report)
 

@@ -15,6 +15,8 @@ BINANCE_RECV_WINDOW_DEFAULT = 5000
 BINANCE_RECV_WINDOW_MIN = 1
 BINANCE_RECV_WINDOW_MAX = 60000
 RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES_ENV = "RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES"
+SYSTEM_ORDER_NAMESPACE_PREFIX_ENV = "SYSTEM_ORDER_NAMESPACE_PREFIX"
+SYSTEM_ORDER_NAMESPACE_PREFIX_DEFAULT = "QTS1_"
 
 
 def get_binance_recv_window(env: Mapping[str, str] | None = None) -> int:
@@ -84,3 +86,25 @@ def get_reconciler_exchange_client_order_prefixes(
         seen.add(prefix)
         prefixes.append(prefix)
     return prefixes
+
+
+def get_system_order_namespace_prefix(
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """
+    解析系统订单命名空间前缀配置。
+
+    环境变量:
+    - SYSTEM_ORDER_NAMESPACE_PREFIX
+      系统级订单前缀（如 "QTS1_"），用于快速识别本系统订单
+    """
+    source = env if env is not None else os.environ
+    raw = source.get(SYSTEM_ORDER_NAMESPACE_PREFIX_ENV)
+    if raw is None or str(raw).strip() == "":
+        return SYSTEM_ORDER_NAMESPACE_PREFIX_DEFAULT
+
+    prefix = str(raw).strip()
+    if not prefix:
+        return SYSTEM_ORDER_NAMESPACE_PREFIX_DEFAULT
+
+    return prefix

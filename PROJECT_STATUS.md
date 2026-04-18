@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-17 22:47 (北京时间)
+2026-04-17 23:19 (北京时间)
 
 ## 分支状态
 - **当前分支**：`main`
@@ -13,6 +13,31 @@
 - **最新提交**：feat(task-portfolio): add portfolio research workflow (#48)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Reconciler 自动识别本系统订单并屏蔽外部历史订单噪声
+- 完成时间: 2026-04-17
+- 分支: main (工作区修复)
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 共享账户历史订单会污染当前程序对账信号（PHANTOM 告警噪声）
+  - 仅靠 `RECONCILER_EXCHANGE_CLIENT_ORDER_PREFIXES` 环境变量无法覆盖"已关闭/废弃策略"的历史订单
+  - 用户需要每新增/删除策略都手改环境变量
+- 开发后状态:
+  - 新增 `trader/core/domain/services/order_ownership_registry.py`（订单归属注册表组件）
+    - 支持 OWNED/EXTERNAL/UNKNOWN 三级分类
+    - 基于命名空间前缀（如 QTS1_）快速识别本系统订单
+    - 支持从本地订单/事件回填注册表（覆盖历史策略）
+  - 新增环境变量 `SYSTEM_ORDER_NAMESPACE_PREFIX`（默认 QTS1_）
+  - `trader/core/application/reconciler.py` 支持 external_order_ids 参数，外部/unknown订单不触发 PHANTOM
+  - `trader/api/routes/reconciler.py` 接入归属判断逻辑，双入口（手动/周期）行为一致
+  - `trader/api/main.py` 周期对账同步接入归属注册表
+  - `trader/api/env_config.py` 增加 `get_system_order_namespace_prefix()` 解析函数
+  - 响应模型新增 `ownership` 字段和 `external_count` 统计
+- Issue 状态迁移:
+  - 共享账户历史订单干扰对账：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_api_env_config.py trader/tests/test_api_reconciler.py --tb=short` → 37 passed
+  - `python -c "import trader.api.main"` → import ok
 
 ### 本次任务：全面测试验证 - 代码质量检查
 - 完成时间: 2026-04-17

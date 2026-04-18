@@ -34,11 +34,13 @@ class ReconcilerService:
         self._drift_handlers: List[Callable[[OrderDrift], Awaitable[None]]] = []
         self._local_orders_getter: Optional[Callable[[], Awaitable[List[Dict[str, Any]]]]] = None
         self._exchange_orders_getter: Optional[Callable[[], Awaitable[List[Dict[str, Any]]]]] = None
+        self._external_order_ids_getter: Optional[Callable[[], set[str]]] = None
 
     async def trigger_reconcile(
         self,
         local_orders_getter: Callable[[], Awaitable[List[Dict[str, Any]]]],
         exchange_orders_getter: Callable[[], Awaitable[List[Dict[str, Any]]]],
+        external_order_ids: Optional[set[str]] = None,
     ) -> ReconcileReport:
         local_raw = await local_orders_getter()
         exchange_raw = await exchange_orders_getter()
@@ -68,7 +70,7 @@ class ReconcilerService:
             for o in exchange_raw
         ]
 
-        report = self._reconciler.reconcile(local_orders, exchange_orders)
+        report = self._reconciler.reconcile(local_orders, exchange_orders, external_order_ids)
         self._last_report = report
 
         for drift in report.drifts:
@@ -76,7 +78,15 @@ class ReconcilerService:
             # to calculate grace period, so they are always handled immediately.
             # GHOST and DIVERGED orders respect grace period to avoid false alarms
             # during normal order propagation delays.
-            if drift.drift_type == DriftType.PHANTOM or drift.grace_period_remaining_sec is None or drift.grace_period_remaining_sec <= 0:
+            # Skip EXTERNAL orders - they don't trigger PHANTOM noise
+            if drift.drift_type == DriftType.PHANTOM:
+                # Check if this is an EXTERNAL order - skip noise for external orders
+                if external_order_ids is not None and drift.cl_ord_id in external_order_ids:
+                    logger.debug(
+                        f"[Reconciler] skipping PHANTOM handler for external order: {drift.cl_ord_id}"
+                    )
+                    continue
+            if drift.grace_period_remaining_sec is None or drift.grace_period_remaining_sec <= 0:
                 await self._handle_drift(drift)
 
         return report
@@ -150,10 +160,12 @@ class ReconcilerService:
         self,
         local_orders_getter: Callable[[], Awaitable[List[Dict[str, Any]]]],
         exchange_orders_getter: Callable[[], Awaitable[List[Dict[str, Any]]]],
+        external_order_ids_getter: Optional[Callable[[], set[str]]] = None,
     ) -> None:
         """Configure the callback functions for periodic reconciliation."""
         self._local_orders_getter = local_orders_getter
         self._exchange_orders_getter = exchange_orders_getter
+        self._external_order_ids_getter = external_order_ids_getter
 
     async def _run_loop(self) -> None:
         while self._running:
@@ -162,7 +174,9 @@ class ReconcilerService:
                 if self._local_orders_getter is None or self._exchange_orders_getter is None:
                     logger.warning("[Reconciler] 周期性对账未配置local_orders_getter和exchange_orders_getter，跳过本次执行")
                     continue
-                await self.trigger_reconcile(self._local_orders_getter, self._exchange_orders_getter)
+                
+                external_ids = self._external_order_ids_getter() if self._external_order_ids_getter else None
+                await self.trigger_reconcile(self._local_orders_getter, self._exchange_orders_getter, external_ids)
             except asyncio.CancelledError:
                 break
             except Exception as e:
