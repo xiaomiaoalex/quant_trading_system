@@ -97,6 +97,13 @@
 
 - 详细拆解见：`docs/V3.4.0_HERMES_QLIB_INTEGRATION_PLAN.md`
 
+### 补充进展（2026-04-18）
+
+- 控制面策略链路已打通：`策略代码新建/调试 -> 回测 -> 代码注册 -> 加载 -> 运行`
+- 后端回测执行已从占位改为真实异步任务，包含 `progress` 推进与报告落盘
+- Task 9.4 / 9.5 在后端与前端联调维度进入“已验证”状态
+- 下一优先级建议：Task 9.6（Audit 查询）与 Task 9.7（Replay 任务状态）继续闭环
+
 ## 并行维护主线：Phase 7 — 风控穿透验证与策略正期望证明
 
 ### 目标
@@ -1869,4 +1876,3 @@ Task 7.8 (统一DecisionTraceId)
 2. Task 7.3 依赖 Phase 6 的 `StrategyLifecycleManager`（已完成）
 3. Task 7.4-7.5 依赖 Task 7.3 的验证门控
 4. Task 7.6-7.8 可并行执行，不依赖其他 Task
-

@@ -1,5 +1,22 @@
 import { APIClient } from './client'
-import type { RegisteredStrategy, StrategyRuntimeInfo, StrategyParams } from '@/types'
+import type {
+  RegisteredStrategy,
+  StrategyRuntimeInfo,
+  StrategyParams,
+  StrategyEventEnvelope,
+  StrategyCodeVersion,
+  StrategyCodeCreateRequest,
+  StrategyCodeDebugRequest,
+  StrategyCodeDebugResponse,
+} from '@/types'
+
+interface LoadStrategyPayload {
+  module_path?: string
+  code?: string
+  code_version?: number
+  version?: string
+  config?: Record<string, unknown>
+}
 
 export class StrategiesAPI extends APIClient {
   async getRegistry(): Promise<RegisteredStrategy[]> {
@@ -22,32 +39,44 @@ export class StrategiesAPI extends APIClient {
     return this.put<{ success: boolean; error?: string }>(`/v1/strategies/${strategyId}/params`, { config: params })
   }
 
-  async loadStrategy(strategyId: string, modulePath: string, version = 'v1', config: Record<string, unknown> = {}): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string; status?: string }>(`/v1/strategies/${strategyId}/load`, {
-      module_path: modulePath,
-      version,
-      config,
-    })
+  async createStrategyCode(request: StrategyCodeCreateRequest): Promise<StrategyCodeVersion> {
+    return this.post<StrategyCodeVersion>('/v1/strategies/code', request)
   }
 
-  async unloadStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/unload`)
+  async getLatestStrategyCode(strategyId: string): Promise<StrategyCodeVersion> {
+    return this.get<StrategyCodeVersion>(`/v1/strategies/${strategyId}/code/latest`)
   }
 
-  async startStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/start`)
+  async getStrategyCodeVersion(strategyId: string, codeVersion: number): Promise<StrategyCodeVersion> {
+    return this.get<StrategyCodeVersion>(`/v1/strategies/${strategyId}/code/${codeVersion}`)
   }
 
-  async stopStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/stop`)
+  async debugStrategyCode(request: StrategyCodeDebugRequest): Promise<StrategyCodeDebugResponse> {
+    return this.post<StrategyCodeDebugResponse>('/v1/strategies/code/debug', request)
   }
 
-  async pauseStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/pause`)
+  async loadStrategy(strategyId: string, payload: LoadStrategyPayload): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/load`, payload)
   }
 
-  async resumeStrategy(strategyId: string): Promise<{ ok: boolean; message?: string }> {
-    return this.post<{ ok: boolean; message?: string }>(`/v1/strategies/${strategyId}/resume`)
+  async unloadStrategy(strategyId: string): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/unload`)
+  }
+
+  async startStrategy(strategyId: string): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/start`)
+  }
+
+  async stopStrategy(strategyId: string): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/stop`)
+  }
+
+  async pauseStrategy(strategyId: string): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/pause`)
+  }
+
+  async resumeStrategy(strategyId: string): Promise<StrategyRuntimeInfo> {
+    return this.post<StrategyRuntimeInfo>(`/v1/strategies/${strategyId}/resume`)
   }
 
   async getStrategyEvents(strategyId: string, eventType?: string, limit = 100): Promise<StrategyEventEnvelope[]> {

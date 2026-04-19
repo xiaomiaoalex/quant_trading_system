@@ -84,6 +84,44 @@ export interface StrategySummary {
   error: number
 }
 
+export interface StrategyCodeVersion {
+  strategy_id: string
+  code_version: number
+  code: string
+  checksum: string
+  created_at?: string
+  created_by?: string
+  notes?: string
+}
+
+export interface StrategyCodeCreateRequest {
+  strategy_id: string
+  code: string
+  name?: string
+  description?: string
+  created_by?: string
+  notes?: string
+  register_if_missing?: boolean
+}
+
+export interface StrategyCodeDebugRequest {
+  strategy_id?: string
+  code: string
+  config?: Record<string, unknown>
+  sample_market_data?: Array<Record<string, unknown>>
+}
+
+export interface StrategyCodeDebugResponse {
+  ok: boolean
+  syntax_ok: boolean
+  protocol_ok: boolean
+  validation_status?: string
+  checksum?: string
+  signals: Array<Record<string, unknown>>
+  errors: string[]
+  warnings: string[]
+}
+
 // Strategy status display configuration
 export const STRATEGY_STATUS_DISPLAY: Record<
   StrategyStatus,

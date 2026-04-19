@@ -4,22 +4,33 @@
 Strategy registry, version management, and runner control endpoints.
 """
 import asyncio
+import hashlib
+import logging
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path
 from pydantic import BaseModel, Field
 
 from trader.api.models.schemas import (
     Strategy, StrategyRegisterRequest,
     StrategyVersion, StrategyVersionCreateRequest,
     VersionedConfig, VersionedConfigUpsertRequest,
+    StrategyCodeVersion,
+    StrategyCodeCreateRequest,
+    StrategyCodeDebugRequest,
+    StrategyCodeDebugResponse,
 )
 from trader.api.env_config import get_binance_recv_window
-from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.core.application.strategy_protocol import (
+    MarketData,
+    MarketDataType,
+    StrategyResourceLimits,
+)
 from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal
 from trader.storage.in_memory import get_storage
@@ -27,10 +38,10 @@ from trader.services import StrategyService
 from trader.services.strategy_runner import (
     StrategyRunner,
     StrategyRuntimeInfo,
-    StrategyStatus,
 )
 
 router = APIRouter(tags=["Strategies"])
+logger = logging.getLogger(__name__)
 
 
 # 全局策略执行器实例（单例）
@@ -229,6 +240,36 @@ def get_strategy_runner() -> StrategyRunner:
     return _strategy_runner_instance
 
 
+def _signal_to_dict(signal) -> Dict:
+    """Convert Signal model to serializable dict for debug endpoint."""
+    return {
+        "strategy_name": signal.strategy_name,
+        "signal_type": signal.signal_type.value if hasattr(signal.signal_type, "value") else str(signal.signal_type),
+        "symbol": signal.symbol,
+        "price": float(signal.price) if signal.price is not None else None,
+        "quantity": float(signal.quantity) if signal.quantity is not None else None,
+        "confidence": float(signal.confidence) if signal.confidence is not None else None,
+        "reason": signal.reason,
+    }
+
+
+def _build_debug_market_data(raw: Dict, fallback_symbol: str = "BTCUSDT") -> MarketData:
+    """Build MarketData from payload dict (debug use)."""
+    price = Decimal(str(raw.get("price", "0")))
+    return MarketData(
+        symbol=str(raw.get("symbol", fallback_symbol)),
+        data_type=MarketDataType.KLINE,
+        price=price,
+        volume=Decimal(str(raw.get("volume", "1"))),
+        kline_open=Decimal(str(raw.get("open", price))),
+        kline_high=Decimal(str(raw.get("high", price))),
+        kline_low=Decimal(str(raw.get("low", price))),
+        kline_close=Decimal(str(raw.get("close", price))),
+        kline_interval=str(raw.get("interval", "1m")),
+        metadata=dict(raw.get("metadata", {})),
+    )
+
+
 @router.get("/v1/strategies/registry", response_model=List[Strategy])
 async def list_strategies():
     """
@@ -263,6 +304,159 @@ async def get_strategy(strategy_id: str = Path(..., description="Strategy ID")):
     if not strategy:
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
     return strategy
+
+
+@router.post("/v1/strategies/code", response_model=StrategyCodeVersion, status_code=201)
+async def create_strategy_code(request: StrategyCodeCreateRequest):
+    """
+    Create or update strategy code (new code version).
+
+    Supports auto registry creation so frontend can complete
+    code edit -> register -> load -> run chain in one flow.
+    """
+    storage = get_storage()
+    service = StrategyService()
+
+    strategy = service.get_strategy(request.strategy_id)
+    if strategy is None:
+        if not request.register_if_missing:
+            raise HTTPException(status_code=404, detail=f"Strategy {request.strategy_id} not found")
+        service.register_strategy(
+            StrategyRegisterRequest(
+                strategy_id=request.strategy_id,
+                name=request.name or request.strategy_id,
+                description=request.description,
+                entrypoint=f"dynamic:{request.strategy_id}",
+                language="python",
+            )
+        )
+
+    entry = storage.create_strategy_code(
+        request.strategy_id,
+        {
+            "code": request.code,
+            "created_by": request.created_by,
+            "notes": request.notes,
+        },
+    )
+    return StrategyCodeVersion(**entry)
+
+
+@router.get("/v1/strategies/{strategy_id}/code/latest", response_model=StrategyCodeVersion)
+async def get_latest_strategy_code(strategy_id: str = Path(..., description="Strategy ID")):
+    """Get latest strategy code version."""
+    storage = get_storage()
+    entry = storage.get_latest_strategy_code(strategy_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"No code found for strategy {strategy_id}")
+    return StrategyCodeVersion(**entry)
+
+
+@router.get("/v1/strategies/{strategy_id}/code/{code_version}", response_model=StrategyCodeVersion)
+async def get_strategy_code_version(
+    strategy_id: str = Path(..., description="Strategy ID"),
+    code_version: int = Path(..., ge=1, description="Code version"),
+):
+    """Get strategy code by version."""
+    storage = get_storage()
+    entry = storage.get_strategy_code_version(strategy_id, code_version)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Code version {code_version} not found")
+    return StrategyCodeVersion(**entry)
+
+
+@router.post("/v1/strategies/code/debug", response_model=StrategyCodeDebugResponse)
+async def debug_strategy_code(request: StrategyCodeDebugRequest):
+    """
+    Debug strategy code with compile + protocol + dry-run tick checks.
+    """
+    runner = get_strategy_runner()
+    debug_id = request.strategy_id or f"debug_{uuid.uuid4().hex[:10]}"
+    checksum = hashlib.sha256(request.code.encode("utf-8")).hexdigest()
+    loaded = False
+    errors: List[str] = []
+    warnings: List[str] = []
+    signals: List[Dict] = []
+    validation_status: Optional[str] = None
+
+    try:
+        info = await runner.load_strategy_from_code(
+            strategy_id=debug_id,
+            version=f"debug-{int(time.time())}",
+            code=request.code,
+            config=request.config,
+        )
+        loaded = True
+        await runner.start(debug_id)
+        plugin = runner.get_plugin(debug_id)
+        if plugin is not None and hasattr(plugin, "validate"):
+            try:
+                result = plugin.validate()
+                validation_status = result.status.value if hasattr(result.status, "value") else str(result.status)
+                warnings = list(getattr(result, "warnings", []) or [])
+                if hasattr(result, "errors") and result.errors:
+                    errors.extend([getattr(e, "message", str(e)) for e in result.errors])
+            except Exception as e:
+                errors.append(f"validate() failed: {e}")
+
+        samples = request.sample_market_data or [
+            {"symbol": "BTCUSDT", "price": 50000, "open": 49900, "high": 50100, "low": 49800, "close": 50000},
+            {"symbol": "BTCUSDT", "price": 50200, "open": 50000, "high": 50300, "low": 49950, "close": 50200},
+            {"symbol": "BTCUSDT", "price": 49800, "open": 50200, "high": 50350, "low": 49700, "close": 49800},
+        ]
+        for raw in samples:
+            md = _build_debug_market_data(raw)
+            signal = await runner.tick(debug_id, md)
+            if signal is not None:
+                signals.append(_signal_to_dict(signal))
+
+        return StrategyCodeDebugResponse(
+            ok=len(errors) == 0,
+            syntax_ok=True,
+            protocol_ok=True,
+            validation_status=validation_status,
+            checksum=checksum,
+            signals=signals,
+            errors=errors,
+            warnings=warnings,
+        )
+    except SyntaxError as e:
+        return StrategyCodeDebugResponse(
+            ok=False,
+            syntax_ok=False,
+            protocol_ok=False,
+            checksum=checksum,
+            errors=[f"SyntaxError: {e}"],
+            warnings=warnings,
+        )
+    except TypeError as e:
+        return StrategyCodeDebugResponse(
+            ok=False,
+            syntax_ok=True,
+            protocol_ok=False,
+            checksum=checksum,
+            errors=[f"ProtocolError: {e}"],
+            warnings=warnings,
+        )
+    except Exception as e:
+        return StrategyCodeDebugResponse(
+            ok=False,
+            syntax_ok=False,
+            protocol_ok=False,
+            checksum=checksum,
+            errors=[str(e)],
+            warnings=warnings,
+        )
+    finally:
+        if loaded:
+            try:
+                await runner.stop(debug_id)
+            except Exception as e:
+                logger.warning("Debug strategy stop failed for %s: %s", debug_id, e)
+            try:
+                await runner.unload_strategy(debug_id)
+            except Exception as e:
+                logger.warning("Debug strategy unload failed for %s: %s", debug_id, e)
 
 
 @router.get("/v1/strategies/{strategy_id}/versions", response_model=List[StrategyVersion])
@@ -419,6 +613,8 @@ async def update_strategy_params(
             updated_config=info.config,
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -433,7 +629,9 @@ async def update_strategy_params(
 class LoadStrategyRequest(BaseModel):
     """加载策略请求"""
 
-    module_path: str = Field(..., description="策略模块路径，如 'strategies.ema_cross'")
+    module_path: Optional[str] = Field(default=None, description="策略模块路径，如 'trader.strategies.ema_cross_btc'")
+    code: Optional[str] = Field(default=None, description="可选：直接加载代码字符串")
+    code_version: Optional[int] = Field(default=None, ge=1, description="可选：加载已保存代码版本")
     version: str = Field(default="v1", description="策略版本")
     config: Dict = Field(default_factory=dict, description="策略配置参数")
     # 资源限制
@@ -528,8 +726,6 @@ async def load_strategy(
         request.max_orders_per_minute is not None,
         request.timeout_seconds is not None,
     ]):
-        from decimal import Decimal
-        from trader.core.application.strategy_protocol import StrategyResourceLimits
         resource_limits = StrategyResourceLimits(
             max_position_size=Decimal(str(request.max_position_size or 1.0)),
             max_daily_loss=Decimal(str(request.max_daily_loss or 100.0)),
@@ -538,10 +734,57 @@ async def load_strategy(
         )
 
     try:
+        storage = get_storage()
+        module_path = request.module_path
+
+        if request.code:
+            info = await runner.load_strategy_from_code(
+                strategy_id=strategy_id,
+                version=request.version,
+                code=request.code,
+                config=request.config,
+                resource_limits=resource_limits,
+            )
+            return _info_to_response(info)
+
+        code_entry = None
+        if request.code_version is not None:
+            code_entry = storage.get_strategy_code_version(strategy_id, request.code_version)
+            if code_entry is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Code version {request.code_version} of strategy {strategy_id} not found",
+                )
+
+        if code_entry is None and (module_path is None or module_path.startswith("dynamic:")):
+            code_entry = storage.get_latest_strategy_code(strategy_id)
+
+        if code_entry is not None:
+            info = await runner.load_strategy_from_code(
+                strategy_id=strategy_id,
+                version=request.version,
+                code=code_entry["code"],
+                config=request.config,
+                resource_limits=resource_limits,
+            )
+            return _info_to_response(info)
+
+        if module_path is None:
+            strategy = StrategyService().get_strategy(strategy_id)
+            if strategy is None:
+                raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+            module_path = strategy.entrypoint
+
+        if module_path.startswith("dynamic:"):
+            raise HTTPException(
+                status_code=400,
+                detail="Strategy uses dynamic code entrypoint, but no code version was found",
+            )
+
         info = await runner.load_strategy(
             strategy_id=strategy_id,
             version=request.version,
-            module_path=request.module_path,
+            module_path=module_path,
             config=request.config,
             resource_limits=resource_limits,
         )
@@ -550,6 +793,8 @@ async def load_strategy(
         raise HTTPException(status_code=400, detail=str(e))
     except TypeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load strategy: {e}")
 

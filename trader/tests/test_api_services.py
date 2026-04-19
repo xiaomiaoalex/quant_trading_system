@@ -217,6 +217,14 @@ class TestBacktestService:
         """Setup for each test"""
         self.storage = reset_storage()
         self.service = BacktestService(self.storage)
+        self.storage.create_strategy(
+            {
+                "strategy_id": "strat_001",
+                "name": "Test Strategy",
+                "entrypoint": "trader.strategies.ema_cross_btc",
+                "description": "for backtest service tests",
+            }
+        )
 
     def test_create_backtest(self):
         """Test creating a backtest"""
@@ -231,7 +239,7 @@ class TestBacktestService:
         )
         backtest = self.service.create_backtest(request)
         assert backtest.run_id is not None
-        assert backtest.status == "RUNNING"
+        assert backtest.status == "PENDING"
 
     def test_get_backtest(self):
         """Test getting a backtest"""

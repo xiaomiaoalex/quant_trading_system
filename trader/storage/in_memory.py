@@ -4,6 +4,7 @@ Storage - In-memory storage implementation for the control plane
 Provides in-memory storage for strategies, deployments, orders, positions, etc.
 """
 import uuid
+import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
@@ -37,6 +38,7 @@ class ControlPlaneInMemoryStorage:
         self.strategies: Dict[str, Dict[str, Any]] = {}
         self.strategy_versions: Dict[str, List[Dict[str, Any]]] = {}
         self.strategy_params: Dict[str, List[Dict[str, Any]]] = {}
+        self.strategy_codes: Dict[str, List[Dict[str, Any]]] = {}
 
         # Deployments
         self.deployments: Dict[str, Dict[str, Any]] = {}
@@ -88,6 +90,7 @@ class ControlPlaneInMemoryStorage:
         self.strategies[strategy_id] = strategy
         self.strategy_versions[strategy_id] = []
         self.strategy_params[strategy_id] = []
+        self.strategy_codes[strategy_id] = []
         return strategy
 
     def get_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
@@ -156,6 +159,51 @@ class ControlPlaneInMemoryStorage:
             return params_list[-1]
         return None
 
+    def create_strategy_code(self, strategy_id: str, code_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new strategy code version"""
+        if strategy_id not in self.strategy_codes:
+            self.strategy_codes[strategy_id] = []
+
+        codes = self.strategy_codes[strategy_id]
+        code_version = len(codes) + 1
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        code = str(code_data.get("code", ""))
+        checksum = hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+        code_entry = {
+            "strategy_id": strategy_id,
+            "code_version": code_version,
+            "code": code,
+            "checksum": checksum,
+            "created_at": now,
+            "created_by": code_data.get("created_by", "system"),
+            "notes": code_data.get("notes"),
+        }
+        codes.append(code_entry)
+        self.strategy_codes[strategy_id] = codes
+        return code_entry
+
+    def get_latest_strategy_code(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Get latest strategy code version"""
+        code_list = self.strategy_codes.get(strategy_id, [])
+        if code_list:
+            return code_list[-1]
+        return None
+
+    def get_strategy_code_version(self, strategy_id: str, code_version: int) -> Optional[Dict[str, Any]]:
+        """Get strategy code by version"""
+        code_list = self.strategy_codes.get(strategy_id, [])
+        for item in code_list:
+            if item.get("code_version") == code_version:
+                return item
+        return None
+
+    def list_strategy_codes(self, strategy_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List strategy code versions (latest first)"""
+        code_list = list(self.strategy_codes.get(strategy_id, []))
+        code_list.sort(key=lambda c: c.get("code_version", 0), reverse=True)
+        return code_list[:limit]
+
     # ==================== Deployment Methods ====================
 
     def create_deployment(self, deployment_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -219,8 +267,12 @@ class ControlPlaneInMemoryStorage:
         backtest = {
             **backtest_data,
             "run_id": run_id,
-            "status": "RUNNING",
+            "status": "PENDING",
             "created_at": now,
+            "progress": 0.0,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
         }
         self.backtests[run_id] = backtest
         return backtest
@@ -250,6 +302,7 @@ class ControlPlaneInMemoryStorage:
         backtest = self.backtests.get(run_id)
         if backtest:
             backtest.update(updates)
+            backtest["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
         return backtest
 
     # ==================== Risk Methods ====================

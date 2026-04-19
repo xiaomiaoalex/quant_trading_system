@@ -4,6 +4,7 @@ Unit Tests - API Endpoints
 Tests for FastAPI endpoints using TestClient.
 """
 import asyncio
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -201,6 +202,119 @@ class TestStrategyEndpoints:
         response = self.client.get("/v1/strategies/registry/nonexistent")
         assert response.status_code == 404
 
+    def test_strategy_code_debug_and_load_flow(self):
+        """Test code create/debug/load/start full flow."""
+        code = """
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+from trader.core.application.strategy_protocol import MarketData, RiskLevel, StrategyPlugin, StrategyResourceLimits, ValidationResult
+from trader.core.domain.models.signal import Signal, SignalType
+
+@dataclass(slots=True)
+class TestCodeStrategy:
+    strategy_id: str = "code_flow"
+    name: str = "Code Flow"
+    version: str = "1.0.0"
+    risk_level: RiskLevel = RiskLevel.LOW
+    resource_limits: StrategyResourceLimits = field(default_factory=StrategyResourceLimits)
+    _last: Decimal | None = None
+
+    async def initialize(self, config: dict[str, Any]) -> None:
+        self._last = None
+
+    async def on_market_data(self, data: MarketData):
+        if self._last is None:
+            self._last = data.price
+            return None
+        signal = Signal(
+            strategy_name=self.strategy_id,
+            signal_type=SignalType.BUY if data.price >= self._last else SignalType.SELL,
+            symbol=data.symbol,
+            price=data.price,
+            quantity=Decimal("1"),
+            reason="code_flow",
+        )
+        self._last = data.price
+        return signal
+
+    async def on_fill(self, order_id: str, symbol: str, side: str, quantity: float, price: float) -> None:
+        return None
+
+    async def on_cancel(self, order_id: str, reason: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+    async def update_config(self, config: dict[str, Any]) -> ValidationResult:
+        return ValidationResult.valid()
+
+    def validate(self) -> ValidationResult:
+        return ValidationResult.valid()
+
+_plugin = TestCodeStrategy()
+def get_plugin() -> StrategyPlugin:
+    return _plugin
+"""
+        create_resp = self.client.post(
+            "/v1/strategies/code",
+            json={
+                "strategy_id": "code_flow",
+                "name": "Code Flow",
+                "description": "test code flow",
+                "code": code,
+                "created_by": "tester",
+                "register_if_missing": True,
+            },
+        )
+        assert create_resp.status_code == 201
+        created = create_resp.json()
+        assert created["code_version"] == 1
+
+        latest_resp = self.client.get("/v1/strategies/code_flow/code/latest")
+        assert latest_resp.status_code == 200
+        assert latest_resp.json()["checksum"] == created["checksum"]
+
+        debug_resp = self.client.post(
+            "/v1/strategies/code/debug",
+            json={"strategy_id": "code_flow_debug", "code": code, "config": {}},
+        )
+        assert debug_resp.status_code == 200
+        debug_data = debug_resp.json()
+        assert debug_data["ok"] is True
+        assert debug_data["syntax_ok"] is True
+        assert debug_data["protocol_ok"] is True
+
+        load_resp = self.client.post(
+            "/v1/strategies/code_flow/load",
+            json={"version": "v1", "code_version": 1, "config": {}},
+        )
+        assert load_resp.status_code == 200
+        assert load_resp.json()["status"] == "LOADED"
+
+        start_resp = self.client.post("/v1/strategies/code_flow/start")
+        assert start_resp.status_code == 200
+        assert start_resp.json()["status"] == "RUNNING"
+
+    def test_load_dynamic_strategy_missing_code_returns_404(self):
+        """Dynamic strategy without saved code should return 404/400 instead of 500."""
+        register_resp = self.client.post(
+            "/v1/strategies/registry",
+            json={
+                "strategy_id": "dynamic_no_code",
+                "name": "Dynamic No Code",
+                "entrypoint": "dynamic:dynamic_no_code",
+            },
+        )
+        assert register_resp.status_code == 201
+
+        load_resp = self.client.post(
+            "/v1/strategies/dynamic_no_code/load",
+            json={"code_version": 3, "version": "v1", "config": {}},
+        )
+        assert load_resp.status_code == 404
+
 
 class TestDeploymentEndpoints:
     """Test deployment API endpoints"""
@@ -285,8 +399,16 @@ class TestBacktestEndpoints:
 
     def test_create_backtest(self):
         """Test creating a backtest"""
+        self.client.post(
+            "/v1/strategies/registry",
+            json={
+                "strategy_id": "ema_cross_btc",
+                "name": "EMA Cross BTC",
+                "entrypoint": "trader.strategies.ema_cross_btc",
+            },
+        )
         payload = {
-            "strategy_id": "strat_001",
+            "strategy_id": "ema_cross_btc",
             "version": 1,
             "symbols": ["BTCUSDT"],
             "start_ts_ms": 1700000000000,
@@ -298,7 +420,121 @@ class TestBacktestEndpoints:
         assert response.status_code == 202
         data = response.json()
         assert data["run_id"] is not None
-        assert data["status"] == "RUNNING"
+        assert data["status"] in ("PENDING", "RUNNING")
+
+    def test_async_backtest_with_code_version_persists_report(self):
+        """End-to-end: code register -> async backtest -> report persisted."""
+        code = """
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+from trader.core.application.strategy_protocol import MarketData, RiskLevel, StrategyPlugin, StrategyResourceLimits, ValidationResult
+from trader.core.domain.models.signal import Signal, SignalType
+
+@dataclass(slots=True)
+class BtFlowStrategy:
+    strategy_id: str = "bt_flow"
+    name: str = "Backtest Flow"
+    version: str = "1.0.0"
+    risk_level: RiskLevel = RiskLevel.LOW
+    resource_limits: StrategyResourceLimits = field(default_factory=StrategyResourceLimits)
+    _last: Decimal | None = None
+    _toggle: bool = False
+
+    async def initialize(self, config: dict[str, Any]) -> None:
+        self._last = None
+        self._toggle = False
+
+    async def on_market_data(self, data: MarketData):
+        if self._last is None:
+            self._last = data.price
+            return None
+        self._toggle = not self._toggle
+        signal = Signal(
+            strategy_name=self.strategy_id,
+            signal_type=SignalType.BUY if self._toggle else SignalType.SELL,
+            symbol=data.symbol,
+            price=data.price,
+            quantity=Decimal("1"),
+            reason="bt_flow",
+        )
+        self._last = data.price
+        return signal
+
+    async def on_fill(self, order_id: str, symbol: str, side: str, quantity: float, price: float) -> None:
+        return None
+
+    async def on_cancel(self, order_id: str, reason: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+    async def update_config(self, config: dict[str, Any]) -> ValidationResult:
+        return ValidationResult.valid()
+
+    def validate(self) -> ValidationResult:
+        return ValidationResult.valid()
+
+_plugin = BtFlowStrategy()
+def get_plugin() -> StrategyPlugin:
+    return _plugin
+"""
+        register_resp = self.client.post(
+            "/v1/strategies/code",
+            json={
+                "strategy_id": "bt_flow",
+                "name": "Backtest Flow",
+                "description": "e2e test",
+                "code": code,
+                "created_by": "tester",
+                "register_if_missing": True,
+            },
+        )
+        assert register_resp.status_code == 201
+        code_version = register_resp.json()["code_version"]
+        assert code_version == 1
+
+        create_resp = self.client.post(
+            "/v1/backtests",
+            json={
+                "strategy_id": "bt_flow",
+                "version": 1,
+                "strategy_code_version": code_version,
+                "symbols": ["BTCUSDT"],
+                "start_ts_ms": 1700000000000,
+                "end_ts_ms": 1700200000000,
+                "venue": "BINANCE",
+                "requested_by": "tester",
+            },
+        )
+        assert create_resp.status_code == 202
+        run_id = create_resp.json()["run_id"]
+
+        final_status = None
+        for _ in range(80):
+            status_resp = self.client.get(f"/v1/backtests/{run_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.json()
+            final_status = status_data["status"]
+            if final_status in ("COMPLETED", "FAILED"):
+                break
+            time.sleep(0.05)
+
+        assert final_status == "COMPLETED"
+        assert status_data["progress"] == 1.0
+        assert status_data["artifact_ref"]
+        assert status_data["artifact_ref"].startswith("backtest_report:")
+
+        report_resp = self.client.get(f"/v1/backtests/{run_id}/report")
+        assert report_resp.status_code == 200
+        report = report_resp.json()
+        assert report["status"] == "COMPLETED"
+        assert isinstance(report["returns"], dict)
+        assert isinstance(report["risk"], dict)
+        assert isinstance(report["equity_curve"], list)
+        assert isinstance(report["trades"], list)
+        assert report["metrics"] is not None
 
 
 class TestRiskEndpoints:

@@ -36,7 +36,10 @@ async def create_backtest(request: BacktestRequest):
     Creates and starts a new backtest run.
     """
     service = BacktestService()
-    return service.create_backtest(request)
+    try:
+        return service.create_backtest(request)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/v1/backtests/{run_id}", response_model=BacktestRun)

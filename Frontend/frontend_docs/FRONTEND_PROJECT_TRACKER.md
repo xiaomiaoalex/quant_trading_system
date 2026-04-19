@@ -9,7 +9,7 @@
 ## 📊 当前开发状态总览
 
 ### 最后更新时间
-- **更新日期**: 2026-04-10 (北京时间)
+- **更新日期**: 2026-04-18 (北京时间)
 - **更新人**: AI Agent
 - **当前阶段**: Phase B - Backtests + Reports + AI Lab
 
@@ -40,12 +40,12 @@
 
 | ID | 修复项 | 优先级 | 执行状态 | 主责任域 | 协同责任域 | 审核门禁 | 预计完成 | 实际完成 |
 |----|--------|--------|----------|----------|------------|----------|----------|----------|
-| Task 9.4 | Backtests 列表与进度 | P1 | 🔄 执行中 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
-| Task 9.5 | Reports 详情接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.4 | Backtests 列表与进度 | P1 | ✅ 已完成 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
+| Task 9.5 | Reports 详情接口 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 | Task 9.6 | Audit 专用查询接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
 | Task 9.7 | Replay 任务状态接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
 
-**Week 2 状态**: 🔄 进行中 (0/4 完成)
+**Week 2 状态**: 🔄 进行中 (2/4 完成)
 
 ### 并行推进（P2 一致性优化）
 
@@ -87,8 +87,8 @@
 
 | 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
 |------|--------|------|------|------|------|------|----------|
-| Backtests | P1 | 🔄 执行中 | 🔄 执行中 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
-| Reports | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| Backtests | P1 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
+| Reports | P1 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
 | AI Lab | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 
 ### 组件开发清单
@@ -185,10 +185,10 @@
 
 | API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
 |-----|------|----------|----------|----------|------|
-| `POST /v1/backtests` | POST | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `GET /v1/backtests/{run_id}` | GET | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
-| `GET /v1/backtests` | GET | 🔴 缺失 (Task 9.4) | ⏳ 待开始 | ⏸️ 阻塞 | 列表接口 |
-| `GET /v1/backtests/{run_id}/report` | GET | 🔴 缺失 (Task 9.5) | ⏳ 待开始 | ⏸️ 阻塞 | 报告详情 |
+| `POST /v1/backtests` | POST | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 支持 `strategy_code_version` |
+| `GET /v1/backtests/{run_id}` | GET | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 支持异步状态与进度 |
+| `GET /v1/backtests` | GET | ✅ 已完成 (Task 9.4) | ✅ 已完成 | ✅ 已完成 | 列表接口 |
+| `GET /v1/backtests/{run_id}/report` | GET | ✅ 已完成 (Task 9.5) | ✅ 已完成 | ✅ 已完成 | 报告详情 |
 | `/api/chat/sessions/*` | Various | 🟢 可用 | ✅ 已完成 | ⏸️ 阻塞 | - |
 | `/api/portfolio-research/*` | Various | 🟢 可用 | ⏳ 待开始 | ⏸️ 阻塞 | - |
 
@@ -228,12 +228,6 @@
 
 | ID | 问题描述 | 影响范围 | 严重性 | 状态 | 解决方案 | 主责任域 |
 |----|----------|----------|--------|------|----------|----------|
-| TG-001 | Monitor Snapshot 非真聚合 | Monitor 页面 | 🔴 高 | 🔄 修复中 | Task 9.2 | backend-api |
-| TG-002 | Reconciler Trigger 需前端提交数据 | Reconcile 页面 | 🔴 高 | 🔄 修复中 | Task 9.3 | backend-api |
-| TG-003 | API 前缀不一致 | 全局 | 🟡 中 | 🔄 修复中 | Task 9.1 | contract-doc |
-| TG-004 | strategies/running 语义不符 | Strategies 页面 | 🟡 中 | 🔄 修复中 | Task 9.8 | contract-doc |
-| TG-005 | 缺少 Backtests 列表 API | Backtests 页面 | 🔴 高 | ⏳ 待开始 | Task 9.4 | backend-api |
-| TG-006 | 缺少 Reports 详情 API | Reports 页面 | 🔴 高 | ⏳ 待开始 | Task 9.5 | backend-api |
 | TG-007 | 缺少 Audit 专用 API | Audit 页面 | 🔴 高 | ⏳ 待开始 | Task 9.6 | backend-api |
 | TG-008 | 缺少 Replay job API | Replay 页面 | 🔴 高 | ⏳ 待开始 | Task 9.7 | backend-api |
 
@@ -241,7 +235,12 @@
 
 | ID | 问题描述 | 解决日期 | 解决方案 | 备注 |
 |----|----------|----------|----------|------|
-| - | - | - | - | - |
+| TG-001 | Monitor Snapshot 非真聚合 | 2026-04-10 | Task 9.2 | 后端聚合+前端联调完成 |
+| TG-002 | Reconciler Trigger 需前端提交数据 | 2026-04-10 | Task 9.3 | 支持无参触发 |
+| TG-003 | API 前缀不一致 | 2026-04-10 | Task 9.1 | 契约与前端调用统一 |
+| TG-004 | strategies/running 语义不符 | 2026-04-10 | Task 9.8 | `/loaded` 语义落地 |
+| TG-005 | 缺少 Backtests 列表 API | 2026-04-18 | Task 9.4 | 列表+进度联调完成 |
+| TG-006 | 缺少 Reports 详情 API | 2026-04-18 | Task 9.5 | 报告详情可读 |
 
 ---
 
@@ -302,25 +301,25 @@
 | 日期 | Week 1 剩余任务 | Week 2 剩余任务 | P2 剩余任务 | 备注 |
 |------|----------------|----------------|-------------|------|
 | 2026-04-10 | 4 | 4 | 3 | 计划启动 |
-| - | - | - | - | - |
+| 2026-04-18 | 0 | 2 | 3 | Task 9.4/9.5 完成，进入 9.6/9.7 |
 
 ### 任务完成率
 
 | 阶段 | 总任务 | 已完成 | 进行中 | 待开始 | 完成率 |
 |------|--------|--------|--------|--------|--------|
-| Week 1 | 4 | 0 | 4 | 0 | 0% |
-| Week 2 | 4 | 0 | 0 | 4 | 0% |
+| Week 1 | 4 | 4 | 0 | 0 | 100% |
+| Week 2 | 4 | 2 | 0 | 2 | 50% |
 | P2 | 3 | 0 | 0 | 3 | 0% |
-| **总计** | **11** | **0** | **4** | **7** | **0%** |
+| **总计** | **11** | **6** | **0** | **5** | **55%** |
 
 ### 前端组件开发进度
 
 | 阶段 | 总组件 | 已完成 | 进行中 | 待开始 | 完成率 |
 |------|--------|--------|--------|--------|--------|
-| Phase A | 11 | 0 | 0 | 11 | 0% |
-| Phase B | 9 | 0 | 0 | 9 | 0% |
+| Phase A | 11 | 11 | 0 | 0 | 100% |
+| Phase B | 9 | 3 | 2 | 4 | 33% |
 | Phase C | 6 | 0 | 0 | 6 | 0% |
-| **总计** | **26** | **0** | **0** | **26** | **0%** |
+| **总计** | **26** | **14** | **2** | **10** | **54%** |
 
 ---
 
@@ -414,30 +413,29 @@
 | 2026-04-10 | v1.5 | 任务编号统一为后端同款 Task 9.x（替换旧 P0-1/P1-4/P2-8 风格） | AI Agent |
 | 2026-04-10 | v1.6 | 修复执行基线引用，改为 truth_gap_priority.md + frontend_master_plan.md | AI Agent |
 | 2026-04-10 | v1.7 | 清理失效文档引用，移除 truth_gap_development_plan.md 链接 | AI Agent |
-| - | - | - | - |
+| 2026-04-18 | v1.8 | Task 9.4/9.5 联调完成，Backtests/Reports API 状态与阻塞清单同步刷新 | AI Agent |
 
 ---
 
 ## 🎯 下一步行动
 
 ### 立即行动（Today）
-1. [AI Agent / `backend-api`] 开始 Task 9.1: 统一 API 前缀与文档路径
-2. [AI Agent / `backend-api`] 开始 Task 9.2: Monitor Snapshot 真聚合化
-3. [AI Agent / `backend-api`] 开始 Task 9.3: Reconciler 无参触发
-4. [AI Agent / `frontend-console`] 初始化 Vite + React + TypeScript 项目
-5. [AI Agent / `frontend-console`] 安装依赖：TanStack Query, Zod, Tailwind CSS
+1. [AI Agent / `backend-api`] 推进 Task 9.6: Audit 专用查询接口
+2. [AI Agent / `backend-api`] 推进 Task 9.7: Replay 任务状态接口
+3. [AI Agent / `frontend-console`] 对接 Task 9.6/9.7 并补齐页面交互
+4. [AI Agent / `qa-validation`] 在可用 Node 环境执行前端 typecheck 与页面回归
 
 ### 本周行动（Week 1）
-1. [AI Agent / `backend-api`] 完成 Task 9.1/9.2/9.3 + Task 9.8
-2. [AI Agent / `frontend-console`] 完成 App Shell 框架
-3. [AI Agent / `frontend-console`] 完成 Monitor 页面基础结构
-4. [AI Agent / `qa-validation`] 首次联调（预计：2026-04-17）
+1. [AI Agent / `backend-api`] 完成 Task 9.4/9.5 剩余回归与文档闭环
+2. [AI Agent / `frontend-console`] 稳定 Backtests Strategy Lab 六步链路
+3. [AI Agent / `qa-validation`] 执行“代码调试→回测→加载运行”端到端验收
+4. [AI Agent / `qa-validation`] 输出联调问题清单并归档
 
 ### 下周行动（Week 2）
-1. [AI Agent / `backend-api`] 完成 Task 9.4/9.5/9.6/9.7
-2. [AI Agent / `frontend-console`] 完成 Strategies + Reconcile 页面
-3. [AI Agent / `frontend-console`] 开始 Backtests + Reports 页面
-4. [AI Agent / `qa-validation`] Phase A 验收（预计：2026-04-24）
+1. [AI Agent / `backend-api`] 完成 Task 9.6/9.7
+2. [AI Agent / `frontend-console`] 完成 Audit + Replay 页面首版
+3. [AI Agent / `frontend-console`] 对 Backtests/Reports 做可视化与交互优化
+4. [AI Agent / `qa-validation`] Phase B 验收（预计：2026-04-24）
 
 ---
 
