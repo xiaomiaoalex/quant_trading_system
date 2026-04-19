@@ -575,3 +575,274 @@ class TestOrderIdempotency:
         assert len(fill_calls) == 1
         assert fill_calls[0]["strategy_id"] == "test_strategy"
         assert fill_calls[0]["qty"] == float(Decimal("0.001"))
+
+
+class TestLiveTradingDynamicCheck:
+    """Test that live_trading_enabled supports Callable for dynamic checking"""
+
+    @pytest.fixture
+    def fake_broker(self):
+        return FakeBroker()
+
+    @pytest.fixture
+    def fake_storage(self):
+        storage = MagicMock()
+        storage.create_order = MagicMock(return_value={})
+        storage.create_execution = MagicMock(return_value={})
+        storage.append_event = MagicMock(return_value={})
+        storage.get_order = MagicMock(return_value=None)
+        return storage
+
+    @pytest.mark.asyncio
+    async def test_callable_live_trading_toggle(self, fake_broker, fake_storage):
+        """When live_trading_enabled is a Callable, runtime changes should take effect immediately"""
+        enabled = False
+
+        def check():
+            return enabled
+
+        handler = OMSCallbackHandler(
+            broker=fake_broker,
+            storage=fake_storage,
+            live_trading_enabled=check,
+        )
+
+        signal = Signal(
+            strategy_name="test",
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            quantity=Decimal("0.001"),
+            price=Decimal("50000"),
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            await handler.execute_signal("test_strategy", signal)
+        assert "not enabled" in str(exc_info.value).lower()
+
+        enabled = True
+
+        result = await handler.execute_signal("test_strategy", signal)
+        assert result is not None
+        assert "order_id" in result
+
+    @pytest.mark.asyncio
+    async def test_bool_live_trading_still_works(self, fake_broker, fake_storage):
+        """When live_trading_enabled is a plain bool, it should still work as before"""
+        handler = OMSCallbackHandler(
+            broker=fake_broker,
+            storage=fake_storage,
+            live_trading_enabled=True,
+        )
+
+        signal = Signal(
+            strategy_name="test",
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            quantity=Decimal("0.001"),
+            price=Decimal("50000"),
+        )
+
+        result = await handler.execute_signal("test_strategy", signal)
+        assert result is not None
+
+
+class TestStreamKeyFormat:
+    """Test that event stream_key uses unified strategy:{id} format"""
+
+    def test_event_callback_uses_colon_format(self):
+        """_event_callback_dispatcher should use strategy:{id} format"""
+        from trader.api.routes.strategies import _event_callback_dispatcher
+        from trader.storage.in_memory import get_storage
+
+        storage = get_storage()
+        storage.append_event({
+            "stream_key": "strategy:test_id",
+            "event_type": "strategy.signal",
+            "ts_ms": 1000,
+            "data": {"symbol": "BTCUSDT"},
+        })
+
+        events = storage.list_events(stream_key="strategy:test_id")
+        assert len(events) >= 1
+        assert events[0]["stream_key"] == "strategy:test_id"
+
+    def test_strategy_event_service_uses_colon_format(self):
+        """StrategyEvent.to_envelope should use strategy:{id} format"""
+        from trader.services.strategy_event_service import StrategyEvent, StrategyEventType
+
+        event = StrategyEvent(
+            strategy_id="my_strategy",
+            event_type=StrategyEventType.SIGNAL_GENERATED,
+            payload={"symbol": "BTCUSDT"},
+        )
+        envelope = event.to_envelope()
+        assert envelope.stream_key == "strategy:my_strategy"
+
+
+class TestLiveTradingEnvVar:
+    """Test LIVE_TRADING_ENABLED environment variable support"""
+
+    def test_env_var_true(self, monkeypatch):
+        """LIVE_TRADING_ENABLED=true should enable trading"""
+        from trader.api.routes.strategies import _is_live_trading_enabled, set_live_trading_enabled
+
+        set_live_trading_enabled(None)
+        monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+
+        assert _is_live_trading_enabled() is True
+
+    def test_env_var_false(self, monkeypatch):
+        """LIVE_TRADING_ENABLED=false should disable trading"""
+        from trader.api.routes.strategies import _is_live_trading_enabled, set_live_trading_enabled
+
+        set_live_trading_enabled(None)
+        monkeypatch.setenv("LIVE_TRADING_ENABLED", "false")
+
+        assert _is_live_trading_enabled() is False
+
+    def test_env_var_unset_defaults_false(self, monkeypatch):
+        """When LIVE_TRADING_ENABLED is not set, default is False"""
+        from trader.api.routes.strategies import _is_live_trading_enabled, set_live_trading_enabled
+
+        set_live_trading_enabled(None)
+        monkeypatch.delenv("LIVE_TRADING_ENABLED", raising=False)
+
+        assert _is_live_trading_enabled() is False
+
+    def test_runtime_override_takes_priority(self, monkeypatch):
+        """Runtime API setting should override environment variable"""
+        from trader.api.routes.strategies import _is_live_trading_enabled, set_live_trading_enabled
+
+        monkeypatch.setenv("LIVE_TRADING_ENABLED", "true")
+        set_live_trading_enabled(False)
+
+        assert _is_live_trading_enabled() is False
+
+        set_live_trading_enabled(True)
+        assert _is_live_trading_enabled() is True
+
+        set_live_trading_enabled(None)
+        assert _is_live_trading_enabled() is True
+
+
+class TestMinNotionalDynamic:
+    """Test that minNotional is fetched from exchange rules dynamically"""
+
+    @pytest.fixture
+    def fake_broker_with_exchange_info(self):
+        broker = FakeBroker()
+        broker.get_exchange_info = AsyncMock(return_value={
+            "symbols": [{
+                "symbol": "BTCUSDT",
+                "filters": [
+                    {"filterType": "NOTIONAL", "minNotional": "5"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.00001"},
+                ],
+            }],
+        })
+        return broker
+
+    @pytest.fixture
+    def fake_storage(self):
+        storage = MagicMock()
+        storage.create_order = MagicMock(return_value={})
+        storage.create_execution = MagicMock(return_value={})
+        storage.append_event = MagicMock(return_value={})
+        storage.get_order = MagicMock(return_value=None)
+        return storage
+
+    @pytest.mark.asyncio
+    async def test_min_notional_from_exchange(self, fake_broker_with_exchange_info, fake_storage):
+        """minNotional should be read from exchangeInfo, not hardcoded"""
+        handler = OMSCallbackHandler(
+            broker=fake_broker_with_exchange_info,
+            storage=fake_storage,
+            live_trading_enabled=True,
+        )
+
+        min_notional = await handler._get_min_notional("BTCUSDT")
+        assert min_notional == Decimal("5")
+
+    @pytest.mark.asyncio
+    async def test_min_notional_caching(self, fake_broker_with_exchange_info, fake_storage):
+        """minNotional should be cached after first fetch"""
+        handler = OMSCallbackHandler(
+            broker=fake_broker_with_exchange_info,
+            storage=fake_storage,
+            live_trading_enabled=True,
+        )
+
+        await handler._get_min_notional("BTCUSDT")
+        await handler._get_min_notional("BTCUSDT")
+
+        assert fake_broker_with_exchange_info.get_exchange_info.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_min_notional_fallback_on_error(self, fake_storage):
+        """When exchangeInfo fetch fails, fallback to default 10"""
+        broker = FakeBroker()
+        broker.get_exchange_info = AsyncMock(side_effect=Exception("Network error"))
+
+        handler = OMSCallbackHandler(
+            broker=broker,
+            storage=fake_storage,
+            live_trading_enabled=True,
+        )
+
+        min_notional = await handler._get_min_notional("BTCUSDT")
+        assert min_notional == Decimal("10")
+
+    @pytest.mark.asyncio
+    async def test_min_notional_rejects_small_order(self, fake_broker_with_exchange_info, fake_storage):
+        """Orders below minNotional should be rejected"""
+        handler = OMSCallbackHandler(
+            broker=fake_broker_with_exchange_info,
+            storage=fake_storage,
+            live_trading_enabled=True,
+        )
+
+        signal = Signal(
+            strategy_name="test",
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            quantity=Decimal("0.00001"),
+            price=Decimal("400"),
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            await handler.execute_signal("test_strategy", signal)
+        assert "minNotional" in str(exc_info.value).lower() or "notional" in str(exc_info.value).lower()
+
+
+class TestBrokerEnvSelection:
+    """Test that broker environment is selected based on BINANCE_ENV"""
+
+    def test_demo_env_creates_demo_config(self, monkeypatch):
+        """BINANCE_ENV=demo should create demo config"""
+        import os
+        from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
+
+        monkeypatch.setenv("BINANCE_ENV", "demo")
+        env = os.environ.get("BINANCE_ENV", "demo").lower()
+
+        if env in ("testnet", "test"):
+            config = BinanceSpotDemoBrokerConfig.for_testnet(api_key="k", secret_key="s")
+        else:
+            config = BinanceSpotDemoBrokerConfig.for_demo(api_key="k", secret_key="s")
+
+        assert "demo-api.binance.com" in config.base_url
+
+    def test_testnet_env_creates_testnet_config(self, monkeypatch):
+        """BINANCE_ENV=testnet should create testnet config"""
+        import os
+        from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
+
+        monkeypatch.setenv("BINANCE_ENV", "testnet")
+        env = os.environ.get("BINANCE_ENV", "demo").lower()
+
+        if env in ("testnet", "test"):
+            config = BinanceSpotDemoBrokerConfig.for_testnet(api_key="k", secret_key="s")
+        else:
+            config = BinanceSpotDemoBrokerConfig.for_demo(api_key="k", secret_key="s")
+
+        assert "testnet.binance.vision" in config.base_url

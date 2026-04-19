@@ -17,6 +17,7 @@ Private Stream Manager - Binance Private WebSocket Stream
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable, Awaitable
@@ -81,8 +82,12 @@ class PrivateStreamConfig:
     """私有流配置"""
     base_url: str = "wss://stream.binance.com:9443/ws"
     rest_url: str = "https://testnet.binance.vision/api"
+    proxy_url: Optional[str] = None
+    request_timeout: float = 15.0
     listen_key_ttl: int = 3600            # listenKey 有效期（秒）
     listen_key_refresh_interval: int = 1800  # 刷新间隔（秒）
+    listen_key_create_max_attempts: int = 5
+    listen_key_create_base_delay: float = 1.5
     reconnect_delay: float = 1.0
     max_reconnect_delay: float = 60.0
     pong_timeout: int = 10                # Pong 超时次数
@@ -111,7 +116,8 @@ class PrivateStreamManager(BaseStreamFSM):
         super().__init__("PrivateStream", private_stream_config)
 
         self._credentials = credentials
-        self._config = config or PrivateStreamConfig()
+        # 注意：不要覆盖 BaseStreamFSM._config（其类型是 StreamConfig）
+        self._private_config = config or PrivateStreamConfig()
         self._session: Optional[aiohttp.ClientSession] = None
         self._ws: Optional[ws_client.WebSocketClientProtocol] = None
 
@@ -119,6 +125,7 @@ class PrivateStreamManager(BaseStreamFSM):
         self._listen_key_expiry_ts: float = 0
 
         self._pong_timeout_counter = 0
+        self._last_pong_ts = time.time()
         self._last_user_event_ts = time.time()
         self._last_data_ts = time.time()
 
@@ -149,9 +156,12 @@ class PrivateStreamManager(BaseStreamFSM):
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
         import aiohttp
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self._private_config.request_timeout),
+            trust_env=True,
+        )
 
-        await self._create_listen_key()
+        await self._create_listen_key_with_retry()
         await self._connect()
 
         self._ping_task = asyncio.create_task(self._ping_loop())
@@ -197,15 +207,19 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _create_listen_key(self) -> None:
         """创建 listenKey"""
-        url = f"{self._config.rest_url}/v3/userDataStream"
+        url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
 
         try:
-            async with self._session.post(url, headers=headers) as resp:
+            async with self._session.post(
+                url,
+                headers=headers,
+                proxy=self._resolve_proxy(),
+            ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     self._listen_key = data["listenKey"]
-                    self._listen_key_expiry_ts = time.time() + self._config.listen_key_ttl
+                    self._listen_key_expiry_ts = time.time() + self._private_config.listen_key_ttl
                     logger.info(f"[{self._name}] ListenKey created: {self._listen_key[:10]}...")
                 else:
                     error = await resp.text()
@@ -221,16 +235,55 @@ class PrivateStreamManager(BaseStreamFSM):
             logger.error(f"[{self._name}] ListenKey creation error: {e}")
             raise
 
+    def _resolve_proxy(self) -> Optional[str]:
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        return (
+            self._private_config.proxy_url
+            or os.environ.get("BINANCE_PROXY_URL")
+            or os.environ.get("BINANCE_PROXY")
+            or os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+        )
+
+    async def _create_listen_key_with_retry(self) -> None:
+        """创建 listenKey（带重试，适配 VPN 抖动场景）。"""
+        max_attempts = max(1, self._private_config.listen_key_create_max_attempts)
+        delay = max(0.1, self._private_config.listen_key_create_base_delay)
+
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self._create_listen_key()
+                return
+            except Exception as e:
+                last_error = e
+                if attempt >= max_attempts:
+                    break
+                logger.warning(
+                    f"[{self._name}] ListenKey create attempt {attempt}/{max_attempts} failed, "
+                    f"retry in {delay:.1f}s: {e}"
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+
+        assert last_error is not None
+        raise last_error
+
     async def _refresh_listen_key(self) -> None:
         """刷新 listenKey"""
-        url = f"{self._config.rest_url}/v3/userDataStream"
+        url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
         params = {"listenKey": self._listen_key}
 
         try:
-            async with self._session.put(url, headers=headers, params=params) as resp:
+            async with self._session.put(
+                url,
+                headers=headers,
+                params=params,
+                proxy=self._resolve_proxy(),
+            ) as resp:
                 if resp.status == 200:
-                    self._listen_key_expiry_ts = time.time() + self._config.listen_key_ttl
+                    self._listen_key_expiry_ts = time.time() + self._private_config.listen_key_ttl
                     logger.info(f"[{self._name}] ListenKey refreshed")
                 else:
                     logger.warning(f"[{self._name}] ListenKey refresh failed: {resp.status}, triggering reconnect")
@@ -245,12 +298,17 @@ class PrivateStreamManager(BaseStreamFSM):
         if not self._listen_key:
             return
 
-        url = f"{self._config.rest_url}/v3/userDataStream"
+        url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
         params = {"listenKey": self._listen_key}
 
         try:
-            async with self._session.delete(url, headers=headers, params=params) as resp:
+            async with self._session.delete(
+                url,
+                headers=headers,
+                params=params,
+                proxy=self._resolve_proxy(),
+            ) as resp:
                 logger.info(f"[{self._name}] ListenKey deleted: {resp.status}")
 
         except Exception as e:
@@ -260,7 +318,7 @@ class PrivateStreamManager(BaseStreamFSM):
         """listenKey 保持活动循环"""
         while self._running:
             try:
-                await asyncio.sleep(self._config.listen_key_refresh_interval)
+                await asyncio.sleep(self._private_config.listen_key_refresh_interval)
 
                 if self._running and self._listen_key:
                     await self._refresh_listen_key()
@@ -274,7 +332,7 @@ class PrivateStreamManager(BaseStreamFSM):
         """构建流 URL"""
         if not self._listen_key:
             raise Exception("ListenKey not available")
-        return f"{self._config.base_url}/{self._listen_key}"
+        return f"{self._private_config.base_url}/{self._listen_key}"
 
     async def _connect(self) -> None:
         """建立 WebSocket 连接"""
@@ -285,13 +343,13 @@ class PrivateStreamManager(BaseStreamFSM):
             self._ws = await websockets.connect(
                 url,
                 ping_interval=None,
-                ping_timeout=self._config.pong_timeout,
-                pong_callback=self.on_pong,
+                ping_timeout=self._private_config.pong_timeout,
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
             self._metrics.last_connect_ts = time.time()
             self._pong_timeout_counter = 0
+            self._last_pong_ts = time.time()
 
             await self._trigger_event(StreamEvent.CONNECTED)
             asyncio.create_task(self._receive_loop())
@@ -338,8 +396,8 @@ class PrivateStreamManager(BaseStreamFSM):
                     pass
                 self._recv_task = None
 
-            delay = self._config.reconnect_delay
-            while self._running and delay <= self._config.max_reconnect_delay:
+            delay = self._private_config.reconnect_delay
+            while self._running and delay <= self._private_config.max_reconnect_delay:
                 try:
                     logger.info(f"[{self._name}] Reconnecting in {delay}s...")
                     await asyncio.sleep(delay)
@@ -363,14 +421,14 @@ class PrivateStreamManager(BaseStreamFSM):
                 except Exception as e:
                     logger.warning(f"[{self._name}] Reconnect failed: {e}")
                     delay *= 2
-                    delay = min(delay, self._config.max_reconnect_delay)
+                    delay = min(delay, self._private_config.max_reconnect_delay)
 
             self._set_state(StreamState.ERROR)
             self._metrics.last_error = "Max reconnection attempts reached"
 
     async def _receive_loop(self) -> None:
         """接收消息循环（带超时检测）"""
-        stale_timeout = self._config.stale_timeout
+        stale_timeout = self._private_config.stale_timeout
 
         while self._running:
             try:
@@ -490,7 +548,12 @@ class PrivateStreamManager(BaseStreamFSM):
                 await asyncio.sleep(30)
 
                 if self._ws and self._state == StreamState.CONNECTED:
-                    await self._ws.ping()
+                    pong_waiter = await self._ws.ping()
+                    await asyncio.wait_for(
+                        pong_waiter,
+                        timeout=float(self._private_config.pong_timeout),
+                    )
+                    self.on_pong()
 
             except asyncio.CancelledError:
                 break
@@ -504,16 +567,17 @@ class PrivateStreamManager(BaseStreamFSM):
                 await asyncio.sleep(5)
 
                 now = time.time()
-
-                self._pong_timeout_counter += 1
-
                 time_since_data = now - self._last_data_ts
                 time_since_user_event = now - self._last_user_event_ts
+                time_since_pong = now - self._last_pong_ts
 
-                if self._pong_timeout_counter > self._config.pong_timeout_count:
+                max_pong_lag = float(
+                    self._private_config.pong_timeout * self._private_config.pong_timeout_count
+                )
+                if time_since_pong > max_pong_lag:
                     logger.warning(
                         f"[{self._name}] Pong timeout: "
-                        f"{self._pong_timeout_counter} consecutive timeouts"
+                        f"{time_since_pong:.1f}s since last pong"
                     )
                     self._set_state(StreamState.STALE_DATA)
                     self._metrics.stale_count += 1
@@ -522,7 +586,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.reconnect()
                     continue
 
-                if time_since_data > self._config.stale_timeout:
+                if time_since_data > self._private_config.stale_timeout:
                     logger.warning(
                         f"[{self._name}] Stale data: {time_since_data:.1f}s since last trade"
                     )
@@ -532,11 +596,10 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.force_resync("stale_data")
                     await self.reconnect()
 
-                if time_since_user_event > (self._config.stale_timeout * 2):
+                if time_since_user_event > (self._private_config.stale_timeout * 2):
                     logger.warning(
                         f"[{self._name}] User event timeout: {time_since_user_event:.1f}s"
                     )
-                    self._pong_timeout_counter += 1
 
             except asyncio.CancelledError:
                 break
@@ -546,6 +609,7 @@ class PrivateStreamManager(BaseStreamFSM):
     def on_pong(self, data: bytes = b"") -> None:
         """处理 Pong 响应"""
         self._pong_timeout_counter = 0
+        self._last_pong_ts = time.time()
 
     def get_listen_key(self) -> Optional[str]:
         """获取当前 listenKey"""

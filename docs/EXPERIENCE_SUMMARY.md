@@ -4,6 +4,76 @@
 
 ---
 
+## 零、Task 11-15 联调热修复经验 (2026-04-18)
+
+### 0.1 子类覆盖基类配置对象会破坏状态机约束
+
+**问题描述**：
+`PublicStreamManager` / `PrivateStreamManager` 继承 `BaseStreamFSM` 后，把 `self._config` 从 `StreamConfig` 覆盖成了业务配置对象。
+
+**后果**：
+- 基类方法 `_check_reconnect_storm()` 读取 `reconnect_window_seconds` 与 `max_reconnect_per_window` 时直接报属性不存在。
+- 表现为运行期反复出现 `Stale check error: ... reconnect_window_seconds`。
+
+**解决方案**：
+- 保持 `BaseStreamFSM._config` 只承载 `StreamConfig`。
+- 在子类引入独立字段（如 `self._public_config` / `self._private_config`）承载业务参数。
+
+**经验**：
+- 对框架型基类，受保护属性（`_config`）通常是“隐式契约”，子类不应复用同名字段改类型。
+
+---
+
+### 0.2 Ping 发出不等于 Pong 已确认
+
+**问题描述**：
+WS 心跳逻辑仅 `ping()` 不等待 `pong`，却用“距离上次 pong 的时间”判定超时，导致假阳性重连。
+
+**解决方案**：
+- 使用 `pong_waiter = await ws.ping()` + `await asyncio.wait_for(pong_waiter, timeout=...)`。
+- 仅在 pong waiter 成功后调用 `on_pong()` 更新最后 pong 时间。
+
+**经验**：
+- 心跳判定必须基于“已确认事件”，不能基于“已发送动作”。
+- 监控指标（超时次数/时间）应从确认信号导出，否则会产生噪声告警。
+
+---
+
+### 0.3 仅在 `.env` 写代理变量，不代表 aiohttp 会自动生效
+
+**问题描述**：
+跨境网络环境下，`.env` 已配置代理但 Binance 私有流依然直连失败。
+
+**根因**：
+- `aiohttp.ClientSession()` 默认 `trust_env=False`，不会自动读取系统/环境代理。
+- 私有流请求若未显式传 `proxy=...`，可能绕过代理。
+
+**解决方案**：
+- 在会话层开启 `trust_env=True`。
+- 请求层统一传入解析后的代理（`BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY`）。
+- 启动关键路径（listenKey 创建）增加指数退避重试，适配 VPN 抖动。
+
+**经验**：
+- “配置存在”与“调用链消费该配置”是两件事，必须在代码路径逐层验证。
+- 对交易链路的启动前置步骤（如 listenKey），不能使用单次尝试。
+
+---
+
+### 0.4 外部依赖不可用时要“降级可运行”，而不是“一票否决”
+
+**问题描述**：
+Binance 私有流 listenKey 接口返回 410 时，连接器启动失败，导致整个自动化主链路不可用。
+
+**解决方案**：
+- 连接器启动拆分为“核心能力”和“增强能力”：
+  - 核心能力（Public Stream + 调度）必须尽量可用；
+  - 增强能力（Private Stream）失败时进入 DEGRADED，不阻断服务启动。
+
+**经验**：
+- 面向真实网络环境（尤其跨境/VPN）时，控制面应优先保障可用性，再逐步恢复完整性。
+
+---
+
 ## 一、代码质量经验
 
 ### 1.1 PostgreSQLStorage API 契约与调用方不匹配问题

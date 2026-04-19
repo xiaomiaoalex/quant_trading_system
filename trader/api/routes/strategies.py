@@ -160,6 +160,14 @@ def get_fill_handler():
     return _fill_handler
 
 
+async def ensure_fill_handler_ready():
+    """确保 fill_handler 已初始化并返回。"""
+    global _fill_handler
+    if _fill_handler is None:
+        await _get_oms_handler()
+    return _fill_handler
+
+
 def get_strategy_runner() -> StrategyRunner:
     """
     获取全局策略执行器实例。

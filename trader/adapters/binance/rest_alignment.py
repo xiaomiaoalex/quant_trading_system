@@ -12,6 +12,7 @@ REST 对齐协调器，负责与 Binance REST API 同步账户数据。
 """
 import asyncio
 import logging
+import os
 import time
 import hashlib
 import hmac
@@ -44,6 +45,7 @@ class RestAlignmentSnapshot:
 class AlignmentConfig:
     """对齐配置"""
     base_url: str = "https://testnet.binance.vision/api"
+    proxy_url: Optional[str] = None
     p0_interval_seconds: float = 60.0
     p1_interval_seconds: float = 120.0
     p2_interval_seconds: float = 300.0
@@ -106,8 +108,18 @@ class RESTAlignmentCoordinator:
 
         import aiohttp
         self._running = True
-        self._session = aiohttp.ClientSession()
+        self._session = aiohttp.ClientSession(trust_env=True)
         logger.info("[RESTAlignment] Started")
+
+    def _resolve_proxy(self) -> Optional[str]:
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        return (
+            self._config.proxy_url
+            or os.environ.get("BINANCE_PROXY_URL")
+            or os.environ.get("BINANCE_PROXY")
+            or os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+        )
 
     async def stop(self) -> None:
         """停止协调器"""
@@ -290,7 +302,8 @@ class RESTAlignmentCoordinator:
                     method,
                     url,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout)
+                    timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
+                    proxy=self._resolve_proxy(),
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()

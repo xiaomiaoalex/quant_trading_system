@@ -12,6 +12,7 @@ Public Stream Manager - Binance Public WebSocket Stream
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
@@ -50,6 +51,8 @@ class PublicStreamConfig:
     max_reconnect_delay: float = 60.0
     ping_interval: float = 30.0
     stale_timeout: float = 30.0
+    open_timeout: float = 15.0
+    proxy_url: Optional[str] = None
     streams: List[str] = field(default_factory=lambda: ["btcusdt@trade", "btcusdt@kline_1m"])
 
 
@@ -66,10 +69,12 @@ class PublicStreamManager(BaseStreamFSM):
         config: Optional[PublicStreamConfig] = None,
         stream_config: Optional[StreamConfig] = None
     ):
-        public_config = stream_config or StreamConfig()
-        super().__init__("PublicStream", public_config)
+        fsm_config = stream_config or StreamConfig()
+        super().__init__("PublicStream", fsm_config)
 
-        self._config = config or PublicStreamConfig()
+        # 注意：不要覆盖 BaseStreamFSM._config（其类型是 StreamConfig）
+        # 否则基类重连风暴检测会读取不到字段（max_reconnect_per_window/reconnect_window_seconds）。
+        self._public_config = config or PublicStreamConfig()
         self._ws: Optional[ws_client.WebSocketClientProtocol] = None
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -87,8 +92,22 @@ class PublicStreamManager(BaseStreamFSM):
 
     def _build_stream_url(self) -> str:
         """构建流 URL"""
-        streams = "/".join(self._config.streams)
-        return f"{self._config.base_url}/{streams}"
+        streams = "/".join(self._public_config.streams)
+        return f"{self._public_config.base_url}/{streams}"
+
+    def _resolve_proxy(self) -> str | bool | None:
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        explicit = self._public_config.proxy_url
+        if explicit:
+            return explicit
+        env_proxy = (
+            os.environ.get("BINANCE_PROXY_URL")
+            or os.environ.get("BINANCE_PROXY")
+            or os.environ.get("HTTPS_PROXY")
+            or os.environ.get("HTTP_PROXY")
+        )
+        # websockets.connect(proxy=True) 表示自动使用环境代理
+        return True if env_proxy else None
 
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
@@ -130,8 +149,9 @@ class PublicStreamManager(BaseStreamFSM):
             self._ws = await websockets.connect(
                 url,
                 ping_interval=None,
-                ping_timeout=self._config.ping_interval,
-                pong_callback=self.on_pong,
+                ping_timeout=self._public_config.ping_interval,
+                open_timeout=self._public_config.open_timeout,
+                proxy=self._resolve_proxy(),
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
@@ -171,8 +191,8 @@ class PublicStreamManager(BaseStreamFSM):
         self._set_state(StreamState.RECONNECTING)
         self._record_reconnect()
 
-        delay = self._config.reconnect_delay
-        while self._running and delay <= self._config.max_reconnect_delay:
+        delay = self._public_config.reconnect_delay
+        while self._running and delay <= self._public_config.max_reconnect_delay:
             try:
                 logger.info(f"[{self._name}] Reconnecting in {delay}s...")
                 await asyncio.sleep(delay)
@@ -183,7 +203,7 @@ class PublicStreamManager(BaseStreamFSM):
             except Exception as e:
                 logger.warning(f"[{self._name}] Reconnect failed: {e}")
                 delay *= 2
-                delay = min(delay, self._config.max_reconnect_delay)
+                delay = min(delay, self._public_config.max_reconnect_delay)
 
         self._set_state(StreamState.ERROR)
         self._metrics.last_error = "Max reconnection attempts reached"
@@ -246,10 +266,15 @@ class PublicStreamManager(BaseStreamFSM):
         """Ping 循环"""
         while self._running:
             try:
-                await asyncio.sleep(self._config.ping_interval)
+                await asyncio.sleep(self._public_config.ping_interval)
 
                 if self._ws and self._state == StreamState.CONNECTED:
-                    await self._ws.ping()
+                    pong_waiter = await self._ws.ping()
+                    await asyncio.wait_for(
+                        pong_waiter,
+                        timeout=self._public_config.stale_timeout,
+                    )
+                    self.on_pong()
 
             except asyncio.CancelledError:
                 break
@@ -266,7 +291,7 @@ class PublicStreamManager(BaseStreamFSM):
                 time_since_data = now - self._last_data_ts
                 time_since_pong = now - self._last_pong_ts
 
-                if time_since_data > self._config.stale_timeout:
+                if time_since_data > self._public_config.stale_timeout:
                     logger.warning(
                         f"[{self._name}] Stale data detected: "
                         f"{time_since_data:.1f}s since last data"
@@ -276,7 +301,9 @@ class PublicStreamManager(BaseStreamFSM):
                     await self._trigger_event(StreamEvent.STALE_DETECTED)
                     await self.reconnect()
 
-                if time_since_pong > (self._config.ping_interval + self._config.stale_timeout):
+                if time_since_pong > (
+                    self._public_config.ping_interval + self._public_config.stale_timeout
+                ):
                     logger.warning(
                         f"[{self._name}] Pong timeout: "
                         f"{time_since_pong:.1f}s since last pong"

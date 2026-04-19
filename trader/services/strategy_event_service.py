@@ -52,7 +52,7 @@ class StrategyEvent:
     
     def to_envelope(self) -> EventEnvelope:
         return EventEnvelope(
-            stream_key=f"strategy.{self.strategy_id}.{self.event_type.value}",
+            stream_key=f"strategy:{self.strategy_id}",
             event_type=self.event_type.value,
             trace_id=self.trace_id,
             ts_ms=self.ts_ms,
@@ -143,7 +143,7 @@ class StrategyEventService:
         
         # 过滤
         if strategy_id:
-            events = [e for e in events if f"strategy.{strategy_id}." in e.stream_key]
+            events = [e for e in events if e.stream_key == f"strategy:{strategy_id}"]
         if event_type:
             events = [e for e in events if e.event_type == event_type]
         

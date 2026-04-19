@@ -386,7 +386,15 @@ class TestSnapshotStorageIntegration:
     def pg_connection_string(self):
         """Get PostgreSQL connection string from environment"""
         import os
-        return os.environ.get("POSTGRES_CONNECTION_STRING")
+        conn_str = os.environ.get("POSTGRES_CONNECTION_STRING")
+        if conn_str:
+            return conn_str
+        host = os.environ.get("POSTGRES_HOST", "localhost")
+        port = os.environ.get("POSTGRES_PORT", "5432")
+        db = os.environ.get("POSTGRES_DB", "trading")
+        user = os.environ.get("POSTGRES_USER", "trader")
+        password = os.environ.get("POSTGRES_PASSWORD", "")
+        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
     
     def _is_docker_available(self):
         """Check if Docker is available"""

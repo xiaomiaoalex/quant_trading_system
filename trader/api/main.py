@@ -117,14 +117,44 @@ async def lifespan(app: FastAPI):
                 BinanceConnectorConfig,
             )
 
-            # 根据 BINANCE_ENV 判断是否使用 testnet
+            # 根据 BINANCE_ENV 统一 connector 的 REST/WS 环境
             binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
-            is_testnet = binance_env in ("demo", "testnet", "test")
+            from trader.adapters.binance.public_stream import PublicStreamConfig
+            from trader.adapters.binance.private_stream import PrivateStreamConfig
+            from trader.adapters.binance.rest_alignment import AlignmentConfig
 
-            # 创建 connector 配置
-            config = BinanceConnectorConfig(
-                testnet=is_testnet,
-            )
+            if binance_env in ("demo",):
+                # Binance Spot Demo 环境
+                config = BinanceConnectorConfig(
+                    testnet=True,
+                    public_stream_config=PublicStreamConfig(
+                        base_url="wss://demo-stream.binance.com/ws",
+                    ),
+                    private_stream_config=PrivateStreamConfig(
+                        base_url="wss://demo-stream.binance.com/ws",
+                        rest_url="https://demo-api.binance.com/api",
+                    ),
+                    alignment_config=AlignmentConfig(
+                        base_url="https://demo-api.binance.com/api",
+                    ),
+                )
+            elif binance_env in ("testnet", "test"):
+                config = BinanceConnectorConfig(
+                    testnet=True,
+                    public_stream_config=PublicStreamConfig(
+                        base_url="wss://stream.testnet.binance.vision/ws",
+                    ),
+                    private_stream_config=PrivateStreamConfig(
+                        base_url="wss://stream.testnet.binance.vision/ws",
+                        rest_url="https://testnet.binance.vision/api",
+                    ),
+                    alignment_config=AlignmentConfig(
+                        base_url="https://testnet.binance.vision/api",
+                    ),
+                )
+            else:
+                # 生产环境
+                config = BinanceConnectorConfig(testnet=False)
 
             # 创建 connector
             connector = BinanceConnector(
@@ -133,9 +163,9 @@ async def lifespan(app: FastAPI):
                 config=config,
             )
 
-            # 注册成交回调处理器
-            from trader.api.routes.strategies import get_fill_handler
-            fill_handler = get_fill_handler()
+            # 注册成交回调处理器（先确保 handler 已初始化）
+            from trader.api.routes.strategies import ensure_fill_handler_ready
+            fill_handler = await ensure_fill_handler_ready()
             if fill_handler is not None:
                 connector.register_fill_handler(fill_handler)
                 logger.info("[Lifespan] Fill handler registered to connector")
@@ -145,7 +175,14 @@ async def lifespan(app: FastAPI):
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()
             _binance_connector_instance = connector
-            logger.info("[Lifespan] BinanceConnector started")
+            logger.info(
+                "[Lifespan] BinanceConnector started: env=%s public_ws=%s private_ws=%s private_rest=%s align_rest=%s",
+                binance_env,
+                config.public_stream_config.base_url if config.public_stream_config else "default",
+                config.private_stream_config.base_url if config.private_stream_config else "default",
+                config.private_stream_config.rest_url if config.private_stream_config else "default",
+                config.alignment_config.base_url if config.alignment_config else "default",
+            )
 
             # 注入 connector 到策略编排器
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
@@ -204,11 +241,19 @@ async def lifespan(app: FastAPI):
                 return []
 
             recv_window = get_binance_recv_window()
-            config = BinanceSpotDemoBrokerConfig.for_demo(
-                api_key,
-                secret_key,
-                recv_window=recv_window,
-            )
+            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
+            if binance_env in ("testnet", "test"):
+                config = BinanceSpotDemoBrokerConfig.for_testnet(
+                    api_key,
+                    secret_key,
+                    recv_window=recv_window,
+                )
+            else:
+                config = BinanceSpotDemoBrokerConfig.for_demo(
+                    api_key,
+                    secret_key,
+                    recv_window=recv_window,
+                )
             broker = BinanceSpotDemoBroker(config)
             await broker.connect()
             try:
