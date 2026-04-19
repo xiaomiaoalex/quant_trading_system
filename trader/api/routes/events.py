@@ -6,7 +6,7 @@ Event log, snapshot, and replay endpoints (Task 9.7, 9.11).
 import uuid
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
 from trader.api.models.schemas import EventEnvelope, SnapshotEnvelope, ReplayRequest, ActionResult, ReplayJob
@@ -19,38 +19,45 @@ _replay_jobs: Dict[str, ReplayJob] = {}
 _replay_jobs_lock = asyncio.Lock()
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def clear_replay_jobs() -> None:
+    """Clear replay jobs storage (tests helper)."""
+    _replay_jobs.clear()
+
+
 async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
     """
     后台执行 replay 任务。
     
     更新 job 状态为 RUNNING，执行完成后更新为 COMPLETED/FAILED。
     """
-    global _replay_jobs
-    
     async with _replay_jobs_lock:
         if job_id in _replay_jobs:
             job = _replay_jobs[job_id]
             job.status = "RUNNING"
-            job.started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            job.started_at = _utc_now_iso()
     
     service = EventService()
     
     try:
         # 执行 replay
-        service.trigger_replay(request)
+        summary = await service.run_replay(request)
         
         async with _replay_jobs_lock:
             if job_id in _replay_jobs:
                 job = _replay_jobs[job_id]
                 job.status = "COMPLETED"
-                job.finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                job.result_summary = {"stream_key": request.stream_key, "message": "Replay completed"}
+                job.finished_at = _utc_now_iso()
+                job.result_summary = summary
     except Exception as e:
         async with _replay_jobs_lock:
             if job_id in _replay_jobs:
                 job = _replay_jobs[job_id]
                 job.status = "FAILED"
-                job.finished_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                job.finished_at = _utc_now_iso()
                 job.error = str(e)
 
 
@@ -92,7 +99,7 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
     """
     # 创建 job 记录
     job_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    now = _utc_now_iso()
     
     job = ReplayJob(
         job_id=job_id,
@@ -107,7 +114,8 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
     )
     
     # 存储 job
-    _replay_jobs[job_id] = job
+    async with _replay_jobs_lock:
+        _replay_jobs[job_id] = job
     
     # 使用 BackgroundTasks 异步执行
     background_tasks.add_task(_run_replay_task, job_id, request)
@@ -122,9 +130,34 @@ async def get_replay_status(job_id: str = Path(..., description="Replay job ID")
     
     返回任务的当前状态和结果摘要。
     """
-    if job_id not in _replay_jobs:
-        raise HTTPException(status_code=404, detail=f"Replay job {job_id} not found")
-    return _replay_jobs[job_id]
+    async with _replay_jobs_lock:
+        if job_id not in _replay_jobs:
+            raise HTTPException(status_code=404, detail=f"Replay job {job_id} not found")
+        return _replay_jobs[job_id]
+
+
+@router.get("/v1/replay", response_model=list[ReplayJob])
+async def list_replay_jobs(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    stream_key: Optional[str] = Query(None, description="Filter by stream key"),
+    requested_by: Optional[str] = Query(None, description="Filter by requester"),
+    limit: int = Query(100, ge=1, le=500, description="Max results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+):
+    """List replay jobs with optional filters and pagination."""
+    async with _replay_jobs_lock:
+        jobs = list(_replay_jobs.values())
+
+    if status:
+        status_norm = status.strip().upper()
+        jobs = [job for job in jobs if job.status.upper() == status_norm]
+    if stream_key:
+        jobs = [job for job in jobs if job.stream_key == stream_key]
+    if requested_by:
+        jobs = [job for job in jobs if job.requested_by == requested_by]
+
+    jobs.sort(key=lambda item: item.requested_at, reverse=True)
+    return jobs[offset : offset + limit]
 
 
 # Task 9.11: 快照历史查询接口

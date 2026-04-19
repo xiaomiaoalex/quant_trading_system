@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from trader.api.main import app
 from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
-from trader.storage.in_memory import reset_storage
+from trader.storage.in_memory import get_storage, reset_storage
 
 
 async def _clear_postgres_risk_state() -> None:
@@ -1155,10 +1155,39 @@ class TestPortfolioEndpoints:
 class TestEventEndpoints:
     """Test event API endpoints"""
 
+    @staticmethod
+    def _seed_replay_events() -> None:
+        storage = get_storage()
+        storage.append_event(
+            {
+                "stream_key": "orders",
+                "event_type": "ORDER_CREATED",
+                "trace_id": "trace-1",
+                "ts_ms": int(time.time() * 1000) - 1000,
+                "payload": {
+                    "client_order_id": "ord-1",
+                },
+            }
+        )
+        storage.append_event(
+            {
+                "stream_key": "orders",
+                "event_type": "ORDER_SUBMITTED",
+                "trace_id": "trace-2",
+                "ts_ms": int(time.time() * 1000),
+                "payload": {
+                    "client_order_id": "ord-1",
+                },
+            }
+        )
+
     def setup_method(self):
         """Setup for each test"""
+        from trader.api.routes.events import clear_replay_jobs
+
         self.client = TestClient(app)
         reset_storage()
+        clear_replay_jobs()
 
     def test_list_events_empty(self):
         """Test listing events when empty"""
@@ -1174,6 +1203,7 @@ class TestEventEndpoints:
 
     def test_trigger_replay(self):
         """Test triggering replay (Task 9.7 - returns ReplayJob)"""
+        self._seed_replay_events()
         payload = {
             "stream_key": "orders",
             "requested_by": "admin"
@@ -1186,6 +1216,48 @@ class TestEventEndpoints:
         assert data["status"] in ("PENDING", "RUNNING", "COMPLETED", "FAILED")
         assert data["stream_key"] == "orders"
         assert data["requested_by"] == "admin"
+
+    def test_get_replay_status(self):
+        self._seed_replay_events()
+        payload = {
+            "stream_key": "orders",
+            "requested_by": "admin",
+        }
+        response = self.client.post("/v1/replay", json=payload)
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+
+        status_response = self.client.get(f"/v1/replay/{job_id}")
+        assert status_response.status_code == 200
+        data = status_response.json()
+        assert data["job_id"] == job_id
+        assert data["stream_key"] == "orders"
+        assert data["status"] in ("PENDING", "RUNNING", "COMPLETED")
+        if data["status"] == "COMPLETED":
+            assert data["result_summary"]["events_total"] >= 2
+
+    def test_get_replay_status_not_found(self):
+        response = self.client.get("/v1/replay/not-found")
+        assert response.status_code == 404
+
+    def test_list_replay_jobs(self):
+        self._seed_replay_events()
+        payload = {"stream_key": "orders", "requested_by": "admin"}
+        first = self.client.post("/v1/replay", json=payload)
+        assert first.status_code == 200
+        second = self.client.post("/v1/replay", json={"stream_key": "orders", "requested_by": "alice"})
+        assert second.status_code == 200
+
+        list_all = self.client.get("/v1/replay")
+        assert list_all.status_code == 200
+        all_jobs = list_all.json()
+        assert len(all_jobs) >= 2
+
+        list_admin = self.client.get("/v1/replay", params={"requested_by": "admin"})
+        assert list_admin.status_code == 200
+        admin_jobs = list_admin.json()
+        assert len(admin_jobs) >= 1
+        assert all(item["requested_by"] == "admin" for item in admin_jobs)
 
 
 class TestKillSwitchEndpoints:

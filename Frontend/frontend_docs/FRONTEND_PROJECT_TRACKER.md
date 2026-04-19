@@ -11,7 +11,7 @@
 ### 最后更新时间
 - **更新日期**: 2026-04-18 (北京时间)
 - **更新人**: AI Agent
-- **当前阶段**: Phase B/C - Backtests + Reports + Audit
+- **当前阶段**: Phase B/C - Backtests + Reports + Audit + Replay
 
 ### 分支状态
 - **主分支**: `main` ✅
@@ -43,9 +43,9 @@
 | Task 9.4 | Backtests 列表与进度 | P1 | ✅ 已完成 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 | Task 9.5 | Reports 详情接口 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 | Task 9.6 | Audit 专用查询接口 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
-| Task 9.7 | Replay 任务状态接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.7 | Replay 任务状态接口 | P1 | ✅ 已完成 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 
-**Week 2 状态**: 🔄 进行中 (3/4 完成)
+**Week 2 状态**: ✅ 完成 (4/4 完成)
 
 ### 并行推进（P2 一致性优化）
 
@@ -199,14 +199,14 @@
 ### 工期预估
 - **预计**: 1-2 周
 - **前提**: 后端补齐 P2 接口
-- **当前状态**: ⚪ 未开始
+- **当前状态**: 🔄 进行中
 
 ### 页面范围与状态
 
 | 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
 |------|--------|------|------|------|------|------|----------|
 | Audit | P2 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
-| Replay | P2 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| Replay | P2 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
 | Visual Polish | P2 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 
 ### 关键组件（Phase C）
@@ -228,7 +228,6 @@
 
 | ID | 问题描述 | 影响范围 | 严重性 | 状态 | 解决方案 | 主责任域 |
 |----|----------|----------|--------|------|----------|----------|
-| TG-008 | 缺少 Replay job API | Replay 页面 | 🔴 高 | ⏳ 待开始 | Task 9.7 | backend-api |
 
 ### 已解决 Truth Gap
 
@@ -241,6 +240,7 @@
 | TG-005 | 缺少 Backtests 列表 API | 2026-04-18 | Task 9.4 | 列表+进度联调完成 |
 | TG-006 | 缺少 Reports 详情 API | 2026-04-18 | Task 9.5 | 报告详情可读 |
 | TG-007 | 缺少 Audit 专用 API | 2026-04-18 | Task 9.6 | Audit 列表/详情 + 页面联调完成 |
+| TG-008 | 缺少 Replay job API | 2026-04-18 | Task 9.7 | Replay 触发/列表/详情 + 页面联调完成 |
 
 ---
 
@@ -303,15 +303,16 @@
 | 2026-04-10 | 4 | 4 | 3 | 计划启动 |
 | 2026-04-18 | 0 | 2 | 3 | Task 9.4/9.5 完成，进入 9.6/9.7 |
 | 2026-04-18 | 0 | 1 | 3 | Task 9.6 完成，聚焦 9.7 |
+| 2026-04-18 | 0 | 0 | 3 | Task 9.7 完成，Week 2 收口 |
 
 ### 任务完成率
 
 | 阶段 | 总任务 | 已完成 | 进行中 | 待开始 | 完成率 |
 |------|--------|--------|--------|--------|--------|
 | Week 1 | 4 | 4 | 0 | 0 | 100% |
-| Week 2 | 4 | 3 | 0 | 1 | 75% |
+| Week 2 | 4 | 4 | 0 | 0 | 100% |
 | P2 | 3 | 0 | 0 | 3 | 0% |
-| **总计** | **11** | **7** | **0** | **4** | **64%** |
+| **总计** | **11** | **8** | **0** | **3** | **73%** |
 
 ### 前端组件开发进度
 
@@ -319,8 +320,8 @@
 |------|--------|--------|--------|--------|--------|
 | Phase A | 11 | 11 | 0 | 0 | 100% |
 | Phase B | 9 | 3 | 2 | 4 | 33% |
-| Phase C | 6 | 1 | 1 | 4 | 17% |
-| **总计** | **26** | **15** | **3** | **8** | **58%** |
+| Phase C | 6 | 2 | 1 | 3 | 33% |
+| **总计** | **26** | **16** | **3** | **7** | **62%** |
 
 ---
 
@@ -345,8 +346,8 @@
 | Chat | 创建会话、发送消息、审批策略 | ⏳ 待开始 |
 | Backtests | 创建回测、查看进度 | ⏳ 待开始 |
 | Reports | 查看报告详情 | ⏳ 待开始 |
-| Audit | 检索审计条目 | ⏳ 待开始 |
-| Replay | 触发回放、查看状态 | ⏳ 待开始 |
+| Audit | 检索审计条目 | 🔄 执行中（待环境验证） |
+| Replay | 触发回放、查看状态 | 🔄 执行中（待环境验证） |
 
 ---
 
@@ -416,15 +417,16 @@
 | 2026-04-10 | v1.7 | 清理失效文档引用，移除 truth_gap_development_plan.md 链接 | AI Agent |
 | 2026-04-18 | v1.8 | Task 9.4/9.5 联调完成，Backtests/Reports API 状态与阻塞清单同步刷新 | AI Agent |
 | 2026-04-18 | v1.9 | Task 9.6 完成：Audit API 查询能力 + /audit 页面打通并进入联调验证 | AI Agent |
+| 2026-04-18 | v2.0 | Task 9.7 完成：Replay API（触发/列表/详情）+ /replay 页面打通并进入联调验证 | AI Agent |
 
 ---
 
 ## 🎯 下一步行动
 
 ### 立即行动（Today）
-1. [AI Agent / `backend-api`] 推进 Task 9.7: Replay 任务状态接口
-2. [AI Agent / `frontend-console`] 对接 Replay API 并补齐 `/replay` 页面
-3. [AI Agent / `frontend-console`] 对 Audit 页增加筛选体验优化与状态提示
+1. [AI Agent / `backend-api`] 推进 Task 9.9: Chat 参数风格统一
+2. [AI Agent / `backend-api`] 推进 Task 9.10: Stale/Degraded 枚举统一
+3. [AI Agent / `frontend-console`] 对 Audit/Replay 页增加筛选体验优化与状态提示
 4. [AI Agent / `qa-validation`] 在可用 Node 环境执行前端 typecheck 与页面回归
 
 ### 本周行动（Week 1）
@@ -434,9 +436,9 @@
 4. [AI Agent / `qa-validation`] 输出联调问题清单并归档
 
 ### 下周行动（Week 2）
-1. [AI Agent / `backend-api`] 完成 Task 9.7
-2. [AI Agent / `frontend-console`] 完成 Replay 页面首版并与后端联调
-3. [AI Agent / `frontend-console`] 对 Backtests/Reports/Audit 做可视化与交互优化
+1. [AI Agent / `backend-api`] 完成 Task 9.9/9.10
+2. [AI Agent / `frontend-console`] 对 Backtests/Reports/Audit/Replay 做可视化与交互优化
+3. [AI Agent / `frontend-console`] 联动 contract-doc 刷新 API 对齐文档
 4. [AI Agent / `qa-validation`] Phase B 验收（预计：2026-04-24）
 
 ---
