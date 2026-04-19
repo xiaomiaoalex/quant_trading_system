@@ -13,6 +13,19 @@ from trader.services.event import EventService
 from trader.storage.in_memory import InMemoryStorage
 
 
+# 清理全局 PostgreSQL 连接池的 fixture
+@pytest.fixture(scope="function", autouse=False)
+async def cleanup_postgres_pool():
+    """Cleanup PostgreSQL connection pool after test"""
+    yield
+    try:
+        from trader.adapters.persistence.postgres import close_pool
+        await close_pool()
+    except Exception:
+        # Ignore cleanup errors
+        pass
+
+
 # Module-level fixtures for shared use
 @pytest.fixture
 def mock_pool():
@@ -407,7 +420,7 @@ class TestSnapshotStorageIntegration:
     
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_full_snapshot_persistence_workflow(self, pg_connection_string):
+    async def test_full_snapshot_persistence_workflow(self, pg_connection_string, cleanup_postgres_pool):
         """Test full workflow: create storage, save, retrieve, update, delete"""
         from trader.adapters.persistence.postgres.snapshot_storage import (
             create_postgres_snapshot_storage,

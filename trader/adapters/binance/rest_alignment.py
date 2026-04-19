@@ -45,6 +45,7 @@ class RestAlignmentSnapshot:
 class AlignmentConfig:
     """对齐配置"""
     base_url: str = "https://testnet.binance.vision/api"
+    recv_window_ms: int = 10000
     proxy_url: Optional[str] = None
     p0_interval_seconds: float = 60.0
     p1_interval_seconds: float = 120.0
@@ -91,6 +92,7 @@ class RESTAlignmentCoordinator:
 
         self._metrics = AlignmentMetrics()
         self._last_alignment_ts = 0.0
+        self._timestamp_offset_ms: int = 0
 
         self._snapshot_handlers: List[Callable[[RestAlignmentSnapshot], None]] = []
 
@@ -109,17 +111,48 @@ class RESTAlignmentCoordinator:
         import aiohttp
         self._running = True
         self._session = aiohttp.ClientSession(trust_env=True)
+        await self._sync_server_time_offset()
         logger.info("[RESTAlignment] Started")
 
     def _resolve_proxy(self) -> Optional[str]:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
         return (
             self._config.proxy_url
             or os.environ.get("BINANCE_PROXY_URL")
             or os.environ.get("BINANCE_PROXY")
             or os.environ.get("HTTPS_PROXY")
             or os.environ.get("HTTP_PROXY")
+            or os.environ.get("ALL_PROXY")
         )
+
+    async def _sync_server_time_offset(self) -> None:
+        """同步服务器时间偏移，降低 -1021 风险。"""
+        if self._session is None:
+            return
+        import aiohttp
+        url = f"{self._config.base_url}/v3/time"
+        try:
+            async with self._session.get(
+                url,
+                proxy=self._resolve_proxy(),
+                timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
+            ) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+                server_ms = int(data.get("serverTime", 0))
+                if server_ms <= 0:
+                    return
+                local_ms = int(time.time() * 1000)
+                self._timestamp_offset_ms = server_ms - local_ms
+                logger.info(
+                    "[RESTAlignment] Time offset synced: offset_ms=%s",
+                    self._timestamp_offset_ms,
+                )
+        except Exception as e:
+            # 时间同步失败不应阻断主流程，但需要可观测。
+            logger.warning("[RESTAlignment] Time sync failed: %s", e)
+            return
 
     async def stop(self) -> None:
         """停止协调器"""
@@ -274,23 +307,24 @@ class RESTAlignmentCoordinator:
         """
         import aiohttp
         params = params or {}
-
-        timestamp = int(time.time() * 1000)
-        params["timestamp"] = timestamp
-
-        query_string = urlencode(sorted(params.items()))
-        signature = hmac.new(
-            self._secret_key.encode("utf-8"),
-            query_string.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-
-        url = f"{self._config.base_url}{endpoint}?{query_string}&signature={signature}"
         headers = {"X-MBX-APIKEY": self._api_key}
 
         task_name = f"rest_{endpoint}"
 
+        current_recv_window_ms = int(self._config.recv_window_ms)
         for attempt in range(5):
+            req_params = dict(params)
+            req_params["timestamp"] = int(time.time() * 1000) + self._timestamp_offset_ms
+            req_params["recvWindow"] = current_recv_window_ms
+
+            query_string = urlencode(sorted(req_params.items()))
+            signature = hmac.new(
+                self._secret_key.encode("utf-8"),
+                query_string.encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+            url = f"{self._config.base_url}{endpoint}?{query_string}&signature={signature}"
+
             if not await self._rate_budget.acquire_async(cost=1, priority=priority, timeout=30.0):
                 delay = self._backoff.next_delay(task_name, retry_after_s=None)
                 logger.warning(f"[RESTAlignment] Rate limit wait: {delay:.2f}s")
@@ -333,6 +367,16 @@ class RESTAlignmentCoordinator:
 
                     else:
                         error_text = await resp.text()
+                        if resp.status == 400 and '"code":-1021' in error_text:
+                            logger.warning(
+                                "[RESTAlignment] -1021 detected (attempt=%s, recvWindow=%sms), "
+                                "syncing time and retrying",
+                                attempt + 1,
+                                current_recv_window_ms,
+                            )
+                            await self._sync_server_time_offset()
+                            current_recv_window_ms = min(60000, max(current_recv_window_ms * 2, 10000))
+                            continue
                         logger.error(f"[RESTAlignment] Request failed: {resp.status} - {error_text}")
                         raise Exception(f"HTTP {resp.status}: {error_text}")
 

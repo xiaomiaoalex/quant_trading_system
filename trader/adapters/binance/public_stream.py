@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
@@ -27,9 +28,11 @@ import websockets.client as ws_client
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM, StreamConfig, StreamState, StreamEvent
 )
+from trader.adapters.binance.websockets_compat import install_connection_lost_guard
 
 
 logger = logging.getLogger(__name__)
+install_connection_lost_guard(logger)
 
 
 @dataclass
@@ -49,6 +52,8 @@ class PublicStreamConfig:
     base_url: str = "wss://stream.binance.com:9443/ws"
     reconnect_delay: float = 1.0
     max_reconnect_delay: float = 60.0
+    reconnect_jitter_ratio: float = 0.2
+    reconnect_jitter_max_seconds: float = 3.0
     ping_interval: float = 30.0
     stale_timeout: float = 30.0
     open_timeout: float = 15.0
@@ -96,7 +101,7 @@ class PublicStreamManager(BaseStreamFSM):
         return f"{self._public_config.base_url}/{streams}"
 
     def _resolve_proxy(self) -> str | bool | None:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
         explicit = self._public_config.proxy_url
         if explicit:
             return explicit
@@ -105,9 +110,19 @@ class PublicStreamManager(BaseStreamFSM):
             or os.environ.get("BINANCE_PROXY")
             or os.environ.get("HTTPS_PROXY")
             or os.environ.get("HTTP_PROXY")
+            or os.environ.get("ALL_PROXY")
         )
-        # websockets.connect(proxy=True) 表示自动使用环境代理
-        return True if env_proxy else None
+        return env_proxy or None
+
+    def _apply_jitter(self, delay: float) -> float:
+        """对重连延迟施加抖动，避免多个连接器同频重连。"""
+        ratio = max(0.0, min(self._public_config.reconnect_jitter_ratio, 1.0))
+        if ratio <= 0:
+            return max(0.0, delay)
+        scale = random.uniform(1.0 - ratio, 1.0 + ratio)
+        jittered = max(0.0, delay * scale)
+        max_jittered = delay + max(0.0, self._public_config.reconnect_jitter_max_seconds)
+        return min(jittered, max_jittered)
 
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
@@ -194,8 +209,12 @@ class PublicStreamManager(BaseStreamFSM):
         delay = self._public_config.reconnect_delay
         while self._running and delay <= self._public_config.max_reconnect_delay:
             try:
-                logger.info(f"[{self._name}] Reconnecting in {delay}s...")
-                await asyncio.sleep(delay)
+                sleep_delay = self._apply_jitter(delay)
+                logger.info(
+                    f"[{self._name}] Reconnecting in {sleep_delay:.2f}s "
+                    f"(base={delay:.2f}s)"
+                )
+                await asyncio.sleep(sleep_delay)
 
                 await self._connect()
                 return

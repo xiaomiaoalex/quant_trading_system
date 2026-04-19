@@ -154,6 +154,21 @@ async def _get_oms_handler():
     return _oms_handler, _fill_handler
 
 
+async def shutdown_strategy_runtime_resources() -> None:
+    """关闭策略路由层持有的 Broker/OMS 资源，避免 reload 场景 session 泄漏。"""
+    global _broker_instance, _oms_handler, _fill_handler
+    async with _broker_lock:
+        if _broker_instance is not None:
+            try:
+                await _broker_instance.disconnect()
+            except Exception as e:
+                logger.warning(f"[Strategies] broker disconnect failed during shutdown: {e}")
+            _broker_instance = None
+
+    _oms_handler = None
+    _fill_handler = None
+
+
 def get_fill_handler():
     """获取已注册的 fill_handler（供 connector 注册用）"""
     global _fill_handler

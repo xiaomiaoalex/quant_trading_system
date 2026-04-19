@@ -15,10 +15,14 @@ Private Stream Manager - Binance Private WebSocket Stream
 - 可独立运行和故障
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
+import random
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable, Awaitable
 
@@ -32,9 +36,11 @@ from trader.adapters.binance.stream_base import (
     BaseStreamFSM, StreamConfig, StreamState, StreamEvent
 )
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
+from trader.adapters.binance.websockets_compat import install_connection_lost_guard
 
 
 logger = logging.getLogger(__name__)
+install_connection_lost_guard(logger)
 
 
 class ListenKeyEndpointGoneError(Exception):
@@ -80,16 +86,24 @@ class RawFillUpdate:
 @dataclass
 class PrivateStreamConfig:
     """私有流配置"""
+    mode: str = "auto"  # auto | ws_api_signature | legacy_listen_key
     base_url: str = "wss://stream.binance.com:9443/ws"
     rest_url: str = "https://testnet.binance.vision/api"
+    ws_api_urls: List[str] = field(default_factory=list)
     proxy_url: Optional[str] = None
+    open_timeout: float = 15.0
     request_timeout: float = 15.0
+    ws_api_subscribe_timeout: float = 15.0
+    ws_api_recv_window_ms: int = 5000
     listen_key_ttl: int = 3600            # listenKey 有效期（秒）
     listen_key_refresh_interval: int = 1800  # 刷新间隔（秒）
     listen_key_create_max_attempts: int = 5
     listen_key_create_base_delay: float = 1.5
     reconnect_delay: float = 1.0
     max_reconnect_delay: float = 60.0
+    reconnect_jitter_ratio: float = 0.2
+    reconnect_jitter_max_seconds: float = 3.0
+    ping_interval: float = 30.0
     pong_timeout: int = 10                # Pong 超时次数
     stale_timeout: int = 30                # 无数据超时（秒）
     pong_timeout_count: int = 2            # 连续 Pong 超时次数阈值
@@ -123,11 +137,23 @@ class PrivateStreamManager(BaseStreamFSM):
 
         self._listen_key: Optional[str] = None
         self._listen_key_expiry_ts: float = 0
+        self._subscription_id: Optional[int] = None
+        self._selected_mode: str = "unknown"
+        self._selected_ws_url: Optional[str] = None
+        self._timestamp_offset_ms: int = 0
+        self._ws_api_subscribe_attempts: int = 0
+        self._ws_api_subscribe_success: int = 0
+        self._ws_api_subscribe_failures: int = 0
+        self._last_ws_api_subscribe_error: Optional[str] = None
+        self._last_ws_api_subscribe_ts: float = 0.0
+        self._legacy_fallback_count: int = 0
 
         self._pong_timeout_counter = 0
         self._last_pong_ts = time.time()
         self._last_user_event_ts = time.time()
         self._last_data_ts = time.time()
+        self._has_seen_user_event = False
+        self._has_seen_execution_report = False
 
         self._order_update_handlers: List[Callable[[RawOrderUpdate], None]] = []
         self._fill_update_handlers: List[Callable[[RawFillUpdate], None]] = []
@@ -161,12 +187,12 @@ class PrivateStreamManager(BaseStreamFSM):
             trust_env=True,
         )
 
-        await self._create_listen_key_with_retry()
-        await self._connect()
+        await self._start_private_stream()
 
         self._ping_task = asyncio.create_task(self._ping_loop())
         self._stale_check_task = asyncio.create_task(self._stale_check_loop())
-        self._listen_key_task = asyncio.create_task(self._listen_key_keepalive_loop())
+        if self._selected_mode == "legacy_listen_key":
+            self._listen_key_task = asyncio.create_task(self._listen_key_keepalive_loop())
 
     async def _on_stop(self) -> None:
         """停止时的具体逻辑"""
@@ -184,7 +210,7 @@ class PrivateStreamManager(BaseStreamFSM):
             await self._session.close()
             self._session = None
 
-        if self._listen_key:
+        if self._selected_mode == "legacy_listen_key" and self._listen_key:
             await self._delete_listen_key()
 
     async def force_resync(self, reason: str) -> Optional[RestAlignmentSnapshot]:
@@ -204,6 +230,214 @@ class PrivateStreamManager(BaseStreamFSM):
         else:
             logger.error(f"[{self._name}] No force_resync callback configured")
             return None
+
+    async def _start_private_stream(self) -> None:
+        """启动私有流（优先官方 ws-api 签名订阅，必要时回退 legacy listenKey）。"""
+        mode = self._normalize_mode(self._private_config.mode)
+        startup_errors: List[str] = []
+
+        if mode in ("auto", "ws_api_signature"):
+            try:
+                await self._start_ws_api_signature_mode()
+                return
+            except Exception as e:
+                startup_errors.append(f"ws_api_signature: {e}")
+                logger.warning(f"[{self._name}] ws-api signature mode unavailable: {e}")
+                if mode == "ws_api_signature":
+                    raise
+                await self._disconnect()
+
+        await self._start_legacy_mode()
+        if startup_errors:
+            self._legacy_fallback_count += 1
+            logger.warning(
+                f"[{self._name}] Fallback to legacy listenKey mode, previous errors={startup_errors}"
+            )
+
+    @staticmethod
+    def _normalize_mode(raw: str) -> str:
+        mode = (raw or "auto").strip().lower()
+        if mode not in ("auto", "ws_api_signature", "legacy_listen_key"):
+            return "auto"
+        return mode
+
+    def _resolve_ws_api_urls(self) -> List[str]:
+        """解析 ws-api 候选地址，支持环境变量覆盖。"""
+        env_multi = os.environ.get("BINANCE_WS_API_URLS", "").strip()
+        if env_multi:
+            urls = [u.strip() for u in env_multi.split(",") if u.strip()]
+            if urls:
+                return urls
+
+        env_single = os.environ.get("BINANCE_WS_API_URL", "").strip()
+        if env_single:
+            return [env_single]
+
+        if self._private_config.ws_api_urls:
+            return list(self._private_config.ws_api_urls)
+
+        # 兜底顺序：demo -> prod -> testnet
+        return [
+            "wss://demo-ws-api.binance.com/ws-api/v3",
+            "wss://ws-api.binance.com/ws-api/v3",
+            "wss://ws-api.testnet.binance.vision/ws-api/v3",
+        ]
+
+    async def _start_ws_api_signature_mode(self) -> None:
+        """通过 userDataStream.subscribe.signature 启动私有流。"""
+        last_error: Exception | None = None
+        urls = self._resolve_ws_api_urls()
+        if not urls:
+            raise RuntimeError("No ws-api endpoints configured")
+        if self._selected_ws_url and self._selected_ws_url in urls:
+            urls = [self._selected_ws_url] + [u for u in urls if u != self._selected_ws_url]
+
+        for url in urls:
+            try:
+                await self._connect(url, start_receiver=False)
+                await self._sync_server_time_offset_via_ws_api()
+                await self._subscribe_ws_api_user_stream()
+                self._selected_mode = "ws_api_signature"
+                self._selected_ws_url = url
+                self._start_receive_loop()
+                logger.info(
+                    f"[{self._name}] ws-api signature mode connected: url={url}, "
+                    f"subscription_id={self._subscription_id}"
+                )
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[{self._name}] ws-api endpoint failed: {url} error={e}")
+                await self._disconnect()
+
+        assert last_error is not None
+        raise last_error
+
+    async def _start_legacy_mode(self) -> None:
+        """legacy listenKey 启动模式（兼容兜底）。"""
+        await self._create_listen_key_with_retry()
+        await self._connect(self._build_legacy_stream_url(), start_receiver=True)
+        self._selected_mode = "legacy_listen_key"
+        self._selected_ws_url = self._build_legacy_stream_url()
+        self._subscription_id = None
+
+    async def _sync_server_time_offset(self) -> None:
+        """同步服务器时间偏移，降低签名时间戳漂移导致的鉴权失败。"""
+        url = f"{self._private_config.rest_url}/v3/time"
+        try:
+            async with self._session.get(url, proxy=self._resolve_proxy()) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[{self._name}] Time sync skipped: status={resp.status}")
+                    return
+                data = await resp.json()
+                server_ms = int(data.get("serverTime", 0))
+                if server_ms <= 0:
+                    return
+                local_ms = int(time.time() * 1000)
+                self._timestamp_offset_ms = server_ms - local_ms
+                logger.info(
+                    f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms"
+                )
+        except Exception as e:
+            logger.warning(f"[{self._name}] Time sync failed: {e}")
+
+    async def _sync_server_time_offset_via_ws_api(self) -> None:
+        """优先通过 ws-api `time` 对时，失败时回退 REST。"""
+        if self._ws is None:
+            await self._sync_server_time_offset()
+            return
+
+        req_id = f"private-time-{uuid.uuid4().hex[:8]}"
+        try:
+            request = {"id": req_id, "method": "time"}
+            await self._ws.send(json.dumps(request))
+            raw_resp = await asyncio.wait_for(
+                self._ws.recv(),
+                timeout=self._private_config.ws_api_subscribe_timeout,
+            )
+            resp = json.loads(raw_resp)
+            status = int(resp.get("status", 0))
+            if status != 200:
+                raise RuntimeError(f"ws-api time status={status}, resp={resp}")
+            result = resp.get("result", {}) or {}
+            server_ms = int(result.get("serverTime", 0))
+            if server_ms <= 0:
+                raise RuntimeError(f"ws-api time missing serverTime: {resp}")
+            local_ms = int(time.time() * 1000)
+            self._timestamp_offset_ms = server_ms - local_ms
+            logger.info(
+                f"[{self._name}] Time offset synced via ws-api: {self._timestamp_offset_ms}ms"
+            )
+        except Exception as e:
+            logger.warning(f"[{self._name}] ws-api time sync failed, fallback REST: {e}")
+            await self._sync_server_time_offset()
+
+    def _apply_jitter(self, delay: float) -> float:
+        """对重试延迟施加抖动，缓解同频重连风暴。"""
+        ratio = max(0.0, min(self._private_config.reconnect_jitter_ratio, 1.0))
+        if ratio <= 0:
+            return max(0.0, delay)
+        scale = random.uniform(1.0 - ratio, 1.0 + ratio)
+        jittered = max(0.0, delay * scale)
+        max_jittered = delay + max(0.0, self._private_config.reconnect_jitter_max_seconds)
+        return min(jittered, max_jittered)
+
+    def _build_ws_api_signature(self, params: Dict[str, Any]) -> str:
+        payload = "&".join(f"{key}={params[key]}" for key in sorted(params))
+        return hmac.new(
+            self._credentials.secret_key.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    async def _subscribe_ws_api_user_stream(self) -> None:
+        """发送 userDataStream.subscribe.signature 请求并校验结果。"""
+        if self._ws is None:
+            raise RuntimeError("WS not connected before subscribe")
+
+        self._ws_api_subscribe_attempts += 1
+        try:
+            timestamp = int(time.time() * 1000) + self._timestamp_offset_ms
+            params: Dict[str, Any] = {
+                "apiKey": self._credentials.api_key,
+                "timestamp": timestamp,
+                "recvWindow": self._private_config.ws_api_recv_window_ms,
+            }
+            params["signature"] = self._build_ws_api_signature(params)
+
+            req_id = f"private-sub-{uuid.uuid4().hex[:12]}"
+            request = {
+                "id": req_id,
+                "method": "userDataStream.subscribe.signature",
+                "params": params,
+            }
+
+            await self._ws.send(json.dumps(request))
+            raw_resp = await asyncio.wait_for(
+                self._ws.recv(),
+                timeout=self._private_config.ws_api_subscribe_timeout,
+            )
+            resp = json.loads(raw_resp)
+
+            status = int(resp.get("status", 0))
+            if status != 200:
+                error = resp.get("error", {})
+                code = error.get("code")
+                msg = error.get("msg")
+                raise RuntimeError(
+                    "userDataStream.subscribe.signature failed: "
+                    f"status={status}, code={code}, msg={msg}"
+                )
+
+            result = resp.get("result", {}) or {}
+            self._subscription_id = result.get("subscriptionId")
+            self._ws_api_subscribe_success += 1
+            self._last_ws_api_subscribe_error = None
+            self._last_ws_api_subscribe_ts = time.time()
+        except Exception as e:
+            self._ws_api_subscribe_failures += 1
+            self._last_ws_api_subscribe_error = str(e)
+            raise
 
     async def _create_listen_key(self) -> None:
         """创建 listenKey"""
@@ -236,13 +470,14 @@ class PrivateStreamManager(BaseStreamFSM):
             raise
 
     def _resolve_proxy(self) -> Optional[str]:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY。"""
+        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
         return (
             self._private_config.proxy_url
             or os.environ.get("BINANCE_PROXY_URL")
             or os.environ.get("BINANCE_PROXY")
             or os.environ.get("HTTPS_PROXY")
             or os.environ.get("HTTP_PROXY")
+            or os.environ.get("ALL_PROXY")
         )
 
     async def _create_listen_key_with_retry(self) -> None:
@@ -263,7 +498,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     f"[{self._name}] ListenKey create attempt {attempt}/{max_attempts} failed, "
                     f"retry in {delay:.1f}s: {e}"
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(self._apply_jitter(delay))
                 delay = min(delay * 2, 30.0)
 
         assert last_error is not None
@@ -328,15 +563,14 @@ class PrivateStreamManager(BaseStreamFSM):
             except Exception as e:
                 logger.error(f"[{self._name}] ListenKey keepalive error: {e}")
 
-    def _build_stream_url(self) -> str:
-        """构建流 URL"""
+    def _build_legacy_stream_url(self) -> str:
+        """构建 legacy listenKey 流 URL。"""
         if not self._listen_key:
             raise Exception("ListenKey not available")
         return f"{self._private_config.base_url}/{self._listen_key}"
 
-    async def _connect(self) -> None:
+    async def _connect(self, url: str, start_receiver: bool = True) -> None:
         """建立 WebSocket 连接"""
-        url = self._build_stream_url()
         logger.info(f"[{self._name}] Connecting to {url[:50]}...")
 
         try:
@@ -344,15 +578,22 @@ class PrivateStreamManager(BaseStreamFSM):
                 url,
                 ping_interval=None,
                 ping_timeout=self._private_config.pong_timeout,
+                open_timeout=self._private_config.open_timeout,
+                proxy=self._resolve_proxy(),
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
             self._metrics.last_connect_ts = time.time()
             self._pong_timeout_counter = 0
             self._last_pong_ts = time.time()
+            self._last_user_event_ts = self._last_pong_ts
+            self._last_data_ts = self._last_pong_ts
+            self._has_seen_user_event = False
+            self._has_seen_execution_report = False
 
             await self._trigger_event(StreamEvent.CONNECTED)
-            asyncio.create_task(self._receive_loop())
+            if start_receiver:
+                self._start_receive_loop()
 
         except Exception as e:
             logger.error(f"[{self._name}] Connection failed: {e}")
@@ -362,6 +603,14 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _disconnect(self) -> None:
         """断开 WebSocket 连接"""
+        if self._recv_task and not self._recv_task.done():
+            self._recv_task.cancel()
+            try:
+                await self._recv_task
+            except asyncio.CancelledError:
+                pass
+            self._recv_task = None
+
         if self._ws:
             try:
                 await self._ws.close()
@@ -372,6 +621,12 @@ class PrivateStreamManager(BaseStreamFSM):
 
         self._metrics.disconnect_count += 1
         self._metrics.last_disconnect_ts = time.time()
+
+    def _start_receive_loop(self) -> None:
+        """启动接收循环（确保最多只有一个 recv 协程）。"""
+        if self._recv_task and not self._recv_task.done():
+            return
+        self._recv_task = asyncio.create_task(self._receive_loop())
 
     async def reconnect(self) -> None:
         """重连（带互斥锁保护）"""
@@ -399,21 +654,27 @@ class PrivateStreamManager(BaseStreamFSM):
             delay = self._private_config.reconnect_delay
             while self._running and delay <= self._private_config.max_reconnect_delay:
                 try:
-                    logger.info(f"[{self._name}] Reconnecting in {delay}s...")
-                    await asyncio.sleep(delay)
+                    sleep_delay = self._apply_jitter(delay)
+                    logger.info(
+                        f"[{self._name}] Reconnecting in {sleep_delay:.2f}s "
+                        f"(base={delay:.2f}s)"
+                    )
+                    await asyncio.sleep(sleep_delay)
 
-                    await self._create_listen_key()
-                    await self._connect()
+                    if self._selected_mode == "ws_api_signature":
+                        await self._start_ws_api_signature_mode()
+                    else:
+                        await self._create_listen_key_with_retry()
+                        await self._connect(self._build_legacy_stream_url(), start_receiver=True)
 
                     self._set_state(StreamState.ALIGNING)
                     self._is_aligning = True
 
                     alignment_result = await self.force_resync("ws_reconnect")
 
-                    if alignment_result is not None:
+                    if alignment_result is not None or self._selected_mode == "ws_api_signature":
                         self._set_state(StreamState.CONNECTED)
                         self._is_aligning = False
-                        self._recv_task = asyncio.create_task(self._receive_loop())
                         return
                     else:
                         logger.warning(f"[{self._name}] Alignment failed, staying in ALIGNING")
@@ -427,23 +688,16 @@ class PrivateStreamManager(BaseStreamFSM):
             self._metrics.last_error = "Max reconnection attempts reached"
 
     async def _receive_loop(self) -> None:
-        """接收消息循环（带超时检测）"""
-        stale_timeout = self._private_config.stale_timeout
-
+        """接收消息循环（阻塞接收，连通性依赖 ping/pong 与 close 事件判定）。"""
         while self._running:
             try:
-                message = await asyncio.wait_for(
-                    self._ws.recv(),
-                    timeout=stale_timeout
-                )
+                if self._ws is None:
+                    await asyncio.sleep(0.1)
+                    continue
+                message = await self._ws.recv()
                 await self._handle_message(message)
 
-            except asyncio.TimeoutError:
-                logger.warning(f"[{self._name}] Receive timeout after {stale_timeout}s, triggering STALE")
-                self._set_state(StreamState.STALE_DATA)
-                self._metrics.stale_count += 1
-                await self._trigger_event(StreamEvent.STALE_DETECTED)
-                await self.reconnect()
+            except asyncio.CancelledError:
                 break
 
             except websockets.exceptions.ConnectionClosed as e:
@@ -464,17 +718,34 @@ class PrivateStreamManager(BaseStreamFSM):
             return
 
         try:
-            data = json.loads(message)
+            payload = json.loads(message)
+
+            # ws-api 控制应答
+            if "status" in payload and "id" in payload and "event" not in payload:
+                status = int(payload.get("status", 0))
+                if status != 200:
+                    logger.warning(f"[{self._name}] ws-api control response error: {payload}")
+                return
+
+            # ws-api 用户数据事件封装：{"subscriptionId":..., "event": {...}}
+            if "event" in payload and isinstance(payload.get("event"), dict):
+                data = payload["event"]
+            else:
+                # legacy listenKey 事件是扁平结构
+                data = payload
+
             now = time.time()
             exchange_ts = data.get("E", int(now * 1000))
 
             event_type = data.get("e")
 
-            if event_type == "outboundAccountInfo":
+            if event_type in ("outboundAccountInfo", "outboundAccountPosition", "balanceUpdate"):
                 self._last_user_event_ts = now
+                self._has_seen_user_event = True
 
             elif event_type == "executionReport":
                 self._last_data_ts = now
+                self._has_seen_execution_report = True
 
                 order_update = self._parse_order_update(data, exchange_ts)
                 for handler in self._order_update_handlers:
@@ -492,7 +763,7 @@ class PrivateStreamManager(BaseStreamFSM):
                             except Exception as e:
                                 logger.error(f"[{self._name}] Fill handler error: {e}")
 
-            await self._trigger_event(StreamEvent.DATA_RECEIVED, data)
+            await self._trigger_event(StreamEvent.DATA_RECEIVED, payload)
 
         except json.JSONDecodeError as e:
             logger.warning(f"[{self._name}] JSON decode error: {e}")
@@ -545,7 +816,7 @@ class PrivateStreamManager(BaseStreamFSM):
         """Ping 循环"""
         while self._running:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(self._private_config.ping_interval)
 
                 if self._ws and self._state == StreamState.CONNECTED:
                     pong_waiter = await self._ws.ping()
@@ -572,7 +843,8 @@ class PrivateStreamManager(BaseStreamFSM):
                 time_since_pong = now - self._last_pong_ts
 
                 max_pong_lag = float(
-                    self._private_config.pong_timeout * self._private_config.pong_timeout_count
+                    self._private_config.ping_interval
+                    + self._private_config.pong_timeout * self._private_config.pong_timeout_count
                 )
                 if time_since_pong > max_pong_lag:
                     logger.warning(
@@ -586,7 +858,12 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.reconnect()
                     continue
 
-                if time_since_data > self._private_config.stale_timeout:
+                # 仅在真正观察到 executionReport 后才做 data stale 判定，避免空闲账户误判重连。
+                should_check_data_stale = (
+                    self._selected_mode != "ws_api_signature"
+                    and self._has_seen_execution_report
+                )
+                if should_check_data_stale and time_since_data > self._private_config.stale_timeout:
                     logger.warning(
                         f"[{self._name}] Stale data: {time_since_data:.1f}s since last trade"
                     )
@@ -596,7 +873,11 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.force_resync("stale_data")
                     await self.reconnect()
 
-                if time_since_user_event > (self._private_config.stale_timeout * 2):
+                should_check_user_event_stale = (
+                    self._selected_mode != "ws_api_signature"
+                    and self._has_seen_user_event
+                )
+                if should_check_user_event_stale and time_since_user_event > (self._private_config.stale_timeout * 2):
                     logger.warning(
                         f"[{self._name}] User event timeout: {time_since_user_event:.1f}s"
                     )
@@ -610,6 +891,38 @@ class PrivateStreamManager(BaseStreamFSM):
         """处理 Pong 响应"""
         self._pong_timeout_counter = 0
         self._last_pong_ts = time.time()
+
+    def get_status(self) -> Dict[str, Any]:
+        """扩展状态：增加私有流模式与订阅质量指标，便于监控页直连展示。"""
+        base = super().get_status()
+        now = time.time()
+        ws_api_attempts = self._ws_api_subscribe_attempts
+        ws_api_success_rate = (
+            round(self._ws_api_subscribe_success / ws_api_attempts, 4)
+            if ws_api_attempts > 0
+            else None
+        )
+        base["private_runtime"] = {
+            "selected_mode": self._selected_mode,
+            "selected_ws_url": self._selected_ws_url,
+            "subscription_id": self._subscription_id,
+            "legacy_fallback_count": self._legacy_fallback_count,
+            "timestamp_offset_ms": self._timestamp_offset_ms,
+            "proxy_configured": bool(self._resolve_proxy()),
+            "ws_api_subscribe_attempts": ws_api_attempts,
+            "ws_api_subscribe_success": self._ws_api_subscribe_success,
+            "ws_api_subscribe_failures": self._ws_api_subscribe_failures,
+            "ws_api_subscribe_success_rate": ws_api_success_rate,
+            "last_ws_api_subscribe_error": self._last_ws_api_subscribe_error,
+            "last_ws_api_subscribe_ts_ms": (
+                int(self._last_ws_api_subscribe_ts * 1000)
+                if self._last_ws_api_subscribe_ts > 0
+                else None
+            ),
+            "last_data_age_seconds": max(0.0, round(now - self._last_data_ts, 3)),
+            "last_pong_age_seconds": max(0.0, round(now - self._last_pong_ts, 3)),
+        }
+        return base
 
     def get_listen_key(self) -> Optional[str]:
         """获取当前 listenKey"""
