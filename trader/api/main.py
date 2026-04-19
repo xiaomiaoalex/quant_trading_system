@@ -5,6 +5,7 @@ Main application entry point for the Systematic Trader Control Plane API.
 
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -56,6 +57,9 @@ from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
+# 全局 BinanceConnector 实例（用于成交回调）
+_binance_connector_instance: Optional[Any] = None
+
 _BUILTIN_STRATEGIES = [
     StrategyRegisterRequest(
         strategy_id="ema_cross_btc",
@@ -94,7 +98,62 @@ def _seed_strategies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _binance_connector_instance
+
+    # 初始化策略
     _seed_strategies()
+
+    # ================================================================
+    # BinanceConnector 初始化（用于成交回调）
+    # ================================================================
+    # 检查是否启用 Binance 连接
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if api_key and secret_key:
+        try:
+            from trader.adapters.binance.connector import (
+                BinanceConnector,
+                BinanceConnectorConfig,
+            )
+
+            # 根据 BINANCE_ENV 判断是否使用 testnet
+            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
+            is_testnet = binance_env in ("demo", "testnet", "test")
+
+            # 创建 connector 配置
+            config = BinanceConnectorConfig(
+                testnet=is_testnet,
+            )
+
+            # 创建 connector
+            connector = BinanceConnector(
+                api_key=api_key,
+                secret_key=secret_key,
+                config=config,
+            )
+
+            # 注册成交回调处理器
+            from trader.api.routes.strategies import get_fill_handler
+            fill_handler = get_fill_handler()
+            if fill_handler is not None:
+                connector.register_fill_handler(fill_handler)
+                logger.info("[Lifespan] Fill handler registered to connector")
+            else:
+                logger.warning("[Lifespan] Fill handler not available yet")
+
+            # 启动 connector（会启动 public 和 private streams）
+            await connector.start()
+            _binance_connector_instance = connector
+            logger.info("[Lifespan] BinanceConnector started")
+
+            # 注入 connector 到策略编排器
+            from trader.api.routes.strategies import set_strategy_orchestrator_connector
+            set_strategy_orchestrator_connector(connector)
+        except Exception as e:
+            logger.error(f"[Lifespan] Failed to start BinanceConnector: {e}")
+    else:
+        logger.info("[Lifespan] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping connector")
 
     async def _local_orders_getter() -> List[Dict[str, Any]]:
         try:
@@ -186,28 +245,8 @@ async def lifespan(app: FastAPI):
             logger.error(f"[Reconciler] exchange_orders_getter failed: {e}")
             return []
 
-    _connector: Optional[BinanceConnector] = None
-
-    api_key = os.environ.get("BINANCE_API_KEY")
-    secret_key = os.environ.get("BINANCE_SECRET_KEY")
-
-    if api_key and secret_key:
-        try:
-            _connector = BinanceConnector(
-                api_key=api_key,
-                secret_key=secret_key,
-                streams=["btcusdt@trade", "btcusdt@kline_1m"],
-            )
-            await _connector.start()
-            logger.info("[Main] BinanceConnector started")
-        except Exception as e:
-            logger.error(f"[Main] Failed to start BinanceConnector: {e}")
-            _connector = None
-    else:
-        logger.warning("[Main] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping BinanceConnector")
-
     def _connector_getter() -> Optional[BinanceConnector]:
-        return _connector
+        return _binance_connector_instance
 
     reconciler_service = reconciler.get_reconciler_service()
 
@@ -250,9 +289,12 @@ async def lifespan(app: FastAPI):
         await strategies.shutdown_strategy_runtime()
     except Exception as e:
         logger.error(f"[Main] Failed to shutdown strategy runtime: {e}")
-    if _connector:
-        await _connector.stop()
-        logger.info("[Main] BinanceConnector stopped")
+    if _binance_connector_instance is not None:
+        try:
+            await _binance_connector_instance.stop()
+            logger.info("[Lifespan] BinanceConnector stopped")
+        except Exception as e:
+            logger.error(f"[Lifespan] Error stopping BinanceConnector: {e}")
     await _heartbeat_service.stop()
     await _connection_manager.stop()
     await reconciler_service.stop()
