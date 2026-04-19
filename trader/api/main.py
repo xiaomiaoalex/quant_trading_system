@@ -223,7 +223,6 @@ async def lifespan(app: FastAPI):
         if external_count > 0:
             return ownership_registry.get_external_order_ids()
         return set()
-
     # 检查是否启用交易所对账
     if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
         logger.info("[Reconciler] Exchange reconciliation disabled")
@@ -246,7 +245,6 @@ async def lifespan(app: FastAPI):
         connection_manager=_connection_manager,
         connector_getter=_connector_getter,
     )
-
     yield
     try:
         await strategies.shutdown_strategy_runtime()

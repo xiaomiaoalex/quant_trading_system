@@ -1,0 +1,345 @@
+{
+  "run_id": "7bbf0eb4-be81-4a1a-8fb0-9d690a040959",
+  "created_at": "2026-04-18T02:29:14.331922Z",
+  "returns": {
+    "total_return": 0.0,
+    "total_return_pct": 0.0,
+    "annualized_return": 0.0,
+    "sharpe_ratio": 0.0
+  },
+  "risk": {
+    "max_drawdown": 0.0,
+    "max_drawdown_pct": 0.0,
+    "volatility": 0.0,
+    "var_95": 0.0
+  },
+  "trades": [],
+  "equity_curve": [
+    {
+      "timestamp": 1700000000000,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700001265822,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700002531644,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700003797466,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700005063288,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700006329110,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700007594932,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700008860754,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700010126576,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700011392398,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700012658220,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700013924042,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700015189864,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700016455686,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700017721508,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700018987330,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700020253152,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700021518974,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700022784796,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700024050618,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700025316440,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700026582262,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700027848084,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700029113906,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700030379728,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700031645550,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700032911372,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700034177194,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700035443016,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700036708838,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700037974660,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700039240482,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700040506304,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700041772126,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700043037948,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700044303770,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700045569592,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700046835414,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700048101236,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700049367058,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700050632880,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700051898702,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700053164524,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700054430346,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700055696168,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700056961990,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700058227812,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700059493634,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700060759456,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700062025278,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700063291100,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700064556922,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700065822744,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700067088566,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700068354388,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700069620210,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700070886032,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700072151854,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700073417676,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700074683498,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700075949320,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700077215142,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700078480964,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700079746786,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700081012608,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700082278430,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700083544252,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700084810074,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700086075896,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700087341718,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700088607540,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700089873362,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700091139184,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700092405006,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700093670828,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700094936650,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700096202472,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700097468294,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700098734116,
+      "equity": 100000.0
+    },
+    {
+      "timestamp": 1700099999938,
+      "equity": 100000.0
+    }
+  ],
+  "metadata": {
+    "strategy_id": "ema_cross_btc",
+    "version": 1,
+    "venue": "BINANCE",
+    "requested_by": "user001"
+  }
+}
