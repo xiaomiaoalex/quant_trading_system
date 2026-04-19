@@ -5,6 +5,7 @@ Tests for FastAPI endpoints using TestClient.
 """
 import asyncio
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,41 @@ async def _clear_postgres_risk_state() -> None:
     finally:
         await storage.disconnect()
         await close_pool()
+
+
+async def _seed_audit_entries() -> list[str]:
+    from insight.chat_interface import create_chat_interface
+    from trader.api.routes.audit import clear_audit_entries
+    from trader.api.routes.chat import set_chat_interface
+
+    clear_audit_entries()
+    interface = create_chat_interface()
+    set_chat_interface(interface)
+
+    audit_log = interface.get_audit_log()
+    assert audit_log is not None
+
+    first = await audit_log.log_generation(
+        prompt="Generate momentum strategy",
+        generated_code="class S: pass",
+        llm_backend="mock",
+        llm_model="gpt-4",
+        strategy_name="Audit Alpha",
+        strategy_id="audit_alpha",
+        metadata={"tag": "alpha"},
+    )
+    await audit_log.submit_for_approval(first.entry_id)
+
+    second = await audit_log.log_generation(
+        prompt="Generate mean reversion strategy",
+        generated_code="class M: pass",
+        llm_backend="mock",
+        llm_model="gpt-4",
+        strategy_name="Audit Beta",
+        strategy_id="audit_beta",
+        metadata={"tag": "beta"},
+    )
+    return [first.entry_id, second.entry_id]
 
 
 class TestHealthEndpoint:
@@ -535,6 +571,62 @@ def get_plugin() -> StrategyPlugin:
         assert isinstance(report["equity_curve"], list)
         assert isinstance(report["trades"], list)
         assert report["metrics"] is not None
+
+
+class TestAuditEndpoints:
+    """Test audit query API endpoints (Task 9.6)."""
+
+    def setup_method(self):
+        self.client = TestClient(app)
+        self.entry_ids = asyncio.run(_seed_audit_entries())
+
+    def test_list_audit_entries(self):
+        response = self.client.get("/api/audit/entries")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 2
+        assert all("entry_id" in item for item in data)
+
+    def test_list_audit_entries_with_filters(self):
+        response = self.client.get(
+            "/api/audit/entries",
+            params={"strategy_id": "audit_alpha", "status": "pending", "event_type": "submitted"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["strategy_id"] == "audit_alpha"
+        assert data[0]["status"] == "pending"
+        assert data[0]["event_type"] == "submitted"
+
+    def test_get_audit_entry(self):
+        entry_id = self.entry_ids[0]
+        response = self.client.get(f"/api/audit/entries/{entry_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["entry_id"] == entry_id
+        assert data["strategy_id"] == "audit_alpha"
+
+    def test_get_audit_entry_not_found(self):
+        response = self.client.get("/api/audit/entries/not-exists")
+        assert response.status_code == 404
+
+    def test_list_audit_entries_invalid_since(self):
+        response = self.client.get("/api/audit/entries", params={"since": "not-a-time"})
+        assert response.status_code == 400
+        assert "Invalid since format" in response.json()["detail"]
+
+    def test_list_audit_entries_time_range_and_pagination(self):
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        until = (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        response = self.client.get(
+            "/api/audit/entries",
+            params={"since": since, "until": until, "limit": 1, "offset": 0},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
 
 
 class TestRiskEndpoints:

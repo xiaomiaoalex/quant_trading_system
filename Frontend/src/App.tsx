@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AppShell } from '@/components/layout'
-import { Monitor, Strategies, Reconcile, Backtests, Reports, Chat } from './pages'
+import { Monitor, Strategies, Reconcile, Backtests, Reports, Chat, Audit } from './pages'
 
 function App() {
   return (
@@ -13,8 +13,8 @@ function App() {
         <Route path="/backtests" element={<Backtests />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/chat" element={<Chat />} />
-        {/* Future routes:
         <Route path="/audit" element={<Audit />} />
+        {/* Future routes:
         <Route path="/replay" element={<Replay />} />
         */}
       </Routes>

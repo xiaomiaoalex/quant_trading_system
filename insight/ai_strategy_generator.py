@@ -822,6 +822,10 @@ class AIStrategyGenerator:
     def get_sandbox(self) -> CodeSandbox:
         """获取沙箱实例"""
         return self._sandbox
+
+    def get_audit_log(self) -> Optional[AIAuditLog]:
+        """获取审计日志实例（如果已配置）。"""
+        return self._audit_log
     
     def get_adapter(self) -> LLMAdapter:
         """获取LLM适配器"""

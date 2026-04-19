@@ -11,13 +11,13 @@
 ### 最后更新时间
 - **更新日期**: 2026-04-18 (北京时间)
 - **更新人**: AI Agent
-- **当前阶段**: Phase B - Backtests + Reports + AI Lab
+- **当前阶段**: Phase B/C - Backtests + Reports + Audit
 
 ### 分支状态
 - **主分支**: `main` ✅
 - **Phase A 分支**: `feat/phase-a-frontend` ✅ (已合并)
-- **开发分支**: `feat/phase-b-backtests` (当前)
-- **最新提交**: cd53216 (Phase A 完成)
+- **开发分支**: `codex/task9-strategy-code-e2e-bridge` (当前)
+- **最新提交**: `feat(task-9): wire strategy code lab with async backtest and report persistence`
 
 ---
 
@@ -42,10 +42,10 @@
 |----|--------|--------|----------|----------|------------|----------|----------|----------|
 | Task 9.4 | Backtests 列表与进度 | P1 | ✅ 已完成 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 | Task 9.5 | Reports 详情接口 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
-| Task 9.6 | Audit 专用查询接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
+| Task 9.6 | Audit 专用查询接口 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | 2026-04-18 |
 | Task 9.7 | Replay 任务状态接口 | P1 | ⏳ 待执行 | frontend-console | backend-api, qa-validation | 自测通过 + 契约一致 + 联调通过 | 1.1 天 | - |
 
-**Week 2 状态**: 🔄 进行中 (2/4 完成)
+**Week 2 状态**: 🔄 进行中 (3/4 完成)
 
 ### 并行推进（P2 一致性优化）
 
@@ -89,7 +89,7 @@
 |------|--------|------|------|------|------|------|----------|
 | Backtests | P1 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
 | Reports | P1 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
-| AI Lab | P1 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| AI Lab | P1 | 🔄 执行中 | 🔄 执行中 | 🔄 执行中 | ⏸️ 阻塞 | 🟡 部分可用 | frontend-console |
 
 ### 组件开发清单
 
@@ -205,7 +205,7 @@
 
 | 页面 | 优先级 | 设计 | 开发 | 联调 | 测试 | 状态 | 主责任域 |
 |------|--------|------|------|------|------|------|----------|
-| Audit | P2 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
+| Audit | P2 | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 🔄 执行中 | 🟡 待环境验证 | frontend-console |
 | Replay | P2 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 | Visual Polish | P2 | ⏳ 待开始 | ⏳ 待开始 | ⏸️ 阻塞 | ⏸️ 阻塞 | 🔴 阻塞 | frontend-console |
 
@@ -228,7 +228,6 @@
 
 | ID | 问题描述 | 影响范围 | 严重性 | 状态 | 解决方案 | 主责任域 |
 |----|----------|----------|--------|------|----------|----------|
-| TG-007 | 缺少 Audit 专用 API | Audit 页面 | 🔴 高 | ⏳ 待开始 | Task 9.6 | backend-api |
 | TG-008 | 缺少 Replay job API | Replay 页面 | 🔴 高 | ⏳ 待开始 | Task 9.7 | backend-api |
 
 ### 已解决 Truth Gap
@@ -241,6 +240,7 @@
 | TG-004 | strategies/running 语义不符 | 2026-04-10 | Task 9.8 | `/loaded` 语义落地 |
 | TG-005 | 缺少 Backtests 列表 API | 2026-04-18 | Task 9.4 | 列表+进度联调完成 |
 | TG-006 | 缺少 Reports 详情 API | 2026-04-18 | Task 9.5 | 报告详情可读 |
+| TG-007 | 缺少 Audit 专用 API | 2026-04-18 | Task 9.6 | Audit 列表/详情 + 页面联调完成 |
 
 ---
 
@@ -302,15 +302,16 @@
 |------|----------------|----------------|-------------|------|
 | 2026-04-10 | 4 | 4 | 3 | 计划启动 |
 | 2026-04-18 | 0 | 2 | 3 | Task 9.4/9.5 完成，进入 9.6/9.7 |
+| 2026-04-18 | 0 | 1 | 3 | Task 9.6 完成，聚焦 9.7 |
 
 ### 任务完成率
 
 | 阶段 | 总任务 | 已完成 | 进行中 | 待开始 | 完成率 |
 |------|--------|--------|--------|--------|--------|
 | Week 1 | 4 | 4 | 0 | 0 | 100% |
-| Week 2 | 4 | 2 | 0 | 2 | 50% |
+| Week 2 | 4 | 3 | 0 | 1 | 75% |
 | P2 | 3 | 0 | 0 | 3 | 0% |
-| **总计** | **11** | **6** | **0** | **5** | **55%** |
+| **总计** | **11** | **7** | **0** | **4** | **64%** |
 
 ### 前端组件开发进度
 
@@ -318,8 +319,8 @@
 |------|--------|--------|--------|--------|--------|
 | Phase A | 11 | 11 | 0 | 0 | 100% |
 | Phase B | 9 | 3 | 2 | 4 | 33% |
-| Phase C | 6 | 0 | 0 | 6 | 0% |
-| **总计** | **26** | **14** | **2** | **10** | **54%** |
+| Phase C | 6 | 1 | 1 | 4 | 17% |
+| **总计** | **26** | **15** | **3** | **8** | **58%** |
 
 ---
 
@@ -414,15 +415,16 @@
 | 2026-04-10 | v1.6 | 修复执行基线引用，改为 truth_gap_priority.md + frontend_master_plan.md | AI Agent |
 | 2026-04-10 | v1.7 | 清理失效文档引用，移除 truth_gap_development_plan.md 链接 | AI Agent |
 | 2026-04-18 | v1.8 | Task 9.4/9.5 联调完成，Backtests/Reports API 状态与阻塞清单同步刷新 | AI Agent |
+| 2026-04-18 | v1.9 | Task 9.6 完成：Audit API 查询能力 + /audit 页面打通并进入联调验证 | AI Agent |
 
 ---
 
 ## 🎯 下一步行动
 
 ### 立即行动（Today）
-1. [AI Agent / `backend-api`] 推进 Task 9.6: Audit 专用查询接口
-2. [AI Agent / `backend-api`] 推进 Task 9.7: Replay 任务状态接口
-3. [AI Agent / `frontend-console`] 对接 Task 9.6/9.7 并补齐页面交互
+1. [AI Agent / `backend-api`] 推进 Task 9.7: Replay 任务状态接口
+2. [AI Agent / `frontend-console`] 对接 Replay API 并补齐 `/replay` 页面
+3. [AI Agent / `frontend-console`] 对 Audit 页增加筛选体验优化与状态提示
 4. [AI Agent / `qa-validation`] 在可用 Node 环境执行前端 typecheck 与页面回归
 
 ### 本周行动（Week 1）
@@ -432,9 +434,9 @@
 4. [AI Agent / `qa-validation`] 输出联调问题清单并归档
 
 ### 下周行动（Week 2）
-1. [AI Agent / `backend-api`] 完成 Task 9.6/9.7
-2. [AI Agent / `frontend-console`] 完成 Audit + Replay 页面首版
-3. [AI Agent / `frontend-console`] 对 Backtests/Reports 做可视化与交互优化
+1. [AI Agent / `backend-api`] 完成 Task 9.7
+2. [AI Agent / `frontend-console`] 完成 Replay 页面首版并与后端联调
+3. [AI Agent / `frontend-console`] 对 Backtests/Reports/Audit 做可视化与交互优化
 4. [AI Agent / `qa-validation`] Phase B 验收（预计：2026-04-24）
 
 ---

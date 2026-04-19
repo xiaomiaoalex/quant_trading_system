@@ -344,6 +344,10 @@ class StrategyChatInterface:
         self._hitl = hitl_governance
         self._store = session_store or InMemoryChatSessionStore()
 
+    def get_audit_log(self):
+        """返回生成器绑定的审计日志实例（可能为 None）。"""
+        return self._generator.get_audit_log()
+
     # ==================== 会话管理 ====================
 
     async def create_session(
