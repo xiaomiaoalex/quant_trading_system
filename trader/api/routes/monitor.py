@@ -221,17 +221,59 @@ async def get_monitor_snapshot(
             extra={"error": str(e), "error_type": type(e).__name__}
         )
     
-    snapshot = service.get_snapshot(
-        positions=positions_for_exposure,
-        open_orders_count=open_orders_count or 0,
-        pending_orders_count=pending_orders_count or 0,
-        daily_pnl=daily_pnl or "0",
-        daily_pnl_pct=daily_pnl_pct or "0",
-        realized_pnl=realized_pnl or "0",
-        unrealized_pnl=unrealized_pnl or "0",
-        killswitch_level=killswitch_level or 0,
-        killswitch_scope=killswitch_scope or "GLOBAL",
-    )
+    # Task 19: 从 OMSCallbackHandler 获取可观测性指标
+    try:
+        from trader.api.routes.strategies import get_oms_metrics
+        oms_metrics = get_oms_metrics()
+        if oms_metrics:
+            snapshot = service.get_snapshot(
+                positions=positions_for_exposure,
+                open_orders_count=open_orders_count or 0,
+                pending_orders_count=pending_orders_count or 0,
+                daily_pnl=daily_pnl or "0",
+                daily_pnl_pct=daily_pnl_pct or "0",
+                realized_pnl=realized_pnl or "0",
+                unrealized_pnl=unrealized_pnl or "0",
+                killswitch_level=killswitch_level or 0,
+                killswitch_scope=killswitch_scope or "GLOBAL",
+            )
+            # Task 19: 填充 OMS 可观测性指标到快照
+            snapshot.order_submit_ok = oms_metrics.get("order_submit_ok", 0)
+            snapshot.order_submit_reject = oms_metrics.get("order_submit_reject", 0)
+            snapshot.order_submit_error = oms_metrics.get("order_submit_error", 0)
+            snapshot.reject_reason_counts = oms_metrics.get("reject_reason_counts", {})
+            snapshot.fill_latency_ms_avg = oms_metrics.get("fill_latency_ms_avg")
+            snapshot.fill_latency_count = oms_metrics.get("fill_latency_count", 0)
+            snapshot.cl_ord_id_dedup_hits = oms_metrics.get("cl_ord_id_dedup_hits", 0)
+            snapshot.exec_dedup_hits = oms_metrics.get("exec_dedup_hits", 0)
+        else:
+            snapshot = service.get_snapshot(
+                positions=positions_for_exposure,
+                open_orders_count=open_orders_count or 0,
+                pending_orders_count=pending_orders_count or 0,
+                daily_pnl=daily_pnl or "0",
+                daily_pnl_pct=daily_pnl_pct or "0",
+                realized_pnl=realized_pnl or "0",
+                unrealized_pnl=unrealized_pnl or "0",
+                killswitch_level=killswitch_level or 0,
+                killswitch_scope=killswitch_scope or "GLOBAL",
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to fetch OMS metrics for monitor snapshot",
+            extra={"error": str(e), "error_type": type(e).__name__}
+        )
+        snapshot = service.get_snapshot(
+            positions=positions_for_exposure,
+            open_orders_count=open_orders_count or 0,
+            pending_orders_count=pending_orders_count or 0,
+            daily_pnl=daily_pnl or "0",
+            daily_pnl_pct=daily_pnl_pct or "0",
+            realized_pnl=realized_pnl or "0",
+            unrealized_pnl=unrealized_pnl or "0",
+            killswitch_level=killswitch_level or 0,
+            killswitch_scope=killswitch_scope or "GLOBAL",
+        )
     
     # 添加元信息
     snapshot.snapshot_source = "aggregated"
