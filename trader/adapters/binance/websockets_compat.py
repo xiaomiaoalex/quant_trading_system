@@ -38,7 +38,20 @@ def _patch_connection_lost(cls: type[Any], log: logging.Logger) -> bool:
             except Exception:
                 # Keep original behavior if setattr is blocked.
                 pass
-        return original(self, exc)
+        try:
+            return original(self, exc)
+        except AttributeError as err:
+            if "recv_messages" not in str(err):
+                raise
+            log.debug(
+                "websockets_compat: late recv_messages attr error on %s, retrying with guard",
+                cls.__name__,
+            )
+            try:
+                object.__setattr__(self, "recv_messages", _RecvMessagesNoop())
+            except Exception:
+                raise
+            return original(self, exc)
 
     patched_connection_lost._qts_guard_installed = True  # type: ignore[attr-defined]
     setattr(cls, "connection_lost", patched_connection_lost)

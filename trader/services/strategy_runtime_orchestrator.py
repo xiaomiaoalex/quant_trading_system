@@ -350,10 +350,15 @@ class StrategyRuntimeOrchestrator:
                 try:
                     trade_stream = f"{symbol_lower}@trade"
                     kline_stream = f"{symbol_lower}@kline_1m"
-                    pub_mgr = self._connector._public_manager
-                    new_streams = list(pub_mgr._config.streams) + [trade_stream, kline_stream]
-                    pub_mgr._config.streams = new_streams
-                    if pub_mgr._state.value == "RUNNING":
+                    pub_mgr = self._connector.public_stream
+                    existing_streams = list(pub_mgr._public_config.streams)
+                    new_streams = list(existing_streams)
+                    for stream in (trade_stream, kline_stream):
+                        if stream not in new_streams:
+                            new_streams.append(stream)
+
+                    pub_mgr._public_config.streams = new_streams
+                    if pub_mgr.is_running():
                         await pub_mgr.stop()
                         await pub_mgr.start()
                     self._subscribed_symbols.add(symbol_lower)

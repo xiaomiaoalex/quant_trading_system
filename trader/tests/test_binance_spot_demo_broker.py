@@ -84,7 +84,8 @@ async def test_signed_request_uses_time_offset(monkeypatch: pytest.MonkeyPatch) 
 
     call = broker._session.calls[0]
     query = parse_qs(urlparse(call["url"]).query)
-    assert query["timestamp"] == ["99000"]
+    expected_ts = str(99_000 - broker._timestamp_safety_margin_ms)
+    assert query["timestamp"] == [expected_ts]
     assert query["recvWindow"] == [str(broker._config.recv_window)]
     assert "signature" in query
 
@@ -124,5 +125,7 @@ async def test_signed_request_resyncs_on_1021_and_retries(monkeypatch: pytest.Mo
 
     first_query = parse_qs(urlparse(broker._session.calls[0]["url"]).query)
     second_query = parse_qs(urlparse(broker._session.calls[1]["url"]).query)
-    assert first_query["timestamp"] == ["100000"]
-    assert second_query["timestamp"] == ["98800"]
+    expected_first = str(100_000 - broker._timestamp_safety_margin_ms)
+    expected_second = str(98_800 - broker._timestamp_safety_margin_ms)
+    assert first_query["timestamp"] == [expected_first]
+    assert second_query["timestamp"] == [expected_second]

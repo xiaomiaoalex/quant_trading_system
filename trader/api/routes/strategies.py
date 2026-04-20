@@ -169,6 +169,11 @@ async def shutdown_strategy_runtime_resources() -> None:
     _fill_handler = None
 
 
+async def shutdown_strategy_runtime() -> None:
+    """向后兼容旧调用名。"""
+    await shutdown_strategy_runtime_resources()
+
+
 def get_fill_handler():
     """获取已注册的 fill_handler（供 connector 注册用）"""
     global _fill_handler

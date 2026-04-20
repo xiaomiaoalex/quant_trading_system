@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-20 16:20 (北京时间)
+2026-04-20 21:45 (北京时间)
 
 ## 分支状态
 - **当前分支**：`codex/task9-strategy-code-e2e-bridge`
@@ -13,6 +13,71 @@
 - **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：三层主线联动增强（网络层 + 协议层 + 交易一致性层）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 私有流 `executionReport` 字段映射不准确（`orderId/trade price/qty` 使用错位字段），存在误记账风险
+  - 成交回调链路未按 `cl_ord_id + exec_id` 做幂等保护，重复回报场景可能重复写 execution / 重复触发策略 `on_fill`
+  - 公有流多 stream URL 与 combined payload 兼容性不足，新增 symbol 订阅在编排器中可能未真正生效
+  - `create_oms_callback` 返回值存在“返回工厂函数而非实际 fill handler”的隐患
+- 开发后状态:
+  - 协议层:
+    - `private_stream.py` 修正 `executionReport` 映射：
+      - 订单 `broker_order_id` 使用 `i`（orderId）
+      - 订单均价优先使用 `Z / z`（累计成交额 / 累计成交量）
+      - 成交价格/数量使用 `L / l`（last executed）
+      - 仅 `x=TRADE` 产生成交更新，补充 `exec_id` / `symbol` / `broker_order_id`
+    - `public_stream.py` 增加多 stream combined URL 构造与 combined payload 解析
+  - 交易一致性层:
+    - `oms_callback.py` 新增成交幂等去重（`cl_ord_id + exec_id`，TTL 900s）
+    - 私有流 fill 回调写 execution 时统一落 `exec_id/fill_qty/fill_price`
+    - fill 回调对订单视图做增量更新（filled_qty/avg_price/status）
+    - 修复 `strategy_id` 提取（按最后一个 `_` 切分，兼容 `fire_test_xxx`）
+    - `storage/in_memory.py` 的 `create_execution` 增加 `cl_ord_id + exec_id` 幂等约束
+  - 网络层:
+    - `websockets_compat.py` 强化 `recv_messages` 兼容补丁，覆盖 late `AttributeError` 重试路径
+    - `strategy_runtime_orchestrator.py` 修复动态订阅逻辑（正确更新 `public_stream` 配置并在运行态重启生效）
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_private_stream.py trader/tests/test_binance_public_stream.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_strategy_runtime_orchestrator_subscription.py trader/tests/test_binance_connector.py trader/tests/test_automated_trading_e2e.py trader/tests/test_api_strategy_runner_endpoints.py` → 67 passed
+
+### 本次任务：主备代理自动切换（中国大陆 + VPN 弱网增强）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 各链路仅使用单代理（`BINANCE_PROXY_URL`），主代理波动时只能手工切换
+  - Public/Private/REST/Broker 的代理失败状态互不共享
+  - 弱网抖动下，连接恢复依赖重试但不具备自动主备切换
+- 开发后状态:
+  - 新增 `trader/adapters/binance/proxy_failover.py`：
+    - 统一主备代理候选：`BINANCE_PROXY_URL`（主）+ `BINANCE_BACKUP_PROXY_URL`（备）
+    - 失败阈值触发冷却切换，冷却后自动恢复主代理优先
+    - 支持配置：`BINANCE_PROXY_FAILOVER_THRESHOLD` / `BINANCE_PROXY_FAILOVER_COOLDOWN_SECONDS`
+  - `public_stream.py` / `private_stream.py` / `rest_alignment.py` 全部接入统一切换器
+  - `binance_spot_demo_broker.py` 接入统一切换器（真实下单与对账链路同样支持主备代理）
+  - `connector.py` 健康指标新增 `proxy_failover` 状态输出
+  - 新增测试 `trader/tests/test_binance_proxy_failover.py`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_proxy_failover.py trader/tests/test_binance_spot_demo_broker.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_connector.py` → 45 passed
+
+### 本次任务：修复 reload 退出时报错 `shutdown_strategy_runtime` 不存在
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `trader/api/main.py` 关闭阶段仍调用旧函数 `shutdown_strategy_runtime()`
+  - `trader/api/routes/strategies.py` 已重命名为 `shutdown_strategy_runtime_resources()`
+  - 触发 warning: `[Main] Failed to shutdown strategy runtime: ... no attribute ...`
+- 开发后状态:
+  - `trader/api/main.py` 关闭调用切换到 `shutdown_strategy_runtime_resources()`
+  - `trader/api/routes/strategies.py` 增加兼容别名 `shutdown_strategy_runtime()`，避免旧测试/旧调用断裂
+  - 额外修复 `lifespan` 的 `BinanceConnector` 作用域问题，避免无 key 启动时 `UnboundLocalError`
+- 测试结果:
+  - `python -c "import asyncio; from trader.api.routes import strategies; asyncio.run(strategies.shutdown_strategy_runtime()); print('compat shutdown ok')"` → ok
+  - `python -c "import os; os.environ['BINANCE_API_KEY']=''; os.environ['BINANCE_SECRET_KEY']=''; os.environ['DISABLE_EXCHANGE_RECONCILIATION']='true'; from fastapi.testclient import TestClient; from trader.api.main import app; c=TestClient(app); c.__enter__(); print('lifespan no-key ok'); c.__exit__(None,None,None)"` → ok
 
 ### 本次任务：全面指数退避与时间戳日志增强（网络连接鲁棒性）
 - 完成时间: 2026-04-20

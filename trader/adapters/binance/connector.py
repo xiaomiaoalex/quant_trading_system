@@ -31,6 +31,7 @@ from trader.adapters.binance.private_stream import (
     PrivateStreamManager, PrivateStreamConfig,
     BinanceCredentials, RawOrderUpdate, RawFillUpdate, ListenKeyEndpointGoneError
 )
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.adapters.binance.rest_alignment import (
     RESTAlignmentCoordinator, AlignmentConfig, RestAlignmentSnapshot
 )
@@ -100,6 +101,7 @@ class BinanceConnector:
 
         self._rate_budget = RestRateBudget(self._config.rate_budget_config)
         self._backoff = BackoffController(self._config.backoff_config)
+        self._proxy_failover = get_proxy_failover_controller()
 
         public_streams = streams or ["btcusdt@trade", "btcusdt@kline_1m"]
         public_config = self._config.public_stream_config or PublicStreamConfig(
@@ -360,6 +362,7 @@ class BinanceConnector:
                 "public": self._public_manager.get_status(),
                 "private": self._private_manager.get_status(),
                 "rest": rest_metrics,
+                "proxy_failover": self._proxy_failover.get_state(),
                 "private_stream_disabled_reason": self._private_stream_disabled_reason,
             }
         )

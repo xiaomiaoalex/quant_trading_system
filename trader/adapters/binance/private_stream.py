@@ -35,6 +35,7 @@ import websockets.client as ws_client
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM, StreamConfig, StreamState, StreamEvent
 )
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
 from trader.adapters.binance.websockets_compat import install_connection_lost_guard
 
@@ -71,7 +72,7 @@ class RawOrderUpdate:
 @dataclass
 class RawFillUpdate:
     """原始成交更新（来自 WS）"""
-    cl_ord_id: str
+    cl_ord_id: Optional[str]
     trade_id: int
     exec_type: str
     side: str
@@ -80,6 +81,9 @@ class RawFillUpdate:
     commission: float
     exchange_ts_ms: int
     local_receive_ts_ms: int
+    broker_order_id: Optional[str] = None
+    symbol: Optional[str] = None
+    exec_id: Optional[str] = None
     source: str = "WS"
 
 
@@ -171,6 +175,7 @@ class PrivateStreamManager(BaseStreamFSM):
 
         self._reconnect_lock = asyncio.Lock()
         self._is_aligning = False
+        self._proxy_failover = get_proxy_failover_controller()
 
     def register_order_handler(self, handler: Callable[[RawOrderUpdate], None]) -> None:
         """注册订单更新处理器"""
@@ -349,8 +354,9 @@ class PrivateStreamManager(BaseStreamFSM):
         delay = max(0.1, self._private_config.time_sync_base_delay)
 
         for attempt in range(1, max_attempts + 1):
+            proxy = self._resolve_proxy()
             try:
-                async with self._session.get(url, proxy=self._resolve_proxy()) as resp:
+                async with self._session.get(url, proxy=proxy) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"status={resp.status}")
                     data = await resp.json()
@@ -362,8 +368,10 @@ class PrivateStreamManager(BaseStreamFSM):
                     logger.info(
                         f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms"
                     )
+                    self._proxy_failover.report_success(proxy)
                     return
             except Exception as e:
+                self._proxy_failover.report_failure(proxy)
                 if attempt >= max_attempts:
                     logger.warning(
                         f"[{self._name}] Time sync failed after {max_attempts} attempts: "
@@ -480,13 +488,15 @@ class PrivateStreamManager(BaseStreamFSM):
         """创建 listenKey"""
         url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
+        proxy = self._resolve_proxy()
 
         try:
             async with self._session.post(
                 url,
                 headers=headers,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
             ) as resp:
+                self._proxy_failover.report_success(proxy)
                 if resp.status == 200:
                     data = await resp.json()
                     self._listen_key = data["listenKey"]
@@ -503,19 +513,13 @@ class PrivateStreamManager(BaseStreamFSM):
                     raise Exception(f"Failed to create listenKey: {resp.status}")
 
         except Exception as e:
+            self._proxy_failover.report_failure(proxy)
             logger.error(f"[{self._name}] ListenKey creation error: {e}")
             raise
 
     def _resolve_proxy(self) -> Optional[str]:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
-        return (
-            self._private_config.proxy_url
-            or os.environ.get("BINANCE_PROXY_URL")
-            or os.environ.get("BINANCE_PROXY")
-            or os.environ.get("HTTPS_PROXY")
-            or os.environ.get("HTTP_PROXY")
-            or os.environ.get("ALL_PROXY")
-        )
+        """解析代理配置（支持主备自动切换）。"""
+        return self._proxy_failover.select_proxy(self._private_config.proxy_url)
 
     async def _create_listen_key_with_retry(self) -> None:
         """创建 listenKey（带重试，适配 VPN 抖动场景）。"""
@@ -546,14 +550,16 @@ class PrivateStreamManager(BaseStreamFSM):
         url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
         params = {"listenKey": self._listen_key}
+        proxy = self._resolve_proxy()
 
         try:
             async with self._session.put(
                 url,
                 headers=headers,
                 params=params,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
             ) as resp:
+                self._proxy_failover.report_success(proxy)
                 if resp.status == 200:
                     self._listen_key_expiry_ts = time.time() + self._private_config.listen_key_ttl
                     logger.info(f"[{self._name}] ListenKey refreshed")
@@ -562,6 +568,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.reconnect()
 
         except Exception as e:
+            self._proxy_failover.report_failure(proxy)
             logger.warning(f"[{self._name}] ListenKey refresh error: {e}, triggering reconnect")
             await self.reconnect()
 
@@ -573,17 +580,20 @@ class PrivateStreamManager(BaseStreamFSM):
         url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
         params = {"listenKey": self._listen_key}
+        proxy = self._resolve_proxy()
 
         try:
             async with self._session.delete(
                 url,
                 headers=headers,
                 params=params,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
             ) as resp:
+                self._proxy_failover.report_success(proxy)
                 logger.info(f"[{self._name}] ListenKey deleted: {resp.status}")
 
         except Exception as e:
+            self._proxy_failover.report_failure(proxy)
             logger.warning(f"[{self._name}] ListenKey deletion error: {e}")
 
     async def _listen_key_keepalive_loop(self) -> None:
@@ -628,12 +638,14 @@ class PrivateStreamManager(BaseStreamFSM):
             self._last_data_ts = self._last_pong_ts
             self._has_seen_user_event = False
             self._has_seen_execution_report = False
+            self._proxy_failover.report_success(proxy)
 
             await self._trigger_event(StreamEvent.CONNECTED)
             if start_receiver:
                 self._start_receive_loop()
 
         except Exception as e:
+            self._proxy_failover.report_failure(proxy)
             logger.error(
                 f"[{self._name}] Connection failed: type={type(e).__name__}, repr={e!r}, "
                 f"url={url}, proxy={proxy}"
@@ -795,14 +807,13 @@ class PrivateStreamManager(BaseStreamFSM):
                     except Exception as e:
                         logger.error(f"[{self._name}] Order handler error: {e}")
 
-                if data.get("x") in ["TRADE", "NEW"]:
-                    fill_update = self._parse_fill_update(data, exchange_ts)
-                    if fill_update is not None:
-                        for handler in self._fill_update_handlers:
-                            try:
-                                handler(fill_update)
-                            except Exception as e:
-                                logger.error(f"[{self._name}] Fill handler error: {e}")
+                fill_update = self._parse_fill_update(data, exchange_ts)
+                if fill_update is not None:
+                    for handler in self._fill_update_handlers:
+                        try:
+                            handler(fill_update)
+                        except Exception as e:
+                            logger.error(f"[{self._name}] Fill handler error: {e}")
 
             await self._trigger_event(StreamEvent.DATA_RECEIVED, payload)
 
@@ -811,42 +822,91 @@ class PrivateStreamManager(BaseStreamFSM):
 
     def _parse_order_update(self, data: Dict, exchange_ts: int) -> RawOrderUpdate:
         """解析订单更新"""
+        raw_broker_order_id = data.get("i")
+        broker_order_id = str(raw_broker_order_id) if raw_broker_order_id is not None else None
+        filled_qty = self._safe_float(data.get("z", 0.0))
+        avg_price = self._compute_avg_price(data, filled_qty)
+
         return RawOrderUpdate(
             cl_ord_id=data.get("c"),
-            broker_order_id=data.get("t"),
+            broker_order_id=broker_order_id,
             status=data.get("X", "UNKNOWN"),
-            filled_qty=float(data.get("z", 0)),
-            avg_price=float(data.get("L", 0)) if data.get("L") else None,
+            filled_qty=filled_qty,
+            avg_price=avg_price,
             exchange_ts_ms=exchange_ts,
             local_receive_ts_ms=int(time.time() * 1000),
             source="WS"
         )
 
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _compute_avg_price(self, data: Dict[str, Any], filled_qty: float) -> Optional[float]:
+        """基于 executionReport 累计成交信息计算平均价。"""
+        if filled_qty <= 0:
+            return None
+
+        cum_quote_qty = self._safe_float(data.get("Z", 0.0))
+        if cum_quote_qty > 0:
+            return cum_quote_qty / filled_qty
+
+        last_fill_price = self._safe_float(data.get("L", 0.0))
+        if last_fill_price > 0:
+            return last_fill_price
+        return None
+
+    @staticmethod
+    def _parse_int(value: Any, default: int = 0) -> int:
+        if isinstance(value, int):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            return default
+        try:
+            return int(text)
+        except ValueError:
+            digits = "".join(ch for ch in text if ch.isdigit())
+            return int(digits) if digits else default
+
     def _parse_fill_update(self, data: Dict, exchange_ts: int) -> Optional[RawFillUpdate]:
         """解析成交更新"""
         try:
-            raw_trade_id = data.get("t", 0)
-            trade_id = 0
-            if isinstance(raw_trade_id, int):
-                trade_id = raw_trade_id
-            else:
-                raw_text = str(raw_trade_id)
-                try:
-                    trade_id = int(raw_text)
-                except ValueError:
-                    digits = "".join(ch for ch in raw_text if ch.isdigit())
-                    trade_id = int(digits) if digits else 0
+            exec_type = str(data.get("x") or "")
+            if exec_type != "TRADE":
+                return None
+
+            fill_qty = self._safe_float(data.get("l", 0.0))
+            if fill_qty <= 0:
+                return None
+
+            trade_id = self._parse_int(data.get("t"), default=0)
+            raw_exec_id = data.get("I")
+            exec_id: Optional[str] = None
+            if raw_exec_id is not None and str(raw_exec_id).strip():
+                exec_id = str(raw_exec_id).strip()
+            elif trade_id > 0:
+                exec_id = str(trade_id)
+
+            raw_broker_order_id = data.get("i")
+            broker_order_id = str(raw_broker_order_id) if raw_broker_order_id is not None else None
 
             return RawFillUpdate(
                 cl_ord_id=data.get("c"),
                 trade_id=trade_id,
-                exec_type=data.get("x"),
+                exec_type=exec_type,
                 side=data.get("S"),
-                price=float(data.get("p", 0)),
-                qty=float(data.get("q", 0)),
-                commission=float(data.get("n", 0)),
+                price=self._safe_float(data.get("L", 0.0)),
+                qty=fill_qty,
+                commission=self._safe_float(data.get("n", 0.0)),
                 exchange_ts_ms=exchange_ts,
                 local_receive_ts_ms=int(time.time() * 1000),
+                broker_order_id=broker_order_id,
+                symbol=data.get("s"),
+                exec_id=exec_id,
                 source="WS"
             )
         except (ValueError, TypeError, KeyError) as e:
@@ -943,13 +1003,15 @@ class PrivateStreamManager(BaseStreamFSM):
             if ws_api_attempts > 0
             else None
         )
+        proxy_state = self._proxy_failover.get_state(self._private_config.proxy_url)
         base["private_runtime"] = {
             "selected_mode": self._selected_mode,
             "selected_ws_url": self._selected_ws_url,
             "subscription_id": self._subscription_id,
             "legacy_fallback_count": self._legacy_fallback_count,
             "timestamp_offset_ms": self._timestamp_offset_ms,
-            "proxy_configured": bool(self._resolve_proxy()),
+            "proxy_configured": bool(proxy_state.get("candidates")),
+            "active_proxy": proxy_state.get("active_proxy"),
             "ws_api_subscribe_attempts": ws_api_attempts,
             "ws_api_subscribe_success": self._ws_api_subscribe_success,
             "ws_api_subscribe_failures": self._ws_api_subscribe_failures,

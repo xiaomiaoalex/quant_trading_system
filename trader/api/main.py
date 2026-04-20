@@ -142,7 +142,6 @@ async def lifespan(app: FastAPI):
     if api_key and secret_key:
         try:
             from trader.adapters.binance.connector import (
-                BinanceConnector,
                 BinanceConnectorConfig,
             )
 
@@ -364,7 +363,7 @@ async def lifespan(app: FastAPI):
     )
     yield
     try:
-        await strategies.shutdown_strategy_runtime()
+        await strategies.shutdown_strategy_runtime_resources()
     except Exception as e:
         logger.error(f"[Main] Failed to shutdown strategy runtime: {e}")
     if _binance_connector_instance is not None:

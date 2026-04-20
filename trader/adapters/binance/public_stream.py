@@ -12,12 +12,11 @@ Public Stream Manager - Binance Public WebSocket Stream
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     import aiohttp
@@ -28,6 +27,7 @@ import websockets.client as ws_client
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM, StreamConfig, StreamState, StreamEvent
 )
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.adapters.binance.websockets_compat import install_connection_lost_guard
 
 
@@ -92,29 +92,40 @@ class PublicStreamManager(BaseStreamFSM):
 
         self._ping_task: Optional[asyncio.Task] = None
         self._stale_check_task: Optional[asyncio.Task] = None
+        self._proxy_failover = get_proxy_failover_controller()
 
     def register_market_handler(self, handler: Callable[[MarketEvent], None]) -> None:
         """注册市场事件处理器"""
         self._market_event_handlers.append(handler)
 
     def _build_stream_url(self) -> str:
-        """构建流 URL"""
-        streams = "/".join(self._public_config.streams)
-        return f"{self._public_config.base_url}/{streams}"
+        """
+        构建流 URL。
+
+        Binance 兼容两种形态：
+        - 单 stream: /ws/<stream>
+        - 多 stream: /stream?streams=<s1>/<s2>
+        """
+        streams = [s for s in self._public_config.streams if s]
+        if not streams:
+            raise ValueError("Public stream list is empty")
+
+        base = self._public_config.base_url.rstrip("/")
+        if len(streams) == 1:
+            return f"{base}/{streams[0]}"
+
+        parsed = urlsplit(base)
+        path = parsed.path or ""
+        if path.endswith("/ws"):
+            path = path[:-3] + "/stream"
+        elif not path.endswith("/stream"):
+            path = path + "/stream"
+        query = "streams=" + "/".join(streams)
+        return urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
 
     def _resolve_proxy(self) -> str | bool | None:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
-        explicit = self._public_config.proxy_url
-        if explicit:
-            return explicit
-        env_proxy = (
-            os.environ.get("BINANCE_PROXY_URL")
-            or os.environ.get("BINANCE_PROXY")
-            or os.environ.get("HTTPS_PROXY")
-            or os.environ.get("HTTP_PROXY")
-            or os.environ.get("ALL_PROXY")
-        )
-        return env_proxy or None
+        """解析代理配置（支持主备自动切换）。"""
+        return self._proxy_failover.select_proxy(self._public_config.proxy_url)
 
     def _apply_jitter(self, delay: float) -> float:
         """对重连延迟施加抖动，避免多个连接器同频重连。"""
@@ -176,11 +187,13 @@ class PublicStreamManager(BaseStreamFSM):
             self._metrics.last_connect_ts = time.time()
             self._last_pong_ts = time.time()
             self._last_data_ts = time.time()
+            self._proxy_failover.report_success(proxy)
 
             await self._trigger_event(StreamEvent.CONNECTED)
             asyncio.create_task(self._receive_loop())
 
         except Exception as e:
+            self._proxy_failover.report_failure(proxy)
             logger.error(
                 f"[{self._name}] Connection failed: type={type(e).__name__}, repr={e!r}, "
                 f"url={url}, proxy={proxy}"
@@ -278,8 +291,20 @@ class PublicStreamManager(BaseStreamFSM):
     async def _handle_message(self, message: str) -> None:
         """处理接收到的消息"""
         try:
-            data = json.loads(message)
+            raw = json.loads(message)
             now = time.time()
+            stream_name = ""
+
+            # Combined stream: {"stream":"btcusdt@trade","data":{...}}
+            if (
+                isinstance(raw, dict)
+                and "data" in raw
+                and isinstance(raw.get("data"), dict)
+            ):
+                data = raw["data"]
+                stream_name = str(raw.get("stream") or "")
+            else:
+                data = raw
 
             if "e" in data:
                 event_type = data["e"]
@@ -289,7 +314,7 @@ class PublicStreamManager(BaseStreamFSM):
                 exchange_ts = int(now * 1000)
 
             event = MarketEvent(
-                stream=data.get("stream", ""),
+                stream=stream_name or data.get("stream", ""),
                 event_type=event_type,
                 data=data,
                 exchange_ts_ms=exchange_ts,

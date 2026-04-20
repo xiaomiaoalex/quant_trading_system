@@ -110,17 +110,17 @@ class TestPrivateStreamManager:
 
         data = {
             "c": "client_order_123",
-            "t": "broker_order_456",
+            "i": 456,
             "X": "FILLED",
             "z": "1.5",
-            "L": "50000.0",
+            "Z": "75000.0",
         }
         exchange_ts = 1609459200000
 
         result = manager._parse_order_update(data, exchange_ts)
 
         assert result.cl_ord_id == "client_order_123"
-        assert result.broker_order_id == "broker_order_456"
+        assert result.broker_order_id == "456"
         assert result.status == "FILLED"
         assert result.filled_qty == 1.5
         assert result.avg_price == 50000.0
@@ -133,11 +133,14 @@ class TestPrivateStreamManager:
 
         data = {
             "c": "client_order_123",
-            "t": "trade_789",
+            "i": 456,
+            "t": 789,
+            "I": "exec_001",
             "x": "TRADE",
             "S": "BUY",
-            "p": "50000.0",
-            "q": "0.1",
+            "s": "BTCUSDT",
+            "L": "50000.0",
+            "l": "0.1",
             "n": "0.5",
         }
         exchange_ts = 1609459200000
@@ -145,12 +148,30 @@ class TestPrivateStreamManager:
         result = manager._parse_fill_update(data, exchange_ts)
 
         assert result.cl_ord_id == "client_order_123"
+        assert result.broker_order_id == "456"
+        assert result.symbol == "BTCUSDT"
         assert result.trade_id == 789
+        assert result.exec_id == "exec_001"
         assert result.exec_type == "TRADE"
         assert result.side == "BUY"
         assert result.price == 50000.0
         assert result.qty == 0.1
         assert result.commission == 0.5
+
+    def test_parse_fill_update_non_trade_returns_none(self):
+        """非 TRADE executionReport 不应被解析为成交。"""
+        creds = BinanceCredentials(api_key="test", secret_key="test")
+        manager = PrivateStreamManager(creds)
+
+        data = {
+            "c": "client_order_123",
+            "x": "NEW",
+            "S": "BUY",
+            "L": "0",
+            "l": "0",
+        }
+        result = manager._parse_fill_update(data, 1609459200000)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_receive_loop_does_not_use_wait_for_timeout(self, monkeypatch):
@@ -239,10 +260,14 @@ class TestRawFillUpdate:
             commission=0.5,
             exchange_ts_ms=1609459200000,
             local_receive_ts_ms=1609459200000,
+            broker_order_id="456",
+            symbol="BTCUSDT",
+            exec_id="exec_001",
         )
 
         assert update.cl_ord_id == "test_123"
         assert update.trade_id == 789
+        assert update.exec_id == "exec_001"
         assert update.exec_type == "TRADE"
 
 

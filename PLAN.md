@@ -29,6 +29,7 @@
 | PG投影 / Replay / HITL | `adapters/persistence/postgres/projectors/` 等 | Phase 3 核心能力已落地 |
 | 策略管理与AI共创 | `services/strategy_runner.py` 等 | Phase 4 已完成 |
 | 回测框架升级 | `services/backtesting/` | Phase 5 已完成 Lean 适配、验证与性能基准 |
+| **策略自动交易闭环** | `services/oms_callback.py` 等 | **Task 11-15 完成（2026-04-20）：实时行情 → tick调度 → OMS回调 → 真实下单 → 成交幂等 → 安全闸门** |
 
 ### 部分完成（Phase 6 已完成，待收尾文档）
 
@@ -570,9 +571,9 @@ StrategyRunner
 
 **待完成**：
 - [ ] 运行单测并验证通过
-- [ ] 与OMS对接：信号回调 → OMS.submit_order()
-- [ ] 与KillSwitch对接：策略级风险检查
-- [ ] 集成 `StrategyResourceLimits` 资源限制
+- [x] 与OMS对接：信号回调 → OMS.submit_order() ✅ (Task 11-15, 2026-04-20)
+- [x] 与KillSwitch对接：策略级风险检查 ✅ (Task 11-15, 2026-04-20)
+- [x] 集成 `StrategyResourceLimits` 资源限制 ✅ (Task 11-15, 2026-04-20)
 
 **验收标准**：
 - [ ] 策略可通过API启动和停止

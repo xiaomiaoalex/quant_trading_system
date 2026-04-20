@@ -12,7 +12,6 @@ REST 对齐协调器，负责与 Binance REST API 同步账户数据。
 """
 import asyncio
 import logging
-import os
 import time
 import hashlib
 import hmac
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
 
 from trader.adapters.binance.rate_limit import RestRateBudget, Priority, RateBudgetConfig
 from trader.adapters.binance.backoff import BackoffController, BackoffConfig
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,7 @@ class RESTAlignmentCoordinator:
         self._metrics = AlignmentMetrics()
         self._last_alignment_ts = 0.0
         self._timestamp_offset_ms: int = 0
+        self._proxy_failover = get_proxy_failover_controller()
 
         self._snapshot_handlers: List[Callable[[RestAlignmentSnapshot], None]] = []
 
@@ -115,15 +116,8 @@ class RESTAlignmentCoordinator:
         logger.info("[RESTAlignment] Started")
 
     def _resolve_proxy(self) -> Optional[str]:
-        """解析代理配置，优先级：config > BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY > ALL_PROXY。"""
-        return (
-            self._config.proxy_url
-            or os.environ.get("BINANCE_PROXY_URL")
-            or os.environ.get("BINANCE_PROXY")
-            or os.environ.get("HTTPS_PROXY")
-            or os.environ.get("HTTP_PROXY")
-            or os.environ.get("ALL_PROXY")
-        )
+        """解析代理配置（支持主备自动切换）。"""
+        return self._proxy_failover.select_proxy(self._config.proxy_url)
 
     async def _sync_server_time_offset(self) -> None:
         """同步服务器时间偏移，降低 -1021 风险。"""
@@ -131,10 +125,11 @@ class RESTAlignmentCoordinator:
             return
         import aiohttp
         url = f"{self._config.base_url}/v3/time"
+        proxy = self._resolve_proxy()
         try:
             async with self._session.get(
                 url,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
                 timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
             ) as resp:
                 if resp.status != 200:
@@ -149,8 +144,10 @@ class RESTAlignmentCoordinator:
                     "[RESTAlignment] Time offset synced: offset_ms=%s",
                     self._timestamp_offset_ms,
                 )
+                self._proxy_failover.report_success(proxy)
         except Exception as e:
             # 时间同步失败不应阻断主流程，但需要可观测。
+            self._proxy_failover.report_failure(proxy)
             logger.warning("[RESTAlignment] Time sync failed: %s", e)
             return
 
@@ -332,13 +329,15 @@ class RESTAlignmentCoordinator:
                 continue
 
             try:
+                proxy = self._resolve_proxy()
                 async with self._session.request(
                     method,
                     url,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
-                    proxy=self._resolve_proxy(),
+                    proxy=proxy,
                 ) as resp:
+                    self._proxy_failover.report_success(proxy)
                     if resp.status == 200:
                         data = await resp.json()
                         self._backoff.reset(task_name)
@@ -381,12 +380,14 @@ class RESTAlignmentCoordinator:
                         raise Exception(f"HTTP {resp.status}: {error_text}")
 
             except asyncio.TimeoutError:
+                self._proxy_failover.report_failure(proxy)
                 logger.warning(f"[RESTAlignment] Request timeout")
                 delay = self._backoff.next_delay(task_name)
                 await asyncio.sleep(delay)
                 continue
 
             except aiohttp.ClientError as e:
+                self._proxy_failover.report_failure(proxy)
                 logger.warning(f"[RESTAlignment] Client error: {e}")
                 delay = self._backoff.next_delay(task_name)
                 await asyncio.sleep(delay)

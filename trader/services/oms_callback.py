@@ -15,7 +15,9 @@ OMS Callback Handler - OMS下单回调处理
 - 失败必须 fail-closed，不能 silent fallback
 """
 import logging
+import time
 import uuid
+import inspect
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, Dict, Any, Callable, Union
@@ -103,6 +105,45 @@ class OMSCallbackHandler:
 
         # 已处理的 cl_ord_id 集合（内存缓存，防止同一会话内重复处理）
         self._processed_cl_ord_ids: set = set()
+        # 已处理成交键（cl_ord_id + exec_id）用于幂等去重
+        self._processed_exec_keys: Dict[str, float] = {}
+        self._exec_dedup_ttl_seconds: int = 900
+
+    def _cleanup_exec_dedup(self) -> None:
+        now = time.time()
+        expired_keys = [
+            key for key, expiry in self._processed_exec_keys.items()
+            if expiry <= now
+        ]
+        for key in expired_keys:
+            del self._processed_exec_keys[key]
+
+    def _make_exec_key(self, cl_ord_id: str, exec_id: str) -> str:
+        return f"{cl_ord_id}:{exec_id}"
+
+    def _mark_exec_seen(self, cl_ord_id: str, exec_id: str) -> bool:
+        """
+        记录成交幂等键。
+        Returns:
+            True: 首次出现
+            False: 重复成交
+        """
+        if not cl_ord_id or not exec_id:
+            return False
+        self._cleanup_exec_dedup()
+        key = self._make_exec_key(cl_ord_id, exec_id)
+        if key in self._processed_exec_keys:
+            return False
+        self._processed_exec_keys[key] = time.time() + self._exec_dedup_ttl_seconds
+        return True
+
+    @staticmethod
+    def _safe_strategy_id_from_cl_ord(cl_ord_id: Optional[str]) -> str:
+        if not cl_ord_id:
+            return ""
+        if "_" not in cl_ord_id:
+            return cl_ord_id
+        return cl_ord_id.rsplit("_", 1)[0]
 
     async def execute_signal(
         self,
@@ -199,8 +240,16 @@ class OMSCallbackHandler:
 
         # 2. 检查存储层是否已存在相同 cl_ord_id 的订单
         try:
-            existing_order = await self._storage.get_order(cl_ord_id)
-            if existing_order is not None:
+            existing_order_result = self._storage.get_order(cl_ord_id)
+            if inspect.isawaitable(existing_order_result):
+                existing_order = await existing_order_result
+            else:
+                existing_order = existing_order_result
+            existing_order_found = False
+            if isinstance(existing_order, dict):
+                existing_order_found = str(existing_order.get("cl_ord_id", "")) == cl_ord_id
+
+            if existing_order_found:
                 logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (storage): {cl_ord_id}")
                 # 加入内存缓存防止后续重复处理
                 self._processed_cl_ord_ids.add(cl_ord_id)
@@ -236,32 +285,47 @@ class OMSCallbackHandler:
             order_data = {
                 "cl_ord_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
+                "account_id": "binance_demo",
+                "instrument": signal.symbol,
                 "symbol": signal.symbol,
                 "side": side.value,
                 "order_type": order_type.value,
+                "qty": str(quantity),
                 "quantity": str(quantity),
+                "tif": "GTC",
                 "filled_qty": str(broker_order.filled_quantity),
                 "avg_price": str(broker_order.average_price),
                 "status": broker_order.status.value,
                 "strategy_id": strategy_id,
                 "venue": self._broker.broker_name,
-                "created_at": broker_order.created_at.isoformat() if broker_order.created_at else datetime.now(timezone.utc).isoformat(),
+                "created_at": (
+                    broker_order.created_at.isoformat()
+                    if broker_order.created_at else datetime.now(timezone.utc).isoformat()
+                ),
             }
             self._storage.create_order(order_data)
 
             # ==================== 如果有成交，保存成交记录 ====================
             if broker_order.filled_quantity > 0:
-                execution_data = {
-                    "cl_ord_id": cl_ord_id,
-                    "symbol": signal.symbol,
-                    "side": side.value,
-                    "quantity": str(broker_order.filled_quantity),
-                    "price": str(broker_order.average_price),
-                    "strategy_id": strategy_id,
-                    "venue": self._broker.broker_name,
-                    "ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
-                }
-                self._storage.create_execution(execution_data)
+                exec_id = f"{broker_order.broker_order_id}:init"
+                if self._mark_exec_seen(cl_ord_id, exec_id):
+                    execution_data = {
+                        "cl_ord_id": cl_ord_id,
+                        "exec_id": exec_id,
+                        "ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "fill_qty": str(broker_order.filled_quantity),
+                        "fill_price": str(broker_order.average_price),
+                        "fee": None,
+                        "fee_currency": None,
+                        # 兼容旧字段
+                        "symbol": signal.symbol,
+                        "side": side.value,
+                        "quantity": str(broker_order.filled_quantity),
+                        "price": str(broker_order.average_price),
+                        "strategy_id": strategy_id,
+                        "venue": self._broker.broker_name,
+                    }
+                    self._storage.create_execution(execution_data)
 
                 # ==================== 调用 on_fill 回调 ====================
                 if self._fill_callback:
@@ -477,22 +541,96 @@ def create_oms_callback(
                 # 获取 RawFillUpdate 的属性
                 cl_ord_id = update.cl_ord_id
                 side = update.side
-                quantity = update.qty
-                price = update.price
+                quantity = float(update.qty)
+                price = float(update.price)
+                symbol = getattr(update, "symbol", None) or ""
+                exec_id = str(
+                    getattr(update, "exec_id", None)
+                    or getattr(update, "trade_id", "")
+                ).strip()
+                fee = str(getattr(update, "commission", "")) or None
 
                 # 从 cl_ord_id 提取 strategy_id（格式: strategy_id_uuid）
-                strategy_id = cl_ord_id.split("_")[0] if cl_ord_id else ""
+                strategy_id = handler._safe_strategy_id_from_cl_ord(cl_ord_id)
+
+                if not cl_ord_id or not exec_id:
+                    logger.warning(
+                        "[OMSCallback] Skip fill without idempotency key: cl_ord_id=%s, exec_id=%s",
+                        cl_ord_id,
+                        exec_id,
+                    )
+                    return
+
+                is_new_fill = handler._mark_exec_seen(cl_ord_id, exec_id)
+                if not is_new_fill:
+                    logger.info(
+                        "[OMSCallback] Duplicate fill ignored: cl_ord_id=%s, exec_id=%s",
+                        cl_ord_id,
+                        exec_id,
+                    )
+                    return
+
+                # 写执行记录（按 cl_ord_id + exec_id 幂等）
+                execution_data = {
+                    "cl_ord_id": cl_ord_id,
+                    "exec_id": exec_id,
+                    "ts_ms": int(time.time() * 1000),
+                    "fill_qty": str(quantity),
+                    "fill_price": str(price),
+                    "fee": fee,
+                    "fee_currency": None,
+                    # 兼容旧字段
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": str(quantity),
+                    "price": str(price),
+                    "strategy_id": strategy_id,
+                    "venue": handler._broker.broker_name,
+                }
+                handler._storage.create_execution(execution_data)
+
+                # 尽力更新订单视图（不阻断主流程）
+                existing_order = handler._storage.get_order(cl_ord_id)
+                if existing_order is not None:
+                    prev_filled = Decimal(str(existing_order.get("filled_qty", "0")))
+                    incoming_qty = Decimal(str(quantity))
+                    total_filled = prev_filled + incoming_qty
+                    existing_order["filled_qty"] = str(total_filled)
+
+                    prev_avg = existing_order.get("avg_price")
+                    if prev_avg is None or prev_filled <= 0:
+                        existing_order["avg_price"] = str(price)
+                    else:
+                        prev_avg_dec = Decimal(str(prev_avg))
+                        incoming_price = Decimal(str(price))
+                        weighted_avg = (
+                            (prev_avg_dec * prev_filled) + (incoming_price * incoming_qty)
+                        ) / total_filled
+                        existing_order["avg_price"] = str(weighted_avg)
+
+                    total_qty_raw = existing_order.get("qty") or existing_order.get("quantity") or "0"
+                    total_qty = Decimal(str(total_qty_raw))
+                    if total_qty > 0 and total_filled >= total_qty:
+                        existing_order["status"] = OrderStatus.FILLED.value
+                    elif total_filled > 0:
+                        existing_order["status"] = OrderStatus.PARTIALLY_FILLED.value
+                    existing_order["updated_ts_ms"] = int(time.time() * 1000)
+
+                    if not symbol:
+                        symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
 
                 if fill_callback and strategy_id:
-                    # 传入 order_id=cl_ord_id, symbol="" (fill update 不包含 symbol)
-                    await fill_callback(strategy_id, cl_ord_id, "", side, quantity, price)
+                    await fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price)
                     logger.info(
-                        f"[OMSCallback] Fill processed: cl_ord_id={cl_ord_id}, "
-                        f"qty={quantity}, price={price}"
+                        "[OMSCallback] Fill processed: cl_ord_id=%s, exec_id=%s, qty=%s, price=%s",
+                        cl_ord_id,
+                        exec_id,
+                        quantity,
+                        price,
                     )
             except Exception as e:
                 logger.error(f"[OMSCallback] Fill handler error: {e}", exc_info=True)
 
         return fill_handler
 
-    return oms_callback, create_fill_handler
+    return oms_callback, create_fill_handler()

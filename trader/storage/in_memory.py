@@ -55,6 +55,7 @@ class ControlPlaneInMemoryStorage:
         # Orders & Executions
         self.orders: Dict[str, Dict[str, Any]] = {}
         self.executions: List[Dict[str, Any]] = []
+        self.execution_by_key: Dict[str, Dict[str, Any]] = {}
 
         # Positions & PnL
         self.positions: Dict[str, Dict[str, Any]] = {}
@@ -545,7 +546,15 @@ class ControlPlaneInMemoryStorage:
     # ==================== Execution Methods ====================
 
     def create_execution(self, execution_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create an execution"""
+        """Create an execution with cl_ord_id + exec_id idempotency."""
+        cl_ord_id = str(execution_data.get("cl_ord_id") or "").strip()
+        exec_id = str(execution_data.get("exec_id") or "").strip()
+        if cl_ord_id and exec_id:
+            key = f"{cl_ord_id}:{exec_id}"
+            existing = self.execution_by_key.get(key)
+            if existing is not None:
+                return existing
+            self.execution_by_key[key] = execution_data
         self.executions.append(execution_data)
         return execution_data
 
