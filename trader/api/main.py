@@ -37,6 +37,7 @@ from trader.api.routes import (
     chat,
     portfolio_research,
     audit,
+    sse,
 )
 from trader.services.reconciler_service import ReconcilerService
 from trader.services.strategy import StrategyService
@@ -620,6 +621,7 @@ app.include_router(monitor.router)
 app.include_router(chat.router)
 app.include_router(portfolio_research.router)
 app.include_router(audit.router)
+app.include_router(sse.router)
 
 
 @app.get("/")
