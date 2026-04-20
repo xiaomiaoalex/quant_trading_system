@@ -154,6 +154,20 @@ async def _get_oms_handler():
     return _oms_handler, _fill_handler
 
 
+def get_oms_metrics() -> Optional[Dict[str, Any]]:
+    """
+    Task 19: 获取 OMS 可观测性指标（供 MonitorService 使用）
+    
+    Returns:
+        OMS 指标字典，如果 OMS 未初始化则返回 None
+    """
+    if _oms_handler is None:
+        return None
+    if hasattr(_oms_handler, 'get_dedup_stats'):
+        return _oms_handler.get_dedup_stats()
+    return None
+
+
 async def shutdown_strategy_runtime_resources() -> None:
     """关闭策略路由层持有的 Broker/OMS 资源，避免 reload 场景 session 泄漏。"""
     global _broker_instance, _oms_handler, _fill_handler
