@@ -564,19 +564,36 @@ class BinanceSpotDemoBroker(BrokerPort):
             "symbol": symbol_norm,
             "side": side_value,
             "type": order_type_value,
-            "quantity": str(quantity),
         }
 
         if client_order_id:
             params["newClientOrderId"] = client_order_id
 
-        if order_type_value == "LIMIT":
+        # Task 21: MARKET BUY orders must use quoteOrderQty (quote asset amount)
+        # MARKET SELL orders use quantity (base asset amount)
+        if order_type_value == "MARKET":
+            if side_value == "BUY":
+                # quoteOrderQty = quantity * price (amount in quote currency like USDT)
+                if price is None or price <= 0:
+                    # For MARKET BUY without price, we need the quote amount
+                    # This should not happen if OMS sends price for pre-check
+                    raise ValueError("MARKET BUY requires a price for quoteOrderQty calculation")
+                quote_qty = quantity * price
+                params["quoteOrderQty"] = str(quote_qty)
+            else:
+                # SELL uses quantity (base asset)
+                params["quantity"] = str(quantity)
+        elif order_type_value == "LIMIT":
             if price is None:
                 raise ValueError("LIMIT order requires price")
+            params["quantity"] = str(quantity)
             params["price"] = str(price)
             params["timeInForce"] = "GTC"
+        else:
+            # For other order types (STOP_LOSS, etc.)
+            params["quantity"] = str(quantity)
 
-        if order_type_value not in {"MARKET", "LIMIT"}:
+        if order_type_value not in {"MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
             raise ValueError(
                 f"Unsupported spot order_type for current adapter: {order_type_value}"
             )
