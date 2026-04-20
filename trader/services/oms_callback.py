@@ -520,6 +520,42 @@ class OMSCallbackHandler:
                     }
                     self._storage.create_execution(execution_data)
 
+                # ==================== 更新持仓 ====================
+                # 成交后更新持仓（用于 P&L 计算）
+                try:
+                    # 获取当前持仓
+                    current_positions = self._storage.list_positions(
+                        account_id=None,
+                        venue=self._broker.broker_name,
+                    )
+                    current_qty = Decimal("0")
+                    for pos in current_positions:
+                        if pos.get("instrument") == signal.symbol:
+                            current_qty = Decimal(str(pos.get("quantity", "0")))
+                            break
+
+                    # 计算新持仓
+                    if side.value == "BUY":
+                        new_qty = current_qty + quantity
+                    else:  # SELL
+                        new_qty = current_qty - quantity
+
+                    # 更新持仓
+                    self._storage.upsert_position({
+                        "account_id": "SYSTEM",  # or whatever account ID
+                        "venue": self._broker.broker_name,
+                        "instrument": signal.symbol,
+                        "quantity": str(new_qty),
+                        "current_price": str(broker_order.average_price),
+                        "realized_pnl": "0",  # realized P&L 需要交易历史计算
+                        "unrealized_pnl": "0",
+                    })
+                    logger.debug(
+                        f"[OMSCallback] Position updated: {signal.symbol} qty={new_qty}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[OMSCallback] Failed to update position: {e}")
+
                 # ==================== 调用 on_fill 回调 ====================
                 if self._fill_callback:
                     try:

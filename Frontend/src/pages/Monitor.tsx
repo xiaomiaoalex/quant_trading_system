@@ -165,6 +165,38 @@ export function Monitor() {
           />
         </div>
 
+        {/* Trading Metrics - Task 19 OMS Observability */}
+        <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
+          <h3 className="text-sm font-medium text-gray-300 mb-3">Trading Metrics</h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <MetricCard
+              title="Submitted"
+              value={snapshot.order_submit_ok ?? 0}
+              subValue="success"
+            />
+            <MetricCard
+              title="Rejected"
+              value={snapshot.order_submit_reject ?? 0}
+              subValue={snapshot.reject_reason_counts ? Object.keys(snapshot.reject_reason_counts).length > 0 ? Object.keys(snapshot.reject_reason_counts).join(', ') : 'none' : 'none'}
+            />
+            <MetricCard
+              title="Error"
+              value={snapshot.order_submit_error ?? 0}
+              subValue="errors"
+            />
+            <MetricCard
+              title="Fills"
+              value={snapshot.fill_latency_count ?? 0}
+              subValue={snapshot.fill_latency_ms_avg ? `avg ${snapshot.fill_latency_ms_avg.toFixed(1)}ms` : ''}
+            />
+            <MetricCard
+              title="Dedup Hits"
+              value={(snapshot.cl_ord_id_dedup_hits ?? 0) + (snapshot.exec_dedup_hits ?? 0)}
+              subValue="cl_ord/exec"
+            />
+          </div>
+        </div>
+
         {/* Alert Summary by Severity */}
         {Object.keys(snapshot.alert_count_by_severity).length > 0 && (
           <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
