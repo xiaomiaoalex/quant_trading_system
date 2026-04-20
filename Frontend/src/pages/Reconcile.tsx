@@ -1,10 +1,25 @@
 import { useState, useCallback } from 'react'
-import { useReconcileReport, useDriftEvents, useTriggerReconciliation } from '@/hooks'
+import { useQueryClient } from '@tanstack/react-query'
+import { useReconcileReport, useDriftEvents, useTriggerReconciliation, useSSE } from '@/hooks'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { ReconcileSummaryCard, ReconcileDriftTable } from '@/components/reconcile'
 import { formatAPIError, isAPIError } from '@/api/client'
+import { reconcileKeys } from '@/hooks/useReconcile'
 
 export function Reconcile() {
+  const queryClient = useQueryClient()
+
+  // SSE for real-time updates
+  useSSE(
+    ['reconciliation'],
+    () => {
+      console.log('[Reconcile] SSE update received, invalidating queries')
+      queryClient.invalidateQueries({ queryKey: reconcileKeys.report() })
+      queryClient.invalidateQueries({ queryKey: reconcileKeys.driftEvents() })
+    },
+    { debug: true }
+  )
+
   const { data: report, isLoading, isError, error, refetch, isFetching } = useReconcileReport()
   const { data: driftEvents } = useDriftEvents()
   const { trigger, isPending: isTriggering } = useTriggerReconciliation()

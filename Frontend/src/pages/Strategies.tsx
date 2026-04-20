@@ -29,9 +29,10 @@ export function Strategies() {
     ['strategies', 'orders'],
     () => {
       // Invalidate strategy queries when SSE update is received
+      console.log('[Strategies] SSE update received, invalidating queries')
       queryClient.invalidateQueries({ queryKey: strategyKeys.all })
     },
-    { debug: false }
+    { debug: true }
   )
 
   const { data: registeredStrategies, isLoading, isError, error, refetch } = useStrategyRegistry()
