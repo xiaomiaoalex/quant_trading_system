@@ -563,6 +563,27 @@ class OMSCallbackHandler:
             # Task 19: Track successful submission
             self._order_submit_ok += 1
 
+            # Task 9.11: Broadcast SSE update for real-time frontend updates
+            # Non-blocking: fire-and-forget to avoid slowing down order processing
+            try:
+                from trader.api.routes.sse import broadcast_monitor_update, broadcast_order_update
+                # Use create_task to schedule broadcast without awaiting
+                asyncio.create_task(broadcast_order_update(cl_ord_id, {
+                    "type": "order_update",
+                    "strategy_id": strategy_id,
+                    "symbol": signal.symbol,
+                    "side": side.value,
+                    "quantity": str(quantity),
+                    "filled_qty": str(broker_order.filled_quantity),
+                    "status": broker_order.status.value,
+                }))
+                asyncio.create_task(broadcast_monitor_update({
+                    "type": "order_update",
+                    "order_id": cl_ord_id,
+                }))
+            except Exception:
+                pass  # SSE broadcast is non-critical, don't fail order processing
+
             return {
                 "order_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
