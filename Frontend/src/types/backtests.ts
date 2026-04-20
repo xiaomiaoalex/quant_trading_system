@@ -7,6 +7,7 @@ export interface BacktestRun {
   status: BacktestStatus
   strategy_id: string
   version: number
+  strategy_code_version?: number
   symbols: string[]
   start_ts_ms: number
   end_ts_ms: number
@@ -23,6 +24,7 @@ export interface BacktestRun {
 export interface BacktestRequest {
   strategy_id: string
   version: number
+  strategy_code_version?: number
   params?: Record<string, unknown>
   symbols: string[]
   start_ts_ms: number

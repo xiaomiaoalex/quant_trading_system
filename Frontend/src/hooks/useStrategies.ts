@@ -68,7 +68,7 @@ interface UseStrategyMutationResult {
 }
 
 function useStrategyMutation(
-  mutationFn: () => Promise<{ ok: boolean; message?: string }>
+  mutationFn: () => Promise<unknown>
 ): UseStrategyMutationResult {
   const queryClient = useQueryClient()
 
@@ -84,8 +84,8 @@ function useStrategyMutation(
     mutate: mutation.mutate,
     mutateAsync: async () => {
       try {
-        const result = await mutation.mutateAsync()
-        return result.ok
+        await mutation.mutateAsync()
+        return true
       } catch {
         return false
       }
@@ -97,7 +97,7 @@ function useStrategyMutation(
 
 export function useLoadStrategy(strategyId: string, modulePath = 'strategies.default', version = 'v1') {
   return useStrategyMutation(
-    () => strategiesAPI.loadStrategy(strategyId, modulePath, version)
+    () => strategiesAPI.loadStrategy(strategyId, { module_path: modulePath, version })
   )
 }
 

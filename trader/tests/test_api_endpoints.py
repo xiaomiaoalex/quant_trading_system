@@ -4,6 +4,8 @@ Unit Tests - API Endpoints
 Tests for FastAPI endpoints using TestClient.
 """
 import asyncio
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +13,7 @@ from fastapi.testclient import TestClient
 from trader.api.main import app
 from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
-from trader.storage.in_memory import reset_storage
+from trader.storage.in_memory import get_storage, reset_storage
 
 
 async def _clear_postgres_risk_state() -> None:
@@ -24,6 +26,41 @@ async def _clear_postgres_risk_state() -> None:
     finally:
         await storage.disconnect()
         await close_pool()
+
+
+async def _seed_audit_entries() -> list[str]:
+    from insight.chat_interface import create_chat_interface
+    from trader.api.routes.audit import clear_audit_entries
+    from trader.api.routes.chat import set_chat_interface
+
+    clear_audit_entries()
+    interface = create_chat_interface()
+    set_chat_interface(interface)
+
+    audit_log = interface.get_audit_log()
+    assert audit_log is not None
+
+    first = await audit_log.log_generation(
+        prompt="Generate momentum strategy",
+        generated_code="class S: pass",
+        llm_backend="mock",
+        llm_model="gpt-4",
+        strategy_name="Audit Alpha",
+        strategy_id="audit_alpha",
+        metadata={"tag": "alpha"},
+    )
+    await audit_log.submit_for_approval(first.entry_id)
+
+    second = await audit_log.log_generation(
+        prompt="Generate mean reversion strategy",
+        generated_code="class M: pass",
+        llm_backend="mock",
+        llm_model="gpt-4",
+        strategy_name="Audit Beta",
+        strategy_id="audit_beta",
+        metadata={"tag": "beta"},
+    )
+    return [first.entry_id, second.entry_id]
 
 
 class TestHealthEndpoint:
@@ -201,6 +238,119 @@ class TestStrategyEndpoints:
         response = self.client.get("/v1/strategies/registry/nonexistent")
         assert response.status_code == 404
 
+    def test_strategy_code_debug_and_load_flow(self):
+        """Test code create/debug/load/start full flow."""
+        code = """
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+from trader.core.application.strategy_protocol import MarketData, RiskLevel, StrategyPlugin, StrategyResourceLimits, ValidationResult
+from trader.core.domain.models.signal import Signal, SignalType
+
+@dataclass(slots=True)
+class TestCodeStrategy:
+    strategy_id: str = "code_flow"
+    name: str = "Code Flow"
+    version: str = "1.0.0"
+    risk_level: RiskLevel = RiskLevel.LOW
+    resource_limits: StrategyResourceLimits = field(default_factory=StrategyResourceLimits)
+    _last: Decimal | None = None
+
+    async def initialize(self, config: dict[str, Any]) -> None:
+        self._last = None
+
+    async def on_market_data(self, data: MarketData):
+        if self._last is None:
+            self._last = data.price
+            return None
+        signal = Signal(
+            strategy_name=self.strategy_id,
+            signal_type=SignalType.BUY if data.price >= self._last else SignalType.SELL,
+            symbol=data.symbol,
+            price=data.price,
+            quantity=Decimal("1"),
+            reason="code_flow",
+        )
+        self._last = data.price
+        return signal
+
+    async def on_fill(self, order_id: str, symbol: str, side: str, quantity: float, price: float) -> None:
+        return None
+
+    async def on_cancel(self, order_id: str, reason: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+    async def update_config(self, config: dict[str, Any]) -> ValidationResult:
+        return ValidationResult.valid()
+
+    def validate(self) -> ValidationResult:
+        return ValidationResult.valid()
+
+_plugin = TestCodeStrategy()
+def get_plugin() -> StrategyPlugin:
+    return _plugin
+"""
+        create_resp = self.client.post(
+            "/v1/strategies/code",
+            json={
+                "strategy_id": "code_flow",
+                "name": "Code Flow",
+                "description": "test code flow",
+                "code": code,
+                "created_by": "tester",
+                "register_if_missing": True,
+            },
+        )
+        assert create_resp.status_code == 201
+        created = create_resp.json()
+        assert created["code_version"] == 1
+
+        latest_resp = self.client.get("/v1/strategies/code_flow/code/latest")
+        assert latest_resp.status_code == 200
+        assert latest_resp.json()["checksum"] == created["checksum"]
+
+        debug_resp = self.client.post(
+            "/v1/strategies/code/debug",
+            json={"strategy_id": "code_flow_debug", "code": code, "config": {}},
+        )
+        assert debug_resp.status_code == 200
+        debug_data = debug_resp.json()
+        assert debug_data["ok"] is True
+        assert debug_data["syntax_ok"] is True
+        assert debug_data["protocol_ok"] is True
+
+        load_resp = self.client.post(
+            "/v1/strategies/code_flow/load",
+            json={"version": "v1", "code_version": 1, "config": {}},
+        )
+        assert load_resp.status_code == 200
+        assert load_resp.json()["status"] == "LOADED"
+
+        start_resp = self.client.post("/v1/strategies/code_flow/start")
+        assert start_resp.status_code == 200
+        assert start_resp.json()["status"] == "RUNNING"
+
+    def test_load_dynamic_strategy_missing_code_returns_404(self):
+        """Dynamic strategy without saved code should return 404/400 instead of 500."""
+        register_resp = self.client.post(
+            "/v1/strategies/registry",
+            json={
+                "strategy_id": "dynamic_no_code",
+                "name": "Dynamic No Code",
+                "entrypoint": "dynamic:dynamic_no_code",
+            },
+        )
+        assert register_resp.status_code == 201
+
+        load_resp = self.client.post(
+            "/v1/strategies/dynamic_no_code/load",
+            json={"code_version": 3, "version": "v1", "config": {}},
+        )
+        assert load_resp.status_code == 404
+
 
 class TestDeploymentEndpoints:
     """Test deployment API endpoints"""
@@ -285,8 +435,16 @@ class TestBacktestEndpoints:
 
     def test_create_backtest(self):
         """Test creating a backtest"""
+        self.client.post(
+            "/v1/strategies/registry",
+            json={
+                "strategy_id": "ema_cross_btc",
+                "name": "EMA Cross BTC",
+                "entrypoint": "trader.strategies.ema_cross_btc",
+            },
+        )
         payload = {
-            "strategy_id": "strat_001",
+            "strategy_id": "ema_cross_btc",
             "version": 1,
             "symbols": ["BTCUSDT"],
             "start_ts_ms": 1700000000000,
@@ -298,7 +456,177 @@ class TestBacktestEndpoints:
         assert response.status_code == 202
         data = response.json()
         assert data["run_id"] is not None
-        assert data["status"] == "RUNNING"
+        assert data["status"] in ("PENDING", "RUNNING")
+
+    def test_async_backtest_with_code_version_persists_report(self):
+        """End-to-end: code register -> async backtest -> report persisted."""
+        code = """
+from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Any
+from trader.core.application.strategy_protocol import MarketData, RiskLevel, StrategyPlugin, StrategyResourceLimits, ValidationResult
+from trader.core.domain.models.signal import Signal, SignalType
+
+@dataclass(slots=True)
+class BtFlowStrategy:
+    strategy_id: str = "bt_flow"
+    name: str = "Backtest Flow"
+    version: str = "1.0.0"
+    risk_level: RiskLevel = RiskLevel.LOW
+    resource_limits: StrategyResourceLimits = field(default_factory=StrategyResourceLimits)
+    _last: Decimal | None = None
+    _toggle: bool = False
+
+    async def initialize(self, config: dict[str, Any]) -> None:
+        self._last = None
+        self._toggle = False
+
+    async def on_market_data(self, data: MarketData):
+        if self._last is None:
+            self._last = data.price
+            return None
+        self._toggle = not self._toggle
+        signal = Signal(
+            strategy_name=self.strategy_id,
+            signal_type=SignalType.BUY if self._toggle else SignalType.SELL,
+            symbol=data.symbol,
+            price=data.price,
+            quantity=Decimal("1"),
+            reason="bt_flow",
+        )
+        self._last = data.price
+        return signal
+
+    async def on_fill(self, order_id: str, symbol: str, side: str, quantity: float, price: float) -> None:
+        return None
+
+    async def on_cancel(self, order_id: str, reason: str) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+    async def update_config(self, config: dict[str, Any]) -> ValidationResult:
+        return ValidationResult.valid()
+
+    def validate(self) -> ValidationResult:
+        return ValidationResult.valid()
+
+_plugin = BtFlowStrategy()
+def get_plugin() -> StrategyPlugin:
+    return _plugin
+"""
+        register_resp = self.client.post(
+            "/v1/strategies/code",
+            json={
+                "strategy_id": "bt_flow",
+                "name": "Backtest Flow",
+                "description": "e2e test",
+                "code": code,
+                "created_by": "tester",
+                "register_if_missing": True,
+            },
+        )
+        assert register_resp.status_code == 201
+        code_version = register_resp.json()["code_version"]
+        assert code_version == 1
+
+        create_resp = self.client.post(
+            "/v1/backtests",
+            json={
+                "strategy_id": "bt_flow",
+                "version": 1,
+                "strategy_code_version": code_version,
+                "symbols": ["BTCUSDT"],
+                "start_ts_ms": 1700000000000,
+                "end_ts_ms": 1700200000000,
+                "venue": "BINANCE",
+                "requested_by": "tester",
+            },
+        )
+        assert create_resp.status_code == 202
+        run_id = create_resp.json()["run_id"]
+
+        final_status = None
+        for _ in range(80):
+            status_resp = self.client.get(f"/v1/backtests/{run_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.json()
+            final_status = status_data["status"]
+            if final_status in ("COMPLETED", "FAILED"):
+                break
+            time.sleep(0.05)
+
+        assert final_status == "COMPLETED"
+        assert status_data["progress"] == 1.0
+        assert status_data["artifact_ref"]
+        assert status_data["artifact_ref"].startswith("backtest_report:")
+
+        report_resp = self.client.get(f"/v1/backtests/{run_id}/report")
+        assert report_resp.status_code == 200
+        report = report_resp.json()
+        assert report["status"] == "COMPLETED"
+        assert isinstance(report["returns"], dict)
+        assert isinstance(report["risk"], dict)
+        assert isinstance(report["equity_curve"], list)
+        assert isinstance(report["trades"], list)
+        assert report["metrics"] is not None
+
+
+class TestAuditEndpoints:
+    """Test audit query API endpoints (Task 9.6)."""
+
+    def setup_method(self):
+        self.client = TestClient(app)
+        self.entry_ids = asyncio.run(_seed_audit_entries())
+
+    def test_list_audit_entries(self):
+        response = self.client.get("/api/audit/entries")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 2
+        assert all("entry_id" in item for item in data)
+
+    def test_list_audit_entries_with_filters(self):
+        response = self.client.get(
+            "/api/audit/entries",
+            params={"strategy_id": "audit_alpha", "status": "pending", "event_type": "submitted"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["strategy_id"] == "audit_alpha"
+        assert data[0]["status"] == "pending"
+        assert data[0]["event_type"] == "submitted"
+
+    def test_get_audit_entry(self):
+        entry_id = self.entry_ids[0]
+        response = self.client.get(f"/api/audit/entries/{entry_id}")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["entry_id"] == entry_id
+        assert data["strategy_id"] == "audit_alpha"
+
+    def test_get_audit_entry_not_found(self):
+        response = self.client.get("/api/audit/entries/not-exists")
+        assert response.status_code == 404
+
+    def test_list_audit_entries_invalid_since(self):
+        response = self.client.get("/api/audit/entries", params={"since": "not-a-time"})
+        assert response.status_code == 400
+        assert "Invalid since format" in response.json()["detail"]
+
+    def test_list_audit_entries_time_range_and_pagination(self):
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        until = (now + timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        response = self.client.get(
+            "/api/audit/entries",
+            params={"since": since, "until": until, "limit": 1, "offset": 0},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
 
 
 class TestRiskEndpoints:
@@ -827,10 +1155,39 @@ class TestPortfolioEndpoints:
 class TestEventEndpoints:
     """Test event API endpoints"""
 
+    @staticmethod
+    def _seed_replay_events() -> None:
+        storage = get_storage()
+        storage.append_event(
+            {
+                "stream_key": "orders",
+                "event_type": "ORDER_CREATED",
+                "trace_id": "trace-1",
+                "ts_ms": int(time.time() * 1000) - 1000,
+                "payload": {
+                    "client_order_id": "ord-1",
+                },
+            }
+        )
+        storage.append_event(
+            {
+                "stream_key": "orders",
+                "event_type": "ORDER_SUBMITTED",
+                "trace_id": "trace-2",
+                "ts_ms": int(time.time() * 1000),
+                "payload": {
+                    "client_order_id": "ord-1",
+                },
+            }
+        )
+
     def setup_method(self):
         """Setup for each test"""
+        from trader.api.routes.events import clear_replay_jobs
+
         self.client = TestClient(app)
         reset_storage()
+        clear_replay_jobs()
 
     def test_list_events_empty(self):
         """Test listing events when empty"""
@@ -846,6 +1203,7 @@ class TestEventEndpoints:
 
     def test_trigger_replay(self):
         """Test triggering replay (Task 9.7 - returns ReplayJob)"""
+        self._seed_replay_events()
         payload = {
             "stream_key": "orders",
             "requested_by": "admin"
@@ -858,6 +1216,48 @@ class TestEventEndpoints:
         assert data["status"] in ("PENDING", "RUNNING", "COMPLETED", "FAILED")
         assert data["stream_key"] == "orders"
         assert data["requested_by"] == "admin"
+
+    def test_get_replay_status(self):
+        self._seed_replay_events()
+        payload = {
+            "stream_key": "orders",
+            "requested_by": "admin",
+        }
+        response = self.client.post("/v1/replay", json=payload)
+        assert response.status_code == 200
+        job_id = response.json()["job_id"]
+
+        status_response = self.client.get(f"/v1/replay/{job_id}")
+        assert status_response.status_code == 200
+        data = status_response.json()
+        assert data["job_id"] == job_id
+        assert data["stream_key"] == "orders"
+        assert data["status"] in ("PENDING", "RUNNING", "COMPLETED")
+        if data["status"] == "COMPLETED":
+            assert data["result_summary"]["events_total"] >= 2
+
+    def test_get_replay_status_not_found(self):
+        response = self.client.get("/v1/replay/not-found")
+        assert response.status_code == 404
+
+    def test_list_replay_jobs(self):
+        self._seed_replay_events()
+        payload = {"stream_key": "orders", "requested_by": "admin"}
+        first = self.client.post("/v1/replay", json=payload)
+        assert first.status_code == 200
+        second = self.client.post("/v1/replay", json={"stream_key": "orders", "requested_by": "alice"})
+        assert second.status_code == 200
+
+        list_all = self.client.get("/v1/replay")
+        assert list_all.status_code == 200
+        all_jobs = list_all.json()
+        assert len(all_jobs) >= 2
+
+        list_admin = self.client.get("/v1/replay", params={"requested_by": "admin"})
+        assert list_admin.status_code == 200
+        admin_jobs = list_admin.json()
+        assert len(admin_jobs) >= 1
+        assert all(item["requested_by"] == "admin" for item in admin_jobs)
 
 
 class TestKillSwitchEndpoints:

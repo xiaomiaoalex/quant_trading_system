@@ -4,15 +4,119 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-17 23:19 (北京时间)
+2026-04-20 21:45 (北京时间)
 
 ## 分支状态
-- **当前分支**：`main`
+- **当前分支**：`codex/task9-strategy-code-e2e-bridge`
 - **基于**：`main`
-- **工作树**：有变更（staged services/）
-- **最新提交**：feat(task-portfolio): add portfolio research workflow (#48)
+- **工作树**：有变更（本次为启动阻塞热修）
+- **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：三层主线联动增强（网络层 + 协议层 + 交易一致性层）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 私有流 `executionReport` 字段映射不准确（`orderId/trade price/qty` 使用错位字段），存在误记账风险
+  - 成交回调链路未按 `cl_ord_id + exec_id` 做幂等保护，重复回报场景可能重复写 execution / 重复触发策略 `on_fill`
+  - 公有流多 stream URL 与 combined payload 兼容性不足，新增 symbol 订阅在编排器中可能未真正生效
+  - `create_oms_callback` 返回值存在“返回工厂函数而非实际 fill handler”的隐患
+- 开发后状态:
+  - 协议层:
+    - `private_stream.py` 修正 `executionReport` 映射：
+      - 订单 `broker_order_id` 使用 `i`（orderId）
+      - 订单均价优先使用 `Z / z`（累计成交额 / 累计成交量）
+      - 成交价格/数量使用 `L / l`（last executed）
+      - 仅 `x=TRADE` 产生成交更新，补充 `exec_id` / `symbol` / `broker_order_id`
+    - `public_stream.py` 增加多 stream combined URL 构造与 combined payload 解析
+  - 交易一致性层:
+    - `oms_callback.py` 新增成交幂等去重（`cl_ord_id + exec_id`，TTL 900s）
+    - 私有流 fill 回调写 execution 时统一落 `exec_id/fill_qty/fill_price`
+    - fill 回调对订单视图做增量更新（filled_qty/avg_price/status）
+    - 修复 `strategy_id` 提取（按最后一个 `_` 切分，兼容 `fire_test_xxx`）
+    - `storage/in_memory.py` 的 `create_execution` 增加 `cl_ord_id + exec_id` 幂等约束
+  - 网络层:
+    - `websockets_compat.py` 强化 `recv_messages` 兼容补丁，覆盖 late `AttributeError` 重试路径
+    - `strategy_runtime_orchestrator.py` 修复动态订阅逻辑（正确更新 `public_stream` 配置并在运行态重启生效）
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_private_stream.py trader/tests/test_binance_public_stream.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_strategy_runtime_orchestrator_subscription.py trader/tests/test_binance_connector.py trader/tests/test_automated_trading_e2e.py trader/tests/test_api_strategy_runner_endpoints.py` → 67 passed
+
+### 本次任务：主备代理自动切换（中国大陆 + VPN 弱网增强）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 各链路仅使用单代理（`BINANCE_PROXY_URL`），主代理波动时只能手工切换
+  - Public/Private/REST/Broker 的代理失败状态互不共享
+  - 弱网抖动下，连接恢复依赖重试但不具备自动主备切换
+- 开发后状态:
+  - 新增 `trader/adapters/binance/proxy_failover.py`：
+    - 统一主备代理候选：`BINANCE_PROXY_URL`（主）+ `BINANCE_BACKUP_PROXY_URL`（备）
+    - 失败阈值触发冷却切换，冷却后自动恢复主代理优先
+    - 支持配置：`BINANCE_PROXY_FAILOVER_THRESHOLD` / `BINANCE_PROXY_FAILOVER_COOLDOWN_SECONDS`
+  - `public_stream.py` / `private_stream.py` / `rest_alignment.py` 全部接入统一切换器
+  - `binance_spot_demo_broker.py` 接入统一切换器（真实下单与对账链路同样支持主备代理）
+  - `connector.py` 健康指标新增 `proxy_failover` 状态输出
+  - 新增测试 `trader/tests/test_binance_proxy_failover.py`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_proxy_failover.py trader/tests/test_binance_spot_demo_broker.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_connector.py` → 45 passed
+
+### 本次任务：修复 reload 退出时报错 `shutdown_strategy_runtime` 不存在
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - `trader/api/main.py` 关闭阶段仍调用旧函数 `shutdown_strategy_runtime()`
+  - `trader/api/routes/strategies.py` 已重命名为 `shutdown_strategy_runtime_resources()`
+  - 触发 warning: `[Main] Failed to shutdown strategy runtime: ... no attribute ...`
+- 开发后状态:
+  - `trader/api/main.py` 关闭调用切换到 `shutdown_strategy_runtime_resources()`
+  - `trader/api/routes/strategies.py` 增加兼容别名 `shutdown_strategy_runtime()`，避免旧测试/旧调用断裂
+  - 额外修复 `lifespan` 的 `BinanceConnector` 作用域问题，避免无 key 启动时 `UnboundLocalError`
+- 测试结果:
+  - `python -c "import asyncio; from trader.api.routes import strategies; asyncio.run(strategies.shutdown_strategy_runtime()); print('compat shutdown ok')"` → ok
+  - `python -c "import os; os.environ['BINANCE_API_KEY']=''; os.environ['BINANCE_SECRET_KEY']=''; os.environ['DISABLE_EXCHANGE_RECONCILIATION']='true'; from fastapi.testclient import TestClient; from trader.api.main import app; c=TestClient(app); c.__enter__(); print('lifespan no-key ok'); c.__exit__(None,None,None)"` → ok
+
+### 本次任务：全面指数退避与时间戳日志增强（网络连接鲁棒性）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - Public/Private 首连在弱网抖动下仍可能“一次失败即放弃”
+  - 部分网络异常日志仅输出空字符串，定位成本高
+  - 网络/订单链路日志缺统一毫秒时间戳，跨模块对齐困难
+- 开发后状态:
+  - `trader/adapters/binance/public_stream.py`
+    - 首连重试改为指数退避（含抖动）
+    - 连接失败日志补齐 `type + repr + url + proxy`
+  - `trader/adapters/binance/private_stream.py`
+    - `ws-api` 启动改为“每个 endpoint 多次指数退避”
+    - 对时接口增加指数退避重试
+    - 连接失败日志补齐 `type + repr + url + proxy`
+  - `trader/api/main.py`
+    - 新增 `trader.*` 命名空间日志格式：`YYYY-MM-DD HH:MM:SS.mmm`
+- 测试结果:
+  - `python -c "import trader.adapters.binance.public_stream"` → ok
+  - `python -c "import trader.adapters.binance.private_stream"` → ok
+  - `python -c "import trader.api.main as m; print(m.app.title)"` → ok
+
+### 本次任务：修复 Uvicorn 启动失败（`websockets_compat` 导入阶段崩溃）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 启动 `uvicorn trader.api.main:app` 时报 `ModuleNotFoundError: trader.adapters.binance.websockets_compat`
+  - 补齐文件后仍在导入阶段报错：`ClientConnection` 无 `connection_lost`（websockets API 差异）
+- 开发后状态:
+  - 新增并接入 `trader/adapters/binance/websockets_compat.py`
+  - 兼容层改为“多版本探测 + 幂等补丁 + 导入不抛错”策略
+  - 支持 `websockets.asyncio.connection.Connection` 与旧版 `websockets.client.ClientConnection`
+  - `recv_messages` 缺失时注入 no-op close 对象，避免连接抖动时异常风暴
+- 测试结果:
+  - `python -c "import trader.adapters.binance.websockets_compat"` → ok
+  - `python -c "import trader.api.main as m; print(m.app.title)"` → ok
 
 ### 本次任务：Reconciler 自动识别本系统订单并屏蔽外部历史订单噪声
 - 完成时间: 2026-04-17

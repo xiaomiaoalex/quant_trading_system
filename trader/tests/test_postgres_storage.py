@@ -26,6 +26,19 @@ from trader.adapters.persistence.postgres import (
 )
 
 
+# 清理全局 PostgreSQL 连接池的 fixture
+@pytest.fixture(scope="function", autouse=False)
+async def cleanup_postgres_pool():
+    """Cleanup PostgreSQL connection pool after test"""
+    yield
+    try:
+        from trader.adapters.persistence.postgres import close_pool
+        await close_pool()
+    except Exception:
+        # Ignore cleanup errors
+        pass
+
+
 skip_if_no_asyncpg = pytest.mark.skipif(
     not ASYNCPG_AVAILABLE,
     reason="asyncpg package not installed"
@@ -82,7 +95,7 @@ class TestPostgreSQLStorage:
     """Test PostgreSQL storage implementation"""
 
     @pytest.fixture
-    async def storage(self):
+    async def storage(self, cleanup_postgres_pool):
         """Create storage instance"""
         storage = PostgreSQLStorage()
         await storage.connect()

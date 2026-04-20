@@ -174,9 +174,10 @@ def set_chat_interface(interface: StrategyChatInterface) -> None:
 
 def get_chat_interface() -> StrategyChatInterface:
     """获取全局聊天接口实例"""
+    global _chat_interface
     if _chat_interface is None:
         from insight.chat_interface import create_chat_interface
-        return create_chat_interface()
+        _chat_interface = create_chat_interface()
     return _chat_interface
 
 

@@ -17,27 +17,30 @@ def _reset_runtime_state() -> None:
     asyncio.run(strategies_route.shutdown_strategy_runtime())
 
 
-def test_tick_strategy_once_returns_signal_and_order_when_oms_callback_runs(monkeypatch):
+def test_shutdown_strategy_runtime_backward_compatible_alias(monkeypatch):
     _reset_runtime_state()
 
-    async def _fake_submit_live_order(strategy_id, signal):
-        result = {
-            "client_order_id": "mock_order_001",
-            "broker_order_id": "mock_broker_001",
-            "symbol": signal.symbol,
-            "side": signal.get_order_side().value,
-            "status": "SUBMITTED",
-            "filled_quantity": "0",
-            "avg_price": "0",
-        }
-        strategies_route._last_order_results[strategy_id] = result
-        return result
+    called = {"value": False}
 
-    monkeypatch.setattr(strategies_route, "_submit_live_order", _fake_submit_live_order)
-    monkeypatch.setattr(strategies_route, "_is_live_order_strategy_allowed", lambda _: False)
+    async def _fake_shutdown_resources() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr(
+        strategies_route,
+        "shutdown_strategy_runtime_resources",
+        _fake_shutdown_resources,
+    )
+
+    asyncio.run(strategies_route.shutdown_strategy_runtime())
+
+    assert called["value"] is True
+
+
+def test_strategy_runtime_load_start_stop_flow():
+    _reset_runtime_state()
 
     with TestClient(app) as client:
-        load_response = client.post(
+        load_resp = client.post(
             "/v1/strategies/fire_test/load",
             json={
                 "module_path": "trader.strategies.fire_test",
@@ -50,34 +53,29 @@ def test_tick_strategy_once_returns_signal_and_order_when_oms_callback_runs(monk
                 },
             },
         )
-        assert load_response.status_code == 200
+        assert load_resp.status_code == 200
+        assert load_resp.json()["status"] == "LOADED"
 
-        start_response = client.post("/v1/strategies/fire_test/start")
-        assert start_response.status_code == 200
+        start_resp = client.post("/v1/strategies/fire_test/start")
+        assert start_resp.status_code == 200
+        start_payload = start_resp.json()
+        assert start_payload["strategy_id"] == "fire_test"
+        assert start_payload["status"] == "RUNNING"
+        assert start_payload["symbol"] == "BTCUSDT"
 
-        tick_response = client.post(
-            "/v1/strategies/fire_test/tick",
-            json={
-                "symbol": "BTCUSDT",
-                "price": "50000",
-                "volume": "1",
-                "data_type": "TICKER",
-            },
-        )
-        assert tick_response.status_code == 200
-        payload = tick_response.json()
-        assert payload["strategy_id"] == "fire_test"
-        assert payload["signal_generated"] is True
-        assert payload["signal_type"] == "BUY"
-        assert payload["order_submitted"] is True
-        assert payload["order_result"]["client_order_id"] == "mock_order_001"
+        status_resp = client.get("/v1/strategies/fire_test/status")
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] == "RUNNING"
+
+        stop_resp = client.post("/v1/strategies/fire_test/stop?reason=test_stop")
+        assert stop_resp.status_code == 200
+        stop_payload = stop_resp.json()
+        assert stop_payload["status"] == "STOPPED"
+        assert stop_payload["stop_reason"] == "test_stop"
 
 
-def test_tick_strategy_once_rejects_live_trading_without_credentials(monkeypatch):
+def test_tick_endpoint_removed_returns_404():
     _reset_runtime_state()
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_SECRET_KEY", raising=False)
-    monkeypatch.setenv("LIVE_ORDER_STRATEGIES", "fire_test")
 
     with TestClient(app) as client:
         response = client.post(
@@ -89,6 +87,4 @@ def test_tick_strategy_once_rejects_live_trading_without_credentials(monkeypatch
                 "data_type": "TICKER",
             },
         )
-        assert response.status_code == 400
-        assert "BINANCE_API_KEY" in response.json()["detail"]
-
+        assert response.status_code == 404

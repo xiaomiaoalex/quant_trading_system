@@ -1,0 +1,169 @@
+# Task 16-20 实施提示词（交付给 AI 工程师）
+
+你要在 `quant_trading_system` 仓库完成“自动交易可生产化”的后续 5 个任务。  
+目标是：真实可运行、可恢复、可观测、可验证。禁止做占位实现。
+
+## 全局约束（必须遵守）
+
+- 严格遵守五层架构与确定性约束，不允许跨层乱调。
+- 禁止 `except: pass`，所有异常必须有可观测输出。
+- 失败必须 `fail-closed`，不能返回“假成功”。
+- 订单与成交状态必须单调，不允许终态回退。
+- 不得破坏现有 API 兼容性（新增优先，变更需兼容）。
+- 每个 Task 单独提交，提交信息格式必须为：
+  - `feat(task-16): ...`
+  - `feat(task-17): ...`
+  - `feat(task-18): ...`
+  - `feat(task-19): ...`
+  - `feat(task-20): ...`
+- 每个 Task 完成后必须补测试，并在最终刷新文档：
+  - `PROJECT_STATUS.md`
+  - `PLAN.md`（如优先级/阶段变化）
+  - `docs/EXPERIENCE_SUMMARY.md`
+
+---
+
+## Task 16：Demo/Testnet 环境统一（REST/WS 一致）
+
+### 目标
+统一 `Broker REST`、`Public WS`、`Private WS`、`listenKey REST` 的环境来源，避免混连。
+
+### 实施要求
+- 增加单一环境入口：`BINANCE_ENV=demo|testnet`。
+- 所有 Binance 连接配置必须从同一入口派生，不允许各模块各自硬编码。
+- 启动日志必须打印：`env`、`rest_base`、`public_ws_base`、`private_ws_base`、`listenkey_rest_base`。
+- 启动自检必须包含：
+  - `/v3/time`
+  - listenKey 创建
+  - Public 首条行情可达
+  - Private 首条订单/成交事件可达
+- 自检任一失败时，阻止策略进入 RUNNING（fail-closed）。
+
+### 重点文件（优先修改）
+- `trader/adapters/broker/binance_spot_demo_broker.py`
+- `trader/adapters/binance/connector.py`
+- `trader/adapters/binance/public_stream.py`
+- `trader/adapters/binance/private_stream.py`
+
+### 验收标准
+- 切换 `BINANCE_ENV` 后，REST/WS 全部同步切换。
+- 无“demo REST + testnet WS”混搭情况。
+- 自检失败时，`/start` 不会进入真实运行态。
+
+---
+
+## Task 17：成交去重与幂等（cl_ord_id / exec_id）
+
+### 目标
+同一订单/成交重复回报不会重复记账，WS 与 REST 并发到达仍然幂等。
+
+### 实施要求
+- 明确幂等键：
+  - 订单级：`cl_ord_id`
+  - 成交级：`exec_id`（无则用 `trade_id`）
+- OMS 成交应用前必须先做幂等检查。
+- 持久化层增加唯一约束（若使用 PG，必须有 migration）。
+- 终态单调：`FILLED/CANCELLED/REJECTED` 不可回退。
+- 对重复事件增加可观测计数，如 `dedup_hit_count`。
+
+### 重点文件（优先修改）
+- `trader/core/application/oms.py`
+- `trader/adapters/binance/private_stream.py`
+- 持久化相关文件与 migration（按仓库现状补齐）
+
+### 验收标准
+- 重放同一 fill 2~3 次，订单与成交只记录一次。
+- WS/REST 并发同一回报，不产生重复执行。
+- 状态机在冲突输入下仍保持单调。
+
+---
+
+## Task 18：重启恢复（RUNNING 策略/未完成订单/订阅恢复）
+
+### 目标
+服务重启后可以恢复运行上下文，不丢失关键状态，不产生重复执行。
+
+### 实施要求
+- 新增运行态持久化（例如 `strategy_runtime_state`）：
+  - `strategy_id`
+  - `status`
+  - `config`
+  - `symbols`
+  - `env`
+  - `started_at`
+  - `last_tick_at`
+- 启动恢复顺序必须固定：
+  1. 恢复连接器
+  2. 恢复订阅
+  3. 恢复未终态订单
+  4. 恢复 RUNNING 策略调度
+- 恢复后发布事件：`strategy.recovered`（或同等语义）。
+- 环境不一致时不可强行恢复，必须 STOPPED 并记录原因。
+
+### 重点文件（优先修改）
+- `trader/api/main.py`（生命周期）
+- 策略运行时编排服务（你新增的 orchestrator 文件）
+- OMS 恢复相关逻辑
+
+### 验收标准
+- 重启后 RUNNING 策略会继续产生 tick。
+- 未完成订单会先同步，再恢复策略执行。
+- 发生环境不一致时能安全降级并可观测。
+
+---
+
+## Task 19：运行期可观测性（监控与告警）
+
+### 目标
+让“策略是否在跑、下单是否健康、成交是否异常”可直接观测。
+
+### 必做指标
+- `tick_rate`
+- `tick_lag_ms`
+- `order_submit_total{ok,reject,error}`
+- `reject_reason_count{reason}`
+- `fill_latency_ms`（建议提供 p50/p95）
+- `ws_reconnect_count`
+
+### 实施要求
+- 将上述指标接入现有监控聚合。
+- `/v1/monitor/snapshot` 返回可用于前端直接展示的结构化数据。
+- 为拒单原因提供明确枚举或标准化字段，不允许只有字符串拼接。
+- 告警规则至少覆盖：
+  - `tick_rate=0` 持续 N 秒
+  - 下单成功率低于阈值
+  - 重连频率突增
+  - 成交延迟超阈值
+
+### 重点文件（优先修改）
+- `trader/services/strategy_event_service.py`
+- `trader/services/monitor_service.py`
+- `trader/api/routes/monitor.py`
+
+### 验收标准
+- 人工制造拒单/断流后，监控指标与告警可见且字段完整。
+- 前端可以直接消费 snapshot，不需要临时拼接逻辑。
+
+---
+
+## Task 20：统一验收、回归测试、文档闭环
+
+### 目标
+交付“可合并”的最终结果，而不是局部代码变更。
+
+### 测试要求（必须新增）
+建议新增以下测试文件（可调整命名，但语义必须覆盖）：
+- `trader/tests/test_binance_env_unified.py`
+- `trader/tests/test_oms_idempotency.py`
+- `trader/tests/test_strategy_runtime_recovery.py`
+- `trader/tests/test_runtime_observability.py`
+
+### 必测场景
+- 环境切换后 REST/WS 一致性。
+- 重复成交回报不重复记账。
+- 重启后策略与订单恢复流程正确。
+- 监控指标与拒单原因统计有效。
+
+### 最终验收命令（示例）
+```powershell
+python -m pytest -q trader/tests/test_binance_env_unified.py trader/tests/test_oms_idempotency.py trader/tests/test_strategy_runtime_recovery.py trader/tests/test_runtime_observability.py --tb=short

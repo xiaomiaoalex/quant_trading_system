@@ -19,6 +19,7 @@ import importlib
 import logging
 import time
 import traceback
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -156,6 +157,7 @@ class StrategyRunner:
             max_errors_before_error_state: 错误次数阈值，超过此值策略进入ERROR状态
         """
         self._plugins: Dict[str, StrategyPlugin] = {}
+        self._dynamic_modules: Dict[str, types.ModuleType] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._infos: Dict[str, StrategyRuntimeInfo] = {}
         self._signal_callback = signal_callback
@@ -239,6 +241,67 @@ class StrategyRunner:
             logger.error(f"策略加载失败: {strategy_id}, 错误: {e}")
             raise
 
+    async def load_strategy_from_code(
+        self,
+        strategy_id: str,
+        version: str,
+        code: str,
+        config: Optional[Dict[str, Any]] = None,
+        resource_limits: Optional[StrategyResourceLimits] = None,
+    ) -> StrategyRuntimeInfo:
+        """
+        从代码字符串动态加载策略。
+
+        Args:
+            strategy_id: 策略ID
+            version: 策略版本
+            code: 策略代码字符串（必须定义 get_plugin()）
+            config: 初始化配置
+            resource_limits: 资源限制
+
+        Returns:
+            StrategyRuntimeInfo: 策略运行时信息
+        """
+        if strategy_id in self._plugins:
+            raise ValueError(f"策略已加载: {strategy_id}")
+
+        module_name = f"dynamic_strategy_{strategy_id}_{int(time.time() * 1000)}"
+        module = types.ModuleType(module_name)
+        module.__dict__["__builtins__"] = __builtins__
+
+        try:
+            compiled = compile(code, f"<{module_name}>", "exec")
+            exec(compiled, module.__dict__)
+
+            if "get_plugin" not in module.__dict__:
+                raise ValueError("代码缺少 get_plugin() 函数")
+
+            plugin = module.__dict__["get_plugin"]()
+            is_valid, error_msg = validate_strategy_plugin(plugin)
+            if not is_valid:
+                raise TypeError(f"动态策略未实现 StrategyPlugin 协议: {error_msg}")
+
+            if hasattr(plugin, "version"):
+                plugin.version = version
+
+            await plugin.initialize(config or {})
+
+            self._plugins[strategy_id] = plugin
+            self._dynamic_modules[strategy_id] = module
+            self._infos[strategy_id] = StrategyRuntimeInfo(
+                strategy_id=strategy_id,
+                version=version,
+                status=StrategyStatus.LOADED,
+                loaded_at=datetime.now(timezone.utc),
+                config=config or {},
+                resource_limits=resource_limits,
+            )
+            logger.info(f"策略加载成功（代码）: {strategy_id} v{version}")
+            return self._infos[strategy_id]
+        except Exception as e:
+            logger.error(f"策略加载失败（代码）: {strategy_id}, 错误: {e}")
+            raise
+
     async def unload_strategy(self, strategy_id: str) -> None:
         """
         卸载策略
@@ -273,6 +336,7 @@ class StrategyRunner:
         # 即使shutdown失败，也要从字典中移除
         # 使用 pop 安全移除，不会在失败时重复移除
         self._plugins.pop(strategy_id, None)
+        self._dynamic_modules.pop(strategy_id, None)
         self._infos.pop(strategy_id, None)
         self._strategy_locks.pop(strategy_id, None)  # 清理策略锁
 

@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import aiohttp
 
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.core.application.ports import (
     BrokerAccount,
     BrokerBusinessError,
@@ -147,6 +148,9 @@ class BinanceSpotDemoBroker(BrokerPort):
         self._time_offset_ms: int = 0
         self._time_offset_synced: bool = False
         self._time_sync_lock = asyncio.Lock()
+        # 额外安全余量，避免“ahead of server time”边界误差
+        self._timestamp_safety_margin_ms: int = 150
+        self._proxy_failover = get_proxy_failover_controller()
 
     @property
     def broker_name(self) -> str:
@@ -171,6 +175,9 @@ class BinanceSpotDemoBroker(BrokerPort):
 
     def _headers(self) -> Dict[str, str]:
         return {"X-MBX-APIKEY": self._config.api_key}
+
+    def _resolve_proxy(self) -> Optional[str]:
+        return self._proxy_failover.select_proxy(self._config.proxy_url)
 
     def _normalize_symbol(self, symbol: str) -> str:
         return symbol.upper().replace("-", "").replace("/", "")
@@ -243,7 +250,7 @@ class BinanceSpotDemoBroker(BrokerPort):
         return payload
 
     def _current_timestamp_ms(self) -> int:
-        return int(time.time() * 1000) + self._time_offset_ms
+        return int(time.time() * 1000 + self._time_offset_ms - self._timestamp_safety_margin_ms)
 
     async def _ensure_time_offset(self) -> None:
         if self._time_offset_synced:
@@ -294,6 +301,7 @@ class BinanceSpotDemoBroker(BrokerPort):
         did_resync_for_1021 = False
 
         for attempt in range(1, self._config.max_retries + 1):
+            proxy = self._resolve_proxy()
             try:
                 if signed:
                     await self._ensure_time_offset()
@@ -314,8 +322,9 @@ class BinanceSpotDemoBroker(BrokerPort):
                     method=method,
                     url=final_url,
                     headers=req_headers,
-                    proxy=self._config.proxy_url,
+                    proxy=proxy,
                 ) as resp:
+                    self._proxy_failover.report_success(proxy)
                     content_type = resp.headers.get("Content-Type", "")
                     if "application/json" in content_type:
                         data = await resp.json()
@@ -329,6 +338,7 @@ class BinanceSpotDemoBroker(BrokerPort):
                         if signed and str(code) == "-1021" and not did_resync_for_1021:
                             did_resync_for_1021 = True
                             await self._refresh_time_offset()
+                            await asyncio.sleep(0.1)
                             continue
                         raise BrokerBusinessError(
                             f"{method} {endpoint} failed: status={resp.status}, code={code}, msg={msg}"
@@ -339,6 +349,7 @@ class BinanceSpotDemoBroker(BrokerPort):
             except BrokerBusinessError:
                 raise
             except Exception as exc:
+                self._proxy_failover.report_failure(proxy)
                 last_error = exc
                 if attempt >= self._config.max_retries:
                     break
@@ -362,6 +373,52 @@ class BinanceSpotDemoBroker(BrokerPort):
         if symbol:
             params = {"symbol": self._normalize_symbol(symbol)}
         return await self._request("GET", "/v3/exchangeInfo", params=params, signed=False)
+
+    async def get_symbol_step_size(self, symbol: str) -> Decimal:
+        """
+        Fetch exchange info and return the LOT_SIZE stepSize for the given symbol.
+
+        Returns:
+            Decimal representation of the stepSize (e.g., Decimal("0.00000001")).
+            Returns Decimal("0") if stepSize is "0" or not found.
+
+        Raises:
+            ValueError: If symbol not found in exchange info.
+        """
+        data = await self.get_exchange_info(symbol=symbol)
+        symbols = data.get("symbols", [])
+        if not symbols:
+            raise ValueError(f"Symbol {symbol} not found in exchange info")
+        symbol_data = symbols[0]
+        filters = symbol_data.get("filters", [])
+        for f in filters:
+            if f.get("filterType") == "LOT_SIZE":
+                step_size_str = f.get("stepSize", "0")
+                return Decimal(step_size_str)
+        # LOT_SIZE not found, return zero (will use default quantization)
+        return Decimal("0")
+
+    @staticmethod
+    def quantize_by_step_size(quantity: Decimal, step_size: Decimal) -> Decimal:
+        """
+        Quantize quantity to the nearest valid LOT_SIZE step (floor to nearest valid step).
+
+        Binance LOT_SIZE requires: quantity = floor(quantity / stepSize) * stepSize
+
+        Args:
+            quantity: The raw quantity to quantize.
+            step_size: The stepSize from Binance LOT_SIZE filter (must be > 0).
+
+        Returns:
+            The largest quantity <= input that is a valid multiple of stepSize.
+
+        Raises:
+            ValueError: If step_size <= 0.
+        """
+        if step_size <= 0:
+            raise ValueError(f"step_size must be positive, got {step_size}")
+        steps = int(quantity / step_size)
+        return Decimal(steps) * step_size
 
     async def connect(self) -> None:
         """

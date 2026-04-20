@@ -4,6 +4,452 @@
 
 ---
 
+## 零、Task 15.2 主备代理自动切换经验（中国大陆 + VPN 弱网，2026-04-20）
+
+### 0.0 仅做“重连”不等于“可恢复”，代理故障需要独立状态机
+
+**问题描述**：  
+链路里已有指数退避和重连，但当单一代理节点抖动时，重连会持续命中同一故障出口，恢复速度仍慢且不稳定。
+
+**解决方案**：  
+- 新增统一 `ProxyFailoverController`，对主备代理维护失败计数与冷却窗口。  
+- 达到失败阈值后把当前代理放入冷却，自动切换到备代理。  
+- 冷却结束后自动恢复“主代理优先”。
+
+**经验**：  
+- 网络鲁棒性应分层：`重连`解决短断，`主备切换`解决出口故障。  
+- 这两者不能互相替代，必须并存。
+
+---
+
+### 0.1 代理切换必须跨链路共享，不然会出现“WS通但下单不通”
+
+**问题描述**：  
+若仅在 WebSocket 层做主备切换，Broker 下单和 REST 对齐仍可能继续走坏代理，导致系统状态不一致。
+
+**解决方案**：  
+- 同一 `ProxyFailoverController` 同时接入：  
+  - `PublicStreamManager`  
+  - `PrivateStreamManager`  
+  - `RESTAlignmentCoordinator`  
+  - `BinanceSpotDemoBroker`
+
+**经验**：  
+- 对交易系统而言，代理策略必须是“全链路一致策略”，不能只修单个组件。
+
+---
+
+### 0.2 测试断言应绑定业务常量，避免被“安全余量”演进击穿
+
+**问题描述**：  
+`binance_spot_demo_broker` 的时间戳签名引入了 `timestamp_safety_margin_ms`，旧测试硬编码时间戳常量导致误报失败。
+
+**解决方案**：  
+- 测试改为基于 `broker._timestamp_safety_margin_ms` 计算预期值，而非硬编码固定数字。
+
+**经验**：  
+- 对时间/限流/重试这类弹性参数，测试应使用“约束关系断言”或“配置派生值断言”，不要写死常量。
+
+---
+
+## 零、Task 15.1 补丁经验（reload 关闭链路与作用域陷阱，2026-04-20）
+
+### 0.0 路由函数改名后，生命周期调用点必须同步更新
+
+**问题描述**：  
+`strategies.py` 中清理函数已从 `shutdown_strategy_runtime()` 演进为 `shutdown_strategy_runtime_resources()`，但 `main.py` 仍调用旧名，导致 reload 退出阶段出现 warning。
+
+**解决方案**：  
+- `main.py` 统一调用新函数名。  
+- 在 `strategies.py` 保留旧名别名，做向后兼容（测试和历史调用不崩）。
+
+**经验**：  
+- 生命周期钩子与路由模块的函数名属于“软契约”，改名后必须全局检索并同步。  
+- 对外暴露过的函数建议保留一个兼容别名窗口，降低回归风险。
+
+---
+
+### 0.1 函数内 import 会把同名标识变成局部变量，类型注解也会中招
+
+**问题描述**：  
+`lifespan()` 内部 `from ... import BinanceConnector`，同时又在函数后部写了 `-> Optional[BinanceConnector]` 的注解。  
+当未进入 import 分支（如无 API Key）时，Python 仍将其视为局部变量，触发 `UnboundLocalError`。
+
+**解决方案**：  
+- 去掉函数内重复导入，只保留模块级导入的 `BinanceConnector`。  
+- 保持函数内仅导入额外配置类，避免同名遮蔽。
+
+**经验**：  
+- 在 Python 中，函数体内赋值/导入会改变名字绑定作用域。  
+- 对“可选分支导入 + 后续类型注解引用”组合要特别谨慎，容易在无分支场景爆雷。
+
+---
+
+## 零、Task 11-15 联调热修复经验 (2026-04-18)
+
+### 0.0 首连阶段也要使用指数退避，不能只覆盖重连环节
+
+**问题描述**：
+很多系统只在 `reconnect()` 路径做退避，而首次 `start()` 时仍是“单次连接失败即退出”。  
+在大陆/VPN 波动场景，这会让服务刚启动就进入失败分支。
+
+**解决方案**：
+- `PublicStream` 启动首连增加指数退避（含抖动）。
+- `PrivateStream ws-api` 增加“每个 endpoint 多次指数退避”。
+- 对时接口（`/v3/time`）同样加入指数退避，避免单次网络抖动导致时间校准失效。
+
+**经验**：
+- 连接鲁棒性要覆盖“首连 + 重连 + 辅助网络调用（time/listenKey）”三段，不可只做一段。
+- 退避策略建议统一为“指数 + 抖动”，减少同频重试风暴。
+
+---
+
+### 0.1 子类覆盖基类配置对象会破坏状态机约束
+
+**问题描述**：
+`PublicStreamManager` / `PrivateStreamManager` 继承 `BaseStreamFSM` 后，把 `self._config` 从 `StreamConfig` 覆盖成了业务配置对象。
+
+**后果**：
+- 基类方法 `_check_reconnect_storm()` 读取 `reconnect_window_seconds` 与 `max_reconnect_per_window` 时直接报属性不存在。
+- 表现为运行期反复出现 `Stale check error: ... reconnect_window_seconds`。
+
+**解决方案**：
+- 保持 `BaseStreamFSM._config` 只承载 `StreamConfig`。
+- 在子类引入独立字段（如 `self._public_config` / `self._private_config`）承载业务参数。
+
+**经验**：
+- 对框架型基类，受保护属性（`_config`）通常是“隐式契约”，子类不应复用同名字段改类型。
+
+---
+
+### 0.2 Ping 发出不等于 Pong 已确认
+
+**问题描述**：
+WS 心跳逻辑仅 `ping()` 不等待 `pong`，却用“距离上次 pong 的时间”判定超时，导致假阳性重连。
+
+**解决方案**：
+- 使用 `pong_waiter = await ws.ping()` + `await asyncio.wait_for(pong_waiter, timeout=...)`。
+- 仅在 pong waiter 成功后调用 `on_pong()` 更新最后 pong 时间。
+
+**经验**：
+- 心跳判定必须基于“已确认事件”，不能基于“已发送动作”。
+- 监控指标（超时次数/时间）应从确认信号导出，否则会产生噪声告警。
+
+---
+
+### 0.3 仅在 `.env` 写代理变量，不代表 aiohttp 会自动生效
+
+**问题描述**：
+跨境网络环境下，`.env` 已配置代理但 Binance 私有流依然直连失败。
+
+**根因**：
+- `aiohttp.ClientSession()` 默认 `trust_env=False`，不会自动读取系统/环境代理。
+- 私有流请求若未显式传 `proxy=...`，可能绕过代理。
+
+**解决方案**：
+- 在会话层开启 `trust_env=True`。
+- 请求层统一传入解析后的代理（`BINANCE_PROXY_URL > BINANCE_PROXY > HTTPS_PROXY > HTTP_PROXY`）。
+- 启动关键路径（listenKey 创建）增加指数退避重试，适配 VPN 抖动。
+
+**经验**：
+- “配置存在”与“调用链消费该配置”是两件事，必须在代码路径逐层验证。
+- 对交易链路的启动前置步骤（如 listenKey），不能使用单次尝试。
+
+---
+
+### 0.4 空闲账户不等于断流：`30s recv timeout` 容易制造假故障
+
+**问题描述**：
+私有流接收循环使用 `asyncio.wait_for(ws.recv(), timeout=30)`。  
+在没有新订单/成交的正常空闲期，`recv()` 无消息返回会被当成“断流”，导致每 30 秒触发一次重连。
+
+**解决方案**：
+- 接收循环改为阻塞 `await ws.recv()`，不再用固定超时做存活判定。
+- 存活统一交给 `ping/pong` 与 `ConnectionClosed` 处理。
+
+**经验**：
+- “无业务消息”与“连接失活”是两个维度，不能用同一超时直接等价。
+- 对交易私有流，空闲常态下应优先心跳判活而不是消息频率判活。
+
+---
+
+### 0.5 `stale_data` 判定需要事件门槛（首次成交前不应触发）
+
+**问题描述**：
+`stale_check` 直接用 `last_data_ts` 判断“距离上次成交超过阈值”，但系统刚启动且从未有成交时，该值会自然超时并触发重连。
+
+**解决方案**：
+- 新增事件门槛标记：`_has_seen_execution_report` / `_has_seen_user_event`。
+- 只有“至少收到过一次对应事件”后，才开启对应 stale 检测。
+
+**经验**：
+- 时间窗口规则必须配合“样本是否已出现”的前置条件，否则冷启动阶段会误报。
+- 对弱网环境，先降噪再恢复，是稳定性的第一优先级。
+
+---
+
+### 0.6 第三方库也可能有“握手竞态”，要准备运行时兼容兜底
+
+**问题描述**：
+在 `websockets 16.0` + 弱网代理场景，TCP reset 可能发生在 `connection_made` 前。  
+此时库内部 `connection_lost()` 访问尚未初始化的 `recv_messages`，抛出：
+`AttributeError: 'ClientConnection' object has no attribute 'recv_messages'`。
+
+**解决方案**：
+- 短期：在应用启动时为 `websockets 16.0` 注入兼容补丁，给缺失字段提供 no-op 关闭器，避免异常风暴。
+- 中期：依赖版本收敛到稳定区间（`websockets>=12,<16`），减少再次命中该竞态。
+
+**经验**：
+- 外部库异常不应直接冲垮业务可观测性，必要时要做“版本治理 + 运行时兼容”双保险。
+- 弱网环境下先保证日志可读性，才能继续定位真实业务问题。
+
+---
+
+### 0.7 “异常被吞掉”会制造假象：看似在对时，实际没有对上
+
+**问题描述**：
+`RESTAlignment._sync_server_time_offset()` 内部使用 `aiohttp.ClientTimeout`，但函数体缺少 `aiohttp` 导入。  
+由于外层 `except Exception: return`，最终表现为“日志持续 -1021，代码看起来又在对时重试”。
+
+**解决方案**：
+- 在函数内显式导入 `aiohttp`。
+- 保留失败不阻断主流程，但增加 warning 日志确保可观测。
+
+**经验**：
+- 容错分支里如果全吞异常，必须配合最小可观测日志，否则排障成本会非常高。
+
+---
+
+### 0.8 跨境弱网下，`recvWindow` 需要可配置且可自适应
+
+**问题描述**：
+固定 `recvWindow` 在代理抖动时容易反复触发 `-1021`，尤其是重试链路叠加延迟时。
+
+**解决方案**：
+- 增加 `BINANCE_RECV_WINDOW_MS` 配置入口（范围 1000~60000）。
+- `-1021` 触发后，重试中逐步放大 `recvWindow` 到上限 60000，并先对时后重签名再请求。
+
+**经验**：
+- 交易 API 的签名窗口是“网络参数”，不应硬编码为单一值。
+- 在大陆/VPN 场景，参数可调 + 自适应比“固定最佳值”更可靠。
+
+---
+
+### 0.9 兼容补丁不要只挂在入口文件，连接模块也要就地安装
+
+**问题描述**：
+仅在 `main` 入口安装第三方库兼容补丁时，某些重载/子进程路径可能绕过该入口，导致线上仍偶发同类异常。
+
+**解决方案**：
+- 提取独立 `websockets_compat` 模块，补丁逻辑幂等化。
+- 在 `public_stream` / `private_stream` 模块导入时就安装 guard，确保连接组件路径必经。
+
+**经验**：
+- 对“基础设施级”兼容逻辑，建议放在最靠近使用点的位置安装，减少路径依赖。
+- 幂等安装是前提，否则热重载会引入重复 patch 风险。
+
+---
+
+### 0.10 对账线程与交易主链路必须共享同一网络参数
+
+**问题描述**：
+主链路已经读取代理参数，但 Reconciler 的 `exchange_orders_getter` 创建 broker 时未显式透传代理与窗口参数，导致线程间网络表现不一致。
+
+**解决方案**：
+- 在 `main` 统一解析 `proxy_url`、`recvWindow`，并传入 `BinanceSpotDemoBrokerConfig.for_demo/for_testnet`。
+
+**经验**：
+- “同一交易所、不同子线程”的网络与签名参数要统一管理，否则会出现“主链路通、对账链路不通”的隐蔽故障。
+
+---
+
+### 0.11 “仅本项目订单对账”必须落在周期主路径，而不是只在手动触发路径
+
+**问题描述**：
+虽然设计上要求“只对账本项目发出的订单”，但周期任务 `_exchange_orders_getter` 仍返回交易所全量 open orders，导致历史测试单（如 `spot_test_*`）持续触发 `PHANTOM`。
+
+**解决方案**：
+- 在周期对账主路径增加 owned-order 过滤：
+  - 保留本地 OMS 已存在的 `cl_ord_id`
+  - 保留命中 `strategy_id_` 前缀的订单（本地状态丢失时仍可追踪）
+  - 过滤其余外部订单
+- 增加开关与扩展前缀配置：
+  - `RECONCILER_FILTER_EXTERNAL_ORDERS`（默认开启）
+  - `RECONCILER_OWNED_ORDER_PREFIXES`（自定义前缀）
+
+---
+
+### 0.12 私有流 ws-api 端点不能跨环境盲试
+
+**问题描述**：
+私有流在未显式配置 `ws_api_urls` 时，按 demo/prod/testnet 依次轮询握手。
+在大陆弱网 + 代理波动场景下，跨环境轮询会把冷启动时间拉长，并制造大量误导性失败日志。
+
+**解决方案**：
+- `PrivateStreamManager._resolve_ws_api_urls()` 改为按 `rest_url` 自动推断环境：
+  - `demo-api.binance.com` → `demo-ws-api.binance.com`
+  - `testnet.binance.vision` → `ws-api.testnet.binance.vision`
+  - 其他 → `ws-api.binance.com`
+- 保留 `BINANCE_WS_API_URL` / `BINANCE_WS_API_URLS` 的显式覆盖优先级。
+
+**经验**：
+- 交易所多环境共存时，端点选择必须“环境同源”，否则问题会被放大成网络故障。
+- 对弱网链路，先减少无效尝试，再增加重试，是更稳的策略。
+
+**经验**：
+- 同一需求若有“手动触发”与“周期任务”两条路径，过滤策略必须在两条路径都生效。
+- 对账噪声会掩盖真实异常，先降噪再告警更符合生产可观测性。
+
+---
+
+### 0.4 外部依赖不可用时要“降级可运行”，而不是“一票否决”
+
+**问题描述**：
+Binance 私有流 listenKey 接口返回 410 时，连接器启动失败，导致整个自动化主链路不可用。
+
+**解决方案**：
+- 连接器启动拆分为“核心能力”和“增强能力”：
+  - 核心能力（Public Stream + 调度）必须尽量可用；
+  - 增强能力（Private Stream）失败时进入 DEGRADED，不阻断服务启动。
+
+**经验**：
+- 面向真实网络环境（尤其跨境/VPN）时，控制面应优先保障可用性，再逐步恢复完整性。
+
+---
+
+### 0.5 Binance 私有流已转向 ws-api 签名订阅，事件结构不同
+
+**问题描述**：
+Demo 环境 `userDataStream` listenKey 接口返回 410，且 ws-api 消息结构与 legacy 私有流不同。
+
+**关键差异**：
+- legacy: 顶层直接是业务事件（如 `executionReport`）
+- ws-api: `{"subscriptionId": ..., "event": {...}}`
+
+**解决方案**：
+- 私有流实现双栈：`ws_api_signature` 优先，`legacy_listen_key` 兜底
+- 消息解析层兼容两种结构，统一下游订单/成交处理
+
+**经验**：
+- 当交易所推荐链路发生变更时，优先做“协议适配层”而不是全链路重写。
+
+---
+
+### 0.6 WebSocket 握手阶段不能和接收循环并发 `recv()`
+
+**问题描述**：
+先启动 receive loop，再在订阅握手里 `recv()` 应答，会触发并发读取冲突（`cannot call recv while another coroutine is already running recv`）。
+
+**解决方案**：
+- 连接建立后先完成握手订阅，再启动统一 receive loop
+- 通过 `_recv_task` 单例化，保证任一时刻仅一个协程读取 WebSocket
+
+**经验**：
+- WebSocket 客户端的读取协程必须全局唯一，这是连接稳定性的硬约束。
+
+---
+
+### 0.7 跨境网络下应对重连风暴：指数退避必须加 jitter
+
+**问题描述**：
+纯指数退避在多实例场景会出现“同频重连”，放大代理/VPN 抖动造成的瞬时拥塞。
+
+**解决方案**：
+- 在 Public/Private 重连路径增加抖动参数（`reconnect_jitter_ratio`、`reconnect_jitter_max_seconds`）
+- 日志同时输出 `base delay` 与 `jittered delay`，便于排障
+
+**经验**：
+- 退避不是只看“有没有指数回退”，还要看“是否去同频”。
+- 网络脆弱环境下，jitter 是稳定性刚需，不是优化项。
+
+---
+
+### 0.8 运行期健康要看“成功率”，不只看“当前连接状态”
+
+**问题描述**：
+仅看 CONNECTED/ERROR 无法判断私有流是否在频繁重订阅、失败后回退。
+
+**解决方案**：
+- 扩展私有流状态，输出订阅质量指标：
+  - `ws_api_subscribe_attempts`
+  - `ws_api_subscribe_success`
+  - `ws_api_subscribe_failures`
+  - `ws_api_subscribe_success_rate`
+  - `legacy_fallback_count`
+
+**经验**：
+- “状态”适合告警，“成功率”适合运营与调优，两者缺一不可。
+
+---
+
+### 0.9 签名 REST 重试必须重建 timestamp，不能复用首次参数
+
+**问题描述**：
+重试沿用首次构造的 `timestamp`，在网络抖动+退避后容易超出 `recvWindow`，触发 `-1021`。
+
+**解决方案**：
+- 每次重试都重新生成签名参数（`timestamp` + `recvWindow` + `signature`）
+- 遇到 `-1021` 时先做服务端对时，再继续重试
+
+**经验**：
+- 对“带时效签名”的接口，重试要重新签名，这是协议级要求。
+
+---
+
+### 0.10 私有流“无成交事件”不等于连接陈旧
+
+**问题描述**：
+在 ws-api 私有流中，若账户无成交活动，长时间没有 `executionReport` 是正常现象；若按“无成交超时”判 stale，会制造假重连。
+
+**解决方案**：
+- ws-api 模式下关闭成交事件 stale 判定，主要依赖 ping/pong 与断线错误驱动重连
+
+**经验**：
+- 健康判定必须和流语义匹配，不能沿用另一协议路径的假设。
+
+---
+
+### 0.11 启动编排必须支持“失败即回滚”，否则 reload 容易泄漏资源
+
+**问题描述**：
+连接器启动过程中若某个子组件失败（例如 public stream 握手超时），若只抛异常不回滚，已创建的 session 会在 reload 场景下泄漏。
+
+**解决方案**：
+- 启动流程采用事务化思路：任一步失败时无条件 `stop private/public/rest` 回滚。
+- 即使部分组件未完全启动，`stop()` 也要幂等可重入。
+
+**经验**：
+- 对多组件启动链路，`start` 和 `stop` 必须成对设计，失败路径与成功路径同等重要。
+
+---
+
+### 0.12 ws-api 私有流空闲是常态，不能用 fixed recv timeout 驱动重连
+
+**问题描述**：
+ws-api 私有流在账户无事件时长时间静默，若固定 `recv timeout=30s` 会触发虚假 stale 与重连风暴。
+
+**解决方案**：
+- `ws_api_signature` 模式改为 `await ws.recv()` 阻塞读取
+- 连接健康主要由 ping/pong 与连接关闭异常判定
+
+**经验**：
+- “事件静默”与“链路失活”必须分开处理，策略不同。
+
+---
+
+### 0.13 同协议链路优先对时，减少跨通道依赖
+
+**问题描述**：
+ws-api 订阅前若依赖 REST `/v3/time` 对时，在 REST 抖动时会放大失败面。
+
+**解决方案**：
+- 先用 ws-api `time` 对时；失败再回退 REST 对时
+
+**经验**：
+- 同一协议内自洽（ws-api->ws-api）通常比跨协议（ws-api->REST）更稳。
+
+---
+
 ## 一、代码质量经验
 
 ### 1.1 PostgreSQLStorage API 契约与调用方不匹配问题

@@ -65,6 +65,11 @@ from trader.adapters.binance.degraded_cascade import (
     CascadeMetrics,
     CascadeState,
 )
+from trader.adapters.binance.proxy_failover import (
+    ProxyFailoverConfig,
+    ProxyFailoverController,
+    get_proxy_failover_controller,
+)
 
 
 __all__ = [
@@ -112,4 +117,8 @@ __all__ = [
     "CascadeConfig",
     "CascadeMetrics",
     "CascadeState",
+    # Proxy Failover
+    "ProxyFailoverConfig",
+    "ProxyFailoverController",
+    "get_proxy_failover_controller",
 ]

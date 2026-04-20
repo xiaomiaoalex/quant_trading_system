@@ -128,7 +128,8 @@ Insight Plane
 | 风控穿透验证与策略正期望证明 | **Next** | Phase 7 计划，验证风控真的改变下单结果 |
 | Qlib 离线研究引擎接入 | **Next** | 仅用于 Insight 研究域，输出版本化预测信号 |
 | Hermes 研究编排接入 | **Next** | 仅用于研发自动化，不进入生产执行链路 |
-| Runner 主执行链路（自动执行） | Current | StrategyRunner已实现 |
+| **策略自动交易闭环（实盘）** | **Current ✅** | **Task 11-15 完成（2026-04-20）：实时行情订阅 → tick调度 → 信号生成 → OMS回调 → 真实下单 → 成交回调 → 幂等保护 → 安全闸门** |
+| Runner 主执行链路（自动执行） | Current | StrategyRunner已实现，支持tick驱动与OMS回调 |
 | 中国 A 股实盘适配器 | Deferred | 当前只保留接口契约 |
 | 多交易所套利 / 高频做市 | Deferred | 明确不纳入当前版本 |
 

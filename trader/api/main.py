@@ -5,6 +5,7 @@ Main application entry point for the Systematic Trader Control Plane API.
 
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -56,6 +57,38 @@ from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
+
+def _configure_trader_logging() -> None:
+    """
+    为 trader.* 日志配置统一毫秒时间戳格式。
+
+    - 仅作用于 `trader` 命名空间日志
+    - 幂等安装，避免 --reload 时重复 handler
+    """
+    trader_logger = logging.getLogger("trader")
+    trader_logger.setLevel(logging.INFO)
+
+    for handler in trader_logger.handlers:
+        if getattr(handler, "_qts_trader_ts_handler", False):
+            return
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    handler._qts_trader_ts_handler = True  # type: ignore[attr-defined]
+    trader_logger.addHandler(handler)
+    trader_logger.propagate = False
+
+
+_configure_trader_logging()
+
+# 全局 BinanceConnector 实例（用于成交回调）
+_binance_connector_instance: Optional[Any] = None
+
 _BUILTIN_STRATEGIES = [
     StrategyRegisterRequest(
         strategy_id="ema_cross_btc",
@@ -94,7 +127,102 @@ def _seed_strategies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _binance_connector_instance
+
+    # 初始化策略
     _seed_strategies()
+
+    # ================================================================
+    # BinanceConnector 初始化（用于成交回调）
+    # ================================================================
+    # 检查是否启用 Binance 连接
+    api_key = os.environ.get("BINANCE_API_KEY")
+    secret_key = os.environ.get("BINANCE_SECRET_KEY")
+
+    if api_key and secret_key:
+        try:
+            from trader.adapters.binance.connector import (
+                BinanceConnectorConfig,
+            )
+
+            # 根据 BINANCE_ENV 统一 connector 的 REST/WS 环境
+            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
+            from trader.adapters.binance.public_stream import PublicStreamConfig
+            from trader.adapters.binance.private_stream import PrivateStreamConfig
+            from trader.adapters.binance.rest_alignment import AlignmentConfig
+
+            if binance_env in ("demo",):
+                # Binance Spot Demo 环境
+                config = BinanceConnectorConfig(
+                    testnet=True,
+                    public_stream_config=PublicStreamConfig(
+                        base_url="wss://demo-stream.binance.com/ws",
+                    ),
+                    private_stream_config=PrivateStreamConfig(
+                        base_url="wss://demo-stream.binance.com/ws",
+                        rest_url="https://demo-api.binance.com/api",
+                    ),
+                    alignment_config=AlignmentConfig(
+                        base_url="https://demo-api.binance.com/api",
+                    ),
+                )
+            elif binance_env in ("testnet", "test"):
+                config = BinanceConnectorConfig(
+                    testnet=True,
+                    public_stream_config=PublicStreamConfig(
+                        base_url="wss://stream.testnet.binance.vision/ws",
+                    ),
+                    private_stream_config=PrivateStreamConfig(
+                        base_url="wss://stream.testnet.binance.vision/ws",
+                        rest_url="https://testnet.binance.vision/api",
+                    ),
+                    alignment_config=AlignmentConfig(
+                        base_url="https://testnet.binance.vision/api",
+                    ),
+                )
+            else:
+                # 生产环境
+                config = BinanceConnectorConfig(testnet=False)
+
+            # 创建 connector
+            connector = BinanceConnector(
+                api_key=api_key,
+                secret_key=secret_key,
+                config=config,
+            )
+
+            # 注册成交回调处理器（先确保 handler 已初始化）
+            from trader.api.routes.strategies import ensure_fill_handler_ready
+            fill_handler = await ensure_fill_handler_ready()
+            if fill_handler is not None:
+                connector.register_fill_handler(fill_handler)
+                logger.info("[Lifespan] Fill handler registered to connector")
+            else:
+                logger.warning("[Lifespan] Fill handler not available yet")
+
+            # 启动 connector（会启动 public 和 private streams）
+            await connector.start()
+            _binance_connector_instance = connector
+            logger.info(
+                "[Lifespan] BinanceConnector started: env=%s public_ws=%s private_ws=%s private_rest=%s align_rest=%s",
+                binance_env,
+                config.public_stream_config.base_url if config.public_stream_config else "default",
+                config.private_stream_config.base_url if config.private_stream_config else "default",
+                config.private_stream_config.rest_url if config.private_stream_config else "default",
+                config.alignment_config.base_url if config.alignment_config else "default",
+            )
+
+            # 注入 connector 到策略编排器
+            from trader.api.routes.strategies import set_strategy_orchestrator_connector
+            set_strategy_orchestrator_connector(connector)
+        except Exception as e:
+            logger.exception(
+                "[Lifespan] Failed to start BinanceConnector: type=%s repr=%r",
+                type(e).__name__,
+                e,
+            )
+    else:
+        logger.info("[Lifespan] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping connector")
 
     async def _local_orders_getter() -> List[Dict[str, Any]]:
         try:
@@ -145,30 +273,31 @@ async def lifespan(app: FastAPI):
                 return []
 
             recv_window = get_binance_recv_window()
-            config = BinanceSpotDemoBrokerConfig.for_demo(
-                api_key,
-                secret_key,
-                recv_window=recv_window,
-            )
+            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
+            if binance_env in ("testnet", "test"):
+                config = BinanceSpotDemoBrokerConfig.for_testnet(
+                    api_key,
+                    secret_key,
+                    recv_window=recv_window,
+                )
+            else:
+                config = BinanceSpotDemoBrokerConfig.for_demo(
+                    api_key,
+                    secret_key,
+                    recv_window=recv_window,
+                )
             broker = BinanceSpotDemoBroker(config)
             await broker.connect()
             try:
                 broker_orders = await broker.get_open_orders()
                 prefixes = get_reconciler_exchange_client_order_prefixes()
                 if prefixes:
-                    before_count = len(broker_orders)
                     broker_orders = [
                         order
                         for order in broker_orders
                         if order.client_order_id
                         and any(order.client_order_id.startswith(prefix) for prefix in prefixes)
                     ]
-                    logger.info(
-                        "[Reconciler] Applied exchange order prefix filter: prefixes=%s, before=%s, after=%s",
-                        prefixes,
-                        before_count,
-                        len(broker_orders),
-                    )
                 return [
                     {
                         "client_order_id": order.client_order_id,
@@ -186,28 +315,8 @@ async def lifespan(app: FastAPI):
             logger.error(f"[Reconciler] exchange_orders_getter failed: {e}")
             return []
 
-    _connector: Optional[BinanceConnector] = None
-
-    api_key = os.environ.get("BINANCE_API_KEY")
-    secret_key = os.environ.get("BINANCE_SECRET_KEY")
-
-    if api_key and secret_key:
-        try:
-            _connector = BinanceConnector(
-                api_key=api_key,
-                secret_key=secret_key,
-                streams=["btcusdt@trade", "btcusdt@kline_1m"],
-            )
-            await _connector.start()
-            logger.info("[Main] BinanceConnector started")
-        except Exception as e:
-            logger.error(f"[Main] Failed to start BinanceConnector: {e}")
-            _connector = None
-    else:
-        logger.warning("[Main] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping BinanceConnector")
-
     def _connector_getter() -> Optional[BinanceConnector]:
-        return _connector
+        return _binance_connector_instance
 
     reconciler_service = reconciler.get_reconciler_service()
 
@@ -223,7 +332,6 @@ async def lifespan(app: FastAPI):
         if external_count > 0:
             return ownership_registry.get_external_order_ids()
         return set()
-
     # 检查是否启用交易所对账
     if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
         logger.info("[Reconciler] Exchange reconciliation disabled")
@@ -246,15 +354,17 @@ async def lifespan(app: FastAPI):
         connection_manager=_connection_manager,
         connector_getter=_connector_getter,
     )
-
     yield
     try:
-        await strategies.shutdown_strategy_runtime()
+        await strategies.shutdown_strategy_runtime_resources()
     except Exception as e:
         logger.error(f"[Main] Failed to shutdown strategy runtime: {e}")
-    if _connector:
-        await _connector.stop()
-        logger.info("[Main] BinanceConnector stopped")
+    if _binance_connector_instance is not None:
+        try:
+            await _binance_connector_instance.stop()
+            logger.info("[Lifespan] BinanceConnector stopped")
+        except Exception as e:
+            logger.error(f"[Lifespan] Error stopping BinanceConnector: {e}")
     await _heartbeat_service.stop()
     await _connection_manager.stop()
     await reconciler_service.stop()

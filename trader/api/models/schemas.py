@@ -40,6 +40,48 @@ class StrategyRegisterRequest(BaseModel):
     language: str = "python"
 
 
+class StrategyCodeVersion(BaseModel):
+    """策略代码版本"""
+    strategy_id: str
+    code_version: int
+    code: str
+    checksum: str
+    created_at: Optional[str] = None
+    created_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class StrategyCodeCreateRequest(BaseModel):
+    """策略代码新建/保存请求"""
+    strategy_id: str
+    code: str = Field(..., min_length=1)
+    name: Optional[str] = None
+    description: Optional[str] = None
+    created_by: str = "console_user"
+    notes: Optional[str] = None
+    register_if_missing: bool = True
+
+
+class StrategyCodeDebugRequest(BaseModel):
+    """策略代码调试请求"""
+    strategy_id: Optional[str] = None
+    code: str = Field(..., min_length=1)
+    config: Dict[str, Any] = Field(default_factory=dict)
+    sample_market_data: Optional[List[Dict[str, Any]]] = None
+
+
+class StrategyCodeDebugResponse(BaseModel):
+    """策略代码调试响应"""
+    ok: bool
+    syntax_ok: bool
+    protocol_ok: bool
+    validation_status: Optional[str] = None
+    checksum: Optional[str] = None
+    signals: List[Dict[str, Any]] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
 class StrategyVersion(BaseModel):
     """策略版本"""
     strategy_id: str
@@ -156,6 +198,7 @@ class BacktestRequest(BaseModel):
     end_ts_ms: int = Field(..., description="End timestamp in milliseconds")
     venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     requested_by: str
+    strategy_code_version: Optional[int] = None
 
 
 class BacktestRun(BaseModel):
@@ -167,6 +210,7 @@ class BacktestRun(BaseModel):
     symbols: List[str]
     start_ts_ms: int
     end_ts_ms: int
+    strategy_code_version: Optional[int] = None
     metrics: Optional[Dict[str, Any]] = None
     artifact_ref: Optional[str] = None
     created_at: Optional[str] = None

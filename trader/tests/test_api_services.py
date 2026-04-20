@@ -217,6 +217,14 @@ class TestBacktestService:
         """Setup for each test"""
         self.storage = reset_storage()
         self.service = BacktestService(self.storage)
+        self.storage.create_strategy(
+            {
+                "strategy_id": "strat_001",
+                "name": "Test Strategy",
+                "entrypoint": "trader.strategies.ema_cross_btc",
+                "description": "for backtest service tests",
+            }
+        )
 
     def test_create_backtest(self):
         """Test creating a backtest"""
@@ -231,7 +239,7 @@ class TestBacktestService:
         )
         backtest = self.service.create_backtest(request)
         assert backtest.run_id is not None
-        assert backtest.status == "RUNNING"
+        assert backtest.status == "PENDING"
 
     def test_get_backtest(self):
         """Test getting a backtest"""
@@ -616,6 +624,22 @@ class TestEventService:
         )
         result = self.service.trigger_replay(request)
         assert result.ok is True
+
+    def test_run_replay_returns_summary(self):
+        """Test replay execution summary for existing event stream."""
+        self.storage.append_event(
+            {
+                "stream_key": "orders",
+                "event_type": "ORDER_CREATED",
+                "trace_id": "trace-service-1",
+                "ts_ms": 1700000000000,
+                "payload": {"client_order_id": "svc-ord-1"},
+            }
+        )
+        request = ReplayRequest(stream_key="orders", requested_by="admin")
+        summary = asyncio.run(self.service.run_replay(request))
+        assert summary["stream_key"] == "orders"
+        assert summary["events_total"] >= 1
 
 
 class TestKillSwitchService:

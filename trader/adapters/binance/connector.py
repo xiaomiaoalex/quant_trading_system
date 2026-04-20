@@ -31,6 +31,7 @@ from trader.adapters.binance.private_stream import (
     PrivateStreamManager, PrivateStreamConfig,
     BinanceCredentials, RawOrderUpdate, RawFillUpdate, ListenKeyEndpointGoneError
 )
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.adapters.binance.rest_alignment import (
     RESTAlignmentCoordinator, AlignmentConfig, RestAlignmentSnapshot
 )
@@ -100,6 +101,7 @@ class BinanceConnector:
 
         self._rate_budget = RestRateBudget(self._config.rate_budget_config)
         self._backoff = BackoffController(self._config.backoff_config)
+        self._proxy_failover = get_proxy_failover_controller()
 
         public_streams = streams or ["btcusdt@trade", "btcusdt@kline_1m"]
         public_config = self._config.public_stream_config or PublicStreamConfig(
@@ -151,6 +153,7 @@ class BinanceConnector:
 
         self._health_check_task: Optional[asyncio.Task] = None
         self._private_stream_disabled_reason: Optional[str] = None
+        self._private_stream_available: bool = True
 
     def register_order_handler(self, handler: Callable[[RawOrderUpdate], None]) -> None:
         """注册订单更新处理器"""
@@ -185,25 +188,33 @@ class BinanceConnector:
             await self._public_manager.start()
             try:
                 await self._private_manager.start()
+                self._private_stream_available = True
+                self._private_stream_disabled_reason = None
             except ListenKeyEndpointGoneError as e:
                 # Binance legacy listenKey endpoints are retired; continue with Public+REST in degraded mode.
+                self._private_stream_available = False
                 self._private_stream_disabled_reason = str(e)
                 await self._private_manager.stop()
                 logger.warning(
                     "[BinanceConnector] Private stream disabled due to listenKey endpoint retirement: %s",
                     e,
                 )
-            except Exception:
-                # Ensure partially started private manager resources are released before bubbling up.
+            except Exception as e:
+                # 某些环境下私有流可能受限，降级为 Public+REST，保持主流程可运行。
+                self._private_stream_available = False
+                self._private_stream_disabled_reason = str(e)
                 await self._private_manager.stop()
-                raise
+                logger.warning(
+                    "[BinanceConnector] Private stream unavailable, running in degraded mode: %s",
+                    e,
+                )
 
             self._health_check_task = asyncio.create_task(self._health_check_loop())
 
-            if self._private_stream_disabled_reason:
-                logger.info("[BinanceConnector] Started in DEGRADED mode (private stream unavailable)")
-            else:
-                logger.info("[BinanceConnector] Started")
+            logger.info(
+                "[BinanceConnector] Started (private_stream_available=%s)",
+                self._private_stream_available,
+            )
         except Exception:
             await self._safe_stop_started_components()
             self._running = False
@@ -311,10 +322,14 @@ class BinanceConnector:
         private_state = self._private_manager.state
 
         public_healthy = public_state == StreamState.CONNECTED
-        private_healthy = private_state == StreamState.CONNECTED
+        private_healthy = (
+            private_state == StreamState.CONNECTED if self._private_stream_available else False
+        )
         rest_metrics = self._rest_coordinator.get_metrics()
         last_rest_success_ts = rest_metrics.get("last_rest_success_ts_ms", 0)
-        rest_healthy = last_rest_success_ts > 0 and (time.time() * 1000 - last_rest_success_ts) < 60000
+        rest_healthy = (
+            last_rest_success_ts > 0 and (time.time() * 1000 - last_rest_success_ts) < 60000
+        ) or rest_metrics.get("total_alignments", 0) > 0
 
         if self._private_stream_disabled_reason:
             if public_healthy and rest_healthy:
@@ -347,6 +362,7 @@ class BinanceConnector:
                 "public": self._public_manager.get_status(),
                 "private": self._private_manager.get_status(),
                 "rest": rest_metrics,
+                "proxy_failover": self._proxy_failover.get_state(),
                 "private_stream_disabled_reason": self._private_stream_disabled_reason,
             }
         )
