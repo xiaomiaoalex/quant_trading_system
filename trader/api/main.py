@@ -59,10 +59,78 @@ from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
+import re
+
+
+# ANSI 颜色代码
+class LogColors:
+    """日志颜色定义"""
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    # 级别颜色
+    INFO = "\033[92m"      # 绿色
+    WARNING = "\033[93m"   # 黄色
+    ERROR = "\033[91m"     # 红色
+    CRITICAL = "\033[95m"  # 紫色
+    # 字段颜色
+    STRATEGY = "\033[94m"  # 蓝色
+    ORDER = "\033[96m"      # 青色
+    SYMBOL = "\033[95m"    # 紫色
+    PRICE = "\033[92m"     # 绿色
+    QTY = "\033[93m"       # 黄色
+    SIDE = "\033[93m"      # 黄色
+
+
+class ColoredFormatter(logging.Formatter):
+    """
+    带颜色的日志格式化器。
+
+    根据日志级别和消息内容中的字段自动着色：
+    - strategy=xxx → 蓝色
+    - order=cl_ord_id → 青色
+    - symbol=BTCUSDT → 紫色
+    - price/qty=xxx → 绿色/黄色
+    - ERROR/WARNING 级别 → 对应颜色
+    """
+
+    LEVEL_COLORS = {
+        "INFO": LogColors.INFO,
+        "WARNING": LogColors.WARNING,
+        "ERROR": LogColors.ERROR,
+        "CRITICAL": LogColors.CRITICAL,
+    }
+
+    FIELD_PATTERNS = [
+        # (pattern_regex, replacement_template)
+        (r"(strategy)=(\w+)", rf"\1={LogColors.STRATEGY}\2{LogColors.RESET}"),
+        (r"(order|cl_ord_id|exec_id)=(\S+)", rf"\1={LogColors.ORDER}\2{LogColors.RESET}"),
+        (r"(symbol)=(\S+)", rf"\1={LogColors.SYMBOL}\2{LogColors.RESET}"),
+        (r"(price|avg_price|fill_price)=([\d.]+)", rf"\1={LogColors.PRICE}\2{LogColors.RESET}"),
+        (r"(qty|quantity|fill_qty)=([\d.]+)", rf"\1={LogColors.QTY}\2{LogColors.RESET}"),
+        (r"(side)=(\w+)", rf"\1={LogColors.SIDE}\2{LogColors.RESET}"),
+    ]
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+
+        # 替换级别颜色
+        level_color = self.LEVEL_COLORS.get(record.levelname, "")
+        if level_color:
+            formatted = formatted.replace(
+                record.levelname,
+                f"{level_color}{record.levelname}{LogColors.RESET}"
+            )
+
+        # 替换消息中的字段颜色
+        for pattern, replacement in self.FIELD_PATTERNS:
+            formatted = re.sub(pattern, replacement, formatted)
+
+        return formatted
+
 
 def _configure_trader_logging() -> None:
     """
-    为 trader.* 日志配置统一毫秒时间戳格式。
+    为 trader.* 日志配置统一毫秒时间戳格式和颜色输出。
 
     - 仅作用于 `trader` 命名空间日志
     - 幂等安装，避免 --reload 时重复 handler
@@ -75,12 +143,10 @@ def _configure_trader_logging() -> None:
             return
 
     handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter(
-            fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
+    handler.setFormatter(ColoredFormatter(
+        fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
     handler._qts_trader_ts_handler = True  # type: ignore[attr-defined]
     trader_logger.addHandler(handler)
     trader_logger.propagate = False
