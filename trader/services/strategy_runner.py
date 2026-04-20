@@ -412,7 +412,12 @@ class StrategyRunner:
             "last_tick_at": int(info.last_tick_at.timestamp() * 1000) if info.last_tick_at else None,
         }
         try:
-            await self._runtime_state_storage.save_strategy_runtime_state(state)
+            # Task 18: Handle both sync and async storage backends
+            save_fn = self._runtime_state_storage.save_strategy_runtime_state
+            if asyncio.iscoroutinefunction(save_fn):
+                await save_fn(state)
+            else:
+                save_fn(state)
         except Exception as e:
             logger.error(f"[StrategyRunner] Failed to persist runtime state for {strategy_id}: {e}")
 
