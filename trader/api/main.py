@@ -299,12 +299,14 @@ async def lifespan(app: FastAPI):
                         if order.client_order_id
                         and any(order.client_order_id.startswith(prefix) for prefix in prefixes)
                     ]
-                    logger.info(
-                        "[Reconciler] Applied exchange order prefix filter: prefixes=%s, before=%s, after=%s",
-                        prefixes,
-                        before_count,
-                        len(broker_orders),
-                    )
+                    # 仅在过滤实际产生影响时记录日志
+                    if before_count != len(broker_orders):
+                        logger.info(
+                            "[Reconciler] Applied exchange order prefix filter: prefixes=%s, before=%s, after=%s",
+                            prefixes,
+                            before_count,
+                            len(broker_orders),
+                        )
                 return [
                     {
                         "client_order_id": order.client_order_id,
