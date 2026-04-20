@@ -136,10 +136,16 @@ export function useSSE(
         connect()
       }, reconnectDelay)
     }
-  }, [channels.join(",")]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [channels.join(","), onUpdate, onMessage, onOpen, onError, debug, reconnectDelay]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Connect on mount, disconnect on unmount
   useEffect(() => {
+    // Guard against SSR - EventSource is not available in Node.js
+    if (typeof window === 'undefined') {
+      if (debug) console.log('[SSE] Skipping connect - SSR environment')
+      return
+    }
+
     connect()
 
     return () => {

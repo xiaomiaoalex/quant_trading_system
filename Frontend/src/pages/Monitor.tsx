@@ -19,10 +19,11 @@ export function Monitor() {
     ['monitor'],
     () => {
       // Invalidate monitor queries when SSE update is received
+      console.log('[Monitor] SSE update received, invalidating queries')
       queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
       queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
     },
-    { debug: false }
+    { debug: true }
   )
 
   // Data hooks
