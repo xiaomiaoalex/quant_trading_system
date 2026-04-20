@@ -166,10 +166,14 @@ class MonitorService:
     def _evaluate_rule(
         self,
         rule: AlertRule,
-        metric_value: float,
+        metric_value: Optional[float],
         now: datetime,
     ) -> Optional[Alert]:
         """评估单个告警规则"""
+        # Task 19: Skip evaluation if metric value is None
+        if metric_value is None:
+            return None
+
         # 检查冷却时间
         if rule.rule_name in self._triggered_alerts:
             triggered = self._triggered_alerts[rule.rule_name]

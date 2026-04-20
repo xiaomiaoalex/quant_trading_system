@@ -379,8 +379,8 @@ async def lifespan(app: FastAPI):
                         state["recovery_error"] = str(e)
                         storage.save_strategy_runtime_state(state)
 
-            # 执行恢复（延迟到事件循环完全启动后）
-            asyncio.create_task(_recover_runtime_state())
+            # 执行恢复（在 lifespan 启动阶段执行，不使用 fire-and-forget）
+            await _recover_runtime_state()
         except Exception as e:
             logger.exception(
                 "[Lifespan] Failed to start BinanceConnector: type=%s repr=%r",
