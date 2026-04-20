@@ -39,8 +39,8 @@ export function Strategies() {
     runtimeMap.set(info.strategy_id, normalized)
   })
 
-  // Get status for a strategy
-  const getStatus = (strategyId: string) => runtimeMap.get(strategyId)?.status ?? 'stopped'
+  // Get status for a strategy - returns null if not loaded
+  const getStatus = (strategyId: string) => runtimeMap.get(strategyId)?.status ?? null
   const getBlockedReason = (strategyId: string) => runtimeMap.get(strategyId)?.blocked_reason
   const getRuntimeInfo = (strategyId: string) => runtimeMap.get(strategyId)
 
@@ -156,7 +156,7 @@ export function Strategies() {
               {registeredStrategies.map(strategy => {
                 const runtime = getRuntimeInfo(strategy.strategy_id)
                 const status = getStatus(strategy.strategy_id)
-                const statusConfig = STRATEGY_STATUS_DISPLAY[status] ?? STRATEGY_STATUS_DISPLAY.stopped
+                const statusConfig = status ? (STRATEGY_STATUS_DISPLAY[status] ?? STRATEGY_STATUS_DISPLAY.stopped) : STRATEGY_STATUS_DISPLAY.stopped
                 const blockedReason = getBlockedReason(strategy.strategy_id)
                 return (
                   <tr key={strategy.strategy_id} className="hover:bg-gray-700/30">
@@ -183,13 +183,13 @@ export function Strategies() {
                         <span className="text-sm text-gray-500">0</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-red-400 max-w-[150px] truncate">{blockedReason ?? '-'}</td>
-                    <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-sm text-red-400 max-w-[150px] truncate">{blockedReason ?? '-'}</td>
+                      <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        {status === 'stopped' && (
+                        {status === null && (
                           <button onClick={() => handleAction(strategy, 'load')} className="rounded bg-blue-900/30 px-2 py-1 text-xs text-blue-300 hover:bg-blue-900/50">Load</button>
                         )}
-                        {status === 'loaded' && (
+                        {(status === 'loaded' || status === 'stopped') && (
                           <>
                             <button onClick={() => handleAction(strategy, 'start')} className="rounded bg-green-900/30 px-2 py-1 text-xs text-green-300 hover:bg-green-900/50">Start</button>
                             <button onClick={() => handleAction(strategy, 'unload')} className="rounded bg-red-900/30 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50">Unload</button>

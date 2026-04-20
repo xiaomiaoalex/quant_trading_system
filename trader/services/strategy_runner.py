@@ -366,6 +366,14 @@ class StrategyRunner:
         if info.status == StrategyStatus.RUNNING:
             raise ValueError(f"策略已在运行: {strategy_id}")
 
+        # 重新初始化策略（确保每次 start 都有干净的状态）
+        plugin = self._plugins.get(strategy_id)
+        if plugin and hasattr(plugin, 'initialize'):
+            try:
+                await plugin.initialize(info.config or {})
+            except Exception as e:
+                logger.warning(f"策略启动时 initialize 失败: {strategy_id}, {e}")
+
         # 更新状态
         info.status = StrategyStatus.RUNNING
         info.started_at = datetime.now(timezone.utc)
@@ -401,6 +409,14 @@ class StrategyRunner:
                 await task
             except asyncio.CancelledError:
                 pass
+
+        # 重置策略内部状态（调用 shutdown）
+        plugin = self._plugins.get(strategy_id)
+        if plugin and hasattr(plugin, 'shutdown'):
+            try:
+                await plugin.shutdown()
+            except Exception as e:
+                logger.warning(f"策略停止时 shutdown 失败: {strategy_id}, {e}")
 
         # 更新状态
         info.status = StrategyStatus.STOPPED

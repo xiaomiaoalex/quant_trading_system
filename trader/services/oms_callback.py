@@ -14,6 +14,7 @@ OMS Callback Handler - OMS下单回调处理
 - 不允许 except: pass
 - 失败必须 fail-closed，不能 silent fallback
 """
+import asyncio
 import logging
 import time
 import uuid
@@ -264,14 +265,71 @@ class OMSCallbackHandler:
         # ==================== 下单 ====================
         try:
             # 转换方向
-            side = OrderSide.BUY if str(signal.signal_type).upper() in ("BUY", "LONG") else OrderSide.SELL
+            side = OrderSide.BUY if signal.signal_type.value.upper() in ("BUY", "LONG") else OrderSide.SELL
 
             # 转换订单类型（默认市价单）
             order_type = OrderType.MARKET
             if signal.price and signal.price > 0:
                 order_type = OrderType.LIMIT
 
+            # 下单前余额预检查
+            if signal.price and signal.price > 0:
+                try:
+                    # 刷新账户信息确保余额最新
+                    await self._broker._fetch_account()
+                    account = self._broker._account_cache
+                    if account:
+                        # 解析交易对的 base 和 quote asset
+                        # 例如: BTCUSDT -> base=BTC, quote=USDT
+                        #      ETHUSDT -> base=ETH, quote=USDT
+                        #      BTCUSDC -> base=BTC, quote=USDC
+                        symbol = signal.symbol.upper()
+                        # 常见的 quote assets
+                        quote_assets = ("USDT", "BUSD", "USDC", "FDUSD", "USD", "BTC", "ETH")
+                        base_asset = symbol
+                        quote_asset = None
+                        for qa in quote_assets:
+                            if symbol.endswith(qa):
+                                base_asset = symbol[:-len(qa)]
+                                quote_asset = qa
+                                break
+                        
+                        if side == OrderSide.BUY:
+                            # BUY: 检查 quote asset (USDT等) 余额
+                            quote_balance = Decimal("0")
+                            for bal in account.get("balances", []):
+                                if bal.get("asset") == quote_asset:
+                                    quote_balance = Decimal(str(bal.get("free", "0")))
+                                    break
+                            notional = quantity * signal.price
+                            if quote_balance < notional:
+                                logger.warning(
+                                    f"[OMSCallback] Insufficient {quote_asset} balance for BUY: "
+                                    f"required={notional}, available={quote_balance}, "
+                                    f"symbol={signal.symbol}, qty={quantity}, price={signal.price}"
+                                )
+                        elif side == OrderSide.SELL:
+                            # SELL: 检查 base asset (BTC等) 余额
+                            base_balance = Decimal("0")
+                            for bal in account.get("balances", []):
+                                if bal.get("asset") == base_asset:
+                                    base_balance = Decimal(str(bal.get("free", "0")))
+                                    break
+                            if base_balance < quantity:
+                                logger.warning(
+                                    f"[OMSCallback] Insufficient {base_asset} balance for SELL: "
+                                    f"required={quantity}, available={base_balance}, "
+                                    f"symbol={signal.symbol}, price={signal.price}"
+                                )
+                except Exception as e:
+                    logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
+
             # 下单
+            logger.info(
+                f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
+                f"side={side.value}, type={order_type.value}, qty={quantity}, "
+                f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
+            )
             broker_order = await self._broker.place_order(
                 symbol=signal.symbol,
                 side=side,
@@ -620,7 +678,8 @@ def create_oms_callback(
                         symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
 
                 if fill_callback and strategy_id:
-                    await fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price)
+                    # 创建异步任务来运行协程，避免阻塞同步调用链
+                    asyncio.create_task(fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price))
                     logger.info(
                         "[OMSCallback] Fill processed: cl_ord_id=%s, exec_id=%s, qty=%s, price=%s",
                         cl_ord_id,

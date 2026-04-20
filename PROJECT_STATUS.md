@@ -4,7 +4,36 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-20 21:45 (北京时间)
+2026-04-20 18:16 (北京时间)
+
+## 最近开发记录（滚动式）
+
+### 本次任务：修复 fire_test 策略信号方向错误与异步 handler RuntimeWarning
+- 完成时间: 2026-04-20 18:16
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - fire_test 策略启动后第一次信号总是 SELL 而不是 BUY
+  - OMS 回调发出订单后报余额不足，但实际上直接测试下单成功
+  - connector 和 private_stream 的异步 handler 调用存在 RuntimeWarning
+  - 前端 stop 按钮后显示 Load 而不是 Start
+- 开发后状态:
+  - **根本原因1**: `str(SignalType.BUY)` 返回 `"SignalType.BUY"` 而非 `"BUY"`
+    - 修复: `oms_callback.py` 中使用 `signal.signal_type.value.upper()` 代替 `str(signal.signal_type).upper()`
+  - **根本原因2**: `connector.py` 和 `private_stream.py` 调用异步 handler 时未 await
+    - 修复: 添加 `_dispatch_handler()` 方法自动处理同步/异步函数
+  - **根本原因3**: `strategy_runner.stop()` 未调用 `plugin.shutdown()` 重置状态
+    - 修复: `stop()` 调用 `plugin.shutdown()`，`start()` 调用 `plugin.initialize()`
+  - **根本原因4**: 余额预检查只检查 USDT 余额，未检查 BTC 余额
+    - 修复: BUY 检查 quote asset (USDT)，SELL 检查 base asset (BTC)
+  - 前端 `Strategies.tsx` 修复: `stopped` 状态显示 Start/Unload 按钮
+- 测试结果:
+  - fire_test 启动后第一次信号为 BUY ✅
+  - BUY/SELL 交替正确 ✅
+  - 两个订单均成交 ✅
+  - 无 RuntimeWarning ✅
+
+
 
 ## 分支状态
 - **当前分支**：`codex/task9-strategy-code-e2e-bridge`

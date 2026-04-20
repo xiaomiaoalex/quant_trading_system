@@ -261,21 +261,28 @@ class BinanceConnector:
             except Exception as e:
                 logger.error(f"[BinanceConnector] Market handler error: {e}")
 
+    def _dispatch_handler(self, handler: Callable, *args) -> None:
+        """分发处理器调用，自动处理同步/异步函数"""
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                # 异步函数：创建 task 在事件循环中执行
+                loop = asyncio.get_event_loop()
+                loop.create_task(handler(*args))
+            else:
+                # 同步函数：直接调用
+                handler(*args)
+        except Exception as e:
+            logger.error(f"[BinanceConnector] Handler error: {e}")
+
     def _on_order_update(self, update: RawOrderUpdate) -> None:
         """处理订单更新"""
         for handler in self._order_update_handlers:
-            try:
-                handler(update)
-            except Exception as e:
-                logger.error(f"[BinanceConnector] Order handler error: {e}")
+            self._dispatch_handler(handler, update)
 
     def _on_fill_update(self, update: RawFillUpdate) -> None:
         """处理成交更新"""
         for handler in self._fill_update_handlers:
-            try:
-                handler(update)
-            except Exception as e:
-                logger.error(f"[BinanceConnector] Fill handler error: {e}")
+            self._dispatch_handler(handler, update)
 
     def _on_rest_snapshot(self, snapshot: RestAlignmentSnapshot) -> None:
         """处理 REST 对齐快照"""
@@ -284,10 +291,7 @@ class BinanceConnector:
             f"orders={len(snapshot.open_orders)}, reason={snapshot.alignment_reason}"
         )
         for handler in self._snapshot_handlers:
-            try:
-                handler(snapshot)
-            except Exception as e:
-                logger.error(f"[BinanceConnector] Snapshot handler error: {e}")
+            self._dispatch_handler(handler, snapshot)
 
     async def _on_force_resync(self, reason: str) -> Optional[RestAlignmentSnapshot]:
         """处理强制对齐请求"""
