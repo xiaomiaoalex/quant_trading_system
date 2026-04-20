@@ -57,6 +57,8 @@ class PublicStreamConfig:
     ping_interval: float = 30.0
     stale_timeout: float = 30.0
     open_timeout: float = 15.0
+    initial_connect_max_attempts: int = 3
+    initial_connect_base_delay: float = 1.0
     proxy_url: Optional[str] = None
     streams: List[str] = field(default_factory=lambda: ["btcusdt@trade", "btcusdt@kline_1m"])
 
@@ -128,7 +130,7 @@ class PublicStreamManager(BaseStreamFSM):
         """启动时的具体逻辑"""
         import aiohttp
         self._session = aiohttp.ClientSession()
-        await self._connect()
+        await self._connect_with_retry()
 
         self._ping_task = asyncio.create_task(self._ping_loop())
         self._stale_check_task = asyncio.create_task(self._stale_check_loop())
@@ -158,7 +160,8 @@ class PublicStreamManager(BaseStreamFSM):
     async def _connect(self) -> None:
         """建立 WebSocket 连接"""
         url = self._build_stream_url()
-        logger.info(f"[{self._name}] Connecting to {url}")
+        proxy = self._resolve_proxy()
+        logger.info(f"[{self._name}] Connecting to {url} (proxy={proxy})")
 
         try:
             self._ws = await websockets.connect(
@@ -166,7 +169,7 @@ class PublicStreamManager(BaseStreamFSM):
                 ping_interval=None,
                 ping_timeout=self._public_config.ping_interval,
                 open_timeout=self._public_config.open_timeout,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
@@ -178,10 +181,37 @@ class PublicStreamManager(BaseStreamFSM):
             asyncio.create_task(self._receive_loop())
 
         except Exception as e:
-            logger.error(f"[{self._name}] Connection failed: {e}")
+            logger.error(
+                f"[{self._name}] Connection failed: type={type(e).__name__}, repr={e!r}, "
+                f"url={url}, proxy={proxy}"
+            )
             self._set_state(StreamState.ERROR)
             self._metrics.last_error = str(e)
             raise
+
+    async def _connect_with_retry(self) -> None:
+        """启动阶段连接重试，提升弱网场景下首连成功率。"""
+        max_attempts = max(1, self._public_config.initial_connect_max_attempts)
+        base_delay = max(0.1, self._public_config.initial_connect_base_delay)
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self._connect()
+                return
+            except Exception as e:
+                last_error = e
+                if attempt >= max_attempts:
+                    break
+                delay = self._apply_jitter(base_delay * (2 ** (attempt - 1)))
+                logger.warning(
+                    f"[{self._name}] Initial connect attempt {attempt}/{max_attempts} failed, "
+                    f"retry in {delay:.2f}s: type={type(e).__name__}, repr={e!r}"
+                )
+                await asyncio.sleep(delay)
+
+        if last_error is not None:
+            raise last_error
 
     async def _disconnect(self) -> None:
         """断开 WebSocket 连接"""

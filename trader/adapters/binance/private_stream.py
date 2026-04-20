@@ -95,6 +95,11 @@ class PrivateStreamConfig:
     request_timeout: float = 15.0
     ws_api_subscribe_timeout: float = 15.0
     ws_api_recv_window_ms: int = 5000
+    ws_api_connect_max_attempts_per_url: int = 3
+    ws_api_connect_base_delay: float = 1.0
+    ws_api_connect_max_delay: float = 20.0
+    time_sync_max_attempts: int = 3
+    time_sync_base_delay: float = 0.5
     listen_key_ttl: int = 3600            # listenKey 有效期（秒）
     listen_key_refresh_interval: int = 1800  # 刷新间隔（秒）
     listen_key_create_max_attempts: int = 5
@@ -294,22 +299,37 @@ class PrivateStreamManager(BaseStreamFSM):
             urls = [self._selected_ws_url] + [u for u in urls if u != self._selected_ws_url]
 
         for url in urls:
-            try:
-                await self._connect(url, start_receiver=False)
-                await self._sync_server_time_offset_via_ws_api()
-                await self._subscribe_ws_api_user_stream()
-                self._selected_mode = "ws_api_signature"
-                self._selected_ws_url = url
-                self._start_receive_loop()
-                logger.info(
-                    f"[{self._name}] ws-api signature mode connected: url={url}, "
-                    f"subscription_id={self._subscription_id}"
-                )
-                return
-            except Exception as e:
-                last_error = e
-                logger.warning(f"[{self._name}] ws-api endpoint failed: {url} error={e}")
-                await self._disconnect()
+            max_attempts = max(1, self._private_config.ws_api_connect_max_attempts_per_url)
+            delay = max(0.1, self._private_config.ws_api_connect_base_delay)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    await self._connect(url, start_receiver=False)
+                    await self._sync_server_time_offset_via_ws_api()
+                    await self._subscribe_ws_api_user_stream()
+                    self._selected_mode = "ws_api_signature"
+                    self._selected_ws_url = url
+                    self._start_receive_loop()
+                    logger.info(
+                        f"[{self._name}] ws-api signature mode connected: url={url}, "
+                        f"subscription_id={self._subscription_id}"
+                    )
+                    return
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        f"[{self._name}] ws-api endpoint failed: url={url}, "
+                        f"attempt={attempt}/{max_attempts}, type={type(e).__name__}, repr={e!r}"
+                    )
+                    await self._disconnect()
+                    if attempt >= max_attempts:
+                        break
+                    sleep_delay = self._apply_jitter(delay)
+                    logger.info(
+                        f"[{self._name}] ws-api retry in {sleep_delay:.2f}s "
+                        f"(base={delay:.2f}s, url={url})"
+                    )
+                    await asyncio.sleep(sleep_delay)
+                    delay = min(delay * 2, self._private_config.ws_api_connect_max_delay)
 
         assert last_error is not None
         raise last_error
@@ -325,22 +345,38 @@ class PrivateStreamManager(BaseStreamFSM):
     async def _sync_server_time_offset(self) -> None:
         """同步服务器时间偏移，降低签名时间戳漂移导致的鉴权失败。"""
         url = f"{self._private_config.rest_url}/v3/time"
-        try:
-            async with self._session.get(url, proxy=self._resolve_proxy()) as resp:
-                if resp.status != 200:
-                    logger.warning(f"[{self._name}] Time sync skipped: status={resp.status}")
+        max_attempts = max(1, self._private_config.time_sync_max_attempts)
+        delay = max(0.1, self._private_config.time_sync_base_delay)
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with self._session.get(url, proxy=self._resolve_proxy()) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"status={resp.status}")
+                    data = await resp.json()
+                    server_ms = int(data.get("serverTime", 0))
+                    if server_ms <= 0:
+                        raise RuntimeError("missing serverTime")
+                    local_ms = int(time.time() * 1000)
+                    self._timestamp_offset_ms = server_ms - local_ms
+                    logger.info(
+                        f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms"
+                    )
                     return
-                data = await resp.json()
-                server_ms = int(data.get("serverTime", 0))
-                if server_ms <= 0:
+            except Exception as e:
+                if attempt >= max_attempts:
+                    logger.warning(
+                        f"[{self._name}] Time sync failed after {max_attempts} attempts: "
+                        f"type={type(e).__name__}, repr={e!r}"
+                    )
                     return
-                local_ms = int(time.time() * 1000)
-                self._timestamp_offset_ms = server_ms - local_ms
-                logger.info(
-                    f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms"
+                sleep_delay = self._apply_jitter(delay)
+                logger.warning(
+                    f"[{self._name}] Time sync attempt {attempt}/{max_attempts} failed, "
+                    f"retry in {sleep_delay:.2f}s: type={type(e).__name__}, repr={e!r}"
                 )
-        except Exception as e:
-            logger.warning(f"[{self._name}] Time sync failed: {e}")
+                await asyncio.sleep(sleep_delay)
+                delay = min(delay * 2, 5.0)
 
     async def _sync_server_time_offset_via_ws_api(self) -> None:
         """优先通过 ws-api `time` 对时，失败时回退 REST。"""
@@ -572,7 +608,8 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _connect(self, url: str, start_receiver: bool = True) -> None:
         """建立 WebSocket 连接"""
-        logger.info(f"[{self._name}] Connecting to {url[:50]}...")
+        proxy = self._resolve_proxy()
+        logger.info(f"[{self._name}] Connecting to {url[:80]} (proxy={proxy})")
 
         try:
             self._ws = await websockets.connect(
@@ -580,7 +617,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 ping_interval=None,
                 ping_timeout=self._private_config.pong_timeout,
                 open_timeout=self._private_config.open_timeout,
-                proxy=self._resolve_proxy(),
+                proxy=proxy,
             )
             self._set_state(StreamState.CONNECTED)
             self._metrics.connect_count += 1
@@ -597,7 +634,10 @@ class PrivateStreamManager(BaseStreamFSM):
                 self._start_receive_loop()
 
         except Exception as e:
-            logger.error(f"[{self._name}] Connection failed: {e}")
+            logger.error(
+                f"[{self._name}] Connection failed: type={type(e).__name__}, repr={e!r}, "
+                f"url={url}, proxy={proxy}"
+            )
             self._set_state(StreamState.ERROR)
             self._metrics.last_error = str(e)
             raise

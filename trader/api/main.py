@@ -57,6 +57,35 @@ from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
+
+def _configure_trader_logging() -> None:
+    """
+    为 trader.* 日志配置统一毫秒时间戳格式。
+
+    - 仅作用于 `trader` 命名空间日志
+    - 幂等安装，避免 --reload 时重复 handler
+    """
+    trader_logger = logging.getLogger("trader")
+    trader_logger.setLevel(logging.INFO)
+
+    for handler in trader_logger.handlers:
+        if getattr(handler, "_qts_trader_ts_handler", False):
+            return
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    handler._qts_trader_ts_handler = True  # type: ignore[attr-defined]
+    trader_logger.addHandler(handler)
+    trader_logger.propagate = False
+
+
+_configure_trader_logging()
+
 # 全局 BinanceConnector 实例（用于成交回调）
 _binance_connector_instance: Optional[Any] = None
 
@@ -188,7 +217,11 @@ async def lifespan(app: FastAPI):
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
             set_strategy_orchestrator_connector(connector)
         except Exception as e:
-            logger.error(f"[Lifespan] Failed to start BinanceConnector: {e}")
+            logger.exception(
+                "[Lifespan] Failed to start BinanceConnector: type=%s repr=%r",
+                type(e).__name__,
+                e,
+            )
     else:
         logger.info("[Lifespan] BINANCE_API_KEY or BINANCE_SECRET_KEY not set, skipping connector")
 

@@ -4,7 +4,7 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-20 15:10 (北京时间)
+2026-04-20 16:20 (北京时间)
 
 ## 分支状态
 - **当前分支**：`codex/task9-strategy-code-e2e-bridge`
@@ -13,6 +13,29 @@
 - **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：全面指数退避与时间戳日志增强（网络连接鲁棒性）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - Public/Private 首连在弱网抖动下仍可能“一次失败即放弃”
+  - 部分网络异常日志仅输出空字符串，定位成本高
+  - 网络/订单链路日志缺统一毫秒时间戳，跨模块对齐困难
+- 开发后状态:
+  - `trader/adapters/binance/public_stream.py`
+    - 首连重试改为指数退避（含抖动）
+    - 连接失败日志补齐 `type + repr + url + proxy`
+  - `trader/adapters/binance/private_stream.py`
+    - `ws-api` 启动改为“每个 endpoint 多次指数退避”
+    - 对时接口增加指数退避重试
+    - 连接失败日志补齐 `type + repr + url + proxy`
+  - `trader/api/main.py`
+    - 新增 `trader.*` 命名空间日志格式：`YYYY-MM-DD HH:MM:SS.mmm`
+- 测试结果:
+  - `python -c "import trader.adapters.binance.public_stream"` → ok
+  - `python -c "import trader.adapters.binance.private_stream"` → ok
+  - `python -c "import trader.api.main as m; print(m.app.title)"` → ok
 
 ### 本次任务：修复 Uvicorn 启动失败（`websockets_compat` 导入阶段崩溃）
 - 完成时间: 2026-04-20
