@@ -121,8 +121,19 @@ class Reconciler:
         local_ids = set(local_by_id.keys())
         exchange_ids = set(exchange_by_id.keys())
 
+        # 终端状态：这些状态的订单不会出现在交易所的 open orders 中
+        # 不应该对这些状态触发 GHOST 告警
+        terminal_statuses = {"FILLED", "CANCELLED", "REJECTED", "EXPIRED", "PENDING_CANCEL"}
+
         for cl_ord_id in local_ids - exchange_ids:
             local = local_by_id[cl_ord_id]
+            # 过滤掉已成交/已取消等终端状态的订单
+            # 这些订单本来就不会出现在交易所 open orders 中
+            if local.status in terminal_statuses:
+                logger.debug(
+                    f"[Reconciler] Skipping GHOST check for terminal order: {cl_ord_id} status={local.status}"
+                )
+                continue
             drifts.append(self._create_ghost_drift(local, now))
 
         for cl_ord_id in exchange_ids - local_ids:

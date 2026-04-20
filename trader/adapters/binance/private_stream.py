@@ -185,6 +185,16 @@ class PrivateStreamManager(BaseStreamFSM):
         """注册成交更新处理器"""
         self._fill_update_handlers.append(handler)
 
+    async def _dispatch_handler(self, handler: Callable, *args) -> None:
+        """分发处理器调用，自动处理同步/异步函数"""
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                await handler(*args)
+            else:
+                handler(*args)
+        except Exception as e:
+            logger.error(f"[{self._name}] Handler error: {e}")
+
     def set_force_resync_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
         """设置强制对齐回调"""
         self._force_resync_callback = callback
@@ -802,18 +812,12 @@ class PrivateStreamManager(BaseStreamFSM):
 
                 order_update = self._parse_order_update(data, exchange_ts)
                 for handler in self._order_update_handlers:
-                    try:
-                        handler(order_update)
-                    except Exception as e:
-                        logger.error(f"[{self._name}] Order handler error: {e}")
+                    await self._dispatch_handler(handler, order_update)
 
                 fill_update = self._parse_fill_update(data, exchange_ts)
                 if fill_update is not None:
                     for handler in self._fill_update_handlers:
-                        try:
-                            handler(fill_update)
-                        except Exception as e:
-                            logger.error(f"[{self._name}] Fill handler error: {e}")
+                        await self._dispatch_handler(handler, fill_update)
 
             await self._trigger_event(StreamEvent.DATA_RECEIVED, payload)
 

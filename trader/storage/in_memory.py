@@ -77,6 +77,12 @@ class ControlPlaneInMemoryStorage:
         self._event_counter = 0
         self._snapshot_counter = 0
 
+        # Task 17: Execution dedup counter
+        self._execution_dedup_hits: int = 0
+
+        # Task 18: Strategy runtime state persistence
+        self.strategy_runtime_states: Dict[str, Dict[str, Any]] = {}
+
     # ==================== Strategy Methods ====================
 
     def create_strategy(self, strategy_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -553,6 +559,7 @@ class ControlPlaneInMemoryStorage:
             key = f"{cl_ord_id}:{exec_id}"
             existing = self.execution_by_key.get(key)
             if existing is not None:
+                self._execution_dedup_hits += 1  # Task 17: 计数重复执行
                 return existing
             self.execution_by_key[key] = execution_data
         self.executions.append(execution_data)
@@ -574,6 +581,20 @@ class ControlPlaneInMemoryStorage:
         if since_ts_ms:
             executions = [e for e in executions if e.get("ts_ms", 0) >= since_ts_ms]
         return executions[:limit]
+
+    def get_execution_dedup_stats(self) -> Dict[str, int]:
+        """
+        获取执行去重统计信息（Task 17）。
+
+        Returns:
+            Dict with:
+                - execution_dedup_hits: 重复执行次数
+                - total_executions: 总执行数
+        """
+        return {
+            "execution_dedup_hits": self._execution_dedup_hits,
+            "total_executions": len(self.executions),
+        }
 
     # ==================== Position Methods ====================
 
@@ -694,6 +715,50 @@ class ControlPlaneInMemoryStorage:
         if until_ts_ms:
             history = [s for s in history if s.get("ts_ms", 0) <= until_ts_ms]
         return history[-limit:] if history else []
+
+    # ==================== Task 18: Strategy Runtime State Persistence ====================
+
+    def save_strategy_runtime_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Save strategy runtime state.
+
+        State schema:
+            - strategy_id: str
+            - status: str (RUNNING/STOPPED/PAUSED)
+            - config: dict
+            - symbols: List[str]
+            - env: str
+            - started_at: int (timestamp ms)
+            - last_tick_at: int (timestamp ms)
+            - recovery_error: Optional[str] (if recovery failed)
+        """
+        strategy_id = state.get("strategy_id")
+        if not strategy_id:
+            raise ValueError("strategy_runtime_state requires strategy_id")
+        self.strategy_runtime_states[strategy_id] = state.copy()
+        return self.strategy_runtime_states[strategy_id]
+
+    def get_strategy_runtime_state(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Get strategy runtime state by strategy_id."""
+        return self.strategy_runtime_states.get(strategy_id)
+
+    def list_strategy_runtime_states(self) -> List[Dict[str, Any]]:
+        """List all strategy runtime states."""
+        return list(self.strategy_runtime_states.values())
+
+    def list_running_strategy_states(self) -> List[Dict[str, Any]]:
+        """List all RUNNING strategy runtime states."""
+        return [
+            s for s in self.strategy_runtime_states.values()
+            if s.get("status") == "RUNNING"
+        ]
+
+    def delete_strategy_runtime_state(self, strategy_id: str) -> bool:
+        """Delete strategy runtime state."""
+        if strategy_id in self.strategy_runtime_states:
+            del self.strategy_runtime_states[strategy_id]
+            return True
+        return False
 
     # ==================== KillSwitch Methods ====================
 

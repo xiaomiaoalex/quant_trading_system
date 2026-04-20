@@ -52,7 +52,7 @@ class FireTestStrategy:
     # 发信号最小间隔（秒）
     interval_seconds: int = 30
     # 每次建议下单数量
-    order_size: Decimal = Decimal("0.0001")
+    order_size: Decimal = Decimal("0.0002")
     # 信号置信度
     min_confidence: Decimal = Decimal("0.95")
     # 最大发信号次数（0 表示不限制）
@@ -87,16 +87,26 @@ class FireTestStrategy:
         self._last_signal_type = signal_type
         self._emit_count += 1
 
+        # 动态调整交易量：确保买卖数量匹配，避免余额不足
+        if self._emit_count == 1 and signal_type == SignalType.BUY:
+            # 第一次买入：使用满足最小名义金额的交易量
+            adjusted_size = Decimal("0.0001")  # 约 7.5 USDT
+        elif self._emit_count == 2 and signal_type == SignalType.SELL:
+            # 第二次卖出：使用与第一次买入相同的数量，避免余额不足
+            adjusted_size = Decimal("0.0001")
+        else:
+            adjusted_size = self.order_size
+
         return Signal(
             strategy_name=self.strategy_id,
             signal_type=signal_type,
             symbol=market_data.symbol,
             price=market_data.price,
-            quantity=self.order_size,
+            quantity=adjusted_size,
             confidence=self.min_confidence,
             reason=(
                 f"Fire test emit #{self._emit_count}: mode={self.mode}, "
-                f"signal={signal_type.value}"
+                f"signal={signal_type.value}, size={adjusted_size}"
             ),
             metadata={
                 "emit_count": self._emit_count,
@@ -104,6 +114,7 @@ class FireTestStrategy:
                 "start_with": self.start_with,
                 "interval_seconds": self.interval_seconds,
                 "max_signals": self.max_signals,
+                "adjusted_size": str(adjusted_size),
             },
         )
 

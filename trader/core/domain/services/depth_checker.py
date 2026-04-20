@@ -213,17 +213,27 @@ class DepthChecker:
             DepthCheckResult: 深度检查结果
         """
         # 根据信号类型确定买卖方向
+        # 映射: LONG/SHORT -> 对应方向, CLOSE_LONG/CLOSE_SHORT -> SELL
         if signal.signal_type == SignalType.BUY:
             side = OrderSide.BUY
+        elif signal.signal_type == SignalType.LONG:
+            side = OrderSide.BUY  # 开多仓
+        elif signal.signal_type == SignalType.SHORT:
+            side = OrderSide.SELL  # 开空仓 (注: 现货不支持做空, 此处按 SELL 处理)
         elif signal.signal_type == SignalType.SELL:
             side = OrderSide.SELL
+        elif signal.signal_type == SignalType.CLOSE_LONG:
+            side = OrderSide.SELL  # 平多仓
+        elif signal.signal_type == SignalType.CLOSE_SHORT:
+            side = OrderSide.BUY  # 平空仓 (注: 现货不支持做空, 此处按 BUY 处理)
         else:
+            # SignalType.NONE 或其他未知类型
             return DepthCheckResult(
                 ok=False,
                 estimated_slippage_bps=0.0,
                 available_qty=0.0,
                 rejection_reason="INVALID_SIGNAL_TYPE",
-                message=f"不支持的信号类型: {signal.signal_type}"
+                message=f"[DepthChecker] 不支持的信号类型: {signal.signal_type}"
             )
         
         return self.check_depth(

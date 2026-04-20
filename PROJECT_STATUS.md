@@ -4,7 +4,68 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-20 21:45 (北京时间)
+2026-04-20 18:16 (北京时间)
+
+## 最近开发记录（滚动式）
+
+### 本次任务：Task 16-20 自动化交易系统生产化
+- 完成时间: 2026-04-20 19:44 (北京时间)
+- 分支: codex/task16-20-automated-trading-into-production
+- 状态: ✅ Task 16/17/18/19 已完成，Task 20 进行中
+- 开发前状态:
+  - `env_config.py` 仅处理 `recv_window`，未统一 Binance 环境配置
+  - 缺少 fill deduplication 的 observable 指标 (`dedup_hit_count`)
+  - 策略运行时状态未持久化，重启后无法恢复
+  - 缺少运行时可观测性指标
+- 开发后状态:
+  - **Task 16**: 扩展 `env_config.py` 新增 `get_binance_env()`, `get_binance_env_config()`, `BINANCE_ENV_URL_CONFIGS`
+  - **Task 16**: `BinanceSpotDemoBrokerConfig` 新增 `for_env()` 工厂方法
+  - **Task 16**: `BinanceConnectorConfig` 新增 `from_env()` 类方法
+  - **Task 16**: `main.py` 新增启动自检 `_run_startup_self_check()`
+  - **Task 17**: `OMSCallbackHandler` 新增 `_cl_ord_id_dedup_hits`, `_exec_dedup_hits` 计数器
+  - **Task 17**: `ControlPlaneInMemoryStorage` 新增 execution deduplication 统计
+  - **Task 17**: 新增 `005_executions_table.sql` 迁移，unique constraint on `(cl_ord_id, exec_id)`
+  - **Task 17**: OMS 添加 terminal state monotonicity 检查
+  - **Task 18**: `StrategyRunner` 新增 `runtime_state_storage` 参数和 `_persist_runtime_state()` 方法
+  - **Task 18**: `start()`, `stop()`, `tick()` 方法集成状态持久化
+  - **Task 18**: `main.py` lifespan 新增 `_recover_runtime_state()` 恢复逻辑
+  - **Task 18**: 新增 `update_strategy_subscription()` 方法支持 symbols/env 更新
+  - **Task 19**: OMS 新增订单可观测性指标 (`order_submit_ok/reject/error`, `reject_reason_counts`, `fill_latency_count`)
+  - **Task 19**: `MonitorSnapshot` 新增运行时可观测性字段
+  - **Task 19**: `MonitorService.DEFAULT_ALERT_RULES` 新增运行时阈值告警规则
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_env_unified.py` → 35 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_idempotency.py` → 14 passed ✅
+  - `python -m pytest -q trader/tests/test_strategy_runtime_recovery.py` → 14 passed ✅
+  - `python -m pytest -q trader/tests/test_runtime_observability.py` → 13 passed ✅
+  - P0 回归测试 → 89 passed ✅
+
+### 本次任务：修复 fire_test 策略信号方向错误与异步 handler RuntimeWarning
+- 完成时间: 2026-04-20 18:16
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - fire_test 策略启动后第一次信号总是 SELL 而不是 BUY
+  - OMS 回调发出订单后报余额不足，但实际上直接测试下单成功
+  - connector 和 private_stream 的异步 handler 调用存在 RuntimeWarning
+  - 前端 stop 按钮后显示 Load 而不是 Start
+- 开发后状态:
+  - **根本原因1**: `str(SignalType.BUY)` 返回 `"SignalType.BUY"` 而非 `"BUY"`
+    - 修复: `oms_callback.py` 中使用 `signal.signal_type.value.upper()` 代替 `str(signal.signal_type).upper()`
+  - **根本原因2**: `connector.py` 和 `private_stream.py` 调用异步 handler 时未 await
+    - 修复: 添加 `_dispatch_handler()` 方法自动处理同步/异步函数
+  - **根本原因3**: `strategy_runner.stop()` 未调用 `plugin.shutdown()` 重置状态
+    - 修复: `stop()` 调用 `plugin.shutdown()`，`start()` 调用 `plugin.initialize()`
+  - **根本原因4**: 余额预检查只检查 USDT 余额，未检查 BTC 余额
+    - 修复: BUY 检查 quote asset (USDT)，SELL 检查 base asset (BTC)
+  - 前端 `Strategies.tsx` 修复: `stopped` 状态显示 Start/Unload 按钮
+- 测试结果:
+  - fire_test 启动后第一次信号为 BUY ✅
+  - BUY/SELL 交替正确 ✅
+  - 两个订单均成交 ✅
+  - 无 RuntimeWarning ✅
+
+
 
 ## 分支状态
 - **当前分支**：`codex/task9-strategy-code-e2e-bridge`

@@ -43,7 +43,7 @@ from trader.core.application.strategy_protocol import (
     ValidationResult,
     validate_strategy_plugin,
 )
-from trader.core.domain.models.signal import Signal
+from trader.core.domain.models.signal import Signal, SignalType
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,9 @@ class StrategyRuntimeInfo:
     # daily_loss: Decimal = Decimal("0")
     # 阻塞原因
     blocked_reason: Optional[str] = None
+    # Task 18: 运行时状态恢复字段
+    symbols: List[str] = field(default_factory=list)  # 订阅的交易对列表
+    env: str = "demo"  # 当前环境 (demo/testnet/live)
 
 
 # ============================================================================
@@ -145,6 +148,7 @@ class StrategyRunner:
         killswitch_callback: Optional[Callable[[str], KillSwitchLevel]] = None,
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], Any]] = None,
         max_errors_before_error_state: int = 10,
+        runtime_state_storage: Optional[Any] = None,
     ):
         """
         初始化策略执行器
@@ -155,6 +159,7 @@ class StrategyRunner:
             killswitch_callback: KillSwitch 查询回调，返回当前 KillSwitch 级别
             event_callback: 事件发布回调，接收 (strategy_id, event_type, payload)
             max_errors_before_error_state: 错误次数阈值，超过此值策略进入ERROR状态
+            runtime_state_storage: Task 18 - 运行时状态持久化存储（必须实现 save_strategy_runtime_state, get_strategy_runtime_state, list_running_strategy_states 方法）
         """
         self._plugins: Dict[str, StrategyPlugin] = {}
         self._dynamic_modules: Dict[str, types.ModuleType] = {}
@@ -166,6 +171,8 @@ class StrategyRunner:
         self._event_callback = event_callback
         self._max_errors_before_error_state = max_errors_before_error_state
         self._running = True
+        # Task 18: 运行时状态持久化存储
+        self._runtime_state_storage = runtime_state_storage
         # 策略级别的锁，用于保护并发更新
         self._strategy_locks: Dict[str, asyncio.Lock] = {}
 
@@ -366,14 +373,48 @@ class StrategyRunner:
         if info.status == StrategyStatus.RUNNING:
             raise ValueError(f"策略已在运行: {strategy_id}")
 
+        # 重新初始化策略（确保每次 start 都有干净的状态）
+        plugin = self._plugins.get(strategy_id)
+        if plugin and hasattr(plugin, 'initialize'):
+            try:
+                await plugin.initialize(info.config or {})
+            except Exception as e:
+                logger.warning(f"策略启动时 initialize 失败: {strategy_id}, {e}")
+
         # 更新状态
         info.status = StrategyStatus.RUNNING
         info.started_at = datetime.now(timezone.utc)
         info.error_count = 0
         info.last_error = None
 
+        # Task 18: 持久化运行时状态
+        await self._persist_runtime_state(strategy_id)
+
         logger.info(f"策略启动成功: {strategy_id}")
         return info
+
+    async def _persist_runtime_state(self, strategy_id: str) -> None:
+        """Task 18: 将策略运行时状态持久化到存储"""
+        if not self._runtime_state_storage:
+            return
+
+        info = self._infos.get(strategy_id)
+        if not info:
+            return
+
+        state: Dict[str, Any] = {
+            "strategy_id": strategy_id,
+            "status": info.status.value,
+            "config": info.config,
+            "symbols": info.symbols,
+            "env": info.env,
+            "started_at": int(info.started_at.timestamp() * 1000) if info.started_at else None,
+            "last_tick_at": int(info.last_tick_at.timestamp() * 1000) if info.last_tick_at else None,
+        }
+        try:
+            await self._runtime_state_storage.save_strategy_runtime_state(state)
+        except Exception as e:
+            logger.error(f"[StrategyRunner] Failed to persist runtime state for {strategy_id}: {e}")
 
     async def stop(self, strategy_id: str) -> StrategyRuntimeInfo:
         """
@@ -402,8 +443,19 @@ class StrategyRunner:
             except asyncio.CancelledError:
                 pass
 
+        # 重置策略内部状态（调用 shutdown）
+        plugin = self._plugins.get(strategy_id)
+        if plugin and hasattr(plugin, 'shutdown'):
+            try:
+                await plugin.shutdown()
+            except Exception as e:
+                logger.warning(f"策略停止时 shutdown 失败: {strategy_id}, {e}")
+
         # 更新状态
         info.status = StrategyStatus.STOPPED
+
+        # Task 18: 持久化运行时状态
+        await self._persist_runtime_state(strategy_id)
 
         logger.info(f"策略停止成功: {strategy_id}")
         return info
@@ -513,6 +565,10 @@ class StrategyRunner:
             info.tick_count += 1
             info.last_tick_at = datetime.now(timezone.utc)
 
+            # Task 18: 每 60 个Tick持久化一次运行时状态（避免过度写入）
+            if info.tick_count % 60 == 0:
+                await self._persist_runtime_state(strategy_id)
+
             # 调用策略（带超时控制）
             limits = info.resource_limits
             timeout_seconds = limits.timeout_seconds if limits else 0.0
@@ -573,7 +629,14 @@ class StrategyRunner:
                         order_result = await self._oms_callback(strategy_id, signal)
                         # 发布订单提交事件
                         if self._event_callback and order_result:
-                            side = signal.get_order_side().value if signal.signal_type else None
+                            # 只对有效信号类型发布事件
+                            if signal.signal_type and signal.signal_type != SignalType.NONE:
+                                side = signal.get_order_side().value
+                            else:
+                                side = None
+                                logger.warning(
+                                    f"[StrategyRunner] Skipping order event for invalid signal type: {signal.signal_type}"
+                            )
                             self._event_callback(strategy_id, "strategy.order.submitted", {
                                 "symbol": signal.symbol,
                                 "side": side,
@@ -778,6 +841,31 @@ class StrategyRunner:
             StrategyRuntimeInfo 或 None（策略未加载）
         """
         return self._infos.get(strategy_id)
+
+    def update_strategy_subscription(
+        self,
+        strategy_id: str,
+        symbols: List[str],
+        env: Optional[str] = None,
+    ) -> Optional[StrategyRuntimeInfo]:
+        """
+        Task 18: 更新策略订阅的交易对和环境信息
+
+        Args:
+            strategy_id: 策略ID
+            symbols: 订阅的交易对列表
+            env: 环境名称 (demo/testnet/live)
+
+        Returns:
+            StrategyRuntimeInfo 或 None
+        """
+        info = self._infos.get(strategy_id)
+        if not info:
+            return None
+        info.symbols = symbols
+        if env is not None:
+            info.env = env
+        return info
 
     def get_plugin(self, strategy_id: str) -> Optional[Any]:
         """

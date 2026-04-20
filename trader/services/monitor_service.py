@@ -96,6 +96,39 @@ class MonitorService:
             severity="CRITICAL",
             cooldown_seconds=120,
         ),
+        # Task 19: 运行时阈值告警
+        AlertRule(
+            rule_name="tick_lag_high",
+            metric_key="tick_lag_ms",
+            threshold=1000.0,  # Tick延迟超过1000ms
+            comparison="gt",
+            severity="HIGH",
+            cooldown_seconds=60,
+        ),
+        AlertRule(
+            rule_name="order_reject_rate_high",
+            metric_key="order_submit_reject",
+            threshold=10.0,  # 拒单数超过10个
+            comparison="gt",
+            severity="MEDIUM",
+            cooldown_seconds=120,
+        ),
+        AlertRule(
+            rule_name="ws_reconnect_high",
+            metric_key="ws_reconnect_count",
+            threshold=5.0,  # WS重连超过5次
+            comparison="gt",
+            severity="MEDIUM",
+            cooldown_seconds=300,
+        ),
+        AlertRule(
+            rule_name="fill_latency_high",
+            metric_key="fill_latency_ms_avg",
+            threshold=500.0,  # 平均成交延迟超过500ms
+            comparison="gt",
+            severity="HIGH",
+            cooldown_seconds=60,
+        ),
     ]
 
     def __init__(self):
@@ -133,10 +166,14 @@ class MonitorService:
     def _evaluate_rule(
         self,
         rule: AlertRule,
-        metric_value: float,
+        metric_value: Optional[float],
         now: datetime,
     ) -> Optional[Alert]:
         """评估单个告警规则"""
+        # Task 19: Skip evaluation if metric value is None
+        if metric_value is None:
+            return None
+
         # 检查冷却时间
         if rule.rule_name in self._triggered_alerts:
             triggered = self._triggered_alerts[rule.rule_name]

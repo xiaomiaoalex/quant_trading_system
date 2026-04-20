@@ -14,6 +14,7 @@ OMS Callback Handler - OMS下单回调处理
 - 不允许 except: pass
 - 失败必须 fail-closed，不能 silent fallback
 """
+import asyncio
 import logging
 import time
 import uuid
@@ -109,6 +110,39 @@ class OMSCallbackHandler:
         self._processed_exec_keys: Dict[str, float] = {}
         self._exec_dedup_ttl_seconds: int = 900
 
+        # Task 17: 幂等去重计数器（可观测性）
+        self._cl_ord_id_dedup_hits: int = 0  # cl_ord_id 重复次数
+        self._exec_dedup_hits: int = 0  # exec_id 重复次数
+
+        # Task 19: 订单可观测性指标
+        self._order_submit_ok: int = 0  # 成功提交
+        self._order_submit_reject: int = 0  # 被拒绝
+        self._order_submit_error: int = 0  # 错误
+        self._reject_reason_counts: Dict[str, int] = {}  # 按原因统计拒单
+        self._fill_latency_sum_ms: float = 0.0  # 累计成交延迟（毫秒）
+        self._fill_latency_count: int = 0  # 成交次数
+
+    def get_observable_metrics(self) -> Dict[str, Any]:
+        """
+        Task 19: 获取可观测性指标
+
+        Returns:
+            包含所有运行时指标的字典
+        """
+        return {
+            "cl_ord_id_dedup_hits": self._cl_ord_id_dedup_hits,
+            "exec_dedup_hits": self._exec_dedup_hits,
+            "order_submit_ok": self._order_submit_ok,
+            "order_submit_reject": self._order_submit_reject,
+            "order_submit_error": self._order_submit_error,
+            "reject_reason_counts": dict(self._reject_reason_counts),
+            "fill_latency_ms_avg": (
+                self._fill_latency_sum_ms / self._fill_latency_count
+                if self._fill_latency_count > 0 else None
+            ),
+            "fill_latency_count": self._fill_latency_count,
+        }
+
     def _cleanup_exec_dedup(self) -> None:
         now = time.time()
         expired_keys = [
@@ -118,12 +152,46 @@ class OMSCallbackHandler:
         for key in expired_keys:
             del self._processed_exec_keys[key]
 
+    def _determine_order_side(self, signal: Signal) -> tuple[OrderSide, bool]:
+        """
+        根据信号类型确定订单方向。
+        
+        Args:
+            signal: 交易信号
+            
+        Returns:
+            tuple: (OrderSide, is_emergency)
+                - is_emergency=True 表示信号类型不明确，按紧急卖出处理
+        """
+        signal_value = signal.signal_type.value.upper()
+        
+        # 明确的买入信号
+        if signal_value in ("BUY", "LONG"):
+            return (OrderSide.BUY, False)
+        
+        # 明确的卖出信号
+        if signal_value in ("SELL", "SHORT"):
+            return (OrderSide.SELL, False)
+        
+        # 平仓信号
+        if signal_value in ("CLOSE_LONG", "CLOSE_SHORT"):
+            return (OrderSide.SELL, False)
+        
+        # 未知信号类型 -> EMERGENCY_EXIT
+        logger.critical(
+            f"[OMSCallback] 🚨 EMERGENCY_EXIT: 未知信号类型 {signal.signal_type}, "
+            f"策略={signal.strategy_name}, 强制按 SELL 处理. "
+            f"这通常表示策略发出了无法识别的信号，请检查策略实现."
+        )
+        return (OrderSide.SELL, True)
+
     def _make_exec_key(self, cl_ord_id: str, exec_id: str) -> str:
         return f"{cl_ord_id}:{exec_id}"
 
     def _mark_exec_seen(self, cl_ord_id: str, exec_id: str) -> bool:
         """
         记录成交幂等键。
+
         Returns:
             True: 首次出现
             False: 重复成交
@@ -133,6 +201,7 @@ class OMSCallbackHandler:
         self._cleanup_exec_dedup()
         key = self._make_exec_key(cl_ord_id, exec_id)
         if key in self._processed_exec_keys:
+            self._exec_dedup_hits += 1  # Task 17: 计数重复成交
             return False
         self._processed_exec_keys[key] = time.time() + self._exec_dedup_ttl_seconds
         return True
@@ -144,6 +213,40 @@ class OMSCallbackHandler:
         if "_" not in cl_ord_id:
             return cl_ord_id
         return cl_ord_id.rsplit("_", 1)[0]
+
+    def get_dedup_stats(self) -> Dict[str, Any]:
+        """
+        获取幂等去重统计信息（Task 17 & Task 19）。
+
+        Returns:
+            Dict with:
+                - cl_ord_id_dedup_hits: cl_ord_id 重复处理次数
+                - exec_dedup_hits: exec_id 重复成交次数
+                - active_exec_keys: 当前有效的 exec 键数量
+                - order_submit_ok: 成功提交订单数 (Task 19)
+                - order_submit_reject: 被拒绝订单数 (Task 19)
+                - order_submit_error: 错误订单数 (Task 19)
+                - reject_reason_counts: 按原因统计的拒单数 (Task 19)
+                - fill_latency_ms_avg: 平均成交延迟 (Task 19)
+                - fill_latency_count: 成交次数 (Task 19)
+        """
+        self._cleanup_exec_dedup()
+        return {
+            # Task 17: Dedup stats
+            "cl_ord_id_dedup_hits": self._cl_ord_id_dedup_hits,
+            "exec_dedup_hits": self._exec_dedup_hits,
+            "active_exec_keys": len(self._processed_exec_keys),
+            # Task 19: Order submission stats
+            "order_submit_ok": self._order_submit_ok,
+            "order_submit_reject": self._order_submit_reject,
+            "order_submit_error": self._order_submit_error,
+            "reject_reason_counts": dict(self._reject_reason_counts),
+            "fill_latency_ms_avg": (
+                self._fill_latency_sum_ms / self._fill_latency_count
+                if self._fill_latency_count > 0 else None
+            ),
+            "fill_latency_count": self._fill_latency_count,
+        }
 
     async def execute_signal(
         self,
@@ -179,16 +282,32 @@ class OMSCallbackHandler:
                 "price": str(signal.price) if signal.price else None,
                 "reason": "LIVE_TRADING_DISABLED",
             })
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "LIVE_TRADING_DISABLED"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise TradingDisabledError("Live trading is not enabled")
 
         # ==================== 信号验证 ====================
         if not signal.symbol:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "MISSING_SYMBOL"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError("Signal missing symbol")
 
         if not signal.signal_type:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "MISSING_SIGNAL_TYPE"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError("Signal missing signal_type")
 
         if signal.quantity is None or signal.quantity <= 0:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "INVALID_QUANTITY"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
 
         # ==================== 获取 stepSize ====================
@@ -227,6 +346,10 @@ class OMSCallbackHandler:
                     "price": str(price),
                     "reason": f"MIN_NOTIONAL: {error_msg}",
                 })
+                # Task 19: Track rejection
+                self._order_submit_reject += 1
+                reason = "MIN_NOTIONAL"
+                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
                 raise MinNotionalError(error_msg)
 
         # ==================== 生成订单ID ====================
@@ -235,6 +358,7 @@ class OMSCallbackHandler:
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
         if cl_ord_id in self._processed_cl_ord_ids:
+            self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
             logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (memory): {cl_ord_id}")
             return None
 
@@ -250,6 +374,7 @@ class OMSCallbackHandler:
                 existing_order_found = str(existing_order.get("cl_ord_id", "")) == cl_ord_id
 
             if existing_order_found:
+                self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
                 logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (storage): {cl_ord_id}")
                 # 加入内存缓存防止后续重复处理
                 self._processed_cl_ord_ids.add(cl_ord_id)
@@ -264,14 +389,82 @@ class OMSCallbackHandler:
         # ==================== 下单 ====================
         try:
             # 转换方向
-            side = OrderSide.BUY if str(signal.signal_type).upper() in ("BUY", "LONG") else OrderSide.SELL
-
+            side, is_emergency = self._determine_order_side(signal)
+            
             # 转换订单类型（默认市价单）
             order_type = OrderType.MARKET
             if signal.price and signal.price > 0:
                 order_type = OrderType.LIMIT
 
+            # 下单前余额预检查
+            if signal.price and signal.price > 0:
+                try:
+                    # 刷新账户信息确保余额最新
+                    await self._broker._fetch_account()
+                    account = self._broker._account_cache
+                    if account:
+                        # 解析交易对的 base 和 quote asset
+                        # 例如: BTCUSDT -> base=BTC, quote=USDT
+                        #      ETHUSDT -> base=ETH, quote=USDT
+                        #      BTCUSDC -> base=BTC, quote=USDC
+                        symbol = signal.symbol.upper()
+                        # 常见的 quote assets
+                        quote_assets = ("USDT", "BUSD", "USDC", "FDUSD", "USD", "BTC", "ETH")
+                        base_asset = symbol
+                        quote_asset = None
+                        for qa in quote_assets:
+                            if symbol.endswith(qa):
+                                base_asset = symbol[:-len(qa)]
+                                quote_asset = qa
+                                break
+                        
+                        if side == OrderSide.BUY:
+                            # BUY: 检查 quote asset (USDT等) 余额
+                            quote_balance = Decimal("0")
+                            for bal in account.get("balances", []):
+                                if bal.get("asset") == quote_asset:
+                                    quote_balance = Decimal(str(bal.get("free", "0")))
+                                    break
+                            notional = quantity * signal.price
+                            if quote_balance < notional:
+                                logger.warning(
+                                    f"[OMSCallback] Insufficient {quote_asset} balance for BUY: "
+                                    f"required={notional}, available={quote_balance}, "
+                                    f"symbol={signal.symbol}, qty={quantity}, price={signal.price}"
+                                )
+                        elif side == OrderSide.SELL:
+                            # SELL: 检查 base asset (BTC等) 余额
+                            base_balance = Decimal("0")
+                            for bal in account.get("balances", []):
+                                if bal.get("asset") == base_asset:
+                                    base_balance = Decimal(str(bal.get("free", "0")))
+                                    break
+                            if base_balance < quantity:
+                                if is_emergency:
+                                    # EMERGENCY_EXIT: 强制卖出，按实际余额调整
+                                    original_qty = quantity
+                                    quantity = base_balance
+                                    logger.critical(
+                                        f"[OMSCallback] 🚨 EMERGENCY EXIT: 余额不足强制调整! "
+                                        f"原订单={original_qty} {base_asset}, 实际卖出={quantity} {base_asset}, "
+                                        f"symbol={signal.symbol}, strategy={strategy_id}"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"[OMSCallback] Insufficient {base_asset} balance for SELL: "
+                                        f"required={quantity}, available={base_balance}, "
+                                        f"symbol={signal.symbol}, price={signal.price}"
+                                    )
+                except Exception as e:
+                    logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
+
             # 下单
+            order_desc = f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
+            if is_emergency:
+                order_desc += f"🚨 EMERGENCY_EXIT, "
+            order_desc += f"side={side.value}, type={order_type.value}, qty={quantity}, "
+            order_desc += f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
+            logger.info(order_desc)
             broker_order = await self._broker.place_order(
                 symbol=signal.symbol,
                 side=side,
@@ -346,6 +539,9 @@ class OMSCallbackHandler:
                     except Exception as e:
                         logger.error(f"[OMSCallback] on_fill callback error: {e}")
 
+                # Task 19: Track fill count (latency would need broker timestamps)
+                self._fill_latency_count += 1
+
             # ==================== 发布成功事件 ====================
             event_type = "strategy.order.filled" if broker_order.filled_quantity > 0 else "strategy.order.submitted"
             self._publish_event(strategy_id, event_type, {
@@ -364,6 +560,9 @@ class OMSCallbackHandler:
                 f"filled={broker_order.filled_quantity}"
             )
 
+            # Task 19: Track successful submission
+            self._order_submit_ok += 1
+
             return {
                 "order_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
@@ -375,6 +574,9 @@ class OMSCallbackHandler:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[OMSCallback] Order failed: {error_msg}")
+
+            # Task 19: Track order error
+            self._order_submit_error += 1
 
             # ==================== 发布拒单事件 ====================
             self._publish_event(strategy_id, "strategy.order.rejected", {
@@ -620,7 +822,8 @@ def create_oms_callback(
                         symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
 
                 if fill_callback and strategy_id:
-                    await fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price)
+                    # 创建异步任务来运行协程，避免阻塞同步调用链
+                    asyncio.create_task(fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price))
                     logger.info(
                         "[OMSCallback] Fill processed: cl_ord_id=%s, exec_id=%s, qty=%s, price=%s",
                         cl_ord_id,

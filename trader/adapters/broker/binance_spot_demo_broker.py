@@ -120,6 +120,63 @@ class BinanceSpotDemoBrokerConfig:
             verify_ssl=verify_ssl,
         )
 
+    @classmethod
+    def for_env(
+        cls,
+        api_key: str,
+        secret_key: str,
+        env: str = "demo",
+        timeout: float = 15.0,
+        max_retries: int = 3,
+        recv_window: int = 5000,
+        proxy_url: Optional[str] = None,
+        verify_ssl: bool = True,
+    ) -> "BinanceSpotDemoBrokerConfig":
+        """
+        Factory method that creates config based on environment name.
+
+        Args:
+            api_key: Binance API key
+            secret_key: Binance secret key
+            env: Environment name - 'demo' or 'testnet'
+            timeout: Request timeout in seconds
+            max_retries: Maximum number of retries
+            recv_window: recvWindow for signed requests
+            proxy_url: Optional HTTP/HTTPS proxy URL
+            verify_ssl: Whether to verify SSL certificates
+
+        Returns:
+            BinanceSpotDemoBrokerConfig configured for the specified environment
+
+        Raises:
+            ValueError: If env is not 'demo' or 'testnet'
+        """
+        env_lower = env.lower().strip()
+        if env_lower == "demo":
+            return cls.for_demo(
+                api_key=api_key,
+                secret_key=secret_key,
+                timeout=timeout,
+                max_retries=max_retries,
+                recv_window=recv_window,
+                proxy_url=proxy_url,
+                verify_ssl=verify_ssl,
+            )
+        elif env_lower in ("testnet", "test"):
+            return cls.for_testnet(
+                api_key=api_key,
+                secret_key=secret_key,
+                timeout=timeout,
+                max_retries=max_retries,
+                recv_window=recv_window,
+                proxy_url=proxy_url,
+                verify_ssl=verify_ssl,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported env={env!r}, expected 'demo' or 'testnet'"
+            )
+
 
 class BinanceSpotDemoBroker(BrokerPort):
     """
