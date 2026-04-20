@@ -33,12 +33,12 @@ interface UseMonitorSnapshotResult {
 export function useMonitorSnapshot(
   options: UseMonitorSnapshotOptions = {}
 ): UseMonitorSnapshotResult {
-  const { staleThresholdMs = 60_000, refetchInterval = 30_000 } = options
+  const { staleThresholdMs = 10_000, refetchInterval = 5_000 } = options
 
   const query = useQuery({
     queryKey: monitorKeys.snapshot(),
     queryFn: () => monitorAPI.getSnapshot(),
-    staleTime: 30_000,
+    staleTime: 5_000,
     refetchInterval,
     retry: 2,
     select: data => data,

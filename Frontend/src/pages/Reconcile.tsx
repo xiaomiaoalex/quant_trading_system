@@ -27,7 +27,8 @@ export function Reconcile() {
   if (isError && !is404) return <div className="p-6"><ErrorState title="Failed to load reconciliation data" message={formatAPIError(error)} onRetry={() => refetch()} /></div>
   if (!report) return <div className="p-6"><EmptyState title="No Reconciliation Data" message="Trigger a reconciliation to generate a report." action={{ label: 'Trigger', onClick: () => setShowTriggerConfirm(true) }} /></div>
 
-  const drifts = driftEvents?.map(e => e.data) ?? report.drifts ?? []
+  // driftEvents now returns Drift[] directly (transformed from EventEnvelope in hook)
+  const drifts = driftEvents ?? report.drifts ?? []
 
   return (
     <div className="min-h-screen bg-gray-900">

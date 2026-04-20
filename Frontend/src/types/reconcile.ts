@@ -1,27 +1,28 @@
 // Drift severity levels
 export type DriftSeverity = 'low' | 'medium' | 'high' | 'critical'
 
-// Drift types
-export type DriftType = 'price' | 'quantity' | 'side' | 'missing'
+// Drift types - must match backend DriftType (GHOST/PHANTOM/DIVERGED)
+export type DriftType = 'GHOST' | 'PHANTOM' | 'DIVERGED'
 
 // Reconciliation status
 export type ReconcileStatus = 'completed' | 'in_progress' | 'failed' | 'idle'
 
+// Backend DriftResponse structure (from /v1/reconciler/report)
 export interface Drift {
-  drift_id: string
-  order_id: string
-  local_side?: string
-  exchange_side?: string
-  local_price?: string
-  exchange_price?: string
-  local_quantity?: string
-  exchange_quantity?: string
+  cl_ord_id: string
   drift_type: DriftType
-  severity: DriftSeverity
+  local_status: string | null
+  exchange_status: string | null
   detected_at: string
+  symbol: string | null
+  quantity: string | null
+  filled_quantity: string | null
+  exchange_filled_quantity: string | null
+  grace_period_remaining_sec: number | null
+  ownership: string | null  // "OWNED" / "EXTERNAL" / "UNKNOWN"
 }
 
-// Backend response for /v1/reconciler/report
+// Backend ReconcileReportResponse structure
 export interface ReconcileReport {
   timestamp: string
   total_orders_checked: number
@@ -30,15 +31,28 @@ export interface ReconcileReport {
   phantom_count: number
   diverged_count: number
   within_grace_period_count: number
+  external_count?: number
 }
 
+// Backend EventEnvelope structure (from /v1/events?stream_key=order_drifts)
 export interface DriftEvent {
-  event_id: string
+  event_id: number | null
   stream_key: string
-  trace_id: string
   event_type: string
-  timestamp: string
-  data: Drift
+  schema_version?: number
+  trace_id: string | null
+  ts_ms: number
+  payload: {
+    cl_ord_id: string
+    drift_type: DriftType
+    local_status: string | null
+    exchange_status: string | null
+    symbol: string | null
+    quantity: string | null
+    filled_quantity: string | null
+    exchange_filled_quantity: string | null
+    detected_at: string
+  }
 }
 
 // Display configurations
@@ -50,10 +64,9 @@ export const DRIFT_SEVERITY_DISPLAY: Record<DriftSeverity, { label: string; colo
 }
 
 export const DRIFT_TYPE_DISPLAY: Record<DriftType, { label: string; color: string }> = {
-  price: { label: 'Price', color: 'text-blue-400' },
-  quantity: { label: 'Quantity', color: 'text-purple-400' },
-  side: { label: 'Side', color: 'text-yellow-400' },
-  missing: { label: 'Missing', color: 'text-red-400' },
+  GHOST: { label: 'Ghost', color: 'text-red-400' },
+  PHANTOM: { label: 'Phantom', color: 'text-yellow-400' },
+  DIVERGED: { label: 'Diverged', color: 'text-orange-400' },
 }
 
 // Note: Backend returns diverged_count, not a status field

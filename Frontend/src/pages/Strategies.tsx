@@ -1,12 +1,14 @@
 import { useState, useCallback } from 'react'
 import { clsx } from 'clsx'
-import { useStrategyRegistry, useLoadedStrategies, useLoadStrategy, useUnloadStrategy, useStartStrategy, useStopStrategy, usePauseStrategy, useResumeStrategy } from '@/hooks'
+import { useQueryClient } from '@tanstack/react-query'
+import { useStrategyRegistry, useLoadedStrategies, useLoadStrategy, useUnloadStrategy, useStartStrategy, useStopStrategy, usePauseStrategy, useResumeStrategy, useSSE } from '@/hooks'
 import type { RegisteredStrategy, StrategyRuntimeInfo } from '@/types'
 import { STRATEGY_STATUS_DISPLAY } from '@/types'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { MetricCard } from '@/components/monitor'
 import { StrategyDetailModal } from '@/components/strategies'
 import { formatAPIError } from '@/api/client'
+import { strategyKeys } from '@/hooks/useStrategies'
 
 // Normalize backend status to lowercase
 function normalizeStatus(status: string): StrategyRuntimeInfo['status'] {
@@ -20,6 +22,18 @@ function normalizeStatus(status: string): StrategyRuntimeInfo['status'] {
 }
 
 export function Strategies() {
+  const queryClient = useQueryClient()
+
+  // SSE for real-time updates
+  useSSE(
+    ['strategies', 'orders'],
+    () => {
+      // Invalidate strategy queries when SSE update is received
+      queryClient.invalidateQueries({ queryKey: strategyKeys.all })
+    },
+    { debug: false }
+  )
+
   const { data: registeredStrategies, isLoading, isError, error, refetch } = useStrategyRegistry()
   const { data: loadedStrategies, refetch: refetchLoaded } = useLoadedStrategies()
   const [showConfirm, setShowConfirm] = useState<string | null>(null)

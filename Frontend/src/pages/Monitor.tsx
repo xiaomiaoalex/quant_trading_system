@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
-import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts } from '@/hooks'
+import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts, useSSE } from '@/hooks'
+import { useQueryClient } from '@tanstack/react-query'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog, HealthBadge } from '@/components/ui'
 import {
   MetricCard,
@@ -8,8 +9,22 @@ import {
   KillSwitchIndicator,
   StaleBanner,
 } from '@/components/monitor'
+import { monitorKeys } from '@/hooks/useMonitorSnapshot'
 
 export function Monitor() {
+  const queryClient = useQueryClient()
+
+  // SSE for real-time updates - invalidates queries when server pushes updates
+  useSSE(
+    ['monitor'],
+    () => {
+      // Invalidate monitor queries when SSE update is received
+      queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
+      queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
+    },
+    { debug: false }
+  )
+
   // Data hooks
   const { snapshot, isLoading, isError, error, isStale, healthState, refetch } =
     useMonitorSnapshot()

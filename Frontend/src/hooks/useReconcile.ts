@@ -21,11 +21,27 @@ export function useReconcileReport() {
   })
 }
 
-// Fetch drift events
+// Fetch drift events from /v1/events?stream_key=order_drifts
 export function useDriftEvents() {
   return useQuery({
     queryKey: reconcileKeys.driftEvents(),
-    queryFn: () => reconcileAPI.getDriftEvents(),
+    queryFn: async () => {
+      const events = await reconcileAPI.getDriftEvents()
+      // Transform EventEnvelope[] to Drift[] by extracting payload
+      return events.map(event => ({
+        cl_ord_id: event.payload.cl_ord_id,
+        drift_type: event.payload.drift_type,
+        local_status: event.payload.local_status,
+        exchange_status: event.payload.exchange_status,
+        detected_at: event.payload.detected_at,
+        symbol: event.payload.symbol,
+        quantity: event.payload.quantity,
+        filled_quantity: event.payload.filled_quantity,
+        exchange_filled_quantity: event.payload.exchange_filled_quantity,
+        grace_period_remaining_sec: null,
+        ownership: null,
+      }))
+    },
     staleTime: 30_000,
     retry: 2,
   })
