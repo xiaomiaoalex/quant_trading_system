@@ -110,6 +110,39 @@ class OMSCallbackHandler:
         self._processed_exec_keys: Dict[str, float] = {}
         self._exec_dedup_ttl_seconds: int = 900
 
+        # Task 17: 幂等去重计数器（可观测性）
+        self._cl_ord_id_dedup_hits: int = 0  # cl_ord_id 重复次数
+        self._exec_dedup_hits: int = 0  # exec_id 重复次数
+
+        # Task 19: 订单可观测性指标
+        self._order_submit_ok: int = 0  # 成功提交
+        self._order_submit_reject: int = 0  # 被拒绝
+        self._order_submit_error: int = 0  # 错误
+        self._reject_reason_counts: Dict[str, int] = {}  # 按原因统计拒单
+        self._fill_latency_sum_ms: float = 0.0  # 累计成交延迟（毫秒）
+        self._fill_latency_count: int = 0  # 成交次数
+
+    def get_observable_metrics(self) -> Dict[str, Any]:
+        """
+        Task 19: 获取可观测性指标
+
+        Returns:
+            包含所有运行时指标的字典
+        """
+        return {
+            "cl_ord_id_dedup_hits": self._cl_ord_id_dedup_hits,
+            "exec_dedup_hits": self._exec_dedup_hits,
+            "order_submit_ok": self._order_submit_ok,
+            "order_submit_reject": self._order_submit_reject,
+            "order_submit_error": self._order_submit_error,
+            "reject_reason_counts": dict(self._reject_reason_counts),
+            "fill_latency_ms_avg": (
+                self._fill_latency_sum_ms / self._fill_latency_count
+                if self._fill_latency_count > 0 else None
+            ),
+            "fill_latency_count": self._fill_latency_count,
+        }
+
     def _cleanup_exec_dedup(self) -> None:
         now = time.time()
         expired_keys = [
@@ -158,6 +191,7 @@ class OMSCallbackHandler:
     def _mark_exec_seen(self, cl_ord_id: str, exec_id: str) -> bool:
         """
         记录成交幂等键。
+
         Returns:
             True: 首次出现
             False: 重复成交
@@ -167,6 +201,7 @@ class OMSCallbackHandler:
         self._cleanup_exec_dedup()
         key = self._make_exec_key(cl_ord_id, exec_id)
         if key in self._processed_exec_keys:
+            self._exec_dedup_hits += 1  # Task 17: 计数重复成交
             return False
         self._processed_exec_keys[key] = time.time() + self._exec_dedup_ttl_seconds
         return True
@@ -178,6 +213,40 @@ class OMSCallbackHandler:
         if "_" not in cl_ord_id:
             return cl_ord_id
         return cl_ord_id.rsplit("_", 1)[0]
+
+    def get_dedup_stats(self) -> Dict[str, Any]:
+        """
+        获取幂等去重统计信息（Task 17 & Task 19）。
+
+        Returns:
+            Dict with:
+                - cl_ord_id_dedup_hits: cl_ord_id 重复处理次数
+                - exec_dedup_hits: exec_id 重复成交次数
+                - active_exec_keys: 当前有效的 exec 键数量
+                - order_submit_ok: 成功提交订单数 (Task 19)
+                - order_submit_reject: 被拒绝订单数 (Task 19)
+                - order_submit_error: 错误订单数 (Task 19)
+                - reject_reason_counts: 按原因统计的拒单数 (Task 19)
+                - fill_latency_ms_avg: 平均成交延迟 (Task 19)
+                - fill_latency_count: 成交次数 (Task 19)
+        """
+        self._cleanup_exec_dedup()
+        return {
+            # Task 17: Dedup stats
+            "cl_ord_id_dedup_hits": self._cl_ord_id_dedup_hits,
+            "exec_dedup_hits": self._exec_dedup_hits,
+            "active_exec_keys": len(self._processed_exec_keys),
+            # Task 19: Order submission stats
+            "order_submit_ok": self._order_submit_ok,
+            "order_submit_reject": self._order_submit_reject,
+            "order_submit_error": self._order_submit_error,
+            "reject_reason_counts": dict(self._reject_reason_counts),
+            "fill_latency_ms_avg": (
+                self._fill_latency_sum_ms / self._fill_latency_count
+                if self._fill_latency_count > 0 else None
+            ),
+            "fill_latency_count": self._fill_latency_count,
+        }
 
     async def execute_signal(
         self,
@@ -213,16 +282,32 @@ class OMSCallbackHandler:
                 "price": str(signal.price) if signal.price else None,
                 "reason": "LIVE_TRADING_DISABLED",
             })
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "LIVE_TRADING_DISABLED"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise TradingDisabledError("Live trading is not enabled")
 
         # ==================== 信号验证 ====================
         if not signal.symbol:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "MISSING_SYMBOL"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError("Signal missing symbol")
 
         if not signal.signal_type:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "MISSING_SIGNAL_TYPE"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError("Signal missing signal_type")
 
         if signal.quantity is None or signal.quantity <= 0:
+            # Task 19: Track rejection
+            self._order_submit_reject += 1
+            reason = "INVALID_QUANTITY"
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
 
         # ==================== 获取 stepSize ====================
@@ -261,6 +346,10 @@ class OMSCallbackHandler:
                     "price": str(price),
                     "reason": f"MIN_NOTIONAL: {error_msg}",
                 })
+                # Task 19: Track rejection
+                self._order_submit_reject += 1
+                reason = "MIN_NOTIONAL"
+                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
                 raise MinNotionalError(error_msg)
 
         # ==================== 生成订单ID ====================
@@ -269,6 +358,7 @@ class OMSCallbackHandler:
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
         if cl_ord_id in self._processed_cl_ord_ids:
+            self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
             logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (memory): {cl_ord_id}")
             return None
 
@@ -284,6 +374,7 @@ class OMSCallbackHandler:
                 existing_order_found = str(existing_order.get("cl_ord_id", "")) == cl_ord_id
 
             if existing_order_found:
+                self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
                 logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (storage): {cl_ord_id}")
                 # 加入内存缓存防止后续重复处理
                 self._processed_cl_ord_ids.add(cl_ord_id)
@@ -448,6 +539,9 @@ class OMSCallbackHandler:
                     except Exception as e:
                         logger.error(f"[OMSCallback] on_fill callback error: {e}")
 
+                # Task 19: Track fill count (latency would need broker timestamps)
+                self._fill_latency_count += 1
+
             # ==================== 发布成功事件 ====================
             event_type = "strategy.order.filled" if broker_order.filled_quantity > 0 else "strategy.order.submitted"
             self._publish_event(strategy_id, event_type, {
@@ -466,6 +560,9 @@ class OMSCallbackHandler:
                 f"filled={broker_order.filled_quantity}"
             )
 
+            # Task 19: Track successful submission
+            self._order_submit_ok += 1
+
             return {
                 "order_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
@@ -477,6 +574,9 @@ class OMSCallbackHandler:
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[OMSCallback] Order failed: {error_msg}")
+
+            # Task 19: Track order error
+            self._order_submit_error += 1
 
             # ==================== 发布拒单事件 ====================
             self._publish_event(strategy_id, "strategy.order.rejected", {

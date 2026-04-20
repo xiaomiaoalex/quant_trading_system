@@ -197,13 +197,17 @@ def get_strategy_runner() -> StrategyRunner:
     注意：
     - StrategyRunner 本身是线程安全的
     - OMS 回调通过事件循环异步初始化
+    - Task 18: runtime_state_storage 用于策略运行时状态持久化
     """
     global _strategy_runner_instance
     if _strategy_runner_instance is None:
+        from trader.storage.in_memory import get_storage
+        storage = get_storage()
         _strategy_runner_instance = StrategyRunner(
             oms_callback=_oms_callback_dispatcher,
             killswitch_callback=_killswitch_callback,
             event_callback=_event_callback_dispatcher,
+            runtime_state_storage=storage,  # Task 18
         )
     return _strategy_runner_instance
 

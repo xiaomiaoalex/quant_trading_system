@@ -486,6 +486,19 @@ class MonitorSnapshot(BaseModel):
     active_alerts: List[Alert] = Field(default_factory=list)
     alert_count_by_severity: Dict[str, int] = Field(default_factory=dict)
     
+    # Task 19: 运行时可观测性指标
+    tick_rate: Optional[float] = Field(default=None, description="每秒Tick数")
+    tick_lag_ms: Optional[float] = Field(default=None, description="Tick处理延迟（毫秒）")
+    order_submit_ok: int = Field(default=0, description="成功提交订单数")
+    order_submit_reject: int = Field(default=0, description="被拒绝订单数")
+    order_submit_error: int = Field(default=0, description="错误订单数")
+    reject_reason_counts: Dict[str, int] = Field(default_factory=dict, description="按原因统计的拒单数")
+    fill_latency_ms_avg: Optional[float] = Field(default=None, description="平均成交延迟（毫秒）")
+    fill_latency_count: int = Field(default=0, description="成交次数")
+    ws_reconnect_count: int = Field(default=0, description="WebSocket重连次数")
+    cl_ord_id_dedup_hits: int = Field(default=0, description="cl_ord_id重复去重次数")
+    exec_dedup_hits: int = Field(default=0, description="exec_id重复去重次数")
+    
     # 元信息 (Task 9.2 - 真聚合化)
     snapshot_source: Optional[str] = Field(default="aggregated", description="数据来源: aggregated/query")
     freshness: Optional[str] = Field(default=None, description="数据新鲜度时间戳")

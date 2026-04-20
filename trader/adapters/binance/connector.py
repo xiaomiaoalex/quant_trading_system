@@ -74,6 +74,34 @@ class BinanceConnectorConfig:
     rate_budget_config: Optional[RateBudgetConfig] = None
     backoff_config: Optional[BackoffConfig] = None
 
+    @classmethod
+    def from_env(cls, env: str = "demo") -> "BinanceConnectorConfig":
+        """
+        Create config from environment name using unified env config.
+
+        Args:
+            env: 'demo' or 'testnet'
+
+        Returns:
+            BinanceConnectorConfig with all stream configs derived from env
+        """
+        from trader.api.env_config import get_binance_env_config
+
+        env_config = get_binance_env_config()
+        rest_base = env_config["rest_base"]
+        public_ws = env_config["public_ws_base"]
+        private_ws = env_config["private_ws_base"]
+
+        return cls(
+            testnet=True,
+            public_stream_config=PublicStreamConfig(base_url=public_ws),
+            private_stream_config=PrivateStreamConfig(
+                base_url=private_ws,
+                rest_url=rest_base,
+            ),
+            alignment_config=AlignmentConfig(base_url=rest_base),
+        )
+
 
 class BinanceConnector:
     """

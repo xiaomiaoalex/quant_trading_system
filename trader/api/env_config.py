@@ -6,9 +6,87 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Mapping
+from typing import Mapping, Dict
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# Binance Environment Configuration (Task 16)
+# ============================================================
+
+BINANCE_ENV_ENV = "BINANCE_ENV"
+BINANCE_ENV_DEFAULT = "demo"
+BINANCE_ENV_DEMO = "demo"
+BINANCE_ENV_TESTNET = "testnet"
+VALID_BINANCE_ENVS = {BINANCE_ENV_DEMO, BINANCE_ENV_TESTNET}
+
+# URL Sets per environment
+BINANCE_ENV_URL_CONFIGS: Dict[str, Dict[str, str]] = {
+    BINANCE_ENV_DEMO: {
+        "rest_base": "https://demo-api.binance.com/api",
+        "public_ws_base": "wss://demo-stream.binance.com/ws",
+        "private_ws_base": "wss://demo-stream.binance.com/ws",
+        "listenkey_rest_base": "https://demo-api.binance.com/api",
+    },
+    BINANCE_ENV_TESTNET: {
+        "rest_base": "https://testnet.binance.vision/api",
+        "public_ws_base": "wss://stream.testnet.binance.vision/ws",
+        "private_ws_base": "wss://stream.testnet.binance.vision/ws",
+        "listenkey_rest_base": "https://testnet.binance.vision/api",
+    },
+}
+
+
+def get_binance_env(env: Mapping[str, str] | None = None) -> str:
+    """
+    Returns validated BINANCE_ENV value (demo|testnet).
+
+    Falls back to 'demo' if invalid or unset.
+
+    Args:
+        env: Optional environment mapping (defaults to os.environ)
+
+    Returns:
+        Validated environment name: 'demo' or 'testnet'
+    """
+    source = env if env is not None else os.environ
+    raw = source.get(BINANCE_ENV_ENV, BINANCE_ENV_DEFAULT).lower().strip()
+    if raw not in VALID_BINANCE_ENVS:
+        logger.warning(
+            "[Binance] Invalid %s=%r, falling back to default=%s",
+            BINANCE_ENV_ENV,
+            raw,
+            BINANCE_ENV_DEFAULT,
+        )
+        return BINANCE_ENV_DEFAULT
+    return raw
+
+
+def get_binance_env_config(env: Mapping[str, str] | None = None) -> Dict[str, str]:
+    """
+    Returns full URL config dict for current BINANCE_ENV.
+
+    Includes:
+        - rest_base: REST API base URL
+        - public_ws_base: Public WebSocket base URL
+        - private_ws_base: Private WebSocket base URL
+        - listenkey_rest_base: REST URL for listenKey management
+
+    Args:
+        env: Optional environment mapping (defaults to os.environ)
+
+    Returns:
+        Dict with all environment URLs
+    """
+    binance_env = get_binance_env(env)
+    config = BINANCE_ENV_URL_CONFIGS.get(binance_env, BINANCE_ENV_URL_CONFIGS[BINANCE_ENV_DEFAULT]).copy()
+    config["env"] = binance_env
+    return config
+
+
+def is_valid_binance_env(env_name: str) -> bool:
+    """Check if an environment name is valid."""
+    return env_name.lower() in VALID_BINANCE_ENVS
 
 BINANCE_RECV_WINDOW_ENV = "BINANCE_RECV_WINDOW"
 BINANCE_RECV_WINDOW_DEFAULT = 5000

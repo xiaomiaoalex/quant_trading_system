@@ -334,6 +334,14 @@ class OMS:
         avg_price = Decimal(str(broker_order_data.get("average_price", 0)))
 
         # 处理状态更新
+        # Task 17: 终端状态单调性检查 - 不允许从终态回退
+        if order.is_terminal():
+            logger.warning(
+                f"[OMS] 订单已终态，忽略回调: client_order_id={client_order_id}, "
+                f"current_status={order.status}, callback_status={status}"
+            )
+            return
+
         if status == "FILLED" and order.status != OrderStatus.FILLED:
             order.fill(filled_qty, avg_price)
             await self._storage.save_order(order)

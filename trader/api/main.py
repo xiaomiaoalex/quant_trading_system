@@ -48,6 +48,8 @@ from trader.api.env_config import (
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
     get_system_order_namespace_prefix,
+    get_binance_env,
+    get_binance_env_config,
 )
 from trader.core.domain.services.order_ownership_registry import (
     get_order_ownership_registry,
@@ -144,40 +146,50 @@ async def lifespan(app: FastAPI):
             from trader.adapters.binance.connector import (
                 BinanceConnectorConfig,
             )
-
-            # 根据 BINANCE_ENV 统一 connector 的 REST/WS 环境
-            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
             from trader.adapters.binance.public_stream import PublicStreamConfig
             from trader.adapters.binance.private_stream import PrivateStreamConfig
             from trader.adapters.binance.rest_alignment import AlignmentConfig
+
+            # 使用统一的 env config
+            binance_env = get_binance_env()
+            env_config = get_binance_env_config()
+
+            logger.info(
+                "[Binance] env=%s rest_base=%s public_ws=%s private_ws=%s listenkey_rest=%s",
+                binance_env,
+                env_config["rest_base"],
+                env_config["public_ws_base"],
+                env_config["private_ws_base"],
+                env_config["listenkey_rest_base"],
+            )
 
             if binance_env in ("demo",):
                 # Binance Spot Demo 环境
                 config = BinanceConnectorConfig(
                     testnet=True,
                     public_stream_config=PublicStreamConfig(
-                        base_url="wss://demo-stream.binance.com/ws",
+                        base_url=env_config["public_ws_base"],
                     ),
                     private_stream_config=PrivateStreamConfig(
-                        base_url="wss://demo-stream.binance.com/ws",
-                        rest_url="https://demo-api.binance.com/api",
+                        base_url=env_config["private_ws_base"],
+                        rest_url=env_config["rest_base"],
                     ),
                     alignment_config=AlignmentConfig(
-                        base_url="https://demo-api.binance.com/api",
+                        base_url=env_config["rest_base"],
                     ),
                 )
             elif binance_env in ("testnet", "test"):
                 config = BinanceConnectorConfig(
                     testnet=True,
                     public_stream_config=PublicStreamConfig(
-                        base_url="wss://stream.testnet.binance.vision/ws",
+                        base_url=env_config["public_ws_base"],
                     ),
                     private_stream_config=PrivateStreamConfig(
-                        base_url="wss://stream.testnet.binance.vision/ws",
-                        rest_url="https://testnet.binance.vision/api",
+                        base_url=env_config["private_ws_base"],
+                        rest_url=env_config["rest_base"],
                     ),
                     alignment_config=AlignmentConfig(
-                        base_url="https://testnet.binance.vision/api",
+                        base_url=env_config["rest_base"],
                     ),
                 )
             else:
@@ -200,21 +212,175 @@ async def lifespan(app: FastAPI):
             else:
                 logger.warning("[Lifespan] Fill handler not available yet")
 
+            # ============================================================
+            # Task 16: Startup Self-Check (fail-closed)
+            # ============================================================
+            async def _run_startup_self_check(c: BinanceConnector) -> bool:
+                """
+                Run connectivity self-check before marking connector as ready.
+
+                Returns:
+                    True if all checks passed, False otherwise
+                """
+                import time
+                checks = {}
+                try:
+                    # Check 1: REST /v3/time
+                    start = time.monotonic()
+                    server_time = await c._rest_coordinator._api.get_server_time()
+                    rest_latency_ms = (time.monotonic() - start) * 1000
+                    checks["rest_time"] = True
+                    logger.info("[Binance] Self-check rest_time: OK (latency=%.1fms)", rest_latency_ms)
+                except Exception as e:
+                    checks["rest_time"] = False
+                    logger.error("[Binance] Self-check rest_time: FAILED - %s", e)
+
+                try:
+                    # Check 2: Public stream connected
+                    public_state = c.public_stream.state
+                    checks["public_stream"] = public_state.value == "CONNECTED"
+                    logger.info("[Binance] Self-check public_stream: %s", public_state.value)
+                except Exception as e:
+                    checks["public_stream"] = False
+                    logger.error("[Binance] Self-check public_stream: FAILED - %s", e)
+
+                try:
+                    # Check 3: Private stream available and connected
+                    if c._private_stream_available:
+                        private_state = c.private_stream.state
+                        checks["private_stream"] = private_state.value == "CONNECTED"
+                        logger.info("[Binance] Self-check private_stream: %s", private_state.value)
+                    else:
+                        checks["private_stream"] = False
+                        logger.warning(
+                            "[Binance] Self-check private_stream: SKIPPED (private_stream_available=False, reason=%s)",
+                            c._private_stream_disabled_reason,
+                        )
+                except Exception as e:
+                    checks["private_stream"] = False
+                    logger.error("[Binance] Self-check private_stream: FAILED - %s", e)
+
+                failed = [k for k, v in checks.items() if not v]
+                if failed:
+                    logger.error(
+                        "[Binance] Startup self-check FAILED: %s. Connector will start but strategy RUNNING is blocked.",
+                        failed,
+                    )
+                    return False
+                logger.info("[Binance] Startup self-check: ALL PASSED")
+                return True
+
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()
             _binance_connector_instance = connector
-            logger.info(
-                "[Lifespan] BinanceConnector started: env=%s public_ws=%s private_ws=%s private_rest=%s align_rest=%s",
-                binance_env,
-                config.public_stream_config.base_url if config.public_stream_config else "default",
-                config.private_stream_config.base_url if config.private_stream_config else "default",
-                config.private_stream_config.rest_url if config.private_stream_config else "default",
-                config.alignment_config.base_url if config.alignment_config else "default",
-            )
+
+            # Run self-check (but don't block startup)
+            self_check_passed = await _run_startup_self_check(connector)
+
+            # Store self-check result for strategy start gate
+            connector._startup_self_check_passed = self_check_passed
+
+            if self_check_passed:
+                logger.info(
+                    "[Lifespan] BinanceConnector started: env=%s",
+                    binance_env,
+                )
+            else:
+                logger.warning(
+                    "[Lifespan] BinanceConnector started in DEGRADED mode: env=%s, self_check_failed",
+                    binance_env,
+                )
 
             # 注入 connector 到策略编排器
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
             set_strategy_orchestrator_connector(connector)
+
+            # ============================================================
+            # Task 18: Runtime State Recovery
+            # ============================================================
+            async def _recover_runtime_state() -> None:
+                """
+                从持久化存储恢复策略运行时状态。
+
+                恢复步骤：
+                1. 获取所有 RUNNING 状态的策略运行时状态
+                2. 验证环境一致性（recv_window 等）
+                3. 恢复订阅（market data）
+                4. 恢复策略到 RUNNING 状态
+                5. 发布 strategy.recovered 事件
+                """
+                from trader.storage.in_memory import get_storage
+                storage = get_storage()
+                running_states = storage.list_running_strategy_states()
+
+                if not running_states:
+                    logger.info("[Recovery] No running strategies to recover")
+                    return
+
+                logger.info("[Recovery] Found %d running strategies to recover", len(running_states))
+
+                from trader.api.routes.strategies import get_strategy_runner, get_strategy_orchestrator
+                runner = get_strategy_runner()
+                orchestrator = get_strategy_orchestrator()
+
+                for state in running_states:
+                    strategy_id = state.get("strategy_id")
+                    saved_env = state.get("env", "demo")
+                    symbols = state.get("symbols", [])
+
+                    # 验证环境一致性
+                    if saved_env != binance_env:
+                        logger.warning(
+                            "[Recovery] Strategy %s env mismatch: saved=%s current=%s, skipping",
+                            strategy_id, saved_env, binance_env,
+                        )
+                        # 更新状态为错误
+                        state["recovery_error"] = f"env_mismatch: saved={saved_env} current={binance_env}"
+                        storage.save_strategy_runtime_state(state)
+                        continue
+
+                    # 验证策略是否已加载
+                    info = runner.get_status(strategy_id)
+                    if info is None:
+                        logger.warning("[Recovery] Strategy %s not loaded, skipping", strategy_id)
+                        state["recovery_error"] = "strategy_not_loaded"
+                        storage.save_strategy_runtime_state(state)
+                        continue
+
+                    # 恢复订阅（如果有 symbols）
+                    if symbols and orchestrator._connector:
+                        for symbol in symbols:
+                            try:
+                                # 订阅已经在 connector 启动时通过 streams 配置处理
+                                # 这里只是更新 orchestrator 的订阅状态
+                                logger.info("[Recovery] Restoring subscription for %s: %s", strategy_id, symbol)
+                            except Exception as e:
+                                logger.warning("[Recovery] Failed to restore subscription for %s: %s", symbol, e)
+
+                    # 更新策略信息中的 symbols 和 env
+                    runner.update_strategy_subscription(strategy_id, symbols, binance_env)
+
+                    # 启动策略
+                    try:
+                        await runner.start(strategy_id)
+                        logger.info("[Recovery] Strategy recovered: %s", strategy_id)
+
+                        # 发布恢复事件
+                        from trader.api.routes.strategies import _event_callback_dispatcher
+                        if _event_callback_dispatcher:
+                            _event_callback_dispatcher(strategy_id, "strategy.recovered", {
+                                "strategy_id": strategy_id,
+                                "symbols": symbols,
+                                "env": binance_env,
+                                "recovered_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                    except Exception as e:
+                        logger.error("[Recovery] Failed to recover strategy %s: %s", strategy_id, e)
+                        state["recovery_error"] = str(e)
+                        storage.save_strategy_runtime_state(state)
+
+            # 执行恢复（延迟到事件循环完全启动后）
+            asyncio.create_task(_recover_runtime_state())
         except Exception as e:
             logger.exception(
                 "[Lifespan] Failed to start BinanceConnector: type=%s repr=%r",
@@ -273,19 +439,13 @@ async def lifespan(app: FastAPI):
                 return []
 
             recv_window = get_binance_recv_window()
-            binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
-            if binance_env in ("testnet", "test"):
-                config = BinanceSpotDemoBrokerConfig.for_testnet(
-                    api_key,
-                    secret_key,
-                    recv_window=recv_window,
-                )
-            else:
-                config = BinanceSpotDemoBrokerConfig.for_demo(
-                    api_key,
-                    secret_key,
-                    recv_window=recv_window,
-                )
+            binance_env = get_binance_env()
+            config = BinanceSpotDemoBrokerConfig.for_env(
+                api_key,
+                secret_key,
+                env=binance_env,
+                recv_window=recv_window,
+            )
             broker = BinanceSpotDemoBroker(config)
             await broker.connect()
             try:

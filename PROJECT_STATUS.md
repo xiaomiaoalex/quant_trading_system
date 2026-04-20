@@ -8,6 +8,38 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：Task 16-20 自动化交易系统生产化
+- 完成时间: 2026-04-20 19:44 (北京时间)
+- 分支: codex/task16-20-automated-trading-into-production
+- 状态: ✅ Task 16/17/18/19 已完成，Task 20 进行中
+- 开发前状态:
+  - `env_config.py` 仅处理 `recv_window`，未统一 Binance 环境配置
+  - 缺少 fill deduplication 的 observable 指标 (`dedup_hit_count`)
+  - 策略运行时状态未持久化，重启后无法恢复
+  - 缺少运行时可观测性指标
+- 开发后状态:
+  - **Task 16**: 扩展 `env_config.py` 新增 `get_binance_env()`, `get_binance_env_config()`, `BINANCE_ENV_URL_CONFIGS`
+  - **Task 16**: `BinanceSpotDemoBrokerConfig` 新增 `for_env()` 工厂方法
+  - **Task 16**: `BinanceConnectorConfig` 新增 `from_env()` 类方法
+  - **Task 16**: `main.py` 新增启动自检 `_run_startup_self_check()`
+  - **Task 17**: `OMSCallbackHandler` 新增 `_cl_ord_id_dedup_hits`, `_exec_dedup_hits` 计数器
+  - **Task 17**: `ControlPlaneInMemoryStorage` 新增 execution deduplication 统计
+  - **Task 17**: 新增 `005_executions_table.sql` 迁移，unique constraint on `(cl_ord_id, exec_id)`
+  - **Task 17**: OMS 添加 terminal state monotonicity 检查
+  - **Task 18**: `StrategyRunner` 新增 `runtime_state_storage` 参数和 `_persist_runtime_state()` 方法
+  - **Task 18**: `start()`, `stop()`, `tick()` 方法集成状态持久化
+  - **Task 18**: `main.py` lifespan 新增 `_recover_runtime_state()` 恢复逻辑
+  - **Task 18**: 新增 `update_strategy_subscription()` 方法支持 symbols/env 更新
+  - **Task 19**: OMS 新增订单可观测性指标 (`order_submit_ok/reject/error`, `reject_reason_counts`, `fill_latency_count`)
+  - **Task 19**: `MonitorSnapshot` 新增运行时可观测性字段
+  - **Task 19**: `MonitorService.DEFAULT_ALERT_RULES` 新增运行时阈值告警规则
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_env_unified.py` → 35 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_idempotency.py` → 14 passed ✅
+  - `python -m pytest -q trader/tests/test_strategy_runtime_recovery.py` → 14 passed ✅
+  - `python -m pytest -q trader/tests/test_runtime_observability.py` → 13 passed ✅
+  - P0 回归测试 → 89 passed ✅
+
 ### 本次任务：修复 fire_test 策略信号方向错误与异步 handler RuntimeWarning
 - 完成时间: 2026-04-20 18:16
 - 分支: codex/task9-strategy-code-e2e-bridge

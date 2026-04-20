@@ -291,6 +291,36 @@ class PostgreSQLStorage:
                 ON feature_values(ts_ms DESC)
             """)
 
+            # Task 17: Executions table with cl_ord_id + exec_id unique constraint
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS executions (
+                    execution_id TEXT PRIMARY KEY,
+                    cl_ord_id TEXT NOT NULL,
+                    exec_id TEXT NOT NULL,
+                    symbol TEXT,
+                    side TEXT,
+                    quantity TEXT,
+                    price TEXT,
+                    fee TEXT,
+                    fee_currency TEXT,
+                    ts_ms BIGINT,
+                    strategy_id TEXT,
+                    venue TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    UNIQUE(cl_ord_id, exec_id)
+                )
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_executions_cl_ord_id 
+                ON executions(cl_ord_id)
+            """)
+
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_executions_strategy_id 
+                ON executions(strategy_id)
+            """)
+
     async def save_event(self, event) -> str:
         """
         Save an event to the event log.
@@ -981,6 +1011,140 @@ class PostgreSQLStorage:
                 """
             )
             return [dict(row) for row in rows]
+
+    # ==================== Execution Methods (Task 17) ====================
+
+    async def create_execution(self, execution_data: Dict[str, Any]) -> tuple[str, bool]:
+        """
+        Create an execution record with cl_ord_id + exec_id idempotency.
+
+        Uses UNIQUE(cl_ord_id, exec_id) constraint to ensure idempotency.
+
+        Args:
+            execution_data: Dictionary containing:
+                - execution_id: Unique identifier (or auto-generated)
+                - cl_ord_id: Client order ID
+                - exec_id: Execution ID from exchange
+                - symbol: Trading symbol
+                - side: BUY/SELL
+                - quantity: Executed quantity
+                - price: Execution price
+                - fee: Fee amount
+                - fee_currency: Fee currency
+                - ts_ms: Timestamp in milliseconds
+                - strategy_id: Strategy ID
+                - venue: Exchange/venue name
+
+        Returns:
+            Tuple of (execution_id, created) where created is True if new, False if duplicate
+        """
+        execution_id = execution_data.get("execution_id") or str(uuid.uuid4())
+        cl_ord_id = str(execution_data.get("cl_ord_id") or "").strip()
+        exec_id = str(execution_data.get("exec_id") or "").strip()
+        symbol = execution_data.get("symbol")
+        side = execution_data.get("side")
+        quantity = str(execution_data.get("quantity") or "0")
+        price = str(execution_data.get("price") or "0")
+        fee = execution_data.get("fee")
+        fee_currency = execution_data.get("fee_currency")
+        ts_ms = execution_data.get("ts_ms")
+        strategy_id = execution_data.get("strategy_id")
+        venue = execution_data.get("venue")
+
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO executions 
+                    (execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, fee, fee_currency, ts_ms, strategy_id, venue)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    """,
+                    execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, fee, fee_currency, ts_ms, strategy_id, venue,
+                )
+            return execution_id, True
+        except asyncpg.UniqueViolationError:
+            # Duplicate execution - return the existing one
+            existing = await self.get_execution(cl_ord_id, exec_id)
+            if existing:
+                return existing["execution_id"], False
+            return execution_id, False
+
+    async def get_execution(self, cl_ord_id: str, exec_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get an execution by cl_ord_id + exec_id.
+
+        Args:
+            cl_ord_id: Client order ID
+            exec_id: Execution ID
+
+        Returns:
+            Execution dict or None if not found
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, 
+                       fee, fee_currency, ts_ms, strategy_id, venue, created_at
+                FROM executions
+                WHERE cl_ord_id = $1 AND exec_id = $2
+                """,
+                cl_ord_id, exec_id,
+            )
+
+        if row:
+            return dict(row)
+        return None
+
+    async def list_executions(
+        self,
+        cl_ord_id: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        since_ts_ms: Optional[int] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        List executions with filters.
+
+        Args:
+            cl_ord_id: Filter by client order ID
+            strategy_id: Filter by strategy ID
+            since_ts_ms: Filter by timestamp (milliseconds)
+            limit: Maximum number of results
+
+        Returns:
+            List of execution dicts
+        """
+        query = """
+            SELECT execution_id, cl_ord_id, exec_id, symbol, side, quantity, price,
+                   fee, fee_currency, ts_ms, strategy_id, venue, created_at
+            FROM executions
+            WHERE 1=1
+        """
+        params = []
+        param_count = 0
+
+        if cl_ord_id:
+            param_count += 1
+            query += f" AND cl_ord_id = ${param_count}"
+            params.append(cl_ord_id)
+
+        if strategy_id:
+            param_count += 1
+            query += f" AND strategy_id = ${param_count}"
+            params.append(strategy_id)
+
+        if since_ts_ms:
+            param_count += 1
+            query += f" AND ts_ms >= ${param_count}"
+            params.append(since_ts_ms)
+
+        query += f" ORDER BY ts_ms DESC LIMIT ${param_count + 1}"
+        params.append(limit)
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
 
 
 def is_postgres_available() -> bool:
