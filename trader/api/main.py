@@ -292,21 +292,12 @@ async def lifespan(app: FastAPI):
                 broker_orders = await broker.get_open_orders()
                 prefixes = get_reconciler_exchange_client_order_prefixes()
                 if prefixes:
-                    before_count = len(broker_orders)
                     broker_orders = [
                         order
                         for order in broker_orders
                         if order.client_order_id
                         and any(order.client_order_id.startswith(prefix) for prefix in prefixes)
                     ]
-                    # 仅在过滤实际产生影响时记录日志
-                    if before_count != len(broker_orders):
-                        logger.info(
-                            "[Reconciler] Applied exchange order prefix filter: prefixes=%s, before=%s, after=%s",
-                            prefixes,
-                            before_count,
-                            len(broker_orders),
-                        )
                 return [
                     {
                         "client_order_id": order.client_order_id,
