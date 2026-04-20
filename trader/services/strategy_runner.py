@@ -390,6 +390,17 @@ class StrategyRunner:
         # Task 18: 持久化运行时状态
         await self._persist_runtime_state(strategy_id)
 
+        # Task 9.11: Broadcast SSE update for real-time frontend updates
+        try:
+            from trader.api.routes.sse import broadcast_strategy_update
+            asyncio.create_task(broadcast_strategy_update(strategy_id, {
+                "type": "strategy_started",
+                "status": "RUNNING",
+                "symbols": info.symbols,
+            }))
+        except Exception:
+            pass  # SSE broadcast is non-critical
+
         logger.info(f"策略启动成功: {strategy_id}")
         return info
 
@@ -461,6 +472,16 @@ class StrategyRunner:
 
         # Task 18: 持久化运行时状态
         await self._persist_runtime_state(strategy_id)
+
+        # Task 9.11: Broadcast SSE update for real-time frontend updates
+        try:
+            from trader.api.routes.sse import broadcast_strategy_update
+            asyncio.create_task(broadcast_strategy_update(strategy_id, {
+                "type": "strategy_stopped",
+                "status": "STOPPED",
+            }))
+        except Exception:
+            pass  # SSE broadcast is non-critical
 
         logger.info(f"策略停止成功: {strategy_id}")
         return info

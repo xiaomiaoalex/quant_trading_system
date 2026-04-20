@@ -73,6 +73,19 @@ class ReconcilerService:
         report = self._reconciler.reconcile(local_orders, exchange_orders, external_order_ids)
         self._last_report = report
 
+        # Task 9.11: Broadcast SSE update for real-time frontend updates
+        try:
+            from trader.api.routes.sse import broadcast_reconciliation_update
+            asyncio.create_task(broadcast_reconciliation_update({
+                "type": "reconciliation_complete",
+                "ghost_count": report.ghost_count,
+                "phantom_count": report.phantom_count,
+                "diverged_count": report.diverged_count,
+                "drift_count": len(report.drifts),
+            }))
+        except Exception:
+            pass  # SSE broadcast is non-critical
+
         for drift in report.drifts:
             # PHANTOM orders (exists on exchange but not locally) have no created_at timestamp
             # to calculate grace period, so they are always handled immediately.
