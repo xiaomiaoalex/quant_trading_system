@@ -276,12 +276,13 @@ class PrivateStreamManager(BaseStreamFSM):
         if self._private_config.ws_api_urls:
             return list(self._private_config.ws_api_urls)
 
-        # 兜底顺序：demo -> prod -> testnet
-        return [
-            "wss://demo-ws-api.binance.com/ws-api/v3",
-            "wss://ws-api.binance.com/ws-api/v3",
-            "wss://ws-api.testnet.binance.vision/ws-api/v3",
-        ]
+        # 根据 rest_url 推断环境，避免跨环境 endpoint 盲试导致冷启动过慢。
+        rest_url = (self._private_config.rest_url or "").lower()
+        if "demo-api.binance.com" in rest_url:
+            return ["wss://demo-ws-api.binance.com/ws-api/v3"]
+        if "testnet.binance.vision" in rest_url:
+            return ["wss://ws-api.testnet.binance.vision/ws-api/v3"]
+        return ["wss://ws-api.binance.com/ws-api/v3"]
 
     async def _start_ws_api_signature_mode(self) -> None:
         """通过 userDataStream.subscribe.signature 启动私有流。"""

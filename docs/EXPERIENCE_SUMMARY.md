@@ -179,6 +179,25 @@ WS 心跳逻辑仅 `ping()` 不等待 `pong`，却用“距离上次 pong 的时
   - `RECONCILER_FILTER_EXTERNAL_ORDERS`（默认开启）
   - `RECONCILER_OWNED_ORDER_PREFIXES`（自定义前缀）
 
+---
+
+### 0.12 私有流 ws-api 端点不能跨环境盲试
+
+**问题描述**：
+私有流在未显式配置 `ws_api_urls` 时，按 demo/prod/testnet 依次轮询握手。
+在大陆弱网 + 代理波动场景下，跨环境轮询会把冷启动时间拉长，并制造大量误导性失败日志。
+
+**解决方案**：
+- `PrivateStreamManager._resolve_ws_api_urls()` 改为按 `rest_url` 自动推断环境：
+  - `demo-api.binance.com` → `demo-ws-api.binance.com`
+  - `testnet.binance.vision` → `ws-api.testnet.binance.vision`
+  - 其他 → `ws-api.binance.com`
+- 保留 `BINANCE_WS_API_URL` / `BINANCE_WS_API_URLS` 的显式覆盖优先级。
+
+**经验**：
+- 交易所多环境共存时，端点选择必须“环境同源”，否则问题会被放大成网络故障。
+- 对弱网链路，先减少无效尝试，再增加重试，是更稳的策略。
+
 **经验**：
 - 同一需求若有“手动触发”与“周期任务”两条路径，过滤策略必须在两条路径都生效。
 - 对账噪声会掩盖真实异常，先降噪再告警更符合生产可观测性。

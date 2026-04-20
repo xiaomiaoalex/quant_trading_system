@@ -4,15 +4,31 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-17 23:19 (北京时间)
+2026-04-20 15:10 (北京时间)
 
 ## 分支状态
-- **当前分支**：`main`
+- **当前分支**：`codex/task9-strategy-code-e2e-bridge`
 - **基于**：`main`
-- **工作树**：有变更（staged services/）
-- **最新提交**：feat(task-portfolio): add portfolio research workflow (#48)
+- **工作树**：有变更（本次为启动阻塞热修）
+- **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：修复 Uvicorn 启动失败（`websockets_compat` 导入阶段崩溃）
+- 完成时间: 2026-04-20
+- 分支: codex/task9-strategy-code-e2e-bridge
+- 状态: ✅ 已完成并验证
+- 开发前状态:
+  - 启动 `uvicorn trader.api.main:app` 时报 `ModuleNotFoundError: trader.adapters.binance.websockets_compat`
+  - 补齐文件后仍在导入阶段报错：`ClientConnection` 无 `connection_lost`（websockets API 差异）
+- 开发后状态:
+  - 新增并接入 `trader/adapters/binance/websockets_compat.py`
+  - 兼容层改为“多版本探测 + 幂等补丁 + 导入不抛错”策略
+  - 支持 `websockets.asyncio.connection.Connection` 与旧版 `websockets.client.ClientConnection`
+  - `recv_messages` 缺失时注入 no-op close 对象，避免连接抖动时异常风暴
+- 测试结果:
+  - `python -c "import trader.adapters.binance.websockets_compat"` → ok
+  - `python -c "import trader.api.main as m; print(m.app.title)"` → ok
 
 ### 本次任务：Reconciler 自动识别本系统订单并屏蔽外部历史订单噪声
 - 完成时间: 2026-04-17
