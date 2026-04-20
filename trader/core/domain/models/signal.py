@@ -84,10 +84,22 @@ class Signal:
         return self.signal_type in [SignalType.SELL, SignalType.CLOSE_LONG, SignalType.CLOSE_SHORT]
 
     def get_order_side(self) -> OrderSide:
-        """转换为订单方向"""
+        """
+        转换为订单方向
+        
+        Raises:
+            ValueError: 当信号类型无法转换为有效的订单方向时
+        """
         if self.is_buy_signal():
             return OrderSide.BUY
-        return OrderSide.SELL
+        elif self.is_sell_signal():
+            return OrderSide.SELL
+        else:
+            # 信号类型 NONE 或其他无效类型无法转换为订单方向
+            raise ValueError(
+                f"[Signal] Cannot convert SignalType.{self.signal_type} to OrderSide. "
+                f"Signal type must be one of BUY/LONG (for open long) or SELL/CLOSE_LONG/CLOSE_SHORT (for close/sell)"
+            )
 
     def to_order_params(self) -> Dict[str, Any]:
         """转换为订单参数（供OMS使用）"""

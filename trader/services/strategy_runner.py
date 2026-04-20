@@ -43,7 +43,7 @@ from trader.core.application.strategy_protocol import (
     ValidationResult,
     validate_strategy_plugin,
 )
-from trader.core.domain.models.signal import Signal
+from trader.core.domain.models.signal import Signal, SignalType
 
 logger = logging.getLogger(__name__)
 
@@ -589,7 +589,14 @@ class StrategyRunner:
                         order_result = await self._oms_callback(strategy_id, signal)
                         # 发布订单提交事件
                         if self._event_callback and order_result:
-                            side = signal.get_order_side().value if signal.signal_type else None
+                            # 只对有效信号类型发布事件
+                            if signal.signal_type and signal.signal_type != SignalType.NONE:
+                                side = signal.get_order_side().value
+                            else:
+                                side = None
+                                logger.warning(
+                                    f"[StrategyRunner] Skipping order event for invalid signal type: {signal.signal_type}"
+                            )
                             self._event_callback(strategy_id, "strategy.order.submitted", {
                                 "symbol": signal.symbol,
                                 "side": side,

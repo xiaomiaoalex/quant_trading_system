@@ -119,6 +119,39 @@ class OMSCallbackHandler:
         for key in expired_keys:
             del self._processed_exec_keys[key]
 
+    def _determine_order_side(self, signal: Signal) -> tuple[OrderSide, bool]:
+        """
+        根据信号类型确定订单方向。
+        
+        Args:
+            signal: 交易信号
+            
+        Returns:
+            tuple: (OrderSide, is_emergency)
+                - is_emergency=True 表示信号类型不明确，按紧急卖出处理
+        """
+        signal_value = signal.signal_type.value.upper()
+        
+        # 明确的买入信号
+        if signal_value in ("BUY", "LONG"):
+            return (OrderSide.BUY, False)
+        
+        # 明确的卖出信号
+        if signal_value in ("SELL", "SHORT"):
+            return (OrderSide.SELL, False)
+        
+        # 平仓信号
+        if signal_value in ("CLOSE_LONG", "CLOSE_SHORT"):
+            return (OrderSide.SELL, False)
+        
+        # 未知信号类型 -> EMERGENCY_EXIT
+        logger.critical(
+            f"[OMSCallback] 🚨 EMERGENCY_EXIT: 未知信号类型 {signal.signal_type}, "
+            f"策略={signal.strategy_name}, 强制按 SELL 处理. "
+            f"这通常表示策略发出了无法识别的信号，请检查策略实现."
+        )
+        return (OrderSide.SELL, True)
+
     def _make_exec_key(self, cl_ord_id: str, exec_id: str) -> str:
         return f"{cl_ord_id}:{exec_id}"
 
@@ -265,8 +298,8 @@ class OMSCallbackHandler:
         # ==================== 下单 ====================
         try:
             # 转换方向
-            side = OrderSide.BUY if signal.signal_type.value.upper() in ("BUY", "LONG") else OrderSide.SELL
-
+            side, is_emergency = self._determine_order_side(signal)
+            
             # 转换订单类型（默认市价单）
             order_type = OrderType.MARKET
             if signal.price and signal.price > 0:
@@ -316,20 +349,31 @@ class OMSCallbackHandler:
                                     base_balance = Decimal(str(bal.get("free", "0")))
                                     break
                             if base_balance < quantity:
-                                logger.warning(
-                                    f"[OMSCallback] Insufficient {base_asset} balance for SELL: "
-                                    f"required={quantity}, available={base_balance}, "
-                                    f"symbol={signal.symbol}, price={signal.price}"
-                                )
+                                if is_emergency:
+                                    # EMERGENCY_EXIT: 强制卖出，按实际余额调整
+                                    original_qty = quantity
+                                    quantity = base_balance
+                                    logger.critical(
+                                        f"[OMSCallback] 🚨 EMERGENCY EXIT: 余额不足强制调整! "
+                                        f"原订单={original_qty} {base_asset}, 实际卖出={quantity} {base_asset}, "
+                                        f"symbol={signal.symbol}, strategy={strategy_id}"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"[OMSCallback] Insufficient {base_asset} balance for SELL: "
+                                        f"required={quantity}, available={base_balance}, "
+                                        f"symbol={signal.symbol}, price={signal.price}"
+                                    )
                 except Exception as e:
                     logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
 
             # 下单
-            logger.info(
-                f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
-                f"side={side.value}, type={order_type.value}, qty={quantity}, "
-                f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
-            )
+            order_desc = f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
+            if is_emergency:
+                order_desc += f"🚨 EMERGENCY_EXIT, "
+            order_desc += f"side={side.value}, type={order_type.value}, qty={quantity}, "
+            order_desc += f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
+            logger.info(order_desc)
             broker_order = await self._broker.place_order(
                 symbol=signal.symbol,
                 side=side,
