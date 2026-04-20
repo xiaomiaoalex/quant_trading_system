@@ -31,7 +31,8 @@ export function useLoadedStrategies() {
   return useQuery({
     queryKey: strategyKeys.loaded(),
     queryFn: () => strategiesAPI.getLoaded(),
-    staleTime: 15_000,
+    staleTime: 5_000,
+    refetchInterval: 5_000,
     retry: 2,
     throwOnError: false,
   })
