@@ -531,7 +531,7 @@ class OMSCallbackHandler:
                     current_qty = Decimal("0")
                     for pos in current_positions:
                         if pos.get("instrument") == signal.symbol:
-                            current_qty = Decimal(str(pos.get("quantity", "0")))
+                            current_qty = Decimal(str(pos.get("qty", "0")))
                             break
 
                     # 计算新持仓
@@ -540,14 +540,15 @@ class OMSCallbackHandler:
                     else:  # SELL
                         new_qty = current_qty - quantity
 
-                    # 更新持仓
+                    # 更新持仓 - 使用 PositionView 期望的字段名
                     self._storage.upsert_position({
-                        "account_id": "SYSTEM",  # or whatever account ID
+                        "account_id": "SYSTEM",
                         "venue": self._broker.broker_name,
                         "instrument": signal.symbol,
-                        "quantity": str(new_qty),
-                        "current_price": str(broker_order.average_price),
-                        "realized_pnl": "0",  # realized P&L 需要交易历史计算
+                        "qty": str(new_qty),  # 注意：是 qty 不是 quantity
+                        "avg_cost": str(broker_order.average_price),  # 注意：是 avg_cost
+                        "mark_price": str(broker_order.average_price),
+                        "realized_pnl": "0",
                         "unrealized_pnl": "0",
                     })
                     logger.debug(
