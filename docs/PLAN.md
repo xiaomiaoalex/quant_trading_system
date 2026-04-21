@@ -30,8 +30,11 @@
 | 策略管理与AI共创 | `services/strategy_runner.py` 等 | Phase 4 已完成 |
 | 回测框架升级 | `services/backtesting/` | Phase 5 已完成 Lean 适配、验证与性能基准 |
 | **策略自动交易闭环** | `services/oms_callback.py` 等 | **Task 11-15 完成（2026-04-20）：实时行情 → tick调度 → OMS回调 → 真实下单 → 成交幂等 → 安全闸门** |
+| **自动交易生产化** | `env_config.py`, `proxy_failover.py`, `oms_idempotency.py` | **Task 16-20 完成（2026-04-20）：环境统一、成交去重、重启恢复、运行时可观测性** |
+| **SSE实时更新** | `oms_callback.py`, `strategy_runner.py`, `monitor_service.py` | **Task 9.11 完成：SSE广播集成OMS/StrategyRunner/Reconciler，Monitor和Strategies页面实时更新** |
+| **持仓追踪** | `oms.py`, `monitor_service.py` | **Task 9.11 完成：PositionExposure计算、OMS Metrics修复、Adapter Health修复** |
 
-### 部分完成（Phase 6 已完成，待收尾文档）
+### 已完成（Phase 6 全部完成 ✅）
 
 | 模块 | 状态 |
 |------|------|
@@ -41,8 +44,17 @@
 | Capital Allocator（Phase 6 M4） | ✅ 已完成 |
 | 替代数据健康度（Phase 6 M5） | ✅ 已完成 |
 
+### 已完成（Phase 7 部分完成 ✅）
+
+| 模块 | 状态 |
+|------|------|
+| 控制面快照持久化（Task 7.7） | ✅ 已完成 |
+| 风控穿透测试矩阵（Task 7.1） | ✅ 已完成 |
+| RiskInterventionTracker（Task 7.2） | ✅ 已完成 |
+
 ### 未开始（Target，按优先级推进）
 
+- **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
@@ -66,7 +78,7 @@
 |------|------|--------|------|
 | 8.4 | Qlib 预测信号桥接 | `qlib_to_strategy_bridge` 标准化 Signal 输出 | ✅ 已完成 |
 | 8.5 | Hermes 研究编排 SOP | 数据→训练→评估→报告自动化 | ✅ 已完成 |
-| 8.6 | 五层门控联调 | 与 `strategy_validation_gate` 集成 | 进行中 |
+| 8.6 | 五层门控联调 | 与 `strategy_validation_gate` 集成 | ✅ 已完成 |
 
 ### Phase 8 P2 任务
 
