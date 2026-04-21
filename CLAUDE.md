@@ -27,6 +27,10 @@ python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed" --tb=s
 
 ## Documentation Updates (必须流程)
 
+### PLAN.md (开发计划)
+- 开始开发动作前,必须更新 PLAN.md 中的开发计划.
+
+
 完成开发任务后，必须更新以下文档：
 
 ### PROJECT_STATUS.md (滚动式追踪)
@@ -41,6 +45,7 @@ python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed" --tb=s
 - 记录本次开发中遇到的问题和解决方案
 - 记录可复用的设计模式或代码片段
 - 记录踩坑记录和教训
+
 
 ### P0 regression suite (must pass before any PR)
 ```bash

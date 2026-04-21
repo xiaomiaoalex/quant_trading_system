@@ -115,7 +115,8 @@ async def get_monitor_snapshot(
         positions_for_exposure = [
             PositionForExposure(
                 quantity=float(p.qty) if p.qty and p.qty.strip() else 0.0,
-                current_price=float(p.mark_price) if p.mark_price and p.mark_price.strip() else 0.0,
+                # 使用 avg_cost（平均成本价）计算敞口，比 mark_price 更稳定
+                current_price=float(p.avg_cost) if p.avg_cost and p.avg_cost.strip() else 0.0,
             )
             for p in raw_positions
         ]
@@ -206,14 +207,27 @@ async def get_monitor_snapshot(
         for broker in brokers:
             # 每个注册的 broker 都被视为一个 adapter
             # 健康状态从 broker_service 获取
-            status = broker_service.get_status(broker.account_id)
-            if status:
+            try:
+                status = broker_service.get_status(broker.account_id)
                 service.update_adapter_health(
                     adapter_name=f"broker:{broker.account_id}",
-                    status="HEALTHY" if status.connected else "DOWN",
-                    last_heartbeat_ts_ms=status.last_heartbeat_ts_ms,
-                    error_count=1 if status.last_error else 0,
-                    message=status.last_error,
+                    status="HEALTHY" if status and status.connected else "DOWN",
+                    last_heartbeat_ts_ms=status.last_heartbeat_ts_ms if status else None,
+                    error_count=1 if status and status.last_error else 0,
+                    message=status.last_error if status else "No status available",
+                )
+            except Exception as broker_err:
+                # 单个 broker 状态获取失败不影响其他 broker
+                logger.warning(
+                    f"Failed to get status for broker {broker.account_id}",
+                    extra={"error": str(broker_err)}
+                )
+                service.update_adapter_health(
+                    adapter_name=f"broker:{broker.account_id}",
+                    status="DOWN",
+                    last_heartbeat_ts_ms=None,
+                    error_count=1,
+                    message=f"Status check failed: {broker_err}",
                 )
     except Exception as e:
         logger.error(

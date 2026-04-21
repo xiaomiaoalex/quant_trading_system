@@ -2,6 +2,7 @@
 OMS Fill Idempotency Tests
 ==========================
 """
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -31,7 +32,7 @@ async def test_fill_handler_deduplicates_by_cl_ord_id_and_exec_id():
             }
         )
 
-    _, fill_handler = create_oms_callback(
+    _, fill_handler, _ = create_oms_callback(
         broker=_DummyBroker(),
         live_trading_enabled=True,
         fill_callback=fill_callback,
@@ -49,7 +50,9 @@ async def test_fill_handler_deduplicates_by_cl_ord_id_and_exec_id():
     )
 
     await fill_handler(update)
+    await asyncio.sleep(0)  # Allow scheduled tasks to complete
     await fill_handler(update)  # duplicate
+    await asyncio.sleep(0)  # Allow scheduled tasks to complete
 
     storage = get_storage()
     executions = storage.list_executions(cl_ord_id="fire_test_abcdef1234567890")
@@ -67,7 +70,7 @@ async def test_fill_handler_uses_trade_id_when_exec_id_missing():
     async def fill_callback(strategy_id, order_id, symbol, side, qty, price):
         fills.append((strategy_id, order_id, symbol, side, qty, price))
 
-    _, fill_handler = create_oms_callback(
+    _, fill_handler, _ = create_oms_callback(
         broker=_DummyBroker(),
         live_trading_enabled=True,
         fill_callback=fill_callback,
@@ -85,6 +88,7 @@ async def test_fill_handler_uses_trade_id_when_exec_id_missing():
     )
 
     await fill_handler(update)
+    await asyncio.sleep(0)  # Allow scheduled tasks to complete
 
     storage = get_storage()
     executions = storage.list_executions(cl_ord_id="mybot_alpha_abcdef1234567890")

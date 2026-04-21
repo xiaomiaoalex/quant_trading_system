@@ -113,11 +113,26 @@ async def _create_broker():
                 )
             _broker_instance = BinanceSpotDemoBroker(config)
             await _broker_instance.connect()
+
+            # 注册broker到storage，以便Monitor API能获取adapter health
+            try:
+                storage = get_storage()
+                storage.register_broker({
+                    "account_id": f"binance_{binance_env}",
+                    "broker_name": _broker_instance.broker_name,
+                    "venue": "BINANCE",
+                    "connected": True,
+                })
+                logger.info(f"[Strategies] Broker registered: binance_{binance_env}")
+            except Exception as e:
+                logger.warning(f"[Strategies] Failed to register broker: {e}")
+
         return _broker_instance
 
 
-# 全局 OMSCallbackHandler 实例（用于成交回调）
+# 全局 OMSCallbackHandler 实例（用于成交回调和 metrics 获取）
 _oms_handler: Optional[Any] = None
+_oms_handler_instance: Optional[Any] = None  # 实际 handler 实例，用于获取 metrics
 _fill_handler: Optional[Any] = None
 
 
@@ -128,7 +143,7 @@ async def _get_oms_handler():
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数)
     """
-    global _oms_handler, _fill_handler
+    global _oms_handler, _oms_handler_instance, _fill_handler
     if _oms_handler is None:
         broker = await _create_broker()
         from trader.services.oms_callback import create_oms_callback
@@ -143,13 +158,14 @@ async def _get_oms_handler():
             except Exception as e:
                 logger.error(f"[FillCallback] on_fill error: {e}")
 
-        oms_cb, fill_h = create_oms_callback(
+        oms_cb, fill_h, handler_instance = create_oms_callback(
             broker=broker,
             live_trading_enabled=_is_live_trading_enabled,
             event_callback=_event_callback_dispatcher,
             fill_callback=fill_callback,
         )
         _oms_handler = oms_cb
+        _oms_handler_instance = handler_instance  # 保存实际 handler 实例，用于获取 metrics
         _fill_handler = fill_h
     return _oms_handler, _fill_handler
 
@@ -161,16 +177,16 @@ def get_oms_metrics() -> Optional[Dict[str, Any]]:
     Returns:
         OMS 指标字典，如果 OMS 未初始化则返回 None
     """
-    if _oms_handler is None:
+    if _oms_handler_instance is None:
         return None
-    if hasattr(_oms_handler, 'get_dedup_stats'):
-        return _oms_handler.get_dedup_stats()
+    if hasattr(_oms_handler_instance, 'get_dedup_stats'):
+        return _oms_handler_instance.get_dedup_stats()
     return None
 
 
 async def shutdown_strategy_runtime_resources() -> None:
     """关闭策略路由层持有的 Broker/OMS 资源，避免 reload 场景 session 泄漏。"""
-    global _broker_instance, _oms_handler, _fill_handler
+    global _broker_instance, _oms_handler, _oms_handler_instance, _fill_handler
     async with _broker_lock:
         if _broker_instance is not None:
             try:
@@ -180,6 +196,7 @@ async def shutdown_strategy_runtime_resources() -> None:
             _broker_instance = None
 
     _oms_handler = None
+    _oms_handler_instance = None
     _fill_handler = None
 
 
