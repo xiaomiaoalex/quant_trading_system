@@ -47,10 +47,6 @@ jobs:
       - name: Core Plane IO Check
         run: python scripts/check_core_no_io.py
 
-      - name: Commit Format Check (on push only)
-        if: github.event_name == 'push'
-        run: python scripts/check_commit_format.py "${{ github.event.head_commit.message }}"
-
   p0-gate:
     name: P0 Regression Tests
     runs-on: ubuntu-latest

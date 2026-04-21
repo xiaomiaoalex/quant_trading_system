@@ -531,7 +531,7 @@ class OMSCallbackHandler:
                     current_qty = Decimal("0")
                     for pos in current_positions:
                         if pos.get("instrument") == signal.symbol:
-                            current_qty = Decimal(str(pos.get("qty", "0")))
+                            current_qty = Decimal(str(pos.get("quantity", "0")))
                             break
 
                     # 计算新持仓
@@ -540,15 +540,14 @@ class OMSCallbackHandler:
                     else:  # SELL
                         new_qty = current_qty - quantity
 
-                    # 更新持仓 - 使用 PositionView 期望的字段名
+                    # 更新持仓
                     self._storage.upsert_position({
-                        "account_id": "SYSTEM",
+                        "account_id": "SYSTEM",  # or whatever account ID
                         "venue": self._broker.broker_name,
                         "instrument": signal.symbol,
-                        "qty": str(new_qty),  # 注意：是 qty 不是 quantity
-                        "avg_cost": str(broker_order.average_price),  # 注意：是 avg_cost
-                        "mark_price": str(broker_order.average_price),
-                        "realized_pnl": "0",
+                        "quantity": str(new_qty),
+                        "avg_cost": str(broker_order.average_price),  # 平均成本价
+                        "realized_pnl": "0",  # realized P&L 需要交易历史计算
                         "unrealized_pnl": "0",
                     })
                     logger.debug(
@@ -729,7 +728,7 @@ def create_oms_callback(
     live_trading_enabled: Union[bool, Callable[[], bool]] = False,
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
-) -> tuple[Callable, Callable]:
+) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
 
@@ -740,9 +739,10 @@ def create_oms_callback(
         fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
 
     Returns:
-        tuple: (oms_callback 函数, fill_handler 函数)
+        tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
         - oms_callback: 直接传给 StrategyRunner
         - fill_handler: 注册到 PrivateStreamManager 或 BinanceConnector
+        - handler: OMSCallbackHandler 实例（用于获取 metrics）
     """
     handler = OMSCallbackHandler(
         broker=broker,
@@ -894,4 +894,4 @@ def create_oms_callback(
 
         return fill_handler
 
-    return oms_callback, create_fill_handler()
+    return oms_callback, create_fill_handler(), handler
