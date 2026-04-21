@@ -292,9 +292,9 @@ async def lifespan(app: FastAPI):
                 import time
                 checks = {}
                 try:
-                    # Check 1: REST /v3/time
+                    # Check 1: REST /v3/time via RESTAlignmentCoordinator
                     start = time.monotonic()
-                    server_time = await c._rest_coordinator._api.get_server_time()
+                    server_time = await c._rest_coordinator.get_server_time()
                     rest_latency_ms = (time.monotonic() - start) * 1000
                     checks["rest_time"] = True
                     logger.info("[Binance] Self-check rest_time: OK (latency=%.1fms)", rest_latency_ms)
