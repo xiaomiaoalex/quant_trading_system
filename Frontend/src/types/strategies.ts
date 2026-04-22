@@ -169,3 +169,21 @@ export function deriveStrategySummary(strategies: StrategyRuntimeInfo[]): Strate
     { total: 0, loaded: 0, running: 0, paused: 0, stopped: 0, error: 0 }
   )
 }
+
+// Trading pair types
+export interface TradingPairInfo {
+  symbol: string
+  base_asset: string
+  quote_asset: string
+  status: string
+  min_notional: number
+  min_qty: number
+  max_qty: number
+  step_size: number
+  tick_size: number
+}
+
+export interface TradingPairsResponse {
+  pairs: TradingPairInfo[]
+  total: number
+}

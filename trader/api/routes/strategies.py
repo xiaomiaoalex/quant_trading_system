@@ -897,7 +897,7 @@ async def unload_strategy(
 )
 async def start_strategy(
     strategy_id: str = Path(..., description="Strategy ID"),
-    symbol: Optional[str] = Query("BTCUSDT", description="Trading symbol (e.g., BTCUSDT)"),
+    symbol: str = Query("BTCUSDT", description="Trading symbol (e.g., BTCUSDT)"),
 ):
     """
     Start strategy execution with real-time market data.
@@ -1290,3 +1290,109 @@ async def enable_live_trading(request: SafetyGateEnableRequest):
         killswitch_level=ks_level,
         killswitch_reason=ks_state.get("reason"),
     )
+
+
+class TradingPairInfo(BaseModel):
+    """交易对信息"""
+    symbol: str = Field(..., description="交易对名称，如 BTCUSDT")
+    base_asset: str = Field(..., description="基础资产，如 BTC")
+    quote_asset: str = Field(..., description="报价资产，如 USDT")
+    status: str = Field(..., description="交易对状态，如 TRADING")
+    min_notional: float = Field(..., description="最小名义金额（USDT）")
+    min_qty: float = Field(..., description="最小数量")
+    max_qty: float = Field(..., description="最大数量")
+    step_size: float = Field(..., description="数量步进")
+    tick_size: float = Field(..., description="价格步进")
+
+
+class TradingPairsResponse(BaseModel):
+    """交易对列表响应"""
+    pairs: List[TradingPairInfo] = Field(..., description="交易对列表")
+    total: int = Field(..., description="总数")
+
+
+@router.get(
+    "/v1/exchange/trading-pairs",
+    response_model=TradingPairsResponse,
+)
+async def get_trading_pairs(
+    status_filter: Optional[str] = Query("TRADING", description="过滤交易对状态，默认 TRADING"),
+    quote_asset: Optional[str] = Query("USDT", description="过滤报价资产，默认 USDT"),
+):
+    """
+    获取交易所交易对列表。
+
+    从 Binance 获取当前可交易的交易对列表，包含交易规则和限制。
+    用于前端策略启动时选择交易对。
+    """
+    try:
+        from trader.adapters.broker.binance_spot_demo_broker import (
+            BinanceSpotDemoBroker,
+            BinanceSpotDemoBrokerConfig,
+        )
+
+        api_key = os.environ.get("BINANCE_API_KEY", "test_key")
+        secret_key = os.environ.get("BINANCE_SECRET_KEY", "test_secret")
+        binance_env = os.environ.get("BINANCE_ENV", "demo").strip().lower()
+        recv_window = int(os.environ.get("BINANCE_RECV_WINDOW", "5000"))
+
+        config = BinanceSpotDemoBrokerConfig.for_env(
+            api_key,
+            secret_key,
+            env=binance_env,
+            recv_window=recv_window,
+        )
+        broker = BinanceSpotDemoBroker(config)
+        await broker.connect()
+
+        try:
+            exchange_info = await broker.get_exchange_info()
+            symbols_data = exchange_info.get("symbols", [])
+
+            pairs = []
+            for sym in symbols_data:
+                sym_status = sym.get("status", "")
+                if status_filter and sym_status != status_filter:
+                    continue
+
+                base_asset = sym.get("baseAsset", "")
+                sym_quote = sym.get("quoteAsset", "")
+                if quote_asset and sym_quote != quote_asset:
+                    continue
+
+                filters = sym.get("filters", [])
+                min_notional = 0.0
+                min_qty = 0.0
+                max_qty = 0.0
+                step_size = 0.0
+                tick_size = 0.0
+
+                for f in filters:
+                    ftype = f.get("filterType")
+                    if ftype == "MIN_NOTIONAL":
+                        min_notional = float(f.get("minNotional", 0))
+                    elif ftype == "LOT_SIZE":
+                        min_qty = float(f.get("minQty", 0))
+                        max_qty = float(f.get("maxQty", 0))
+                        step_size = float(f.get("stepSize", 0))
+                    elif ftype == "PRICE_FILTER":
+                        tick_size = float(f.get("tickSize", 0))
+
+                pairs.append(TradingPairInfo(
+                    symbol=sym.get("symbol", ""),
+                    base_asset=base_asset,
+                    quote_asset=sym_quote,
+                    status=sym_status,
+                    min_notional=min_notional,
+                    min_qty=min_qty,
+                    max_qty=max_qty,
+                    step_size=step_size,
+                    tick_size=tick_size,
+                ))
+
+            return TradingPairsResponse(pairs=pairs, total=len(pairs))
+        finally:
+            pass
+    except Exception as e:
+        logger.error(f"[TradingPairs] Failed to fetch trading pairs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trading pairs: {str(e)}")

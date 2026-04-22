@@ -13,6 +13,7 @@ export const strategyKeys = {
   events: (id: string) => [...strategyKeys.all, 'events', id] as const,
   signals: (id: string) => [...strategyKeys.all, 'signals', id] as const,
   errors: (id: string) => [...strategyKeys.all, 'errors', id] as const,
+  tradingPairs: () => [...strategyKeys.all, 'trading-pairs'] as const,
 }
 
 // Fetch registered strategies (metadata only, no runtime status)
@@ -108,10 +109,16 @@ export function useUnloadStrategy(strategyId: string) {
   )
 }
 
-export function useStartStrategy(strategyId: string) {
-  return useStrategyMutation(
-    () => strategiesAPI.startStrategy(strategyId)
-  )
+export function useStartStrategy(strategyId: string, symbol = 'BTCUSDT') {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: () => strategiesAPI.startStrategy(strategyId, symbol),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: strategyKeys.loaded() })
+      queryClient.invalidateQueries({ queryKey: strategyKeys.registry() })
+    },
+  })
 }
 
 export function useStopStrategy(strategyId: string) {
@@ -189,6 +196,17 @@ export function useStrategyErrors(strategyId: string) {
     staleTime: 10_000,
     retry: 2,
     enabled: !!strategyId,
+    throwOnError: false,
+  })
+}
+
+// Fetch trading pairs from exchange
+export function useTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT') {
+  return useQuery({
+    queryKey: strategyKeys.tradingPairs(),
+    queryFn: () => strategiesAPI.getTradingPairs(statusFilter, quoteAsset),
+    staleTime: 60_000,
+    retry: 2,
     throwOnError: false,
   })
 }
