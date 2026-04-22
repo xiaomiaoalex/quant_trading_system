@@ -17,6 +17,8 @@ from trader.api.models.schemas import (
 )
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.services.strategy_runner import StrategyRunner
+from trader.services.backtesting.binance_execution_adapter import BinanceExecutionAdapter
+from trader.services.backtesting.ports import BacktestConfig
 
 logger = logging.getLogger(__name__)
 
@@ -216,20 +218,73 @@ class BacktestService:
                 )
 
             await runner.start(runtime_strategy_id)
-            bars = self._build_market_data_series(request)
-            report = await self._simulate_backtest(
-                runner=runner,
-                runtime_strategy_id=runtime_strategy_id,
-                run_id=run_id,
-                request=request,
-                bars=bars,
+
+            # Build BacktestConfig for VectorBT
+            params = request.params or {}
+            initial_capital = _to_decimal(params.get("initial_capital"), Decimal("100000"))
+            commission_rate = _to_decimal(params.get("commission_rate"), Decimal("0.001"))
+            interval = params.get("interval", "1h")
+
+            config = BacktestConfig(
+                start_date=datetime.fromtimestamp(request.start_ts_ms / 1000, tz=timezone.utc),
+                end_date=datetime.fromtimestamp(request.end_ts_ms / 1000, tz=timezone.utc),
+                initial_capital=initial_capital,
+                symbol=request.symbols[0] if request.symbols else "BTCUSDT",
+                interval=interval,
+                commission_rate=commission_rate,
             )
+
+            # Get strategy plugin from runner
+            strategy = runner._plugins[runtime_strategy_id]
+
+            # Run backtest via BinanceExecutionAdapter (VectorBT)
+            adapter = BinanceExecutionAdapter(
+                killswitch_callback=None,
+                risk_callback=None,
+                oms_callback=None,
+            )
+            result = await adapter.run_backtest(config, strategy)
+
+            # Convert BacktestResult to report dict format expected by save_report
+            returns = {
+                "total_return": float(result.total_return),
+                "total_return_pct": float(result.total_return) * 100,
+                "annualized_return": float(result.total_return) * 365,
+                "sharpe_ratio": float(result.sharpe_ratio),
+            }
+            risk = {
+                "max_drawdown": float(result.max_drawdown),
+                "max_drawdown_pct": float(result.max_drawdown) / float(initial_capital) * 100 if initial_capital > 0 else 0,
+                "volatility": 0.0,
+                "var_95": 0.0,
+            }
+            report_metrics = {
+                "total_return": float(result.total_return),
+                "total_return_pct": returns["total_return_pct"],
+                "annualized_return": returns["annualized_return"],
+                "sharpe_ratio": float(result.sharpe_ratio),
+                "max_drawdown": float(result.max_drawdown),
+                "max_drawdown_pct": risk["max_drawdown_pct"],
+                "volatility": risk["volatility"],
+                "var_95": risk["var_95"],
+                "trade_count": result.num_trades,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "win_rate": float(result.win_rate) * 100 if result.win_rate else 0,
+                "initial_capital": float(initial_capital),
+                "final_equity": float(result.final_capital),
+                "returns": returns,
+                "risk": risk,
+                "trades": list(result.trades) if result.trades else [],
+                "equity_curve": list(result.equity_curve) if result.equity_curve else [],
+            }
+
             artifact_ref = get_artifact_storage().save_report(
                 run_id=run_id,
-                returns=report["returns"],
-                risk=report["risk"],
-                trades=report["trades"],
-                equity_curve=report["equity_curve"],
+                returns=returns,
+                risk=risk,
+                trades=list(result.trades) if result.trades else [],
+                equity_curve=list(result.equity_curve) if result.equity_curve else [],
                 metadata={
                     "strategy_id": request.strategy_id,
                     "version": request.version,
@@ -243,7 +298,7 @@ class BacktestService:
                     "status": "COMPLETED",
                     "progress": 1.0,
                     "finished_at": _utc_now_iso(),
-                    "metrics": report["metrics"],
+                    "metrics": report_metrics,
                     "artifact_ref": artifact_ref,
                     "error": None,
                 },
