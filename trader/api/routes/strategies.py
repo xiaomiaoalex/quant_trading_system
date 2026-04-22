@@ -52,6 +52,8 @@ _strategy_runner_instance: StrategyRunner | None = None
 
 # 全局策略运行时编排器实例（单例）
 _strategy_orchestrator_instance: StrategyRuntimeOrchestrator | None = None
+# 待注入的 connector 引用（在 orchestrator 创建前由 lifespan 设置）
+_pending_orchestrator_connector: Any | None = None
 
 # 全局 Broker 实例（用于 OMS）- 使用 asyncio.Lock 保证初始化安全
 _broker_instance: Optional[Any] = None
@@ -249,11 +251,15 @@ async def _oms_callback_dispatcher(strategy_id: str, signal) -> Optional[Dict]:
 
     实际下单逻辑在事件循环中执行，避免阻塞。
     """
+    logger.warning(
+        f"[OMSCallbackDispatcher] signal received: strategy={strategy_id} "
+        f"signal_type={signal.signal_type if signal else None} symbol={signal.symbol if signal else None}"
+    )
     try:
         oms_cb, _ = await _get_oms_handler()
         return await oms_cb(strategy_id, signal)
     except Exception as e:
-        logger.error(f"[OMSCallback] Dispatcher error: {e}")
+        logger.error(f"[OMSCallbackDispatcher] OMS execute error: {e}")
         return None
 
 
@@ -289,25 +295,38 @@ def get_strategy_orchestrator() -> StrategyRuntimeOrchestrator:
 
     注意：
     - 编排器依赖于 runner 和 connector
-    - connector 通过 set_strategy_orchestrator_connector 注入
+    - connector 通过 set_strategy_orchestrator_connector 在 orchestrator 创建之前注入
+      （避免 SSE keep-alive 轮询在 lifespan 注入 connector 之前触发初始化）
     """
     global _strategy_orchestrator_instance
     if _strategy_orchestrator_instance is None:
         runner = get_strategy_runner()
-        _strategy_orchestrator_instance = StrategyRuntimeOrchestrator(runner=runner)
+        connector = _pending_orchestrator_connector
+        _strategy_orchestrator_instance = StrategyRuntimeOrchestrator(
+            runner=runner,
+            connector=connector,
+        )
     return _strategy_orchestrator_instance
 
 
 def set_strategy_orchestrator_connector(connector) -> None:
     """
-    注入 BinanceConnector 到编排器（由 lifespan 调用）
+    设置待注入的 BinanceConnector，在 orchestrator 创建前调用（由 lifespan 调用）
+
+    注意：此方法在 orchestrator 创建之前调用，确保 connector 在构造时就被注入，
+    避免 orchestrator 先被创建（有 SSE keep-alive 触发）再注入导致的 connector=None 问题。
 
     Args:
         connector: BinanceConnector 实例
     """
-    orchestrator = get_strategy_orchestrator()
-    orchestrator.set_connector(connector)
-    logger.info("[Orchestrator] BinanceConnector injected")
+    global _pending_orchestrator_connector
+    _pending_orchestrator_connector = connector
+    # 如果 orchestrator 已经存在，立即注入 connector
+    if _strategy_orchestrator_instance is not None:
+        _strategy_orchestrator_instance.set_connector(connector)
+        logger.info("[Orchestrator] BinanceConnector injected (late binding)")
+    else:
+        logger.info("[Orchestrator] BinanceConnector queued for pending injection")
 
 
 def _signal_to_dict(signal) -> Dict:
