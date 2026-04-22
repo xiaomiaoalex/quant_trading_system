@@ -3,7 +3,7 @@
 **Document Version:** 1.0  
 **Date:** 2026-03-31  
 **Status:** Approved  
-**Framework:** QuantConnect Lean (Primary), VectorBT (Secondary)
+**Framework:** VectorBT (Primary, via BinanceExecutionAdapter)
 
 ---
 
@@ -24,7 +24,7 @@
 
 ### 1.1 Purpose
 
-The backtesting framework provides historical simulation of trading strategies using QuantConnect Lean as the primary engine and VectorBT as a high-performance alternative for vectorized strategies. It integrates with the five-plane architecture while maintaining deterministic execution and absolute idempotency.
+The backtesting framework provides historical simulation of trading strategies using VectorBT as the primary engine, wrapped with a Binance-specific execution layer that injects direction-aware slippage, KillSwitch checks, and OMS integration. It integrates with the five-plane architecture while maintaining deterministic execution and absolute idempotency.
 
 ### 1.2 Design Principles
 
@@ -51,8 +51,8 @@ The backtesting framework provides historical simulation of trading strategies u
 │                    │                                      │               │ │
 │                    ▼                                      ▼               ▼ │
 │          ┌─────────────────┐                    ┌─────────────────┐ ┌────────┤
-│          │  QuantConnect   │                    │    VectorBT     │ │Custom  │
-│          │  Lean Adapter    │                    │    Adapter       │ │Adapter │
+│          │  VectorBT       │◀───────────────────│ BinanceExec     │
+│          │  (via VBTAdapter│                    │    Adapter       │
 │          └─────────────────┘                    └─────────────────┘ └────────┘
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
@@ -89,8 +89,8 @@ The backtesting framework provides historical simulation of trading strategies u
 │  Persistence │  Backtest results persisted to PostgreSQL            │
 │  Plane       │  Event logs replayed through backtest engine         │
 ├──────────────┼─────────────────────────────────────────────────────┤
-│  Adapter     │  QuantConnect Lean Adapter (Primary)                 │
-│  Plane       │  VectorBT Adapter (Secondary)                        │
+│  Adapter     │  VectorBT Adapter (Primary)                         │
+│  Plane       │  BinanceExecutionAdapter (KillSwitch/OMS/Risk)      │
 │              │  Data transformations at adapter boundaries          │
 ├──────────────┼─────────────────────────────────────────────────────┤
 │  Core        │  StrategyLifecycleManager (Monotonic State Machine)  │
@@ -153,67 +153,68 @@ Abstract interface defining the contract for all backtest engines.
 └─────────────────────────────────────────────────────────────┘
 ```
 
-#### QuantConnect Lean Adapter
+#### BinanceExecutionAdapter
 
-Primary backtest engine adapter implementing `BacktestEnginePort`.
+Binance-specific execution layer wrapping VectorBT, implementing `BacktestEnginePort`. Injects KillSwitch checks, RiskEngine validation, and OMS callback integration.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              QUANTCONNECT LEAN ADAPTER                       │
-│                    (Primary Engine)                          │
+│            BINANCE EXECUTION ADAPTER                         │
+│            (Binance定制执行层)                                │
 ├─────────────────────────────────────────────────────────────┤
-│  Framework: QuantConnect Lean (C# + Python)                 │
-│  License: Apache 2.0                                         │
-│  Execution Model: Event-driven                              │
+│  Wraps: VectorBT via VectorBTAdapter                        │
+│  Data Source: Binance Demo REST API (demo.binance.com)     │
 ├─────────────────────────────────────────────────────────────┤
-│  Components:                                                │
+│  Binance定制逻辑:                                           │
 │  ┌─────────────────┐  ┌─────────────────┐                 │
-│  │ LeanCLIWrapper  │  │ AlgorithmLoader  │                 │
-│  │ - spawns lean   │  │ - loads Python   │                 │
-│  │   CLI process   │  │   algorithms     │                 │
-│  │ - handles IPC   │  │ - validates      │                 │
+│  │ KillSwitch Hook │  │ RiskEngine Hook │                 │
+│  │ - L2+ blocks    │  │ - position lim  │                 │
+│  │   new positions │  │ - exposure chk  │                 │
 │  └─────────────────┘  └─────────────────┘                 │
-│                                                             │
 │  ┌─────────────────┐  ┌─────────────────┐                 │
-│  │ DataFeeder      │  │ ResultParser    │                 │
-│  │ - streams       │  │ - parses Lean   │                 │
-│  │   historical    │  │   JSON results  │                 │
-│  │   data to Lean  │  │ - normalizes    │                 │
+│  │ OMS Callback    │  │ DirectionAware  │                 │
+│  │ - records fills │  │   Slippage     │                 │
+│  │   in-memory     │  │ - BUY: +slip    │                 │
+│  │                 │  │ - SELL: -slip   │                 │
 │  └─────────────────┘  └─────────────────┘                 │
 ├─────────────────────────────────────────────────────────────┤
-│  Capabilities:                                              │
-│  ✓ Event-driven execution                                   │
-│  ✓ Multi-asset support (crypto, stocks, futures, options)  │
-│  ✓ Full order type suite (Market, Limit, Stop, OCO)         │
-│  ✓ Built-in risk management                                 │
-│  ✓ Portfolio analytics                                      │
+│  Port/Adapter Architecture:                                  │
+│  BinanceExecutionAdapter → VectorBTAdapter → VectorBT       │
+│  (KillSwitch/Risk/OMS)     (BacktestEnginePort)  (Engine)  │
+├─────────────────────────────────────────────────────────────┤
+│  Data Provider: BinanceDataProvider (DataProviderPort)     │
+│  - Binance Spot Demo API → OHLCV[] → VectorBT             │
+│  - Supported: BTCUSDT, ETHUSDT, BNB, SOL, XRP, ADA, DOGE   │
+│  - Intervals: 1m, 5m, 15m, 1h, 4h, 1d                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 #### VectorBT Adapter
 
-High-performance vectorized backtest engine adapter for simple strategies.
+High-performance vectorized backtest engine implementing `BacktestEnginePort`.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                 VECTORBT ADAPTER                             │
-│                 (Secondary Engine)                           │
+│                 (BacktestEnginePort)                         │
 ├─────────────────────────────────────────────────────────────┤
 │  Framework: VectorBT (Python)                               │
-│  License: Proprietary                                        │
-│  Execution Model: Vectorized                                │
+│  License: MIT                                               │
+│  Execution Model: Vectorized (Portfolio.from_signals)       │
 ├─────────────────────────────────────────────────────────────┤
 │  Use Cases:                                                 │
 │  • Simple single-asset strategies                           │
 │  • Parameter sweep optimization                             │
 │  • Quick hypothesis testing                                 │
+│  • Sensitivity analysis & heatmaps                          │
 ├─────────────────────────────────────────────────────────────┤
-│  Limitations:                                               │
-│  ✗ No event-driven simulation                               │
-│  ✗ Market orders only                                       │
-│  ✗ No complex order management                              │
-├─────────────────────────────────────────────────────────────┤
-│  Performance: 10-100x faster than event-driven engines      │
+│  Capabilities:                                              │
+│  ✓ High performance (10-100x vs event-driven)              │
+│  ✓ Built-in commission & slippage modeling                 │
+│  ✓ Portfolio-level metrics                                  │
+│  ✓ Parameter optimization via grid search                  │
+│  ✗ No event-driven simulation (use BinanceExecAdapter)    │
+│  ✗ Market orders only (slippage modeled externally)       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -313,9 +314,9 @@ High-performance vectorized backtest engine adapter for simple strategies.
 │         ┌──────────┴──────────┐                                           │
 │         ▼                     ▼                                           │
 │  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐           │
-│  │   QuantConnect  │   │    VectorBT     │   │     Custom      │           │
-│  │   Lean Adapter  │   │     Adapter     │   │     Adapter     │           │
-│  │   (Primary)      │   │   (Secondary)   │   │   (Extensible)  │           │
+│  │ BinanceExec    │   │   VectorBT      │   │                 │           │
+│  │   Adapter       │   │   Adapter       │   │                 │           │
+│  │   (Primary)     │   │ (BacktestEng)   │   │                 │           │
 │  └─────────────────┘   └─────────────────┘   └─────────────────┘           │
 │                                                                              │
 │  ╔════════════════════════════════════════════════════════════════════════╗  │
@@ -398,7 +399,7 @@ High-performance vectorized backtest engine adapter for simple strategies.
    │                                              │                          │
    │   Phase 3: Engine Execution                  ▼                          │
    │   ┌──────────────────────────────────────────────────────┐              │
-   │   │              BACKTEST ENGINE (Lean/VectorBT)          │              │
+   │   │              BACKTEST ENGINE (VectorBT + BinanceExec) │              │
    │   │  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐     │              │
    │   │  │Initialize│ │Emit   │  │Execute │  │Emit    │     │              │
    │   │  │Engine  │  │Events │  │Bars    │  │Trades  │     │              │
@@ -1244,8 +1245,8 @@ class FailClosedHandler:
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Python | 3.12+ | Primary language |
-| QuantConnect Lean CLI | Latest | Via Docker |
-| VectorBT | 0.24+ | Via pip |
+| VectorBT | 0.25+ | Via pip (primary engine) |
+| Binance Demo API | - | Via demo.binance.com |
 | Redis | 7.0+ | For caching |
 | PostgreSQL | 15+ | Shared with trading system |
 
@@ -1300,36 +1301,24 @@ class FailClosedHandler:
 ## Appendix A: File Structure
 
 ```
-trader/backtesting/
-├── __init__.py
-├── adapters/
-│   ├── __init__.py
-│   ├── lean_adapter.py
-│   ├── vectorbt_adapter.py
-│   └── custom_adapter.py
-├── ports/
-│   ├── __init__.py
-│   ├── backtest_engine_port.py
-│   ├── data_provider_port.py
-│   └── result_reporter_port.py
-├── data/
-│   ├── __init__.py
-│   ├── feature_store_adapter.py
-│   ├── cache_layer.py
-│   └── postgres_adapter.py
-├── lifecycle/
-│   ├── __init__.py
-│   ├── strategy_lifecycle_manager.py
-│   └── state_machine.py
-├── reporting/
-│   ├── __init__.py
-│   ├── performance_analyzer.py
-│   ├── trade_analytics.py
-│   └── exporters.py
-└── config/
-    ├── __init__.py
-    └── backtest_config.py
+trader/services/backtesting/
+├── __init__.py                    # Exports: VectorBTAdapter, BinanceDataProvider,
+│                                 #   BinanceExecutionAdapter, BinanceSlippageConfig, etc.
+├── ports.py                      # Port interfaces: BacktestEnginePort, DataProviderPort,
+│                                 #   BacktestConfig, BacktestResult, OHLCV, FrameworkType
+├── vectorbt_adapter.py           # VectorBTAdapter (BacktestEnginePort) - 核心撮合引擎
+├── binance_data_provider.py      # BinanceDataProvider (DataProviderPort) - Binance K线数据
+├── binance_execution_adapter.py  # BinanceExecutionAdapter - KillSwitch/Risk/OMS 包装层
+├── slippage.py                   # DirectionAwareSlippage: BUY+slip, SELL-slip
+├── execution_simulator.py        # Legacy ExecutionSimulator (deprecated, kept for reference)
+├── strategy_adapter.py           # QuantConnectStrategyAdapter (strategy signal conversion)
+├── result_converter.py           # BacktestResultConverter (Lean statistics → BacktestResult)
+└── validation.py                 # SensitivityAnalyzer (参数敏感性分析)
 ```
+
+**Deleted (dead code):**
+- `services/backtesting/` — root-level duplicate (14 files, deleted)
+- `trader/services/backtesting/quantconnect_adapter.py` — 36KB unused QC Lean adapter (deleted)
 
 ---
 
@@ -1337,22 +1326,23 @@ trader/backtesting/
 
 ```yaml
 backtesting:
-  default_engine: lean  # lean | vectorbt | auto
-  
-  lean:
-    cli_path: /app/lean-cli
-    data_dir: /data/lean
-    results_dir: /results
-    timeout_seconds: 3600
-    max_concurrent: 4
-  
+  default_engine: vectorbt  # vectorbt | auto
+
   vectorbt:
     cache_dir: /data/vectorbt
     max_concurrent: 8
     timeout_seconds: 1800
-  
+
+  binance:
+    base_url: https://demo.binance.com
+    timeout_seconds: 30
+    max_retries: 3
+    supported_symbols:
+      - BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT
+      - ADAUSDT, DOGEUSDT, DOTUSDT, MATICUSDT, LTCUSDT
+
   data:
-    provider: feature_store  # feature_store | direct | auto
+    provider: binance  # binance | direct | auto
     cache_ttl_seconds: 86400
     fallback_providers:
       - name: binance
@@ -1375,5 +1365,6 @@ backtesting:
 
 ---
 
-*Document generated as part of Phase 5 backtesting framework integration.*  
-*Reference: ADR-001-backtesting-framework-selection.md*
+*Document updated after VectorBT refactor (2026-04-22).*
+*Primary engine: VectorBT via BinanceExecutionAdapter (KillSwitch/OMS/Risk hooks)*
+*Data source: Binance Spot Demo API (demo.binance.com)*

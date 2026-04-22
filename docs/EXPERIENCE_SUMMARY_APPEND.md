@@ -142,3 +142,82 @@ elif side == OrderSide.SELL:
 ```
 
 **教训**：后端状态与前端展示状态需要明确映射关系，避免语义混淆。
+
+---
+
+### 19. VectorBT 回测重构踩坑记录 (2026-04-22)
+
+#### 19.1 重复代码目录清理
+
+**问题描述**：
+存在两个相同的 `backtesting/` 目录：
+- `services/backtesting/` (根目录，14个文件，10520行)
+- `trader/services/backtesting/` (正确的路径)
+
+**根因**：
+早期开发时创建的副本，长期未清理。
+
+**解决方案**：
+```bash
+rm -rf services/backtesting/
+rm trader/services/backtesting/quantconnect_adapter.py
+```
+
+**教训**：重复代码会误导开发、维护成本高，定期用 `grep` 或工具检查无引用文件。
+
+#### 19.2 test_backtesting_adapters.py 残留导入
+
+**问题描述**：
+删除 `quantconnect_adapter.py` 后，测试文件仍有残留导入，导致 `NameError` 类未定义。
+
+**根因**：
+删除文件时未同步更新引用该文件的测试。
+
+**解决方案**：
+删除依赖已删除模块的测试类（`TestQuantConnectDataAdapter`、`TestTimeFrame` 等），保留 `execution_simulator`、`strategy_adapter` 等仍存在模块的测试。
+
+**教训**：删除任何文件前，先 `grep` 检查引用，删除后同步更新引用方。
+
+#### 19.3 Binance Demo URL 错误
+
+**问题描述**：
+`BinanceDataProvider` 初始使用 `https://testnet.binance.vision/api`，但用户实际用的是 `https://demo.binance.com`。
+
+**解决方案**：
+```python
+# 修改前
+base_url: str = "https://testnet.binance.vision/api"
+# 修改后
+base_url: str = "https://demo.binance.com"
+```
+
+**教训**：Binance 有多个 demo/test 端点，集成前需和用户确认实际使用的 URL。
+
+#### 19.4 Port/Adapter 架构的价值
+
+**设计验证**：
+VectorBT 重构成功验证了 Port/Adapter 架构的实用性：
+- `BacktestEnginePort` 接口不变 → 切换引擎实现只需换 `BinanceExecutionAdapter` 内部的 `_vectorbt`
+- 新增 `BinanceDataProvider` 实现 `DataProviderPort` → 数据源可替换
+- 定制逻辑（KillSwitch/Risk/OMS）通过 callback 注入，不污染引擎代码
+
+**关键代码**：
+```python
+class BinanceExecutionAdapter:
+    def __init__(self, killswitch_callback=None, risk_callback=None, oms_callback=None):
+        self._killswitch_callback = killswitch_callback
+        self._risk_callback = risk_callback
+        self._oms_callback = oms_callback
+        self._vectorbt = VectorBTAdapter()  # 可替换的引擎
+
+    async def run_backtest(self, config, strategy):
+        if self._killswitch_callback and self._killswitch_callback() >= 2:
+            return BacktestResult(..., metrics={"blocked_by": "KillSwitch"})
+        result = await self._vectorbt.run_backtest(config, strategy)
+        if self._oms_callback:
+            for trade in result.trades:
+                self._oms_callback({"type": "backtest_fill", "trade": trade})
+        return result
+```
+
+**架构意义**：业务逻辑（KillSwitch/Risk/OMS）与撮合引擎（VectorBT）解耦，两者独立演进。
