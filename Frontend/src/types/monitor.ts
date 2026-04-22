@@ -48,20 +48,20 @@ export interface MonitorSnapshot {
   adapters: Record<string, AdapterHealth>
   active_alerts: Alert[]
   alert_count_by_severity: Partial<Record<AlertSeverity, number>>
-  // Task 19: OMS 可观测性指标
-  tick_rate?: number
-  tick_lag_ms?: number
-  order_submit_ok?: number
-  order_submit_reject?: number
-  order_submit_error?: number
-  reject_reason_counts?: Record<string, number>
-  fill_latency_ms_avg?: number
-  fill_latency_count?: number
-  ws_reconnect_count?: number
-  cl_ord_id_dedup_hits?: number
-  exec_dedup_hits?: number
+  // Task 19: OMS 可观测性指标 (null 来自后端，表示未初始化)
+  tick_rate?: number | null
+  tick_lag_ms?: number | null
+  order_submit_ok?: number | null
+  order_submit_reject?: number | null
+  order_submit_error?: number | null
+  reject_reason_counts?: Record<string, number> | null
+  fill_latency_ms_avg?: number | null
+  fill_latency_count?: number | null
+  ws_reconnect_count?: number | null
+  cl_ord_id_dedup_hits?: number | null
+  exec_dedup_hits?: number | null
   snapshot_source?: string
-  freshness?: string
+  freshness?: string | null
 }
 
 // Monitor alerts response

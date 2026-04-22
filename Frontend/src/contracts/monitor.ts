@@ -84,21 +84,21 @@ export const MonitorSnapshotSchema = z.object({
   adapters: z.record(AdapterHealthSchema),
   active_alerts: z.array(AlertSchema),
   alert_count_by_severity: z.record(z.number().int().min(0)),
-  // OMS observability — all optional
-  tick_rate: z.number().optional(),
-  tick_lag_ms: z.number().optional(),
-  order_submit_ok: z.number().int().min(0).optional(),
-  order_submit_reject: z.number().int().min(0).optional(),
-  order_submit_error: z.number().int().min(0).optional(),
-  reject_reason_counts: z.record(z.number().int().min(0)).optional(),
-  fill_latency_ms_avg: z.number().optional(),
-  fill_latency_count: z.number().int().min(0).optional(),
-  ws_reconnect_count: z.number().int().min(0).optional(),
-  cl_ord_id_dedup_hits: z.number().int().min(0).optional(),
-  exec_dedup_hits: z.number().int().min(0).optional(),
+  // OMS observability — all optional, but backend may return null
+  tick_rate: z.number().nullish(),
+  tick_lag_ms: z.number().nullish(),
+  order_submit_ok: z.number().int().min(0).nullish(),
+  order_submit_reject: z.number().int().min(0).nullish(),
+  order_submit_error: z.number().int().min(0).nullish(),
+  reject_reason_counts: z.record(z.number().int().min(0)).nullish(),
+  fill_latency_ms_avg: z.number().nullish(),
+  fill_latency_count: z.number().int().min(0).nullish(),
+  ws_reconnect_count: z.number().int().min(0).nullish(),
+  cl_ord_id_dedup_hits: z.number().int().min(0).nullish(),
+  exec_dedup_hits: z.number().int().min(0).nullish(),
   // Meta
   snapshot_source: z.string().optional(),
-  freshness: ISOTimestamp.optional(),
+  freshness: ISOTimestamp.nullish(),
 })
 export type MonitorSnapshot = z.infer<typeof MonitorSnapshotSchema>
 
