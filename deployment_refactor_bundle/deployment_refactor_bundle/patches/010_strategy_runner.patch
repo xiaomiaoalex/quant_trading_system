@@ -1,0 +1,374 @@
+--- a/trader/services/strategy_runner.py
++++ b/trader/services/strategy_runner.py
+@@
+ import asyncio
++import inspect
+ import importlib
+@@
+ @dataclass(slots=True)
+ class StrategyRuntimeInfo:
+     """策略运行时信息"""
+ 
++    deployment_id: str
+     strategy_id: str
+     version: str
+     status: StrategyStatus
++    account_id: str = "binance_demo"
++    venue: str = "BINANCE"
++    mode: str = "demo"
++    module_path: Optional[str] = None
+     loaded_at: Optional[datetime] = None
+     started_at: Optional[datetime] = None
+     last_tick_at: Optional[datetime] = None
+@@
+     # 阻塞原因
+     blocked_reason: Optional[str] = None
++    stop_reason: Optional[str] = None
+     # Task 18: 运行时状态恢复字段
+     symbols: List[str] = field(default_factory=list)  # 订阅的交易对列表
+-    env: str = "demo"  # 当前环境 (demo/testnet/live)
++    env: str = "demo"  # 兼容旧字段；值应与 mode 一致
+@@
+         # Task 18: 运行时状态持久化存储
+         self._runtime_state_storage = runtime_state_storage
+         # 策略级别的锁，用于保护并发更新
+         self._strategy_locks: Dict[str, asyncio.Lock] = {}
++
++    def _build_runtime_init_config(
++        self,
++        *,
++        strategy_id: str,
++        deployment_id: str,
++        config: Optional[Dict[str, Any]],
++        symbols: Optional[List[str]],
++        account_id: str,
++        venue: str,
++        mode: str,
++        module_path: Optional[str],
++    ) -> Dict[str, Any]:
++        merged = dict(config or {})
++        merged.setdefault("symbols", list(symbols or merged.get("symbols") or []))
++        merged["strategy_id"] = strategy_id
++        merged["deployment_id"] = deployment_id
++        merged["account_id"] = account_id
++        merged["venue"] = venue
++        merged["mode"] = mode
++        if module_path is not None:
++            merged.setdefault("module_path", module_path)
++        return merged
++
++    def _instantiate_plugin(
++        self,
++        factory_owner: Any,
++        *,
++        strategy_id: str,
++        deployment_id: str,
++        config: Optional[Dict[str, Any]] = None,
++        symbols: Optional[List[str]] = None,
++    ) -> StrategyPlugin:
++        factory = None
++        for attr in ("create_plugin", "build_plugin", "get_plugin"):
++            candidate = getattr(factory_owner, attr, None)
++            if callable(candidate):
++                factory = candidate
++                break
++
++        if factory is None:
++            raise ValueError("策略模块缺少 create_plugin()/get_plugin() 工厂函数")
++
++        kwargs = {
++            "strategy_id": strategy_id,
++            "deployment_id": deployment_id,
++            "config": dict(config or {}),
++            "symbols": list(symbols or []),
++        }
++
++        try:
++            signature = inspect.signature(factory)
++            accepted = {
++                name: value
++                for name, value in kwargs.items()
++                if name in signature.parameters
++            }
++            plugin = factory(**accepted)
++        except (TypeError, ValueError):
++            plugin = factory()
++
++        if any(plugin is existing for existing in self._plugins.values()):
++            raise ValueError(
++                "策略工厂返回了共享单例对象。请删除模块级 `_plugin_instance`，并改为 `create_plugin()` 每次返回新实例。"
++            )
++
++        is_valid, error_msg = validate_strategy_plugin(plugin)
++        if not is_valid:
++            raise TypeError(f"策略插件未实现 StrategyPlugin 协议: {error_msg}")
++
++        if hasattr(plugin, "strategy_id"):
++            plugin.strategy_id = strategy_id
++        if hasattr(plugin, "deployment_id"):
++            plugin.deployment_id = deployment_id
++        if hasattr(plugin, "symbols"):
++            plugin.symbols = list(symbols or [])
++
++        return plugin
+ 
+     async def load_strategy(
+         self,
+         strategy_id: str,
+         version: str,
+         module_path: str,
+         config: Optional[Dict[str, Any]] = None,
+         resource_limits: Optional[StrategyResourceLimits] = None,
++        deployment_id: Optional[str] = None,
++        symbols: Optional[List[str]] = None,
++        account_id: str = "binance_demo",
++        venue: str = "BINANCE",
++        mode: str = "demo",
+     ) -> StrategyRuntimeInfo:
+@@
+-        if strategy_id in self._plugins:
+-            raise ValueError(f"策略已加载: {strategy_id}")
++        runtime_id = deployment_id or strategy_id
++        runtime_config = self._build_runtime_init_config(
++            strategy_id=strategy_id,
++            deployment_id=runtime_id,
++            config=config,
++            symbols=symbols,
++            account_id=account_id,
++            venue=venue,
++            mode=mode,
++            module_path=module_path,
++        )
++
++        if runtime_id in self._plugins:
++            raise ValueError(f"Deployment 已加载: {runtime_id}")
+ 
+         try:
+-            # 动态导入模块
+             module = importlib.import_module(module_path)
+-
+-            # 获取策略实例
+-            if not hasattr(module, "get_plugin"):
+-                raise ValueError(f"模块 {module_path} 缺少 get_plugin() 函数")
+-
+-            plugin = module.get_plugin()
+-
+-            # 验证协议（使用手动检查，因为 @runtime_checkable 与 async 方法不完全兼容）
+-            is_valid, error_msg = validate_strategy_plugin(plugin)
+-            if not is_valid:
+-                raise TypeError(
+-                    f"模块 {module_path} 返回的对象未实现 StrategyPlugin 协议: {error_msg}"
+-                )
++            plugin = self._instantiate_plugin(
++                module,
++                strategy_id=strategy_id,
++                deployment_id=runtime_id,
++                config=runtime_config,
++                symbols=runtime_config.get("symbols"),
++            )
+ 
+             # 设置策略版本（如果插件支持）
+-            # 注意：name 属性是只读的，不能被外部修改
+-            # strategy_id 是 Runner 内部的标识符，存储在 _plugins 字典的 key 中
+             if hasattr(plugin, 'version'):
+                 plugin.version = version
+ 
+-            # 初始化策略
+-            await plugin.initialize(config or {})
++            await plugin.initialize(runtime_config)
+ 
+-            # 注册策略
+-            self._plugins[strategy_id] = plugin
+-            self._infos[strategy_id] = StrategyRuntimeInfo(
++            self._plugins[runtime_id] = plugin
++            self._infos[runtime_id] = StrategyRuntimeInfo(
++                deployment_id=runtime_id,
+                 strategy_id=strategy_id,
+                 version=version,
+                 status=StrategyStatus.LOADED,
++                account_id=account_id,
++                venue=venue,
++                mode=mode,
++                env=mode,
++                module_path=module_path,
+                 loaded_at=datetime.now(timezone.utc),
+-                config=config or {},
++                config=runtime_config,
+                 resource_limits=resource_limits,
++                symbols=list(runtime_config.get("symbols") or []),
+             )
+ 
+-            logger.info(f"策略加载成功: {strategy_id} v{version}")
+-            return self._infos[strategy_id]
++            logger.info(
++                "策略 deployment 加载成功: template=%s deployment=%s symbols=%s",
++                strategy_id,
++                runtime_id,
++                runtime_config.get("symbols") or [],
++            )
++            return self._infos[runtime_id]
+ 
+         except Exception as e:
+-            logger.error(f"策略加载失败: {strategy_id}, 错误: {e}")
++            logger.error(f"策略 deployment 加载失败: {runtime_id}, 错误: {e}")
+             raise
+@@
+     async def load_strategy_from_code(
+         self,
+         strategy_id: str,
+         version: str,
+         code: str,
+         config: Optional[Dict[str, Any]] = None,
+         resource_limits: Optional[StrategyResourceLimits] = None,
++        deployment_id: Optional[str] = None,
++        symbols: Optional[List[str]] = None,
++        account_id: str = "binance_demo",
++        venue: str = "BINANCE",
++        mode: str = "demo",
+     ) -> StrategyRuntimeInfo:
+@@
+-        if strategy_id in self._plugins:
+-            raise ValueError(f"策略已加载: {strategy_id}")
++        runtime_id = deployment_id or strategy_id
++        runtime_config = self._build_runtime_init_config(
++            strategy_id=strategy_id,
++            deployment_id=runtime_id,
++            config=config,
++            symbols=symbols,
++            account_id=account_id,
++            venue=venue,
++            mode=mode,
++            module_path=None,
++        )
++
++        if runtime_id in self._plugins:
++            raise ValueError(f"Deployment 已加载: {runtime_id}")
+ 
+-        module_name = f"dynamic_strategy_{strategy_id}_{int(time.time() * 1000)}"
++        module_name = f"dynamic_strategy_{runtime_id}_{int(time.time() * 1000)}"
+         module = types.ModuleType(module_name)
+         module.__dict__["__builtins__"] = __builtins__
+@@
+-            if "get_plugin" not in module.__dict__:
+-                raise ValueError("代码缺少 get_plugin() 函数")
+-
+-            plugin = module.__dict__["get_plugin"]()
+-            is_valid, error_msg = validate_strategy_plugin(plugin)
+-            if not is_valid:
+-                raise TypeError(f"动态策略未实现 StrategyPlugin 协议: {error_msg}")
++            plugin = self._instantiate_plugin(
++                module,
++                strategy_id=strategy_id,
++                deployment_id=runtime_id,
++                config=runtime_config,
++                symbols=runtime_config.get("symbols"),
++            )
+@@
+-            await plugin.initialize(config or {})
++            await plugin.initialize(runtime_config)
+ 
+-            self._plugins[strategy_id] = plugin
+-            self._dynamic_modules[strategy_id] = module
+-            self._infos[strategy_id] = StrategyRuntimeInfo(
++            self._plugins[runtime_id] = plugin
++            self._dynamic_modules[runtime_id] = module
++            self._infos[runtime_id] = StrategyRuntimeInfo(
++                deployment_id=runtime_id,
+                 strategy_id=strategy_id,
+                 version=version,
+                 status=StrategyStatus.LOADED,
++                account_id=account_id,
++                venue=venue,
++                mode=mode,
++                env=mode,
+                 loaded_at=datetime.now(timezone.utc),
+-                config=config or {},
++                config=runtime_config,
+                 resource_limits=resource_limits,
++                symbols=list(runtime_config.get("symbols") or []),
+             )
+-            logger.info(f"策略加载成功（代码）: {strategy_id} v{version}")
+-            return self._infos[strategy_id]
++            logger.info(f"策略 deployment 加载成功（代码）: {runtime_id} v{version}")
++            return self._infos[runtime_id]
+         except Exception as e:
+-            logger.error(f"策略加载失败（代码）: {strategy_id}, 错误: {e}")
++            logger.error(f"策略加载失败（代码）: {runtime_id}, 错误: {e}")
+             raise
+@@
+-                await plugin.initialize(info.config or {})
++                await plugin.initialize(
++                    self._build_runtime_init_config(
++                        strategy_id=info.strategy_id,
++                        deployment_id=info.deployment_id,
++                        config=info.config,
++                        symbols=info.symbols,
++                        account_id=info.account_id,
++                        venue=info.venue,
++                        mode=info.mode,
++                        module_path=info.module_path,
++                    )
++                )
+@@
+         state: Dict[str, Any] = {
+-            "strategy_id": strategy_id,
++            "deployment_id": info.deployment_id,
++            "strategy_id": info.strategy_id,
+             "status": info.status.value,
+             "config": info.config,
+             "symbols": info.symbols,
+-            "env": info.env,
++            "account_id": info.account_id,
++            "venue": info.venue,
++            "mode": info.mode,
++            "env": info.env,
+             "started_at": int(info.started_at.timestamp() * 1000) if info.started_at else None,
+             "last_tick_at": int(info.last_tick_at.timestamp() * 1000) if info.last_tick_at else None,
+         }
+@@
+         # 暂停状态不处理Tick
+         if info.status == StrategyStatus.PAUSED:
+             return None
++
++        # deployment 只接收自己声明的交易对
++        if info.symbols and market_data.symbol not in info.symbols:
++            return None
+@@
+                 if not signal.strategy_name:
+-                    signal.strategy_name = strategy_id
++                    signal.strategy_name = info.strategy_id
+@@
+-                        self._event_callback(strategy_id, "strategy.signal", {
++                        self._event_callback(strategy_id, "strategy.signal", {
++                            "deployment_id": info.deployment_id,
++                            "strategy_id": info.strategy_id,
+                             "symbol": signal.symbol,
+                             "direction": direction,
+                             "signal_type": signal.signal_type.value if signal.signal_type else None,
+@@
+-                        order_result = await self._oms_callback(strategy_id, signal)
++                        order_result = await self._oms_callback(strategy_id, signal)
+                         # 发布订单提交事件
+                         if self._event_callback and order_result:
+@@
+-                            self._event_callback(strategy_id, "strategy.order.submitted", {
++                            self._event_callback(strategy_id, "strategy.order.submitted", {
++                                "deployment_id": info.deployment_id,
++                                "strategy_id": info.strategy_id,
+                                 "symbol": signal.symbol,
+                                 "side": side,
+                                 "quantity": str(signal.quantity) if signal.quantity else None,
+                                 "price": str(signal.price) if signal.price else None,
+                             })
+@@
+     def list_strategies(self) -> List[StrategyRuntimeInfo]:
+@@
+         return list(self._infos.values())
++
++    def list_deployments_for_strategy(self, strategy_id: str) -> List[StrategyRuntimeInfo]:
++        """按模板 strategy_id 查找所有已加载 deployment。"""
++
++        return [
++            info for info in self._infos.values()
++            if info.strategy_id == strategy_id
++        ]

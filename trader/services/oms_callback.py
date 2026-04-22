@@ -269,6 +269,14 @@ class OMSCallbackHandler:
             MinNotionalError: 最小名义金额不满足
             InvalidQuantityError: 数量精度错误
         """
+        # 诊断日志
+        logger.warning(
+            f"[OMSCallback] execute_signal called: strategy={strategy_id} "
+            f"signal_type={signal.signal_type} symbol={signal.symbol} "
+            f"qty={signal.quantity} price={signal.price} "
+            f"live_trading_enabled={self._live_trading_enabled_fn()}"
+        )
+
         # ==================== 安全闸门检查 ====================
         if not self._live_trading_enabled_fn():
             logger.warning(

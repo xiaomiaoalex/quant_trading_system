@@ -8,6 +8,7 @@ import {
   AlertList,
   KillSwitchIndicator,
   KillSwitchControl,
+  SafetyGateControl,
   StaleBanner,
 } from '@/components/monitor'
 import { monitorKeys } from '@/hooks/useMonitorSnapshot'
@@ -147,6 +148,9 @@ export function Monitor() {
           currentLevel={snapshot.killswitch_level}
           scope={snapshot.killswitch_scope}
         />
+
+        {/* Safety Gate Control Panel */}
+        <SafetyGateControl />
 
         {/* Key Metrics Grid */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
