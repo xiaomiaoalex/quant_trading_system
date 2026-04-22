@@ -1,0 +1,29 @@
+--- a/strategies/example_strategy.py
++++ b/strategies/example_strategy.py
+@@
+-_plugin_instance = None
+-
+-
+-def get_plugin():
+-    global _plugin_instance
+-    if _plugin_instance is None:
+-        _plugin_instance = ExampleStrategy()
+-    return _plugin_instance
++def create_plugin(**_kwargs):
++    """
++    每次调用都返回一个新的策略实例。
++
++    关键点：
++    - 不能缓存模块级实例
++    - 不能在不同 deployment 间共享内部状态
++    - strategy_id / deployment_id / symbols 由 runner 在 initialize(config) 中注入
++    """
++    return ExampleStrategy()
++
++
++def get_plugin():
++    """
++    兼容旧 runner 的入口。
++    注意：这里也必须返回新对象，不能返回 `_plugin_instance`。
++    """
++    return create_plugin()

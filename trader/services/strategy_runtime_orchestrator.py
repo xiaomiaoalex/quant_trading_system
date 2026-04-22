@@ -107,6 +107,10 @@ class StrategyRuntimeOrchestrator:
         # 已订阅的 symbol 集合（避免重复订阅）
         self._subscribed_symbols: set = set()
 
+        # 诊断：市场事件计数器（用于限速日志）
+        self._market_event_count: int = 0
+        self._last_diag_log_ts: float = 0.0
+
         # 如果有 connector，注册市场数据处理器
         if connector is not None:
             connector.register_market_handler(self._on_market_event)
@@ -120,7 +124,11 @@ class StrategyRuntimeOrchestrator:
         """
         self._connector = connector
         connector.register_market_handler(self._on_market_event)
-        logger.info("[Orchestrator] Connector injected and market handler registered")
+        logger.info(
+            f"[Orchestrator] Connector injected: connector={type(connector).__name__}, "
+            f"public_manager_exists={hasattr(connector, '_public_manager')}, "
+            f"handler_count={len(getattr(connector._public_manager, '_market_event_handlers', []))}"
+        )
 
     def _on_market_event(self, event: MarketEvent) -> None:
         """
@@ -128,6 +136,27 @@ class StrategyRuntimeOrchestrator:
 
         注意：此方法在市场事件循环中调用，必须快速返回。
         """
+        self._market_event_count += 1
+        now = time.time()
+
+        # 限速诊断日志：每 10 秒最多一条
+        if now - self._last_diag_log_ts > 10.0:
+            self._last_diag_log_ts = now
+            running_contexts = [
+                ctx for ctx in self._contexts.values()
+                if ctx.status == RuntimeStatus.RUNNING
+            ]
+            pub_running = (
+                self._connector.public_stream.is_running()
+                if self._connector else "no connector"
+            )
+            logger.warning(
+                f"[Orchestrator] Market event diag: "
+                f"event_type={event.event_type} orch_running={self._running} "
+                f"running_strategies={len(running_contexts)} pub_stream={pub_running} "
+                f"(total_events_since_start={self._market_event_count})"
+            )
+
         if not self._running:
             return
 
@@ -344,6 +373,7 @@ class StrategyRuntimeOrchestrator:
             self._contexts[strategy_id] = ctx
 
         # 确保 connector 已启动并订阅对应 symbol 的行情
+        logger.info(f"[Orchestrator] start_strategy: strategy={strategy_id} self._connector={type(self._connector).__name__ if self._connector else None}")
         if self._connector is not None:
             symbol_lower = symbol.lower()
             if symbol_lower not in self._subscribed_symbols:

@@ -10,6 +10,7 @@ import type {
   StrategyCodeDebugResponse,
   TradingPairsResponse,
 } from '@/types'
+import type { SafetyGateStatus } from '@/types'
 
 interface LoadStrategyPayload {
   module_path?: string
@@ -104,6 +105,18 @@ export class StrategiesAPI extends APIClient {
   async getTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT'): Promise<TradingPairsResponse> {
     return this.get<TradingPairsResponse>('/v1/exchange/trading-pairs', {
       params: { status_filter: statusFilter, quote_asset: quoteAsset },
+    })
+  }
+
+  // Safety Gate API
+  async getSafetyGateStatus(): Promise<SafetyGateStatus> {
+    return this.get<SafetyGateStatus>('/v1/safety-gate/status')
+  }
+
+  async setSafetyGateEnabled(enabled: boolean, confirmed = false): Promise<SafetyGateStatus> {
+    return this.post<SafetyGateStatus>('/v1/safety-gate/enable', {
+      enabled,
+      confirmed,
     })
   }
 }

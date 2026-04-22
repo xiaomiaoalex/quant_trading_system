@@ -210,3 +210,44 @@ export function useTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT') {
     throwOnError: false,
   })
 }
+
+// Safety Gate hook
+export function useSafetyGate() {
+  const queryClient = useQueryClient()
+
+  const query = useQuery({
+    queryKey: [...strategyKeys.all, 'safety-gate'] as const,
+    queryFn: () => strategiesAPI.getSafetyGateStatus(),
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+    retry: 2,
+    throwOnError: false,
+  })
+
+  const mutation = useMutation({
+    mutationFn: ({ enabled, confirmed }: { enabled: boolean; confirmed?: boolean }) =>
+      strategiesAPI.setSafetyGateEnabled(enabled, confirmed ?? false),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [...strategyKeys.all, 'safety-gate'] })
+      queryClient.invalidateQueries({ queryKey: ['monitor', 'snapshot'] })
+    },
+  })
+
+  const enable = async (confirmed = false) => {
+    return mutation.mutateAsync({ enabled: true, confirmed })
+  }
+
+  const disable = async () => {
+    return mutation.mutateAsync({ enabled: false })
+  }
+
+  return {
+    status: query.data ?? null,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    error: query.error ? formatAPIError(query.error) : null,
+    isPending: mutation.isPending,
+    enable,
+    disable,
+  }
+}

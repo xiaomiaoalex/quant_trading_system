@@ -83,6 +83,14 @@ export type AlertSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 
 export const ALERT_SEVERITY_ORDER: AlertSeverity[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 
+// Safety Gate types
+export interface SafetyGateStatus {
+  live_trading_enabled: boolean
+  killswitch_level: number
+  killswitch_reason: string | null
+}
+
+
 export const ALERT_SEVERITY_DISPLAY: Record<
   AlertSeverity,
   { label: string; color: string; bgColor: string }
