@@ -157,6 +157,7 @@ _configure_trader_logging()
 
 # 全局 BinanceConnector 实例（用于成交回调）
 _binance_connector_instance: Optional[Any] = None
+_binance_cascade_controller: Optional[Any] = None
 
 _BUILTIN_STRATEGIES = [
     StrategyRegisterRequest(
@@ -280,6 +281,66 @@ async def lifespan(app: FastAPI):
                 logger.warning("[Lifespan] Fill handler not available yet")
 
             # ============================================================
+            # Task 9.11: DegradedCascadeController 初始化和注册
+            # ============================================================
+            from trader.adapters.binance.degraded_cascade import (
+                DegradedCascadeController,
+                CascadeConfig,
+                BackoffController,
+                BackoffConfig,
+            )
+            from trader.api.routes.strategies import get_oms_metrics
+
+            # 自保回调：触发 KillSwitch L1 时同步 OMS 指标
+            async def on_self_protection(active: bool, reason: str | None) -> None:
+                logger.warning(
+                    "[Cascade] [Lifespan] Self-protection triggered: active=%s reason=%s",
+                    active,
+                    reason,
+                )
+                oms_metrics = get_oms_metrics()
+                if oms_metrics and active:
+                    # 记录本地自保触发的拒单
+                    oms_metrics["order_submit_reject"] = oms_metrics.get("order_submit_reject", 0) + 1
+                    oms_metrics.setdefault("reject_reason_counts", {})["SELF_PROTECTION"] = \
+                        oms_metrics["reject_reason_counts"].get("SELF_PROTECTION", 0) + 1
+
+            # 创建级联控制器
+            _cascade_config = CascadeConfig(
+                control_plane_base_url=f"http://localhost:{server_config.port}",
+                dedup_window_ms=60000,
+                min_report_interval_ms=5000,
+                max_report_interval_ms=30000,
+                self_protection_trigger_ms=30000,
+                max_retries_per_event=5,
+                request_timeout=10.0,
+            )
+            _cascade_backoff = BackoffController(BackoffConfig(
+                initial_delay=1.0,
+                max_delay=30.0,
+                multiplier=2.0,
+            ))
+            _cascade_controller = DegradedCascadeController(
+                control_plane_base_url=f"http://localhost:{server_config.port}",
+                backoff=_cascade_backoff,
+                config=_cascade_config,
+                adapter_name="binance_connector",
+            )
+            _cascade_controller.register_self_protection_callback(on_self_protection)
+
+            # 注册健康处理器到 connector
+            async def cascade_health_handler(health_report):
+                await _cascade_controller.on_adapter_health_changed(health_report, "periodic_health_check")
+            connector.register_health_handler(cascade_health_handler)
+
+            # 启动级联控制器 worker
+            await _cascade_controller.start()
+            logger.info("[Lifespan] DegradedCascadeController started")
+
+            # 存储引用用于 shutdown 清理
+            _binance_cascade_controller = _cascade_controller
+
+            # ============================================================
             # Task 16: Startup Self-Check (fail-closed)
             # ============================================================
             async def _run_startup_self_check(c: BinanceConnector) -> bool:
@@ -292,9 +353,9 @@ async def lifespan(app: FastAPI):
                 import time
                 checks = {}
                 try:
-                    # Check 1: REST /v3/time
+                    # Check 1: REST /v3/time via RESTAlignmentCoordinator
                     start = time.monotonic()
-                    server_time = await c._rest_coordinator._api.get_server_time()
+                    server_time = await c._rest_coordinator.get_server_time()
                     rest_latency_ms = (time.monotonic() - start) * 1000
                     checks["rest_time"] = True
                     logger.info("[Binance] Self-check rest_time: OK (latency=%.1fms)", rest_latency_ms)
@@ -592,6 +653,12 @@ async def lifespan(app: FastAPI):
             logger.info("[Lifespan] BinanceConnector stopped")
         except Exception as e:
             logger.error(f"[Lifespan] Error stopping BinanceConnector: {e}")
+    if _binance_cascade_controller is not None:
+        try:
+            await _binance_cascade_controller.stop()
+            logger.info("[Lifespan] DegradedCascadeController stopped")
+        except Exception as e:
+            logger.error(f"[Lifespan] Error stopping DegradedCascadeController: {e}")
     await _heartbeat_service.stop()
     await _connection_manager.stop()
     await reconciler_service.stop()

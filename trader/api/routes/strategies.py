@@ -258,9 +258,9 @@ async def _oms_callback_dispatcher(strategy_id: str, signal) -> Optional[Dict]:
 
 
 def _killswitch_callback(strategy_id: str) -> KillSwitchLevel:
-    """KillSwitch 查询回调"""
+    """KillSwitch 查询回调 — 查 GLOBAL scope"""
     storage = get_storage()
-    state = storage.get_kill_switch(scope="STRATEGY")
+    state = storage.get_kill_switch(scope="GLOBAL")
     return KillSwitchLevel(state.get("level", 0))
 
 

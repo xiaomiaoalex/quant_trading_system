@@ -75,15 +75,20 @@ async def _apply_killswitch_effect(
     """
     previous_state = killswitch_service.get_state(scope)
     killswitch_changed = False
+    level_names = {0: "NORMAL", 1: "NO_NEW_POSITIONS", 2: "CLOSE_ONLY", 3: "FULL_STOP"}
 
     try:
         if previous_state.level < level:
             logger.info(
-                "Applying KillSwitch effect upgrade_key=%s scope=%s from_level=%s to_level=%s",
+                "[KillSwitch] [RiskAPI] Applying KillSwitch effect: upgrade_key=%s scope=%s level=%s (%s) -> %s (%s) reason=%s updated_by=%s",
                 upgrade_key,
                 scope,
                 previous_state.level,
+                level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                 level,
+                level_names.get(level, f"LEVEL_{level}"),
+                reason,
+                updated_by,
             )
             killswitch_service.set_state(
                 KillSwitchSetRequest(
@@ -96,11 +101,13 @@ async def _apply_killswitch_effect(
             killswitch_changed = True
         else:
             logger.info(
-                "KillSwitch effect already satisfied upgrade_key=%s scope=%s current_level=%s target_level=%s",
+                "[KillSwitch] [RiskAPI] KillSwitch effect already satisfied: upgrade_key=%s scope=%s current_level=%s (%s) target_level=%s (%s)",
                 upgrade_key,
                 scope,
                 previous_state.level,
+                level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                 level,
+                level_names.get(level, f"LEVEL_{level}"),
             )
 
         await asyncio.wait_for(service.mark_effect_applied(upgrade_key), timeout=EFFECT_STATUS_TIMEOUT_SEC)
@@ -112,18 +119,21 @@ async def _apply_killswitch_effect(
             try:
                 if _killswitch_matches(current_state, previous_state):
                     logger.info(
-                        "KillSwitch compensation already converged upgrade_key=%s scope=%s restored_level=%s",
+                        "[KillSwitch] [RiskAPI] KillSwitch compensation already converged: upgrade_key=%s scope=%s level=%s (%s)",
                         upgrade_key,
                         scope,
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                     )
                 else:
                     logger.warning(
-                        "Reverting KillSwitch effect upgrade_key=%s scope=%s from_level=%s to_level=%s after error=%s",
+                        "[KillSwitch] [RiskAPI] Reverting KillSwitch effect: upgrade_key=%s scope=%s from_level=%s (%s) to_level=%s (%s) after error=%s",
                         upgrade_key,
                         scope,
                         current_state.level,
+                        level_names.get(current_state.level, f"LEVEL_{current_state.level}"),
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                         exc,
                     )
                     killswitch_service.set_state(
@@ -138,10 +148,11 @@ async def _apply_killswitch_effect(
                 verified_state = killswitch_service.get_state(scope)
                 if _killswitch_matches(verified_state, previous_state):
                     logger.info(
-                        "KillSwitch compensation converged after rollback exception upgrade_key=%s scope=%s restored_level=%s",
+                        "[KillSwitch] [RiskAPI] KillSwitch compensation converged after rollback exception: upgrade_key=%s scope=%s level=%s (%s)",
                         upgrade_key,
                         scope,
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                     )
                 else:
                     compensation_error = (
@@ -149,20 +160,23 @@ async def _apply_killswitch_effect(
                         f"current_level={verified_state.level}; expected_level={previous_state.level}"
                     )
                     logger.exception(
-                        "KillSwitch compensation failed upgrade_key=%s scope=%s current_level=%s expected_level=%s",
+                        "[KillSwitch] [RiskAPI] KillSwitch compensation failed: upgrade_key=%s scope=%s current_level=%s (%s) expected_level=%s (%s)",
                         upgrade_key,
                         scope,
                         verified_state.level,
+                        level_names.get(verified_state.level, f"LEVEL_{verified_state.level}"),
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                     )
             else:
                 verified_state = killswitch_service.get_state(scope)
                 if _killswitch_matches(verified_state, previous_state):
                     logger.info(
-                        "KillSwitch compensation applied upgrade_key=%s scope=%s restored_level=%s",
+                        "[KillSwitch] [RiskAPI] KillSwitch compensation applied: upgrade_key=%s scope=%s level=%s (%s)",
                         upgrade_key,
                         scope,
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                     )
                 else:
                     compensation_error = (
@@ -170,11 +184,13 @@ async def _apply_killswitch_effect(
                         f"expected_level={previous_state.level}"
                     )
                     logger.error(
-                        "KillSwitch compensation left inconsistent state upgrade_key=%s scope=%s current_level=%s expected_level=%s",
+                        "[KillSwitch] [RiskAPI] KillSwitch compensation left inconsistent state: upgrade_key=%s scope=%s current_level=%s (%s) expected_level=%s (%s)",
                         upgrade_key,
                         scope,
                         verified_state.level,
+                        level_names.get(verified_state.level, f"LEVEL_{verified_state.level}"),
                         previous_state.level,
+                        level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                     )
 
         error_message = f"{exc}{compensation_error or ''}"

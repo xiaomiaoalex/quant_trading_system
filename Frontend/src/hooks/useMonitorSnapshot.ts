@@ -151,3 +151,35 @@ export function useClearAllAlerts(): UseClearAllAlertsResult {
     error: mutation.error ? formatAPIError(mutation.error) : null,
   }
 }
+
+// Set killswitch mutation
+interface UseSetKillSwitchResult {
+  setKillSwitch: (level: number, reason?: string) => Promise<boolean>
+  isPending: boolean
+  error: string | null
+}
+
+export function useSetKillSwitch(): UseSetKillSwitchResult {
+  const queryClient = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: ({ level, reason }: { level: number; reason?: string }) =>
+      monitorAPI.setKillSwitch('GLOBAL', level, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
+    },
+  })
+
+  return {
+    setKillSwitch: async (level: number, reason?: string): Promise<boolean> => {
+      try {
+        await mutation.mutateAsync({ level, reason })
+        return true
+      } catch {
+        return false
+      }
+    },
+    isPending: mutation.isPending,
+    error: mutation.error ? formatAPIError(mutation.error) : null,
+  }
+}

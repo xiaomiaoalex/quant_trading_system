@@ -151,6 +151,31 @@ class RESTAlignmentCoordinator:
             logger.warning("[RESTAlignment] Time sync failed: %s", e)
             return
 
+    async def get_server_time(self) -> int:
+        """
+        获取 Binance 服务器时间（用于自检）。
+
+        Returns:
+            服务器时间戳（毫秒）
+
+        Raises:
+            Exception: 如果请求失败
+        """
+        import aiohttp
+        if self._session is None:
+            raise RuntimeError("RESTAlignmentCoordinator not started")
+        url = f"{self._config.base_url}/v3/time"
+        proxy = self._resolve_proxy()
+        async with self._session.get(
+            url,
+            proxy=proxy,
+            timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"GET /v3/time failed with status {resp.status}")
+            data = await resp.json()
+            return int(data["serverTime"])
+
     async def stop(self) -> None:
         """停止协调器"""
         self._running = False

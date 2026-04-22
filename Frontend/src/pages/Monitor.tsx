@@ -7,6 +7,7 @@ import {
   AdapterHealthTable,
   AlertList,
   KillSwitchIndicator,
+  KillSwitchControl,
   StaleBanner,
 } from '@/components/monitor'
 import { monitorKeys } from '@/hooks/useMonitorSnapshot'
@@ -141,6 +142,12 @@ export function Monitor() {
           />
         </div>
 
+        {/* KillSwitch Control Panel */}
+        <KillSwitchControl
+          currentLevel={snapshot.killswitch_level}
+          scope={snapshot.killswitch_scope}
+        />
+
         {/* Key Metrics Grid */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard
@@ -164,6 +171,41 @@ export function Monitor() {
             subValue={`Realized: ${snapshot.realized_pnl}`}
           />
         </div>
+
+        {/* Detailed Positions */}
+        {snapshot.positions && snapshot.positions.length > 0 && (
+          <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">Position Details</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-700">
+                <thead>
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase">Symbol</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Quantity</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Avg Cost</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Current Price</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Exposure</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Unrealized P&L</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700">
+                  {snapshot.positions.map((pos, idx) => (
+                    <tr key={idx} className="hover:bg-gray-700/30">
+                      <td className="px-3 py-2 text-sm font-medium text-white">{pos.symbol}</td>
+                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.quantity}</td>
+                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.avg_cost || '-'}</td>
+                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.current_price || '-'}</td>
+                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.exposure}</td>
+                      <td className={`px-3 py-2 text-sm text-right ${parseFloat(pos.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {pos.unrealized_pnl || '0'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Trading Metrics - Task 19 OMS Observability */}
         <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">

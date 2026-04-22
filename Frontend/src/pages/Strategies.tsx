@@ -185,9 +185,15 @@ export function Strategies() {
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-400 font-mono">{strategy.strategy_id}</td>
                     <td className="px-4 py-3">
-                      <span className={clsx('inline-flex rounded-full px-2 py-0.5 text-xs font-medium', statusConfig.color, statusConfig.bgColor)}>
-                        {statusConfig.label}
-                      </span>
+                      {blockedReason ? (
+                        <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium text-red-400 bg-red-400/10 border border-red-400/30">
+                          {statusConfig.label} (Blocked)
+                        </span>
+                      ) : (
+                        <span className={clsx('inline-flex rounded-full px-2 py-0.5 text-xs font-medium', statusConfig.color, statusConfig.bgColor)}>
+                          {statusConfig.label}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-300">{runtime?.tick_count ?? '-'}</td>
                     <td className="px-4 py-3 text-sm text-gray-300">{runtime?.signal_count ?? '-'}</td>

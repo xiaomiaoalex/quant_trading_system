@@ -20,6 +20,7 @@ const createMockSnapshot = (overrides = {}): MonitorSnapshot => ({
   timestamp: new Date().toISOString(),
   total_positions: 5,
   total_exposure: '100000',
+  positions: [],
   open_orders_count: 3,
   pending_orders_count: 2,
   daily_pnl: '1500.50',
