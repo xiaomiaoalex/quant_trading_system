@@ -294,9 +294,9 @@ def get_strategy_orchestrator() -> StrategyRuntimeOrchestrator:
     3. 调用 runner.tick() 驱动策略
 
     注意：
-    - 编排器依赖于 runner 和 connector
-    - connector 通过 set_strategy_orchestrator_connector 在 orchestrator 创建之前注入
-      （避免 SSE keep-alive 轮询在 lifespan 注入 connector 之前触发初始化）
+    - connector 通过 _pending_orchestrator_connector 全局变量注入
+    - 每次调用都检查 pending connector，确保即使 orchestrator 先被创建，
+      后续 connector 到达时也能立即生效
     """
     global _strategy_orchestrator_instance
     if _strategy_orchestrator_instance is None:
@@ -306,22 +306,31 @@ def get_strategy_orchestrator() -> StrategyRuntimeOrchestrator:
             runner=runner,
             connector=connector,
         )
+        logger.warning(
+            f"[Orchestrator] Created: connector={type(connector).__name__ if connector else None}, "
+            f"pending_set={connector is not None}"
+        )
     return _strategy_orchestrator_instance
 
 
 def set_strategy_orchestrator_connector(connector) -> None:
     """
-    设置待注入的 BinanceConnector，在 orchestrator 创建前调用（由 lifespan 调用）
+    注入 BinanceConnector 到策略编排器（由 lifespan 调用）
 
-    注意：此方法在 orchestrator 创建之前调用，确保 connector 在构造时就被注入，
-    避免 orchestrator 先被创建（有 SSE keep-alive 触发）再注入导致的 connector=None 问题。
+    如果 orchestrator 已存在，立即通过 set_connector() 注入。
+    如果 orchestrator 尚未创建，则将 pending 引用存入全局变量，
+    供后续 get_strategy_orchestrator() 构造时使用。
 
     Args:
         connector: BinanceConnector 实例
     """
     global _pending_orchestrator_connector
     _pending_orchestrator_connector = connector
-    # 如果 orchestrator 已经存在，立即注入 connector
+    logger.info(
+        f"[Orchestrator] set_strategy_orchestrator_connector called: "
+        f"connector={type(connector).__name__ if connector else None}, "
+        f"orch_exists={_strategy_orchestrator_instance is not None}"
+    )
     if _strategy_orchestrator_instance is not None:
         _strategy_orchestrator_instance.set_connector(connector)
         logger.info("[Orchestrator] BinanceConnector injected (late binding)")
