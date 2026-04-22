@@ -28,7 +28,7 @@
 | 研究信号层 | `core/domain/signals/` | 趋势、价量、资金结构信号已完成 |
 | PG投影 / Replay / HITL | `adapters/persistence/postgres/projectors/` 等 | Phase 3 核心能力已落地 |
 | 策略管理与AI共创 | `services/strategy_runner.py` 等 | Phase 4 已完成 |
-| 回测框架升级 | `services/backtesting/` | Phase 5 已完成 Lean 适配、验证与性能基准 |
+| 回测框架升级 | `services/backtesting/` | ✅ 已完成 VectorBT 重构 (2026-04-22)：用 VectorBT 替换撮合引擎，保留 Binance 定制层（KillSwitch/OMS/Risk/Slippage），删除 QC Lean dead code |
 | **策略自动交易闭环** | `services/oms_callback.py` 等 | **Task 11-15 完成（2026-04-20）：实时行情 → tick调度 → OMS回调 → 真实下单 → 成交幂等 → 安全闸门** |
 | **自动交易生产化** | `env_config.py`, `proxy_failover.py`, `oms_idempotency.py` | **Task 16-20 完成（2026-04-20）：环境统一、成交去重、重启恢复、运行时可观测性** |
 | **SSE实时更新** | `oms_callback.py`, `strategy_runner.py`, `monitor_service.py` | **Task 9.11 完成：SSE广播集成OMS/StrategyRunner/Reconciler，Monitor和Strategies页面实时更新** |
@@ -883,6 +883,23 @@ Task 4.5 (AI聊天界面) ─────────────────▶
 - 回测引擎是**基础设施**，应使用成熟方案，不重复造轮子
 - 差异化竞争点在于：策略逻辑、风险管理、交易执行、与项目架构的深度集成
 - 自研组件保持：StrategyLifecycleManager、StrategyRunner、策略协议
+
+---
+
+### ✅ Phase 5 实现状态（2026-04-22 完成）
+
+**架构**：VectorBT（撮合引擎）+ BinanceExecutionAdapter（Binance 定制层）+ BinanceDataProvider（数据源）
+
+**已完成**：
+- `trader/services/backtesting/vectorbt_adapter.py` — VectorBTAdapter 实现 BacktestEnginePort
+- `trader/services/backtesting/binance_data_provider.py` — BinanceDataProvider 对接 demo.binance.com K线
+- `trader/services/backtesting/binance_execution_adapter.py` — BinanceExecutionAdapter 包装 KillSwitch/OMS/Risk/Slippage
+- `trader/services/backtesting/slippage.py` — 方向感知滑点（BUY+slip, SELL-slip）
+- `trader/services/deployment.py` — BacktestService 接入 VectorBT
+- 删除：`quantconnect_adapter.py`（36KB dead code）、`services/backtesting/`（根目录重复）
+- 数据源 URL：`https://demo.binance.com`（Binance Spot Demo）
+
+**参考文档**：`docs/superpowers/plans/2026-04-22-backtest-vectorbt-refactor.md`
 
 ---
 
