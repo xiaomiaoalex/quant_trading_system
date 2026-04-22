@@ -24,7 +24,7 @@ DEFAULT_SYMBOLS = [
 @dataclass
 class BinanceDataConfig:
     """Binance 数据源配置"""
-    base_url: str = "https://testnet.binance.vision/api"
+    base_url: str = "https://demo.binance.com"
     timeout: float = 30.0
     max_retries: int = 3
     symbols: List[str] = field(default_factory=lambda: DEFAULT_SYMBOLS.copy())
