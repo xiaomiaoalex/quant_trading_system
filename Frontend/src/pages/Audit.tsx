@@ -35,7 +35,7 @@ export function Audit() {
       return
     }
     if (!selectedEntryId || !entries.some(item => item.entry_id === selectedEntryId)) {
-      setSelectedEntryId(entries[0].entry_id)
+      setSelectedEntryId(entries[0]?.entry_id ?? null)
     }
   }, [entries, selectedEntryId])
 

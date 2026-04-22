@@ -302,7 +302,7 @@ class PositionDetail(BaseModel):
     avg_cost: Optional[str] = Field(default=None, description="平均成本价")
     current_price: Optional[str] = Field(default=None, description="当前价格（标记价）")
     unrealized_pnl: Optional[str] = Field(default=None, description="未实现盈亏")
-    exposure: str = Field(default="0", description="敞口价值（数量 * 当前价格）")
+    exposure: Optional[str] = Field(default=None, description="敞口价值（数量 * 当前价格）")
 
 
 class PnlView(BaseModel):
@@ -513,6 +513,12 @@ class MonitorSnapshot(BaseModel):
     # 元信息 (Task 9.2 - 真聚合化)
     snapshot_source: Optional[str] = Field(default="aggregated", description="数据来源: aggregated/query")
     freshness: Optional[str] = Field(default=None, description="数据新鲜度时间戳")
+
+
+class MonitorAlertsResponse(BaseModel):
+    """告警列表响应包装器"""
+    alerts: List[Alert] = Field(default_factory=list)
+    total_count: int = Field(default=0, description="告警总数")
 
 
 # ==================== Heartbeat Models ====================

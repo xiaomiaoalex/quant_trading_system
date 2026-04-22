@@ -35,6 +35,7 @@ const createMockSnapshot = (overrides = {}): MonitorSnapshot => ({
       status: 'HEALTHY',
       last_heartbeat_ts_ms: Date.now(),
       error_count: 0,
+      message: null,
     },
   },
   active_alerts: [],
@@ -132,7 +133,9 @@ describe('useMonitorSnapshot', () => {
         'binance-spot': {
           adapter_name: 'binance-spot',
           status: 'HEALTHY',
+          last_heartbeat_ts_ms: Date.now(),
           error_count: 0,
+          message: null,
         },
       },
     });
@@ -155,7 +158,9 @@ describe('useMonitorSnapshot', () => {
         'binance-spot': {
           adapter_name: 'binance-spot',
           status: 'DEGRADED',
+          last_heartbeat_ts_ms: Date.now(),
           error_count: 5,
+          message: null,
         },
       },
     });
@@ -178,7 +183,9 @@ describe('useMonitorSnapshot', () => {
         'binance-spot': {
           adapter_name: 'binance-spot',
           status: 'DOWN',
+          last_heartbeat_ts_ms: Date.now(),
           error_count: 100,
+          message: null,
         },
       },
     });
@@ -202,7 +209,9 @@ describe('useMonitorSnapshot', () => {
         'binance-spot': {
           adapter_name: 'binance-spot',
           status: 'HEALTHY',
+          last_heartbeat_ts_ms: Date.now(),
           error_count: 0,
+          message: null,
         },
       },
     });

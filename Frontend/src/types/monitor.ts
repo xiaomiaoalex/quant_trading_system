@@ -16,19 +16,19 @@ export interface Alert {
 export interface AdapterHealth {
   adapter_name: string
   status: AdapterHealthStatus
-  last_heartbeat_ts_ms?: number
+  last_heartbeat_ts_ms: number | null
   error_count: number
-  message?: string
+  message: string | null
 }
 
 // Position detail for detailed position display
 export interface PositionDetail {
   symbol: string
   quantity: string
-  avg_cost?: string
-  current_price?: string
-  unrealized_pnl?: string
-  exposure: string
+  avg_cost: string | null
+  current_price: string | null
+  unrealized_pnl: string | null
+  exposure: string | null
 }
 
 // Monitor snapshot model - true aggregation from backend (Task 9.2)
@@ -47,7 +47,7 @@ export interface MonitorSnapshot {
   killswitch_scope: string
   adapters: Record<string, AdapterHealth>
   active_alerts: Alert[]
-  alert_count_by_severity: Record<AlertSeverity, number>
+  alert_count_by_severity: Partial<Record<AlertSeverity, number>>
   // Task 19: OMS 可观测性指标
   tick_rate?: number
   tick_lag_ms?: number
@@ -77,7 +77,7 @@ export interface AlertRule {
   threshold: number
   comparison: 'gt' | 'lt' | 'gte' | 'lte' | 'eq'
   severity: AlertSeverity
-  cooldown_seconds?: number
+  cooldown_seconds: number | null
 }
 
 // Clear alert request
@@ -112,9 +112,11 @@ export function deriveSystemHealthState(
 }
 
 // Snapshot freshness check (stale if older than 60 seconds)
+// 优先使用 freshness 字段，回退到 timestamp（与后端同步）
 export function isSnapshotStale(snapshot: MonitorSnapshot | null, thresholdMs = 60_000): boolean {
   if (!snapshot) return true
-  const snapshotTime = new Date(snapshot.timestamp).getTime()
+  const timeField = snapshot.freshness ?? snapshot.timestamp
+  const snapshotTime = new Date(timeField).getTime()
   const now = Date.now()
   return now - snapshotTime > thresholdMs
 }
