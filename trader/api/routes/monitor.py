@@ -6,12 +6,20 @@ System monitoring and alerting endpoints.
 import asyncio
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Query
 
 logger = logging.getLogger(__name__)
 
-from trader.api.models.schemas import MonitorSnapshot, Alert, AlertRule, PositionView, PositionDetail
+from trader.api.models.schemas import (
+    MonitorSnapshot,
+    Alert,
+    AlertRule,
+    PositionView,
+    PositionDetail,
+    MonitorAlertsResponse,
+)
 from trader.services import MonitorService, PortfolioService, OrderService, KillSwitchService
 
 
@@ -114,23 +122,36 @@ async def get_monitor_snapshot(
     try:
         raw_positions: List[PositionView] = portfolio_svc.list_positions()
         for p in raw_positions:
-            qty = float(p.qty) if p.qty and p.qty.strip() else 0.0
-            avg_cost = float(p.avg_cost) if p.avg_cost and p.avg_cost.strip() else 0.0
-            current_price = float(p.mark_price) if p.mark_price and p.mark_price.strip() else 0.0
-            unrealized_pnl_val = float(p.unrealized_pnl) if p.unrealized_pnl and p.unrealized_pnl.strip() else 0.0
-            exposure_val = qty * current_price
+            # 使用 Decimal 解析金融数据，避免 float 精度问题
+            # 只有原始字段非空且非空白时才生成值，否则为 None
+            has_qty = p.qty and p.qty.strip()
+            has_avg_cost = p.avg_cost and p.avg_cost.strip()
+            has_mark_price = p.mark_price and p.mark_price.strip()
+            has_unrealized = p.unrealized_pnl and p.unrealized_pnl.strip()
+
+            qty_dec = Decimal(p.qty.strip()) if has_qty else Decimal("0")
+            avg_cost_dec = Decimal(p.avg_cost.strip()) if has_avg_cost else None
+            mark_price_dec = Decimal(p.mark_price.strip()) if has_mark_price else None
+            unrealized_dec = Decimal(p.unrealized_pnl.strip()) if has_unrealized else None
+
+            # exposure 只有在 qty 和 mark_price 都有效时才计算
+            exposure_val = (
+                str(qty_dec * mark_price_dec)
+                if (has_qty and has_mark_price)
+                else None
+            )
 
             positions_for_exposure.append(PositionForExposure(
-                quantity=qty,
-                current_price=current_price,
+                quantity=float(qty_dec),
+                current_price=float(mark_price_dec) if mark_price_dec is not None else 0.0,
             ))
             positions_detail.append(PositionDetail(
                 symbol=p.instrument,
-                quantity=str(qty),
-                avg_cost=str(avg_cost) if avg_cost > 0 else None,
-                current_price=str(current_price) if current_price > 0 else None,
-                unrealized_pnl=str(unrealized_pnl_val) if unrealized_pnl_val != 0 else None,
-                exposure=str(exposure_val),
+                quantity=str(qty_dec),
+                avg_cost=str(avg_cost_dec) if avg_cost_dec is not None else None,
+                current_price=str(mark_price_dec) if mark_price_dec is not None else None,
+                unrealized_pnl=str(unrealized_dec) if unrealized_dec is not None else None,
+                exposure=exposure_val,
             ))
     except (ConnectionError, TimeoutError) as e:
         logger.error(
@@ -302,9 +323,11 @@ async def get_monitor_snapshot(
             killswitch_scope=killswitch_scope or "GLOBAL",
         )
     
-    # 添加元信息
+    # 添加元信息 — timestamp 与 freshness 同步，前端 stale 检查依赖 timestamp
+    now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    snapshot.timestamp = now_iso
+    snapshot.freshness = now_iso
     snapshot.snapshot_source = "aggregated"
-    snapshot.freshness = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     # 添加详细持仓信息
     snapshot.positions = positions_detail
@@ -312,15 +335,16 @@ async def get_monitor_snapshot(
     return snapshot
 
 
-@router.get("/v1/monitor/alerts", response_model=list[Alert])
-async def get_active_alerts() -> list[Alert]:
+@router.get("/v1/monitor/alerts", response_model=MonitorAlertsResponse)
+async def get_active_alerts() -> MonitorAlertsResponse:
     """
     获取当前活跃告警列表。
-    
-    返回所有未过冷却期的告警。
+
+    返回所有未过冷却期的告警，包装在标准响应对象中。
     """
     service = await get_monitor_service()
-    return service.get_active_alerts()
+    alerts = service.get_active_alerts()
+    return MonitorAlertsResponse(alerts=alerts, total_count=len(alerts))
 
 
 @router.post("/v1/monitor/rules", response_model=AlertRule)

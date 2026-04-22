@@ -1,7 +1,5 @@
 import { APIClient } from './client'
 import type {
-  MonitorSnapshot,
-  MonitorAlertsResponse,
   AlertRule,
   ActionResult,
   KillSwitchState,
@@ -15,12 +13,12 @@ import type {
 // - POST /v1/reconciler/trigger should support no-parameter trigger (Task 9.3)
 
 export class MonitorAPI extends APIClient {
-  async getSnapshot(): Promise<MonitorSnapshot> {
-    return this.get<MonitorSnapshot>('/v1/monitor/snapshot')
+  async getSnapshot(): Promise<unknown> {
+    return this.get<unknown>('/v1/monitor/snapshot')
   }
 
-  async getAlerts(): Promise<MonitorAlertsResponse> {
-    return this.get<MonitorAlertsResponse>('/v1/monitor/alerts')
+  async getAlerts(): Promise<unknown> {
+    return this.get<unknown>('/v1/monitor/alerts')
   }
 
   async createAlertRule(rule: AlertRule): Promise<ActionResult> {

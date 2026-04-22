@@ -39,7 +39,7 @@ export function Replay() {
       return
     }
     if (!selectedJobId || !jobs.some(item => item.job_id === selectedJobId)) {
-      setSelectedJobId(jobs[0].job_id)
+      setSelectedJobId(jobs[0]?.job_id ?? null)
     }
   }, [jobs, selectedJobId])
 

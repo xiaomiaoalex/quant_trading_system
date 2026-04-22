@@ -3,6 +3,10 @@ import { monitorAPI } from '@/api'
 import type { MonitorSnapshot, SystemHealthState, Alert } from '@/types'
 import { deriveSystemHealthState, isSnapshotStale } from '@/types'
 import { formatAPIError } from '@/api/client'
+import {
+  MonitorSnapshotSchema,
+  MonitorAlertsResponseSchema,
+} from '@/contracts/monitor'
 
 // Query keys for monitor
 export const monitorKeys = {
@@ -14,7 +18,8 @@ export const monitorKeys = {
   dependencies: () => [...monitorKeys.all, 'dependencies'] as const,
 }
 
-// Snapshot query with derived state
+// ─── Snapshot query with Zod validation ──────────────────────────────────────
+
 interface UseMonitorSnapshotOptions {
   staleThresholdMs?: number
   refetchInterval?: number
@@ -27,7 +32,7 @@ interface UseMonitorSnapshotResult {
   error: string | null
   isStale: boolean
   healthState: SystemHealthState
-  refetch: () => void
+  refetch: () => Promise<void>
 }
 
 export function useMonitorSnapshot(
@@ -37,11 +42,22 @@ export function useMonitorSnapshot(
 
   const query = useQuery({
     queryKey: monitorKeys.snapshot(),
-    queryFn: () => monitorAPI.getSnapshot(),
+    queryFn: async () => {
+      const raw = await monitorAPI.getSnapshot()
+      // Runtime contract validation — fails fast on field drift
+      const parsed = MonitorSnapshotSchema.safeParse(raw)
+      if (!parsed.success) {
+        // eslint-disable-next-line no-console
+        console.error('MonitorSnapshot validation failed:', parsed.error.flatten())
+        throw new Error(
+          `Monitor snapshot schema mismatch: ${parsed.error.errors.map((e) => e.message).join(', ')}`
+        )
+      }
+      return parsed.data
+    },
     staleTime: 5_000,
     refetchInterval,
     retry: 2,
-    select: data => data,
   })
 
   const isStale = isSnapshotStale(query.data ?? null, staleThresholdMs)
@@ -54,24 +70,38 @@ export function useMonitorSnapshot(
     error: query.error ? formatAPIError(query.error) : null,
     isStale,
     healthState,
-    refetch: query.refetch,
+    refetch: async () => {
+      await query.refetch()
+    },
   }
 }
 
-// Alerts query
+// ─── Alerts query with Zod validation ────────────────────────────────────────
+
 interface UseMonitorAlertsResult {
   alerts: Alert[]
   totalCount: number
   isLoading: boolean
   isError: boolean
   error: string | null
-  refetch: () => void
+  refetch: () => Promise<void>
 }
 
 export function useMonitorAlerts(): UseMonitorAlertsResult {
   const query = useQuery({
     queryKey: monitorKeys.alerts(),
-    queryFn: () => monitorAPI.getAlerts(),
+    queryFn: async () => {
+      const raw = await monitorAPI.getAlerts()
+      const parsed = MonitorAlertsResponseSchema.safeParse(raw)
+      if (!parsed.success) {
+        // eslint-disable-next-line no-console
+        console.error('MonitorAlertsResponse validation failed:', parsed.error.flatten())
+        throw new Error(
+          `Alerts response schema mismatch: ${parsed.error.errors.map((e) => e.message).join(', ')}`
+        )
+      }
+      return parsed.data
+    },
     staleTime: 30_000,
     retry: 2,
   })
@@ -82,11 +112,14 @@ export function useMonitorAlerts(): UseMonitorAlertsResult {
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error ? formatAPIError(query.error) : null,
-    refetch: query.refetch,
+    refetch: async () => {
+      await query.refetch()
+    },
   }
 }
 
-// Clear single alert mutation
+// ─── Clear single alert mutation ─────────────────────────────────────────────
+
 interface UseClearAlertResult {
   clearAlert: (ruleName: string, reason?: string) => Promise<boolean>
   isPending: boolean
@@ -100,9 +133,17 @@ export function useClearAlert(): UseClearAlertResult {
     mutationFn: ({ ruleName, reason }: { ruleName: string; reason?: string }) =>
       monitorAPI.clearAlert(ruleName, reason),
     onSuccess: () => {
-      // Invalidate both alerts and snapshot queries
-      queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
-      queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
+      // Invalidate with exact match to avoid over-broad invalidation
+      queryClient.invalidateQueries({
+        queryKey: monitorKeys.alerts(),
+        exact: true,
+        refetchType: 'active',
+      })
+      queryClient.invalidateQueries({
+        queryKey: monitorKeys.snapshot(),
+        exact: true,
+        refetchType: 'active',
+      })
     },
   })
 
@@ -120,7 +161,8 @@ export function useClearAlert(): UseClearAlertResult {
   }
 }
 
-// Clear all alerts mutation
+// ─── Clear all alerts mutation ───────────────────────────────────────────────
+
 interface UseClearAllAlertsResult {
   clearAllAlerts: (reason?: string) => Promise<boolean>
   isPending: boolean
@@ -133,8 +175,16 @@ export function useClearAllAlerts(): UseClearAllAlertsResult {
   const mutation = useMutation({
     mutationFn: (reason?: string) => monitorAPI.clearAllAlerts(reason),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
-      queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
+      queryClient.invalidateQueries({
+        queryKey: monitorKeys.alerts(),
+        exact: true,
+        refetchType: 'active',
+      })
+      queryClient.invalidateQueries({
+        queryKey: monitorKeys.snapshot(),
+        exact: true,
+        refetchType: 'active',
+      })
     },
   })
 
@@ -152,7 +202,8 @@ export function useClearAllAlerts(): UseClearAllAlertsResult {
   }
 }
 
-// Set killswitch mutation
+// ─── Set killswitch mutation ─────────────────────────────────────────────────
+
 interface UseSetKillSwitchResult {
   setKillSwitch: (level: number, reason?: string) => Promise<boolean>
   isPending: boolean
@@ -166,7 +217,11 @@ export function useSetKillSwitch(): UseSetKillSwitchResult {
     mutationFn: ({ level, reason }: { level: number; reason?: string }) =>
       monitorAPI.setKillSwitch('GLOBAL', level, reason),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
+      queryClient.invalidateQueries({
+        queryKey: monitorKeys.snapshot(),
+        exact: true,
+        refetchType: 'active',
+      })
     },
   })
 
