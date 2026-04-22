@@ -3,12 +3,15 @@ Storage - In-memory storage implementation for the control plane
 ================================================================
 Provides in-memory storage for strategies, deployments, orders, positions, etc.
 """
+import logging
 import uuid
 import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
 from trader.core.domain.models.order import OrderStatus
+
+logger = logging.getLogger(__name__)
 
 
 class ControlPlaneInMemoryStorage:
@@ -765,6 +768,10 @@ class ControlPlaneInMemoryStorage:
     def set_kill_switch(self, scope: str, level: int, reason: Optional[str], updated_by: str) -> Dict[str, Any]:
         """Set kill switch level"""
         now = datetime.now(timezone.utc).isoformat() + "Z"
+        previous = self.kill_switch_states.get(scope)
+        previous_level = previous.get("level", 0) if previous else 0
+        previous_reason = previous.get("reason") if previous else None
+
         state = {
             "scope": scope,
             "level": level,
@@ -773,6 +780,19 @@ class ControlPlaneInMemoryStorage:
             "updated_by": updated_by,
         }
         self.kill_switch_states[scope] = state
+
+        level_names = {0: "NORMAL", 1: "NO_NEW_POSITIONS", 2: "CLOSE_ONLY", 3: "FULL_STOP"}
+        logger.info(
+            "[KillSwitch] [Storage] State updated: scope=%s level=%s (%s) -> %s (%s) reason=%s updated_by=%s",
+            scope,
+            previous_level,
+            level_names.get(previous_level, f"LEVEL_{previous_level}"),
+            level,
+            level_names.get(level, f"LEVEL_{level}"),
+            reason or "N/A",
+            updated_by,
+        )
+
         return state
 
     def get_kill_switch(self, scope: str = "GLOBAL") -> Dict[str, Any]:

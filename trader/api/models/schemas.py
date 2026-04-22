@@ -295,6 +295,16 @@ class PositionView(BaseModel):
     updated_ts_ms: Optional[int] = None
 
 
+class PositionDetail(BaseModel):
+    """Monitor 页面使用的详细持仓信息"""
+    symbol: str = Field(description="交易对，如 BTCUSDT")
+    quantity: str = Field(description="持仓数量")
+    avg_cost: Optional[str] = Field(default=None, description="平均成本价")
+    current_price: Optional[str] = Field(default=None, description="当前价格（标记价）")
+    unrealized_pnl: Optional[str] = Field(default=None, description="未实现盈亏")
+    exposure: str = Field(default="0", description="敞口价值（数量 * 当前价格）")
+
+
 class PnlView(BaseModel):
     """盈亏视图"""
     account_id: str
@@ -464,6 +474,7 @@ class MonitorSnapshot(BaseModel):
     # 持仓信息
     total_positions: int = 0
     total_exposure: str = "0"
+    positions: List["PositionDetail"] = Field(default_factory=list, description="详细持仓列表")
     
     # 订单信息
     open_orders_count: int = 0

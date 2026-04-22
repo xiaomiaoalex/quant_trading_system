@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query
 
 logger = logging.getLogger(__name__)
 
-from trader.api.models.schemas import MonitorSnapshot, Alert, AlertRule, PositionView
+from trader.api.models.schemas import MonitorSnapshot, Alert, AlertRule, PositionView, PositionDetail
 from trader.services import MonitorService, PortfolioService, OrderService, KillSwitchService
 
 
@@ -110,16 +110,28 @@ async def get_monitor_snapshot(
     
     # 从 PortfolioService 获取持仓列表
     positions_for_exposure: List[PositionForExposure] = []
+    positions_detail: List[PositionDetail] = []
     try:
         raw_positions: List[PositionView] = portfolio_svc.list_positions()
-        positions_for_exposure = [
-            PositionForExposure(
-                quantity=float(p.qty) if p.qty and p.qty.strip() else 0.0,
-                # 使用 avg_cost（平均成本价）计算敞口，比 mark_price 更稳定
-                current_price=float(p.avg_cost) if p.avg_cost and p.avg_cost.strip() else 0.0,
-            )
-            for p in raw_positions
-        ]
+        for p in raw_positions:
+            qty = float(p.qty) if p.qty and p.qty.strip() else 0.0
+            avg_cost = float(p.avg_cost) if p.avg_cost and p.avg_cost.strip() else 0.0
+            current_price = float(p.mark_price) if p.mark_price and p.mark_price.strip() else 0.0
+            unrealized_pnl_val = float(p.unrealized_pnl) if p.unrealized_pnl and p.unrealized_pnl.strip() else 0.0
+            exposure_val = qty * current_price
+
+            positions_for_exposure.append(PositionForExposure(
+                quantity=qty,
+                current_price=current_price,
+            ))
+            positions_detail.append(PositionDetail(
+                symbol=p.instrument,
+                quantity=str(qty),
+                avg_cost=str(avg_cost) if avg_cost > 0 else None,
+                current_price=str(current_price) if current_price > 0 else None,
+                unrealized_pnl=str(unrealized_pnl_val) if unrealized_pnl_val != 0 else None,
+                exposure=str(exposure_val),
+            ))
     except (ConnectionError, TimeoutError) as e:
         logger.error(
             "Failed to fetch positions for monitor snapshot - connection error, using empty list",
@@ -230,8 +242,9 @@ async def get_monitor_snapshot(
                     message=f"Status check failed: {broker_err}",
                 )
     except Exception as e:
-        logger.error(
-            "Failed to fetch adapter health for monitor snapshot",
+        # 降低日志级别：无 broker 注册是正常情况
+        logger.warning(
+            "No brokers registered or failed to fetch adapter health for monitor snapshot",
             extra={"error": str(e), "error_type": type(e).__name__}
         )
     
@@ -292,7 +305,10 @@ async def get_monitor_snapshot(
     # 添加元信息
     snapshot.snapshot_source = "aggregated"
     snapshot.freshness = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    
+
+    # 添加详细持仓信息
+    snapshot.positions = positions_detail
+
     return snapshot
 
 

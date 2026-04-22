@@ -117,13 +117,18 @@ class TestDegradedCascadeController:
 
     @pytest.mark.asyncio
     async def test_on_adapter_health_changed_exit_degraded(self):
-        """测试退出 DEGRADED 模式"""
+        """测试退出 DEGRADED 模式（Anti-Flap：DEGRADED→RECOVERING 后需要 2 次 HEALTHY 才降级，共 3 次）"""
         controller = DegradedCascadeController(
             control_plane_base_url="http://localhost:8080"
         )
 
         controller._state = CascadeState.DEGRADED
         controller._http_client = MagicMock()
+
+        # Mock _post_killswitch_downgrade so auto-downgrade succeeds
+        async def mock_post_downgrade():
+            return True
+        controller._post_killswitch_downgrade = mock_post_downgrade
 
         health = AdapterHealthReport(
             public_stream_state=MagicMock(value="CONNECTED"),
@@ -138,8 +143,23 @@ class TestDegradedCascadeController:
             metrics={}
         )
 
+        # First HEALTHY: DEGRADED → RECOVERING (counter reset to 0 by _on_degraded_exit)
         await controller.on_adapter_health_changed(health, "recovered")
+        assert controller.state == CascadeState.RECOVERING
+        assert controller._consecutive_healthy_checks == 0
 
+        # Second HEALTHY: counter = 1 (still below threshold of 3)
+        await controller.on_adapter_health_changed(health, "recovered")
+        assert controller.state == CascadeState.RECOVERING
+        assert controller._consecutive_healthy_checks == 1
+
+        # Third HEALTHY: counter = 2 (still below threshold of 3)
+        await controller.on_adapter_health_changed(health, "recovered")
+        assert controller.state == CascadeState.RECOVERING
+        assert controller._consecutive_healthy_checks == 2
+
+        # Fourth HEALTHY: counter = 3, triggers auto-downgrade → NORMAL
+        await controller.on_adapter_health_changed(health, "recovered")
         assert controller.state == CascadeState.NORMAL
         assert controller.metrics.degraded_exit_count >= 1
 

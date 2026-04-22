@@ -529,29 +529,52 @@ class OMSCallbackHandler:
                         venue=self._broker.broker_name,
                     )
                     current_qty = Decimal("0")
+                    current_avg_cost = Decimal("0")
                     for pos in current_positions:
                         if pos.get("instrument") == signal.symbol:
                             current_qty = Decimal(str(pos.get("quantity", "0")))
+                            current_avg_cost = Decimal(str(pos.get("avg_cost", "0")))
                             break
 
-                    # 计算新持仓
+                    # 计算新持仓数量和平均成本
+                    new_qty = current_qty
+                    new_avg_cost = broker_order.average_price
+
                     if side.value == "BUY":
-                        new_qty = current_qty + quantity
+                        # 买入：更新平均成本
+                        if current_qty > 0:
+                            total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
+                            new_qty = current_qty + quantity
+                            new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                        else:
+                            new_qty = current_qty + quantity
                     else:  # SELL
+                        # 卖出：减少持仓数量，平均成本不变
                         new_qty = current_qty - quantity
+                        # 如果清仓，重置平均成本
+                        if new_qty <= 0:
+                            new_avg_cost = Decimal("0")
+                            new_qty = Decimal("0")
+
+                    # 计算未实现盈亏（简单计算：持仓量 * (当前价 - 成本价)）
+                    unrealized_pnl = Decimal("0")
+                    if new_qty > 0 and new_avg_cost > 0:
+                        unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
 
                     # 更新持仓
                     self._storage.upsert_position({
-                        "account_id": "SYSTEM",  # or whatever account ID
+                        "account_id": "SYSTEM",
                         "venue": self._broker.broker_name,
                         "instrument": signal.symbol,
-                        "quantity": str(new_qty),
-                        "avg_cost": str(broker_order.average_price),  # 平均成本价
-                        "realized_pnl": "0",  # realized P&L 需要交易历史计算
-                        "unrealized_pnl": "0",
+                        "qty": str(new_qty),
+                        "avg_cost": str(new_avg_cost),
+                        "mark_price": str(broker_order.average_price),
+                        "realized_pnl": "0",  # realized P&L 需要完整交易历史计算
+                        "unrealized_pnl": str(unrealized_pnl),
                     })
-                    logger.debug(
-                        f"[OMSCallback] Position updated: {signal.symbol} qty={new_qty}"
+                    logger.info(
+                        f"[OMSCallback] Position updated: {signal.symbol} qty={new_qty}, "
+                        f"avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
                     )
                 except Exception as e:
                     logger.warning(f"[OMSCallback] Failed to update position: {e}")

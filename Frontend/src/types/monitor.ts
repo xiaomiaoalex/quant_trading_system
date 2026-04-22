@@ -21,11 +21,22 @@ export interface AdapterHealth {
   message?: string
 }
 
+// Position detail for detailed position display
+export interface PositionDetail {
+  symbol: string
+  quantity: string
+  avg_cost?: string
+  current_price?: string
+  unrealized_pnl?: string
+  exposure: string
+}
+
 // Monitor snapshot model - true aggregation from backend (Task 9.2)
 export interface MonitorSnapshot {
   timestamp: string
   total_positions: number
   total_exposure: string
+  positions: PositionDetail[]
   open_orders_count: number
   pending_orders_count: number
   daily_pnl: string
@@ -37,6 +48,20 @@ export interface MonitorSnapshot {
   adapters: Record<string, AdapterHealth>
   active_alerts: Alert[]
   alert_count_by_severity: Record<AlertSeverity, number>
+  // Task 19: OMS 可观测性指标
+  tick_rate?: number
+  tick_lag_ms?: number
+  order_submit_ok?: number
+  order_submit_reject?: number
+  order_submit_error?: number
+  reject_reason_counts?: Record<string, number>
+  fill_latency_ms_avg?: number
+  fill_latency_count?: number
+  ws_reconnect_count?: number
+  cl_ord_id_dedup_hits?: number
+  exec_dedup_hits?: number
+  snapshot_source?: string
+  freshness?: string
 }
 
 // Monitor alerts response

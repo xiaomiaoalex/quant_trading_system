@@ -45,6 +45,20 @@ export class MonitorAPI extends APIClient {
     return this.get<KillSwitchState>('/v1/killswitch')
   }
 
+  async setKillSwitch(
+    scope: string,
+    level: number,
+    reason?: string,
+    updatedBy?: string
+  ): Promise<KillSwitchState> {
+    return this.post<KillSwitchState>('/v1/killswitch', {
+      scope,
+      level,
+      reason,
+      updated_by: updatedBy ?? 'frontend_user',
+    })
+  }
+
   async getReadiness(): Promise<HealthResponse> {
     return this.get<HealthResponse>('/health/ready')
   }
