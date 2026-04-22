@@ -115,6 +115,30 @@ from trader.services.backtesting.performance_benchmark import (
     BenchmarkRunner,
 )
 
+# VectorBT adapter exports
+from trader.services.backtesting.vectorbt_adapter import (
+    VectorBTAdapter,
+    VectorBTConfig,
+)
+
+# Binance data provider exports
+from trader.services.backtesting.binance_data_provider import (
+    BinanceDataProvider,
+    BinanceDataConfig,
+)
+
+# Binance execution adapter exports
+from trader.services.backtesting.binance_execution_adapter import (
+    BinanceExecutionAdapter,
+)
+
+# Slippage model exports
+from trader.services.backtesting.slippage import (
+    BinanceSlippageConfig,
+    SlippageModel,
+    calculate_slippage,
+)
+
 __all__ = [
     # Ports
     "BacktestEnginePort",
@@ -188,4 +212,16 @@ __all__ = [
     "BenchmarkResult",
     "BenchmarkReport",
     "BenchmarkRunner",
+    # VectorBT Adapter
+    "VectorBTAdapter",
+    "VectorBTConfig",
+    # Binance Data Provider
+    "BinanceDataProvider",
+    "BinanceDataConfig",
+    # Binance Execution Adapter
+    "BinanceExecutionAdapter",
+    # Slippage Model
+    "BinanceSlippageConfig",
+    "SlippageModel",
+    "calculate_slippage",
 ]
