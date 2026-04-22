@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
-import numpy as np
-
 from trader.services.backtesting.ports import (
     BacktestConfig,
     BacktestEnginePort,
@@ -51,6 +49,7 @@ class VectorBTAdapter:
         config: BacktestConfig,
         strategy: Any,
     ) -> BacktestResult:
+        import numpy as np
         import vectorbt as vbt
 
         from trader.services.backtesting.binance_data_provider import BinanceDataProvider
@@ -131,6 +130,7 @@ class VectorBTAdapter:
     ) -> OptimizationResult:
         import itertools
 
+        import numpy as np
         from trader.services.backtesting.binance_data_provider import BinanceDataProvider
         data_provider = BinanceDataProvider()
 
