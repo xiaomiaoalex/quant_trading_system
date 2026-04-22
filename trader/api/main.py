@@ -209,6 +209,11 @@ async def lifespan(app: FastAPI):
     api_key = os.environ.get("BINANCE_API_KEY")
     secret_key = os.environ.get("BINANCE_SECRET_KEY")
 
+    logger.warning(
+        f"[Lifespan] Startup: api_key={'set' if api_key else 'NOT SET'}, "
+        f"secret_key={'set' if secret_key else 'NOT SET'}"
+    )
+
     if api_key and secret_key:
         try:
             from trader.adapters.binance.connector import (
@@ -402,7 +407,9 @@ async def lifespan(app: FastAPI):
             # 确保后续即使有 SSE keep-alive 轮询触发 orchestrator 初始化，
             # connector 也能在构造时就被注入）
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
+            logger.warning("[Lifespan] About to call set_strategy_orchestrator_connector")
             set_strategy_orchestrator_connector(connector)
+            logger.warning("[Lifespan] set_strategy_orchestrator_connector returned")
 
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()

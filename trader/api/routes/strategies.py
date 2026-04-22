@@ -938,6 +938,23 @@ async def start_strategy(
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
 
+    # 防御式注入：如果 orchestrator._connector 为 None，尝试从 pending 或 main 实例注入
+    # 解决 orchestrator 在 connector 注入前被创建的问题
+    if orchestrator._connector is None:
+        from trader.api.main import _binance_connector_instance
+        c = _pending_orchestrator_connector or _binance_connector_instance
+        if c is not None:
+            orchestrator.set_connector(c)
+            logger.info(
+                f"[Orchestrator] Late connector injection in start_strategy: "
+                f"connector={type(c).__name__}, source={'pending' if c is _pending_orchestrator_connector else 'main_instance'}"
+            )
+        else:
+            logger.warning(
+                "[Orchestrator] No connector available for injection: "
+                f"pending={_pending_orchestrator_connector}, main_instance={_binance_connector_instance}"
+            )
+
     try:
         # First, start the strategy in runner
         info = await runner.start(strategy_id)
