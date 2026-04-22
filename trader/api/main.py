@@ -398,6 +398,12 @@ async def lifespan(app: FastAPI):
                 logger.info("[Binance] Startup self-check: ALL PASSED")
                 return True
 
+            # 注入 connector 引用到策略编排器（在 connector.start() 之前，
+            # 确保后续即使有 SSE keep-alive 轮询触发 orchestrator 初始化，
+            # connector 也能在构造时就被注入）
+            from trader.api.routes.strategies import set_strategy_orchestrator_connector
+            set_strategy_orchestrator_connector(connector)
+
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()
             _binance_connector_instance = connector

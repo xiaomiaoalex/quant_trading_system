@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
-import { useStrategyRegistry, useLoadedStrategies, useLoadStrategy, useUnloadStrategy, useStartStrategy, useStopStrategy, usePauseStrategy, useResumeStrategy, useSSE } from '@/hooks'
+import { useStrategyRegistry, useLoadedStrategies, useLoadStrategy, useUnloadStrategy, useStartStrategy, useStopStrategy, usePauseStrategy, useResumeStrategy, useSSE, useTradingPairs } from '@/hooks'
 import type { RegisteredStrategy, StrategyRuntimeInfo } from '@/types'
 import { STRATEGY_STATUS_DISPLAY } from '@/types'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
+import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { MetricCard } from '@/components/monitor'
 import { StrategyDetailModal } from '@/components/strategies'
 import { formatAPIError } from '@/api/client'
@@ -37,12 +38,16 @@ export function Strategies() {
 
   const { data: registeredStrategies, isLoading, isError, error, refetch } = useStrategyRegistry()
   const { data: loadedStrategies, refetch: refetchLoaded } = useLoadedStrategies()
+  const { data: tradingPairsData, isLoading: isLoadingPairs } = useTradingPairs()
   const [showConfirm, setShowConfirm] = useState<string | null>(null)
   const [actionType, setActionType] = useState<string | null>(null)
   const [selectedStrategy, setSelectedStrategy] = useState<RegisteredStrategy | null>(null)
   const [detailStrategy, setDetailStrategy] = useState<RegisteredStrategy | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('BTCUSDT')
+  const [showSymbolSelector, setShowSymbolSelector] = useState(false)
+  const [pendingStartAction, setPendingStartAction] = useState<{strategy: RegisteredStrategy, action: string} | null>(null)
 
   // Build runtime status map (normalize status to lowercase)
   const runtimeMap = new Map<string, StrategyRuntimeInfo>()
@@ -62,7 +67,7 @@ export function Strategies() {
   // Mutation hooks
   const loadMutation = useLoadStrategy(selectedStrategy?.strategy_id ?? '', selectedStrategy?.entrypoint ?? 'strategies.default')
   const unloadMutation = useUnloadStrategy(selectedStrategy?.strategy_id ?? '')
-  const startMutation = useStartStrategy(selectedStrategy?.strategy_id ?? '')
+  const startMutation = useStartStrategy(selectedStrategy?.strategy_id ?? '', selectedSymbol)
   const stopMutation = useStopStrategy(selectedStrategy?.strategy_id ?? '')
   const pauseMutation = usePauseStrategy(selectedStrategy?.strategy_id ?? '')
   const resumeMutation = useResumeStrategy(selectedStrategy?.strategy_id ?? '')
@@ -71,7 +76,23 @@ export function Strategies() {
     setSelectedStrategy(strategy)
     setShowConfirm(strategy.strategy_id)
     setActionType(action)
+    
+    // If starting a strategy, show symbol selector first
+    if (action === 'start') {
+      setPendingStartAction({ strategy, action })
+      setShowSymbolSelector(true)
+      setShowConfirm(null)
+    }
   }, [])
+
+  const handleStartWithSymbol = useCallback(async () => {
+    if (!pendingStartAction) return
+    setShowSymbolSelector(false)
+    setSelectedStrategy(pendingStartAction.strategy)
+    setShowConfirm(pendingStartAction.strategy.strategy_id)
+    setActionType(pendingStartAction.action)
+    setPendingStartAction(null)
+  }, [pendingStartAction])
 
   const confirmAction = useCallback(async () => {
     if (!selectedStrategy || !actionType) return
@@ -80,12 +101,12 @@ export function Strategies() {
     let mutationError: string | null = null
     try {
       switch (actionType) {
-        case 'load': success = await loadMutation.mutateAsync(); break
-        case 'unload': success = await unloadMutation.mutateAsync(); break
-        case 'start': success = await startMutation.mutateAsync(); break
-        case 'stop': success = await stopMutation.mutateAsync(); break
-        case 'pause': success = await pauseMutation.mutateAsync(); break
-        case 'resume': success = await resumeMutation.mutateAsync(); break
+        case 'load': await loadMutation.mutateAsync(); success = true; break
+        case 'unload': await unloadMutation.mutateAsync(); success = true; break
+        case 'start': await startMutation.mutateAsync(); success = true; break
+        case 'stop': await stopMutation.mutateAsync(); success = true; break
+        case 'pause': await pauseMutation.mutateAsync(); success = true; break
+        case 'resume': await resumeMutation.mutateAsync(); success = true; break
       }
     } catch (e) {
       mutationError = formatAPIError(e)
@@ -94,16 +115,23 @@ export function Strategies() {
     refetch()
     refetchLoaded()
     if (success) {
-      setSuccessMsg(`${actionType} successful`)
+      setSuccessMsg(`${actionType} successful${actionType === 'start' ? ` for ${selectedSymbol}` : ''}`)
       setTimeout(() => setSuccessMsg(null), 3000)
     } else if (mutationError || loadMutation.error || unloadMutation.error || startMutation.error || stopMutation.error || pauseMutation.error || resumeMutation.error) {
-      setErrorMsg(mutationError ?? loadMutation.error ?? unloadMutation.error ?? startMutation.error ?? stopMutation.error ?? pauseMutation.error ?? resumeMutation.error)
+      const errMsg = mutationError ?? 
+        (loadMutation.error ? String(loadMutation.error) : null) ??
+        (unloadMutation.error ? String(unloadMutation.error) : null) ??
+        (startMutation.error ? String(startMutation.error) : null) ??
+        (stopMutation.error ? String(stopMutation.error) : null) ??
+        (pauseMutation.error ? String(pauseMutation.error) : null) ??
+        (resumeMutation.error ? String(resumeMutation.error) : null)
+      setErrorMsg(errMsg)
       setTimeout(() => setErrorMsg(null), 5000)
     }
     setShowConfirm(null)
     setActionType(null)
     setSelectedStrategy(null)
-  }, [selectedStrategy, actionType, loadMutation, unloadMutation, startMutation, stopMutation, pauseMutation, resumeMutation, refetch, refetchLoaded])
+  }, [selectedStrategy, actionType, selectedSymbol, loadMutation, unloadMutation, startMutation, stopMutation, pauseMutation, resumeMutation, refetch, refetchLoaded])
 
   const getActionLabel = (action: string) => {
     const labels: Record<string, string> = {
@@ -139,7 +167,13 @@ export function Strategies() {
         {(errorMsg || loadMutation.error || unloadMutation.error || startMutation.error || stopMutation.error || pauseMutation.error || resumeMutation.error) && (
           <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-2">
             <p className="text-sm text-red-400">
-              {errorMsg ?? loadMutation.error ?? unloadMutation.error ?? startMutation.error ?? stopMutation.error ?? pauseMutation.error ?? resumeMutation.error}
+              {errorMsg ?? 
+                (loadMutation.error ? String(loadMutation.error) : null) ??
+                (unloadMutation.error ? String(unloadMutation.error) : null) ??
+                (startMutation.error ? String(startMutation.error) : null) ??
+                (stopMutation.error ? String(stopMutation.error) : null) ??
+                (pauseMutation.error ? String(pauseMutation.error) : null) ??
+                (resumeMutation.error ? String(resumeMutation.error) : null)}
             </p>
           </div>
         )}
@@ -237,6 +271,101 @@ export function Strategies() {
           </table>
         </div>
       </div>
+
+      {/* Symbol Selector Dialog */}
+      {showSymbolSelector && (
+        <div className="dialog-backdrop" onClick={() => setShowSymbolSelector(false)}>
+          <div
+            className="dialog-panel max-w-lg"
+            onClick={e => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0">
+                <svg className="h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+                  />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h2 className="text-lg font-semibold text-white">Select Trading Pair</h2>
+                <p className="mt-2 text-sm text-gray-400">
+                  Choose which trading pair to use for this strategy. Each strategy instance will trade independently.
+                </p>
+                
+                <div className="mt-4">
+                  {isLoadingPairs ? (
+                    <div className="flex items-center justify-center py-8">
+                      <LoadingSpinner size="md" />
+                      <span className="ml-3 text-sm text-gray-400">Loading trading pairs...</span>
+                    </div>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto space-y-2">
+                      {tradingPairsData?.pairs.map(pair => (
+                        <button
+                          key={pair.symbol}
+                          onClick={() => setSelectedSymbol(pair.symbol)}
+                          className={clsx(
+                            'w-full px-4 py-3 rounded-lg border text-left transition-colors',
+                            selectedSymbol === pair.symbol
+                              ? 'border-green-500 bg-green-500/10'
+                              : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+                          )}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-sm font-medium text-white">{pair.symbol}</span>
+                              <span className="ml-2 text-xs text-gray-400">
+                                {pair.base_asset}/{pair.quote_asset}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              Min: {pair.min_notional} {pair.quote_asset}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex items-center gap-2">
+                  <label className="text-sm text-gray-400">Custom Symbol:</label>
+                  <input
+                    type="text"
+                    value={selectedSymbol}
+                    onChange={e => setSelectedSymbol(e.target.value.toUpperCase())}
+                    className="flex-1 rounded-md border border-gray-700 bg-gray-800 px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    placeholder="e.g., ETHUSDT"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSymbolSelector(false)}
+                className="rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleStartWithSymbol}
+                className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700"
+              >
+                Start with {selectedSymbol}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmDialog
         isOpen={!!showConfirm}
