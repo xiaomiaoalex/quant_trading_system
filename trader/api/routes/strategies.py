@@ -754,6 +754,7 @@ class StrategyStatusResponse(BaseModel):
     last_error: Optional[str] = None
     config: Dict = Field(default_factory=dict)
     blocked_reason: Optional[str] = None
+    symbol: Optional[str] = None  # 当前交易对（从 orchestrator context 获取）
 
 
 class RuntimeContextResponse(BaseModel):
@@ -770,8 +771,21 @@ class RuntimeContextResponse(BaseModel):
     stop_reason: Optional[str] = None
 
 
-def _info_to_response(info: StrategyRuntimeInfo) -> StrategyStatusResponse:
+def _info_to_response(
+    info: StrategyRuntimeInfo,
+    orchestrator: Optional[StrategyRuntimeOrchestrator] = None,
+) -> StrategyStatusResponse:
     """转换运行时信息为响应模型"""
+    # 从 orchestrator context 获取当前交易对
+    symbol = None
+    if orchestrator is not None:
+        ctx = orchestrator.get_context(info.strategy_id)
+        if ctx is not None:
+            symbol = ctx.symbol
+    # fallback: 从 info.symbols 取第一个
+    if symbol is None and info.symbols:
+        symbol = info.symbols[0]
+
     return StrategyStatusResponse(
         strategy_id=info.strategy_id,
         version=info.version,
@@ -785,6 +799,7 @@ def _info_to_response(info: StrategyRuntimeInfo) -> StrategyStatusResponse:
         last_error=info.last_error,
         config=info.config,
         blocked_reason=info.blocked_reason,
+        symbol=symbol,
     )
 
 
@@ -1123,8 +1138,9 @@ async def list_loaded_strategies():
     Note: This returns loaded strategies, not just RUNNING ones.
     """
     runner = get_strategy_runner()
+    orchestrator = get_strategy_orchestrator()
     infos = runner.list_strategies()
-    return [_info_to_response(info) for info in infos]
+    return [_info_to_response(info, orchestrator) for info in infos]
 
 
 # ============================================================================

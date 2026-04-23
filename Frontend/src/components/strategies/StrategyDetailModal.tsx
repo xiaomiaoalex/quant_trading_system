@@ -153,6 +153,10 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
                     </span>
                   </div>
                   <div className="rounded bg-gray-900/50 p-3">
+                    <p className="text-xs text-gray-500">Symbol</p>
+                    <p className="text-sm text-white font-mono">{runtime?.symbol ?? '-'}</p>
+                  </div>
+                  <div className="rounded bg-gray-900/50 p-3">
                     <p className="text-xs text-gray-500">Language</p>
                     <p className="text-sm text-white">{strategy.language ?? 'Python'}</p>
                   </div>
