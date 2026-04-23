@@ -106,6 +106,8 @@ class OMSCallbackHandler:
 
         # 已处理的 cl_ord_id 集合（内存缓存，防止同一会话内重复处理）
         self._processed_cl_ord_ids: set = set()
+        # cl_ord_id → strategy_id 映射（解决 deployment_id 截断后无法逆向解析的问题）
+        self._cl_ord_id_to_strategy: Dict[str, str] = {}
         # 已处理成交键（cl_ord_id + exec_id）用于幂等去重
         self._processed_exec_keys: Dict[str, float] = {}
         self._exec_dedup_ttl_seconds: int = 900
@@ -206,13 +208,19 @@ class OMSCallbackHandler:
         self._processed_exec_keys[key] = time.time() + self._exec_dedup_ttl_seconds
         return True
 
-    @staticmethod
-    def _safe_strategy_id_from_cl_ord(cl_ord_id: Optional[str]) -> str:
+    def _safe_strategy_id_from_cl_ord(self, cl_ord_id: Optional[str]) -> str:
+        """从 cl_ord_id 提取 strategy_id（支持映射优先 + 分隔符解析回退）"""
         if not cl_ord_id:
             return ""
-        if "_" not in cl_ord_id:
-            return cl_ord_id
-        return cl_ord_id.rsplit("_", 1)[0]
+        # 优先使用精确映射（避免截断导致的不匹配）
+        if hasattr(self, '_cl_ord_id_to_strategy') and cl_ord_id in self._cl_ord_id_to_strategy:
+            return self._cl_ord_id_to_strategy[cl_ord_id]
+        # 回退：按分隔符解析（兼容新旧格式）
+        if "-" in cl_ord_id:
+            return cl_ord_id.rsplit("-", 1)[0]
+        if "_" in cl_ord_id:
+            return cl_ord_id.rsplit("_", 1)[0]
+        return cl_ord_id
 
     def get_dedup_stats(self) -> Dict[str, Any]:
         """
@@ -362,11 +370,12 @@ class OMSCallbackHandler:
 
         # ==================== 生成订单ID ====================
         # 币安要求 cl_ord_id 必须符合 ^[a-zA-Z0-9-_]{1,36}$
-        # deployment_id 包含 __ 分隔符（如 strategy__symbol__mode__account），
-        # 必须保留以便成交回调时正确路由。仅截断控制总长度。
-        # 36 - 1(下划线) - 12(UUID) = 23 字符最大
+        # deployment_id 可能很长，截断到 23 字符为 UUID 留空间。
+        # 使用 '-' 作为分隔符避免与 deployment_id 中的 '_' 混淆。
         safe_strategy_id = strategy_id[:23]
-        cl_ord_id = f"{safe_strategy_id}_{uuid.uuid4().hex[:12]}"
+        cl_ord_id = f"{safe_strategy_id}-{uuid.uuid4().hex[:12]}"
+        # 记录精确映射，避免截断后无法逆向解析 deployment_id
+        self._cl_ord_id_to_strategy[cl_ord_id] = strategy_id
 
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
@@ -551,7 +560,7 @@ class OMSCallbackHandler:
                     current_avg_cost = Decimal("0")
                     for pos in current_positions:
                         if pos.get("instrument") == signal.symbol:
-                            current_qty = Decimal(str(pos.get("quantity", "0")))
+                            current_qty = Decimal(str(pos.get("qty", "0")))
                             current_avg_cost = Decimal(str(pos.get("avg_cost", "0")))
                             break
 
