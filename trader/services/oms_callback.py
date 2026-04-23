@@ -910,6 +910,9 @@ def create_oms_callback(
                     if not symbol:
                         symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
 
+                # Task 19: Track fill count from WS fill events (latency unknown)
+                handler._fill_latency_count += 1
+
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链
                     asyncio.create_task(fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price))
