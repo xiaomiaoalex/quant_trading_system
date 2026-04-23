@@ -174,6 +174,12 @@ class DegradedCascadeController:
                 pass
             logger.info("[Cascade] Worker loop stopped")
 
+        # 关闭 HTTP 客户端，避免连接泄漏
+        if self._http_client and not self._http_client.closed:
+            await self._http_client.close()
+            self._http_client = None
+            logger.info("[Cascade] HTTP client closed")
+
     async def _ensure_http_client(self) -> "aiohttp.ClientSession":
         """确保 HTTP 客户端存在"""
         import aiohttp

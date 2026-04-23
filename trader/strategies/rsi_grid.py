@@ -252,8 +252,11 @@ class RsiGridStrategy:
         return Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
 
 
-_plugin_instance = RsiGridStrategy()
+def create_plugin(**_kwargs) -> RsiGridStrategy:
+    """每次调用返回一个新的策略实例，不能缓存模块级单例。"""
+    return RsiGridStrategy()
 
 
 def get_plugin() -> StrategyPlugin:
-    return _plugin_instance
+    """兼容旧 runner 的入口。必须返回新对象，不能返回单例。"""
+    return create_plugin()

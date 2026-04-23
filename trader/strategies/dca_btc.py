@@ -241,8 +241,11 @@ class DcaBtcStrategy:
             self.max_total_buys = int(config["max_total_buys"])
 
 
-_plugin_instance = DcaBtcStrategy()
+def create_plugin(**_kwargs) -> DcaBtcStrategy:
+    """每次调用返回一个新的策略实例，不能缓存模块级单例。"""
+    return DcaBtcStrategy()
 
 
 def get_plugin() -> StrategyPlugin:
-    return _plugin_instance
+    """兼容旧 runner 的入口。必须返回新对象，不能返回单例。"""
+    return create_plugin()

@@ -61,13 +61,23 @@ function SignalEventRow({ event }: { event: StrategyEventEnvelope }) {
 }
 
 function ErrorEventRow({ event }: { event: StrategyEventEnvelope }) {
-  const payload = event.payload as { error_message?: string }
+  const payload = event.payload as Record<string, unknown>
+  
+  // Try multiple possible error message fields
+  const errorMsg = (
+    payload.error_message ?? 
+    payload.reason ?? 
+    payload.message ?? 
+    payload.error ?? 
+    JSON.stringify(payload)
+  ) as string
+
   return (
     <div className="flex items-start gap-3 py-2 border-b border-gray-800 last:border-0">
       <span className="text-xs text-gray-500 mt-0.5 shrink-0">{formatEventTime(event.ts_ms)}</span>
       <span className="text-xs font-medium px-1.5 py-0.5 rounded text-red-400 bg-red-900/30">Error</span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-red-300">{payload.error_message}</p>
+        <p className="text-sm text-red-300 break-words">{errorMsg}</p>
       </div>
     </div>
   )
@@ -78,8 +88,8 @@ type Tab = 'info' | 'signals' | 'errors'
 export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: StrategyDetailModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>('info')
   
-  const { data: signals } = useStrategySignals(isOpen ? strategy.strategy_id : '')
-  const { data: errors } = useStrategyErrors(isOpen ? strategy.strategy_id : '')
+  const { data: signals } = useStrategySignals(runtime?.deployment_id ?? '')
+  const { data: errors } = useStrategyErrors(runtime?.deployment_id ?? '')
 
   if (!isOpen) return null
 
@@ -154,7 +164,7 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
                   </div>
                   <div className="rounded bg-gray-900/50 p-3">
                     <p className="text-xs text-gray-500">Symbol</p>
-                    <p className="text-sm text-white font-mono">{runtime?.symbol ?? '-'}</p>
+                    <p className="text-sm text-white font-mono">{runtime?.symbols?.[0] ?? '-'}</p>
                   </div>
                   <div className="rounded bg-gray-900/50 p-3">
                     <p className="text-xs text-gray-500">Language</p>

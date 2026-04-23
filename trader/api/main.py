@@ -60,6 +60,9 @@ from trader.adapters.binance.connector import BinanceConnector
 
 logger = logging.getLogger(__name__)
 
+# API server port (single source of truth)
+API_PORT = 8080
+
 import re
 
 
@@ -197,7 +200,7 @@ def _seed_strategies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _binance_connector_instance
+    global _binance_connector_instance, _binance_cascade_controller
 
     # 初始化策略
     _seed_strategies()
@@ -312,7 +315,7 @@ async def lifespan(app: FastAPI):
 
             # 创建级联控制器
             _cascade_config = CascadeConfig(
-                control_plane_base_url=f"http://localhost:{server_config.port}",
+                control_plane_base_url=f"http://localhost:{API_PORT}",
                 dedup_window_ms=60000,
                 min_report_interval_ms=5000,
                 max_report_interval_ms=30000,
@@ -326,7 +329,7 @@ async def lifespan(app: FastAPI):
                 multiplier=2.0,
             ))
             _cascade_controller = DegradedCascadeController(
-                control_plane_base_url=f"http://localhost:{server_config.port}",
+                control_plane_base_url=f"http://localhost:{API_PORT}",
                 backoff=_cascade_backoff,
                 config=_cascade_config,
                 adapter_name="binance_connector",
@@ -716,4 +719,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=API_PORT)

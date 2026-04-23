@@ -39,6 +39,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Literal,
     List,
     Optional,
     Protocol,
@@ -251,6 +252,23 @@ class UpdateParamsOutcome:
     duration_ms: float = 0.0
 
 
+@dataclass(slots=True)
+class StrategyDeploymentSpec:
+    """
+    Strategy template 的一次配置化部署。
+
+    lifecycle 管理模板审批状态；deployment 管理具体的运行实例。
+    """
+
+    deployment_id: str
+    strategy_id: str
+    symbols: List[str]
+    account_id: str = "binance_demo"
+    venue: str = "BINANCE"
+    mode: Literal["paper", "demo", "live", "shadow"] = "demo"
+    config: Dict[str, Any] = field(default_factory=dict)
+
+
 # ============================================================================
 # 策略生命周期
 # ============================================================================
@@ -376,25 +394,37 @@ class LifecyclePort(Protocol):
 class RunnerPort(Protocol):
     """策略运行器端口"""
 
-    async def load_strategy(self, strategy_id: str, plugin: StrategyPlugin, config: Dict[str, Any]) -> Any:
-        """加载策略"""
-        ...
+    async def load_strategy(
+        self,
+        strategy_id: str,
+        version: str,
+        module_path: str,
+        config: Dict[str, Any],
+        deployment_id: Optional[str] = None,
+        symbols: Optional[List[str]] = None,
+        account_id: str = "binance_demo",
+        venue: str = "BINANCE",
+        mode: str = "demo",
+    ) -> Any:
+        """加载 deployment（runtime key 应为 deployment_id）。"""
 
-    async def start_strategy(self, strategy_id: str) -> Any:
-        """启动策略"""
-        ...
+    async def start(self, strategy_id: str) -> Any:
+        """启动 deployment。参数名沿用旧 runner，语义上应传 deployment_id。"""
+
+    async def stop(self, strategy_id: str) -> Any:
+        """停止 deployment。"""
 
     async def stop_strategy(self, strategy_id: str) -> Any:
-        """停止策略"""
-        ...
+        """停止策略（兼容旧接口）。"""
+
+    async def start_strategy(self, strategy_id: str) -> Any:
+        """启动策略（兼容旧接口）。"""
 
     async def unload_strategy(self, strategy_id: str) -> None:
-        """卸载策略并释放资源"""
-        ...
+        """卸载策略并释放资源。"""
 
     async def tick_strategy(self, strategy_id: str, market_data: MarketData) -> Optional[Signal]:
-        """驱动策略Tick"""
-        ...
+        """驱动策略Tick。"""
 
 
 # ============================================================================
@@ -934,7 +964,28 @@ class StrategyLifecycleManager:
         if lifecycle.status != LifecycleStatus.APPROVED:
             raise ValueError(f"当前状态不允许启动: {lifecycle.status}")
 
-        # KillSwitch检查
+        # 兼容旧调用：自动构造一个默认 deployment。
+        default_symbols = list(
+            lifecycle.metadata.get("symbols")
+            or lifecycle.metadata.get("config", {}).get("symbols")
+            or ["BTCUSDT"]
+        )
+        deployment = StrategyDeploymentSpec(
+            deployment_id=f"{lifecycle.strategy_id}__{default_symbols[0].lower()}__demo",
+            strategy_id=lifecycle.strategy_id,
+            symbols=default_symbols,
+            config=dict(lifecycle.metadata.get("config", {})),
+        )
+        return await self.start_deployment(lifecycle, deployment)
+
+    async def start_deployment(
+        self,
+        lifecycle: StrategyLifecycle,
+        deployment: StrategyDeploymentSpec,
+    ) -> StartOutcome:
+        """专业入口：以 deployment spec 启动，而不是直接以模板 strategy_id 启动。"""
+        start_time = time.monotonic()
+
         if self._killswitch_callback:
             ks_level = self._killswitch_callback()
             if ks_level >= KillSwitchLevel.L1_NO_NEW_POSITIONS:
@@ -950,20 +1001,35 @@ class StrategyLifecycleManager:
             try:
                 if self._runner:
                     # 使用真实运行器
-                    config = lifecycle.metadata.get("config", {})
+                    config = {**lifecycle.metadata.get("config", {}), **deployment.config}
                     await self._runner.load_strategy(
                         strategy_id=lifecycle.strategy_id,
-                        plugin=lifecycle.strategy,
+                        version=lifecycle.version,
+                        module_path=lifecycle.metadata.get("module_path") or lifecycle.metadata.get("entrypoint") or "dynamic:manual",
                         config=config,
+                        deployment_id=deployment.deployment_id,
+                        symbols=list(deployment.symbols),
+                        account_id=deployment.account_id,
+                        venue=deployment.venue,
+                        mode=deployment.mode,
                     )
-                    runtime_info = await self._runner.start_strategy(lifecycle.strategy_id)
+                    runtime_info = await self._runner.start(deployment.deployment_id)
                 else:
-                    runtime_info = {"status": "simulated", "strategy_id": lifecycle.strategy_id}
+                    runtime_info = {
+                        "status": "simulated",
+                        "strategy_id": lifecycle.strategy_id,
+                        "deployment_id": deployment.deployment_id,
+                        "symbols": list(deployment.symbols),
+                    }
 
                 lifecycle._transition_to(
                     LifecycleStatus.RUNNING,
                     LifecycleEventType.STARTED,
-                    metadata={"runtime_info": str(runtime_info)},
+                    metadata={
+                        "runtime_info": str(runtime_info),
+                        "deployment_id": deployment.deployment_id,
+                        "symbols": list(deployment.symbols),
+                    },
                 )
                 await self._store.save_lifecycle(lifecycle)
 
@@ -1019,12 +1085,23 @@ class StrategyLifecycleManager:
         if lifecycle.status != LifecycleStatus.RUNNING:
             raise ValueError(f"当前状态不允许停止: {lifecycle.status}")
 
+        deployment_id = lifecycle.metadata.get("deployment_id") or lifecycle.strategy_id
+        return await self.stop_deployment(lifecycle, deployment_id, unload=unload)
+
+    async def stop_deployment(
+        self,
+        lifecycle: StrategyLifecycle,
+        deployment_id: str,
+        unload: bool = False,
+    ) -> StopOutcome:
+        start_time = time.monotonic()
+
         lock = await self._get_lock(lifecycle.strategy_id)
         async with lock:
             try:
                 if self._runner:
                     # 使用真实运行器
-                    await self._runner.stop_strategy(lifecycle.strategy_id)
+                    await self._runner.stop(deployment_id)
 
                 # 收集最终指标
                 final_metrics = lifecycle.current_metrics
@@ -1034,6 +1111,7 @@ class StrategyLifecycleManager:
                     LifecycleEventType.STOPPED,
                     metadata={
                         "final_metrics": str(final_metrics) if final_metrics else None,
+                        "deployment_id": deployment_id,
                         "unload": unload,
                     },
                 )
@@ -1047,11 +1125,11 @@ class StrategyLifecycleManager:
                 if unload:
                     try:
                         if self._runner:
-                            await self._runner.unload_strategy(lifecycle.strategy_id)
+                            await self._runner.unload_strategy(deployment_id)
                             resource_unloaded = True
-                        logger.info(f"策略已卸载并释放资源: {lifecycle.strategy_id}")
+                        logger.info(f"策略已卸载并释放资源: {deployment_id}")
                     except Exception as e:
-                        logger.error(f"卸载策略失败: {lifecycle.strategy_id}, 错误: {e}")
+                        logger.error(f"卸载策略失败: {deployment_id}, 错误: {e}")
 
                 return StopOutcome(
                     success=True,
