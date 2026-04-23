@@ -608,8 +608,6 @@ class StrategyRunner:
 
             # 处理信号
             if signal is not None:
-                info.signal_count += 1
-
                 # 确保信号包含策略信息
                 if not signal.strategy_name:
                     signal.strategy_name = strategy_id
@@ -651,6 +649,7 @@ class StrategyRunner:
 
                 # ==================== OMS 执行 ====================
                 if signal is not None and self._oms_callback:
+                    info.signal_count += 1  # 只统计通过资源限制检查后实际提交的信号
                     try:
                         order_result = await self._oms_callback(strategy_id, signal)
                         # 发布订单提交事件
