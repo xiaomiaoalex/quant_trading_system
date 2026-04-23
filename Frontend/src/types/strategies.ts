@@ -27,6 +27,7 @@ export interface StrategyRuntimeInfo {
   last_error?: string
   config?: Record<string, unknown>
   blocked_reason?: string
+  symbol?: string  // 当前交易对（从 orchestrator context 获取）
 }
 
 // Strategy event types

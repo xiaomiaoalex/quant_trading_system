@@ -193,6 +193,7 @@ export function Strategies() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Name</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Symbol</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Ticks</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Signals</th>
@@ -218,6 +219,7 @@ export function Strategies() {
                       </button>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-400 font-mono">{strategy.strategy_id}</td>
+                    <td className="px-4 py-3 text-sm text-gray-300 font-mono">{runtime?.symbol ?? '-'}</td>
                     <td className="px-4 py-3">
                       {blockedReason ? (
                         <span className="inline-flex rounded-full px-2 py-0.5 text-xs font-medium text-red-400 bg-red-400/10 border border-red-400/30">
