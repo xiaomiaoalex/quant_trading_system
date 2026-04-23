@@ -362,9 +362,10 @@ class OMSCallbackHandler:
 
         # ==================== 生成订单ID ====================
         # 币安要求 cl_ord_id 必须符合 ^[a-zA-Z0-9-_]{1,36}$
-        # strategy_id 可能包含 __，先替换为单下划线
-        # 注意：不要截断 strategy_id，避免逆向工程无法恢复
-        safe_strategy_id = strategy_id.replace("__", "_")
+        # deployment_id 包含 __ 分隔符（如 strategy__symbol__mode__account），
+        # 必须保留以便成交回调时正确路由。仅截断控制总长度。
+        # 36 - 1(下划线) - 12(UUID) = 23 字符最大
+        safe_strategy_id = strategy_id[:23]
         cl_ord_id = f"{safe_strategy_id}_{uuid.uuid4().hex[:12]}"
 
         # ==================== 幂等性检查 ====================
