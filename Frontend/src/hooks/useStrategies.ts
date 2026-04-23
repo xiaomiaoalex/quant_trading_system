@@ -221,6 +221,18 @@ export function useStrategyErrors(deploymentId: string) {
   })
 }
 
+export function useStrategyFills(deploymentId: string) {
+  return useQuery({
+    queryKey: strategyKeys.fills(deploymentId),
+    queryFn: () => strategiesAPI.getStrategyFills(deploymentId),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 2,
+    enabled: !!deploymentId,
+    throwOnError: false,
+  })
+}
+
 export function useTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT') {
   return useQuery({
     queryKey: strategyKeys.tradingPairs(),
