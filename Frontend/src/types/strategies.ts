@@ -1,7 +1,9 @@
-// Strategy status types
-export type StrategyStatus = 'loaded' | 'running' | 'paused' | 'stopped' | 'error'
+// Target path: Frontend/src/types/strategies.ts
 
-// Registered strategy from /v1/strategies/registry
+export type StrategyStatus = 'loaded' | 'running' | 'paused' | 'stopped' | 'error'
+export type DeploymentMode = 'paper' | 'demo' | 'live' | 'shadow'
+
+// Registered strategy template from /v1/strategies/registry
 export interface RegisteredStrategy {
   strategy_id: string
   name: string
@@ -13,25 +15,43 @@ export interface RegisteredStrategy {
   updated_at?: string
 }
 
-// Runtime strategy from /v1/strategies/loaded
+// Loaded runtime deployment from /v1/strategies/loaded
 export interface StrategyRuntimeInfo {
+  deployment_id: string
   strategy_id: string
-  version?: string
+  version: string
   status: StrategyStatus
-  loaded_at?: string
-  started_at?: string
-  last_tick_at?: string
-  tick_count?: number
-  signal_count?: number
-  error_count?: number
-  last_error?: string
+  symbols: string[]
+  account_id: string
+  venue: string
+  mode: DeploymentMode
+  loaded_at: string | null
+  started_at: string | null
+  last_tick_at: string | null
+  tick_count: number
+  signal_count: number
+  error_count: number
+  last_error: string | null
+  stop_reason: string | null
+  config: Record<string, unknown>
+  blocked_reason: string | null
+}
+
+export interface LoadStrategyPayload {
+  deployment_id?: string
+  module_path?: string
+  code?: string
+  code_version?: number
+  version?: string
   config?: Record<string, unknown>
-  blocked_reason?: string
-  symbol?: string  // 当前交易对（从 orchestrator context 获取）
+  symbols: string[]
+  account_id: string
+  venue: string
+  mode: DeploymentMode
 }
 
 // Strategy event types
-export type StrategyEventType = 
+export type StrategyEventType =
   | 'strategy.signal'
   | 'strategy.order.submitted'
   | 'strategy.order.filled'
@@ -77,7 +97,8 @@ export interface StrategyParams {
 }
 
 export interface StrategySummary {
-  total: number
+  totalTemplates: number
+  totalDeployments: number
   loaded: number
   running: number
   paused: number
@@ -123,6 +144,23 @@ export interface StrategyCodeDebugResponse {
   warnings: string[]
 }
 
+export interface TradingPairInfo {
+  symbol: string
+  base_asset: string
+  quote_asset: string
+  status: string
+  min_notional: number
+  min_qty: number
+  max_qty: number
+  step_size: number
+  tick_size: number
+}
+
+export interface TradingPairsResponse {
+  pairs: TradingPairInfo[]
+  total: number
+}
+
 // Strategy status display configuration
 export const STRATEGY_STATUS_DISPLAY: Record<
   StrategyStatus,
@@ -155,11 +193,13 @@ export const STRATEGY_STATUS_DISPLAY: Record<
   },
 }
 
-// Helper to derive summary from loaded strategies runtime info
-export function deriveStrategySummary(strategies: StrategyRuntimeInfo[]): StrategySummary {
-  return strategies.reduce(
+export function deriveStrategySummary(
+  strategies: StrategyRuntimeInfo[],
+  templateCount = 0,
+): StrategySummary {
+  return strategies.reduce<StrategySummary>(
     (acc, s) => {
-      acc.total++
+      acc.totalDeployments++
       if (s.status === 'loaded') acc.loaded++
       else if (s.status === 'running') acc.running++
       else if (s.status === 'paused') acc.paused++
@@ -167,24 +207,35 @@ export function deriveStrategySummary(strategies: StrategyRuntimeInfo[]): Strate
       else if (s.status === 'error') acc.error++
       return acc
     },
-    { total: 0, loaded: 0, running: 0, paused: 0, stopped: 0, error: 0 }
+    {
+      totalTemplates: templateCount,
+      totalDeployments: 0,
+      loaded: 0,
+      running: 0,
+      paused: 0,
+      stopped: 0,
+      error: 0,
+    },
   )
 }
 
-// Trading pair types
-export interface TradingPairInfo {
-  symbol: string
-  base_asset: string
-  quote_asset: string
-  status: string
-  min_notional: number
-  min_qty: number
-  max_qty: number
-  step_size: number
-  tick_size: number
+export function groupRuntimeByStrategy(
+  runtimes: StrategyRuntimeInfo[],
+): Map<string, StrategyRuntimeInfo[]> {
+  const grouped = new Map<string, StrategyRuntimeInfo[]>()
+  for (const runtime of runtimes) {
+    const current = grouped.get(runtime.strategy_id) ?? []
+    current.push(runtime)
+    grouped.set(runtime.strategy_id, current)
+  }
+  return grouped
 }
 
-export interface TradingPairsResponse {
-  pairs: TradingPairInfo[]
-  total: number
+export function buildDeploymentId(
+  strategyId: string,
+  symbol: string,
+  mode: DeploymentMode,
+  accountId: string,
+): string {
+  return `${strategyId}__${symbol.toLowerCase()}__${mode}__${accountId.toLowerCase()}`
 }

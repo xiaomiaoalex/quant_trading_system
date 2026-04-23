@@ -1,22 +1,36 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+// Target path: Frontend/src/hooks/useStrategies.ts
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { strategiesAPI } from '@/api'
-import type { StrategyParams } from '@/types'
+import type { LoadStrategyPayload, StrategyParams } from '@/types'
 import { formatAPIError } from '@/api/client'
 
-// Query key factory
 export const strategyKeys = {
   all: ['strategies'] as const,
   registry: () => [...strategyKeys.all, 'registry'] as const,
   loaded: () => [...strategyKeys.all, 'loaded'] as const,
-  status: (id: string) => [...strategyKeys.all, 'status', id] as const,
-  params: (id: string) => [...strategyKeys.all, 'params', id] as const,
-  events: (id: string) => [...strategyKeys.all, 'events', id] as const,
-  signals: (id: string) => [...strategyKeys.all, 'signals', id] as const,
-  errors: (id: string) => [...strategyKeys.all, 'errors', id] as const,
+  status: (deploymentId: string) => [...strategyKeys.all, 'status', deploymentId] as const,
+  params: (strategyId: string) => [...strategyKeys.all, 'params', strategyId] as const,
+  events: (deploymentId: string) => [...strategyKeys.all, 'events', deploymentId] as const,
+  signals: (deploymentId: string) => [...strategyKeys.all, 'signals', deploymentId] as const,
+  errors: (deploymentId: string) => [...strategyKeys.all, 'errors', deploymentId] as const,
   tradingPairs: () => [...strategyKeys.all, 'trading-pairs'] as const,
+  safetyGate: () => [...strategyKeys.all, 'safety-gate'] as const,
 }
 
-// Fetch registered strategies (metadata only, no runtime status)
+function invalidateStrategyLists(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({
+    queryKey: strategyKeys.loaded(),
+    exact: true,
+    refetchType: 'active',
+  })
+  queryClient.invalidateQueries({
+    queryKey: strategyKeys.registry(),
+    exact: true,
+    refetchType: 'active',
+  })
+}
+
 export function useStrategyRegistry() {
   return useQuery({
     queryKey: strategyKeys.registry(),
@@ -27,7 +41,6 @@ export function useStrategyRegistry() {
   })
 }
 
-// Fetch loaded/running strategies (with runtime status)
 export function useLoadedStrategies() {
   return useQuery({
     queryKey: strategyKeys.loaded(),
@@ -39,18 +52,17 @@ export function useLoadedStrategies() {
   })
 }
 
-// Fetch single strategy status
-export function useStrategyStatus(strategyId: string) {
+export function useStrategyStatus(deploymentId: string) {
   return useQuery({
-    queryKey: strategyKeys.status(strategyId),
-    queryFn: () => strategiesAPI.getStatus(strategyId),
-    staleTime: 10_000,
+    queryKey: strategyKeys.status(deploymentId),
+    queryFn: () => strategiesAPI.getStatus(deploymentId),
+    staleTime: 5_000,
     retry: 2,
-    enabled: !!strategyId,
+    enabled: !!deploymentId,
+    throwOnError: false,
   })
 }
 
-// Fetch strategy params
 export function useStrategyParams(strategyId: string) {
   return useQuery({
     queryKey: strategyKeys.params(strategyId),
@@ -61,29 +73,51 @@ export function useStrategyParams(strategyId: string) {
   })
 }
 
-// Mutation hooks
-interface UseStrategyMutationResult {
-  mutate: () => void
-  mutateAsync: () => Promise<boolean>
+interface UseDeploymentMutationResult<TInput = void> {
+  mutateAsync: (input: TInput) => Promise<boolean>
   isPending: boolean
   error: string | null
 }
 
-function useStrategyMutation(
-  mutationFn: () => Promise<unknown>
-): UseStrategyMutationResult {
+export function useLoadStrategy(): UseDeploymentMutationResult<{
+  strategyId: string
+  payload: LoadStrategyPayload
+}> {
   const queryClient = useQueryClient()
-
   const mutation = useMutation({
-    mutationFn,
+    mutationFn: ({ strategyId, payload }: { strategyId: string; payload: LoadStrategyPayload }) =>
+      strategiesAPI.loadStrategy(strategyId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: strategyKeys.loaded() })
-      queryClient.invalidateQueries({ queryKey: strategyKeys.registry() })
+      invalidateStrategyLists(queryClient)
     },
   })
 
   return {
-    mutate: mutation.mutate,
+    mutateAsync: async (input) => {
+      try {
+        await mutation.mutateAsync(input)
+        return true
+      } catch {
+        return false
+      }
+    },
+    isPending: mutation.isPending,
+    error: mutation.error ? formatAPIError(mutation.error) : null,
+  }
+}
+
+function useRuntimeMutation(
+  mutationFn: () => Promise<unknown>,
+): UseDeploymentMutationResult<void> {
+  const queryClient = useQueryClient()
+  const mutation = useMutation({
+    mutationFn,
+    onSuccess: () => {
+      invalidateStrategyLists(queryClient)
+    },
+  })
+
+  return {
     mutateAsync: async () => {
       try {
         await mutation.mutateAsync()
@@ -97,47 +131,32 @@ function useStrategyMutation(
   }
 }
 
-export function useLoadStrategy(strategyId: string, modulePath = 'strategies.default', version = 'v1') {
-  return useStrategyMutation(
-    () => strategiesAPI.loadStrategy(strategyId, { module_path: modulePath, version })
-  )
+export function useUnloadStrategy(deploymentId: string) {
+  return useRuntimeMutation(() => strategiesAPI.unloadStrategy(deploymentId))
 }
 
-export function useUnloadStrategy(strategyId: string) {
-  return useStrategyMutation(
-    () => strategiesAPI.unloadStrategy(strategyId)
-  )
+export function useStartStrategy(deploymentId: string) {
+  return useRuntimeMutation(() => strategiesAPI.startStrategy(deploymentId))
 }
 
-export function useStartStrategy(strategyId: string, symbol = 'BTCUSDT') {
-  const queryClient = useQueryClient()
-  
-  return useMutation({
-    mutationFn: () => strategiesAPI.startStrategy(strategyId, symbol),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: strategyKeys.loaded() })
-      queryClient.invalidateQueries({ queryKey: strategyKeys.registry() })
-    },
-  })
+export function useStopStrategy(deploymentId: string) {
+  return useRuntimeMutation(() => strategiesAPI.stopStrategy(deploymentId))
 }
 
-export function useStopStrategy(strategyId: string) {
-  return useStrategyMutation(
-    () => strategiesAPI.stopStrategy(strategyId)
-  )
+export function usePauseStrategy(deploymentId: string) {
+  return useRuntimeMutation(() => strategiesAPI.pauseStrategy(deploymentId))
 }
 
-export function usePauseStrategy(strategyId: string) {
-  return useStrategyMutation(
-    () => strategiesAPI.pauseStrategy(strategyId)
-  )
+export function useResumeStrategy(deploymentId: string) {
+  return useRuntimeMutation(() => strategiesAPI.resumeStrategy(deploymentId))
 }
 
-export function useResumeStrategy(strategyId: string) {
-  return useStrategyMutation(
-    () => strategiesAPI.resumeStrategy(strategyId)
-  )
-}
+// Optional clearer aliases for future callers
+export const useStartDeployment = useStartStrategy
+export const useStopDeployment = useStopStrategy
+export const usePauseDeployment = usePauseStrategy
+export const useResumeDeployment = useResumeStrategy
+export const useUnloadDeployment = useUnloadStrategy
 
 export function useUpdateStrategyParams(strategyId: string) {
   const queryClient = useQueryClient()
@@ -145,12 +164,15 @@ export function useUpdateStrategyParams(strategyId: string) {
   const mutation = useMutation({
     mutationFn: (params: StrategyParams) => strategiesAPI.updateParams(strategyId, params),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: strategyKeys.params(strategyId) })
+      queryClient.invalidateQueries({
+        queryKey: strategyKeys.params(strategyId),
+        exact: true,
+        refetchType: 'active',
+      })
     },
   })
 
   return {
-    mutate: mutation.mutate,
     mutateAsync: async (params: StrategyParams): Promise<boolean> => {
       try {
         const result = await mutation.mutateAsync(params)
@@ -164,43 +186,41 @@ export function useUpdateStrategyParams(strategyId: string) {
   }
 }
 
-// Strategy events hooks
-export function useStrategyEvents(strategyId: string, eventType?: string) {
+export function useStrategyEvents(deploymentId: string, eventType?: string) {
   return useQuery({
-    queryKey: [...strategyKeys.events(strategyId), { eventType }],
-    queryFn: () => strategiesAPI.getStrategyEvents(strategyId, eventType),
+    queryKey: [...strategyKeys.events(deploymentId), { eventType }],
+    queryFn: () => strategiesAPI.getStrategyEvents(deploymentId, eventType),
     staleTime: 5_000,
     refetchInterval: 5_000,
     retry: 2,
-    enabled: !!strategyId,
+    enabled: !!deploymentId,
     throwOnError: false,
   })
 }
 
-export function useStrategySignals(strategyId: string) {
+export function useStrategySignals(deploymentId: string) {
   return useQuery({
-    queryKey: strategyKeys.signals(strategyId),
-    queryFn: () => strategiesAPI.getStrategySignals(strategyId),
+    queryKey: strategyKeys.signals(deploymentId),
+    queryFn: () => strategiesAPI.getStrategySignals(deploymentId),
     staleTime: 5_000,
     refetchInterval: 5_000,
     retry: 2,
-    enabled: !!strategyId,
+    enabled: !!deploymentId,
     throwOnError: false,
   })
 }
 
-export function useStrategyErrors(strategyId: string) {
+export function useStrategyErrors(deploymentId: string) {
   return useQuery({
-    queryKey: strategyKeys.errors(strategyId),
-    queryFn: () => strategiesAPI.getStrategyErrors(strategyId),
+    queryKey: strategyKeys.errors(deploymentId),
+    queryFn: () => strategiesAPI.getStrategyErrors(deploymentId),
     staleTime: 10_000,
     retry: 2,
-    enabled: !!strategyId,
+    enabled: !!deploymentId,
     throwOnError: false,
   })
 }
 
-// Fetch trading pairs from exchange
 export function useTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT') {
   return useQuery({
     queryKey: strategyKeys.tradingPairs(),
@@ -211,12 +231,11 @@ export function useTradingPairs(statusFilter = 'TRADING', quoteAsset = 'USDT') {
   })
 }
 
-// Safety Gate hook
 export function useSafetyGate() {
   const queryClient = useQueryClient()
 
   const query = useQuery({
-    queryKey: [...strategyKeys.all, 'safety-gate'] as const,
+    queryKey: strategyKeys.safetyGate(),
     queryFn: () => strategiesAPI.getSafetyGateStatus(),
     staleTime: 10_000,
     refetchInterval: 10_000,
@@ -228,18 +247,21 @@ export function useSafetyGate() {
     mutationFn: ({ enabled, confirmed }: { enabled: boolean; confirmed?: boolean }) =>
       strategiesAPI.setSafetyGateEnabled(enabled, confirmed ?? false),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [...strategyKeys.all, 'safety-gate'] })
-      queryClient.invalidateQueries({ queryKey: ['monitor', 'snapshot'] })
+      queryClient.invalidateQueries({
+        queryKey: strategyKeys.safetyGate(),
+        exact: true,
+        refetchType: 'active',
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['monitor', 'snapshot'],
+        exact: true,
+        refetchType: 'active',
+      })
     },
   })
 
-  const enable = async (confirmed = false) => {
-    return mutation.mutateAsync({ enabled: true, confirmed })
-  }
-
-  const disable = async () => {
-    return mutation.mutateAsync({ enabled: false })
-  }
+  const enable = async (confirmed = false) => mutation.mutateAsync({ enabled: true, confirmed })
+  const disable = async () => mutation.mutateAsync({ enabled: false })
 
   return {
     status: query.data ?? null,

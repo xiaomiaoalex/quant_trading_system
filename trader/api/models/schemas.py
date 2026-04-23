@@ -158,14 +158,19 @@ class TimeWindowConfigUpdateRequest(BaseModel):
 
 # ==================== Deployment Models ====================
 
+DeploymentMode = Literal["paper", "demo", "live", "shadow"]
+
 class Deployment(BaseModel):
     """部署实例"""
     deployment_id: str
     strategy_id: str
-    version: int
+    version: str
     account_id: str
     venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     symbols: List[str]
+    mode: DeploymentMode = "demo"
+    module_path: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
     status: str = Field(..., json_schema_extra={"example": "STOPPED"})
     params_version: Optional[int] = None
     risk_profile_id: Optional[str] = None
@@ -175,15 +180,41 @@ class Deployment(BaseModel):
 
 class DeploymentCreateRequest(BaseModel):
     """创建部署请求"""
-    deployment_id: str
+    deployment_id: Optional[str] = None
     strategy_id: str
-    version: int
+    version: str = "v1"
     account_id: str
     venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     symbols: List[str]
+    mode: DeploymentMode = "demo"
+    module_path: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
     params_version: Optional[int] = None
     risk_profile_id: Optional[str] = None
     created_by: str
+
+
+class DeploymentRuntime(BaseModel):
+    """运行中 deployment 视图。"""
+
+    deployment_id: str
+    strategy_id: str
+    version: str
+    status: Literal["loaded", "running", "paused", "stopped", "error"]
+    symbols: List[str] = Field(default_factory=list)
+    account_id: str
+    venue: str
+    mode: DeploymentMode
+    loaded_at: Optional[str] = None
+    started_at: Optional[str] = None
+    last_tick_at: Optional[str] = None
+    tick_count: int = 0
+    signal_count: int = 0
+    error_count: int = 0
+    last_error: Optional[str] = None
+    stop_reason: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ==================== Backtest Models ====================

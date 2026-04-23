@@ -361,7 +361,11 @@ class OMSCallbackHandler:
                 raise MinNotionalError(error_msg)
 
         # ==================== 生成订单ID ====================
-        cl_ord_id = f"{strategy_id}_{uuid.uuid4().hex[:16]}"
+        # 币安要求 cl_ord_id 必须符合 ^[a-zA-Z0-9-_]{1,36}$
+        # strategy_id 可能包含 __，先替换为单下划线
+        # 注意：不要截断 strategy_id，避免逆向工程无法恢复
+        safe_strategy_id = strategy_id.replace("__", "_")
+        cl_ord_id = f"{safe_strategy_id}_{uuid.uuid4().hex[:12]}"
 
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
@@ -509,7 +513,12 @@ class OMSCallbackHandler:
             # ==================== 如果有成交，保存成交记录 ====================
             if broker_order.filled_quantity > 0:
                 exec_id = f"{broker_order.broker_order_id}:init"
-                if self._mark_exec_seen(cl_ord_id, exec_id):
+                # Task 19: 幂等检查：避免重复计数
+                if not self._mark_exec_seen(cl_ord_id, exec_id):
+                    logger.info(
+                        f"[OMSCallback] Duplicate fill (sync path), skipping count: cl_ord_id={cl_ord_id}, exec_id={exec_id}"
+                    )
+                else:
                     execution_data = {
                         "cl_ord_id": cl_ord_id,
                         "exec_id": exec_id,
@@ -527,9 +536,10 @@ class OMSCallbackHandler:
                         "venue": self._broker.broker_name,
                     }
                     self._storage.create_execution(execution_data)
+                    # Task 19: Track fill count (only first occurrence)
+                    self._fill_latency_count += 1
 
                 # ==================== 更新持仓 ====================
-                # 成交后更新持仓（用于 P&L 计算）
                 try:
                     # 获取当前持仓
                     current_positions = self._storage.list_positions(
@@ -605,9 +615,6 @@ class OMSCallbackHandler:
                         )
                     except Exception as e:
                         logger.error(f"[OMSCallback] on_fill callback error: {e}")
-
-                # Task 19: Track fill count (latency would need broker timestamps)
-                self._fill_latency_count += 1
 
             # ==================== 发布成功事件 ====================
             event_type = "strategy.order.filled" if broker_order.filled_quantity > 0 else "strategy.order.submitted"
@@ -910,8 +917,11 @@ def create_oms_callback(
                     if not symbol:
                         symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
 
-                # Task 19: Track fill count from WS fill events (latency unknown)
-                handler._fill_latency_count += 1
+                # Note: fill_latency_count is NOT incremented here.
+                # The sync path (execute_signal) already incremented it
+                # when broker_place_order returned with filled_quantity > 0.
+                # WS fill updates are the same fill arriving via different path,
+                # counting them would double-count.
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链

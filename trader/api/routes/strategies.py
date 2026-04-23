@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
@@ -727,11 +727,16 @@ async def update_strategy_params(
 class LoadStrategyRequest(BaseModel):
     """加载策略请求"""
 
+    deployment_id: Optional[str] = Field(default=None, description="运行实例 ID；为空时后端按 strategy_id/symbol/mode 自动生成")
     module_path: Optional[str] = Field(default=None, description="策略模块路径，如 'trader.strategies.ema_cross_btc'")
     code: Optional[str] = Field(default=None, description="可选：直接加载代码字符串")
     code_version: Optional[int] = Field(default=None, ge=1, description="可选：加载已保存代码版本")
     version: str = Field(default="v1", description="策略版本")
     config: Dict = Field(default_factory=dict, description="策略配置参数")
+    symbols: List[str] = Field(default_factory=list, description="deployment 交易对列表；MVP 阶段至少 1 个")
+    account_id: str = Field(default="binance_demo", description="账户 ID")
+    venue: str = Field(default="BINANCE", description="交易 venue")
+    mode: Literal["paper", "demo", "live", "shadow"] = Field(default="demo", description="运行模式")
     # 资源限制
     max_position_size: Optional[float] = Field(default=1.0, description="最大持仓数量")
     max_daily_loss: Optional[float] = Field(default=100.0, description="最大日亏损金额")
@@ -742,9 +747,14 @@ class LoadStrategyRequest(BaseModel):
 class StrategyStatusResponse(BaseModel):
     """策略状态响应"""
 
+    deployment_id: str
     strategy_id: str
     version: str
     status: str
+    symbols: List[str] = Field(default_factory=list)
+    account_id: str = "binance_demo"
+    venue: str = "BINANCE"
+    mode: str = "demo"
     loaded_at: Optional[str] = None
     started_at: Optional[str] = None
     last_tick_at: Optional[str] = None
@@ -752,23 +762,49 @@ class StrategyStatusResponse(BaseModel):
     signal_count: int = 0
     error_count: int = 0
     last_error: Optional[str] = None
+    stop_reason: Optional[str] = None
     config: Dict = Field(default_factory=dict)
     blocked_reason: Optional[str] = None
-    symbol: Optional[str] = None  # 当前交易对（从 orchestrator context 获取）
 
 
 class RuntimeContextResponse(BaseModel):
     """策略运行时上下文响应"""
 
+    deployment_id: str
     strategy_id: str
-    symbol: str
+    symbols: List[str] = Field(default_factory=list)
+    primary_symbol: str = ""
+    account_id: str = "binance_demo"
+    venue: str = "BINANCE"
+    mode: str = "demo"
     status: str
     started_at: Optional[str] = None
     last_tick_at: Optional[str] = None
     tick_count: int = 0
+    signal_count: int = 0
     error_count: int = 0
     last_error: Optional[str] = None
     stop_reason: Optional[str] = None
+    blocked_reason: Optional[str] = None
+
+
+def _normalize_runtime_status(raw: str) -> str:
+    return raw.lower() if raw else "stopped"
+
+
+def _primary_symbol(symbols: List[str]) -> str:
+    return symbols[0] if symbols else ""
+
+
+def _build_default_deployment_id(
+    strategy_id: str,
+    symbols: List[str],
+    account_id: str,
+    mode: str,
+) -> str:
+    symbol_part = (symbols[0] if symbols else "UNSET").lower()
+    account_part = account_id.replace("/", "_").replace(":", "_").lower()
+    return f"{strategy_id}__{symbol_part}__{mode}__{account_part}"
 
 
 def _info_to_response(
@@ -776,20 +812,15 @@ def _info_to_response(
     orchestrator: Optional[StrategyRuntimeOrchestrator] = None,
 ) -> StrategyStatusResponse:
     """转换运行时信息为响应模型"""
-    # 从 orchestrator context 获取当前交易对
-    symbol = None
-    if orchestrator is not None:
-        ctx = orchestrator.get_context(info.strategy_id)
-        if ctx is not None:
-            symbol = ctx.symbol
-    # fallback: 从 info.symbols 取第一个
-    if symbol is None and info.symbols:
-        symbol = info.symbols[0]
-
     return StrategyStatusResponse(
+        deployment_id=info.deployment_id,
         strategy_id=info.strategy_id,
         version=info.version,
-        status=info.status.value,
+        status=_normalize_runtime_status(info.status.value),
+        symbols=list(info.symbols),
+        account_id=info.account_id,
+        venue=info.venue,
+        mode=info.mode,
         loaded_at=info.loaded_at.isoformat() if info.loaded_at else None,
         started_at=info.started_at.isoformat() if info.started_at else None,
         last_tick_at=info.last_tick_at.isoformat() if info.last_tick_at else None,
@@ -797,9 +828,9 @@ def _info_to_response(
         signal_count=info.signal_count,
         error_count=info.error_count,
         last_error=info.last_error,
+        stop_reason=info.stop_reason,
         config=info.config,
         blocked_reason=info.blocked_reason,
-        symbol=symbol,
     )
 
 
@@ -842,13 +873,37 @@ async def load_strategy(
         storage = get_storage()
         module_path = request.module_path
 
+        symbols = list(request.symbols or request.config.get("symbols") or [])
+        if not symbols:
+            raise HTTPException(status_code=400, detail="Load request requires at least one symbol in `symbols`")
+
+        deployment_id = request.deployment_id or _build_default_deployment_id(
+            strategy_id=strategy_id,
+            symbols=symbols,
+            account_id=request.account_id,
+            mode=request.mode,
+        )
+
+        merged_config = {
+            **request.config,
+            "symbols": symbols,
+            "account_id": request.account_id,
+            "venue": request.venue,
+            "mode": request.mode,
+        }
+
         if request.code:
             info = await runner.load_strategy_from_code(
                 strategy_id=strategy_id,
+                deployment_id=deployment_id,
                 version=request.version,
                 code=request.code,
-                config=request.config,
+                config=merged_config,
                 resource_limits=resource_limits,
+                symbols=symbols,
+                account_id=request.account_id,
+                venue=request.venue,
+                mode=request.mode,
             )
             return _info_to_response(info)
 
@@ -867,10 +922,15 @@ async def load_strategy(
         if code_entry is not None:
             info = await runner.load_strategy_from_code(
                 strategy_id=strategy_id,
+                deployment_id=deployment_id,
                 version=request.version,
                 code=code_entry["code"],
-                config=request.config,
+                config=merged_config,
                 resource_limits=resource_limits,
+                symbols=symbols,
+                account_id=request.account_id,
+                venue=request.venue,
+                mode=request.mode,
             )
             return _info_to_response(info)
 
@@ -888,10 +948,15 @@ async def load_strategy(
 
         info = await runner.load_strategy(
             strategy_id=strategy_id,
+            deployment_id=deployment_id,
             version=request.version,
             module_path=module_path,
-            config=request.config,
+            config=merged_config,
             resource_limits=resource_limits,
+            symbols=symbols,
+            account_id=request.account_id,
+            venue=request.venue,
+            mode=request.mode,
         )
         return _info_to_response(info)
     except ValueError as e:
@@ -905,63 +970,59 @@ async def load_strategy(
 
 
 @router.post(
-    "/v1/strategies/{strategy_id}/unload",
+    "/v1/deployments/{deployment_id}/unload",
     response_model=StrategyStatusResponse,
 )
-async def unload_strategy(
-    strategy_id: str = Path(..., description="Strategy ID"),
+async def unload_deployment(
+    deployment_id: str = Path(..., description="Deployment ID"),
 ):
     """
-    Unload strategy.
+    Unload deployment.
 
-    Unloads strategy and releases all resources including market data subscription.
+    Unloads deployment and releases all resources including market data subscription.
     """
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
 
     try:
-        info = runner.get_status(strategy_id)
+        info = runner.get_status(deployment_id)
         if info is None:
-            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not loaded")
+            raise HTTPException(status_code=404, detail=f"Deployment {deployment_id} not loaded")
 
         # First, unload from orchestrator (stops tick loop and cleans up subscription)
-        await orchestrator.unload_strategy(strategy_id)
+        await orchestrator.unload_strategy(deployment_id)
 
         # Then, unload the strategy from runner
-        await runner.unload_strategy(strategy_id)
+        await runner.unload_strategy(deployment_id)
         return _info_to_response(info)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
-    "/v1/strategies/{strategy_id}/start",
+    "/v1/deployments/{deployment_id}/start",
     response_model=RuntimeContextResponse,
 )
-async def start_strategy(
-    strategy_id: str = Path(..., description="Strategy ID"),
-    symbol: str = Query("BTCUSDT", description="Trading symbol (e.g., BTCUSDT)"),
+async def start_deployment(
+    deployment_id: str = Path(..., description="Deployment ID"),
 ):
     """
-    Start strategy execution with real-time market data.
+    Start deployment execution with real-time market data.
 
-    Starts the strategy's tick loop and begins receiving real-time market data
+    Starts the deployment's tick loop and begins receiving real-time market data
     from the Binance public stream.
-
-    The symbol determines which market data the strategy receives.
     """
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
 
     # 防御式注入：如果 orchestrator._connector 为 None，尝试从 pending 或 main 实例注入
-    # 解决 orchestrator 在 connector 注入前被创建的问题
     if orchestrator._connector is None:
         from trader.api.main import _binance_connector_instance
         c = _pending_orchestrator_connector or _binance_connector_instance
         if c is not None:
             orchestrator.set_connector(c)
             logger.info(
-                f"[Orchestrator] Late connector injection in start_strategy: "
+                f"[Orchestrator] Late connector injection in start_deployment: "
                 f"connector={type(c).__name__}, source={'pending' if c is _pending_orchestrator_connector else 'main_instance'}"
             )
         else:
@@ -971,118 +1032,130 @@ async def start_strategy(
             )
 
     try:
-        # First, start the strategy in runner
-        info = await runner.start(strategy_id)
-        _info_to_response(info)  # Validate it works
+        info = await runner.start(deployment_id)
+        symbol = _primary_symbol(info.symbols)
+        if not symbol:
+            raise HTTPException(status_code=400, detail="Deployment has no configured symbols")
 
-        # Then start the orchestrator for this strategy
-        ctx = await orchestrator.start_strategy(strategy_id, symbol)
+        ctx = await orchestrator.start_strategy(deployment_id, symbol)
 
         return RuntimeContextResponse(
-            strategy_id=ctx.strategy_id,
-            symbol=ctx.symbol,
-            status=ctx.status,
+            deployment_id=info.deployment_id,
+            strategy_id=info.strategy_id,
+            symbols=list(info.symbols),
+            primary_symbol=symbol,
+            account_id=info.account_id,
+            venue=info.venue,
+            mode=info.mode,
+            status=_normalize_runtime_status(ctx.status),
             started_at=ctx.started_at.isoformat() if ctx.started_at else None,
             last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
             tick_count=ctx.tick_count,
+            signal_count=info.signal_count,
             error_count=ctx.error_count,
             last_error=ctx.last_error,
             stop_reason=ctx.stop_reason,
+            blocked_reason=info.blocked_reason,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
-    "/v1/strategies/{strategy_id}/stop",
+    "/v1/deployments/{deployment_id}/stop",
     response_model=RuntimeContextResponse,
 )
-async def stop_strategy(
-    strategy_id: str = Path(..., description="Strategy ID"),
+async def stop_deployment(
+    deployment_id: str = Path(..., description="Deployment ID"),
     reason: Optional[str] = Query(None, description="Stop reason"),
 ):
     """
-    Stop strategy execution.
+    Stop deployment execution.
 
-    Stops the strategy's tick loop and market data subscription,
-    but keeps the strategy loaded.
+    Stops the deployment's tick loop and market data subscription,
+    but keeps the deployment loaded.
     """
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
 
     try:
-        # First, stop the orchestrator
-        ctx = await orchestrator.stop_strategy(strategy_id, reason)
-
-        # Then, stop the strategy in runner
-        await runner.stop(strategy_id)
+        ctx = await orchestrator.stop_strategy(deployment_id, reason)
+        info = await runner.stop(deployment_id)
+        info.stop_reason = reason
 
         return RuntimeContextResponse(
-            strategy_id=ctx.strategy_id,
-            symbol=ctx.symbol,
-            status=ctx.status,
+            deployment_id=info.deployment_id,
+            strategy_id=info.strategy_id,
+            symbols=list(info.symbols),
+            primary_symbol=_primary_symbol(info.symbols),
+            account_id=info.account_id,
+            venue=info.venue,
+            mode=info.mode,
+            status=_normalize_runtime_status(ctx.status),
             started_at=ctx.started_at.isoformat() if ctx.started_at else None,
             last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
             tick_count=ctx.tick_count,
+            signal_count=info.signal_count,
             error_count=ctx.error_count,
             last_error=ctx.last_error,
             stop_reason=ctx.stop_reason,
+            blocked_reason=info.blocked_reason,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
-    "/v1/strategies/{strategy_id}/pause",
+    "/v1/deployments/{deployment_id}/pause",
     response_model=StrategyStatusResponse,
 )
-async def pause_strategy(
-    strategy_id: str = Path(..., description="Strategy ID"),
+async def pause_deployment(
+    deployment_id: str = Path(..., description="Deployment ID"),
 ):
     """
-    Pause strategy execution.
+    Pause deployment execution.
 
-    Strategy will not receive tick data but remains loaded.
+    Deployment will not receive tick data but remains loaded.
     """
     runner = get_strategy_runner()
 
     try:
-        info = await runner.pause(strategy_id)
+        info = await runner.pause(deployment_id)
         return _info_to_response(info)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
-    "/v1/strategies/{strategy_id}/resume",
+    "/v1/deployments/{deployment_id}/resume",
     response_model=StrategyStatusResponse,
 )
-async def resume_strategy(
-    strategy_id: str = Path(..., description="Strategy ID"),
+async def resume_deployment(
+    deployment_id: str = Path(..., description="Deployment ID"),
 ):
     """
-    Resume strategy execution.
+    Resume deployment execution.
 
-    Resumes a paused strategy.
+    Resumes a paused deployment.
     """
     runner = get_strategy_runner()
 
     try:
-        info = await runner.resume(strategy_id)
+        info = await runner.resume(deployment_id)
         return _info_to_response(info)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get(
-    "/v1/strategies/{strategy_id}/status",
+    "/v1/deployments/{deployment_id}/status",
     response_model=RuntimeContextResponse,
 )
-async def get_strategy_status(
-    strategy_id: str = Path(..., description="Strategy ID"),
+async def get_deployment_status(
+    deployment_id: str = Path(..., description="Deployment ID"),
 ):
     """
-    Get strategy runtime status.
+    Get deployment runtime status.
 
     Returns the current runtime status including orchestrator context
     (tick count, last tick time, etc.).
@@ -1090,40 +1163,72 @@ async def get_strategy_status(
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
 
-    info = runner.get_status(strategy_id)
+    info = runner.get_status(deployment_id)
     if info is None:
         raise HTTPException(
-            status_code=404, detail=f"Strategy {strategy_id} not loaded"
+            status_code=404, detail=f"Deployment {deployment_id} not loaded"
         )
 
-    # Get orchestrator context if available
-    ctx = orchestrator.get_context(strategy_id)
+    ctx = orchestrator.get_context(deployment_id)
 
     if ctx is not None:
         return RuntimeContextResponse(
-            strategy_id=ctx.strategy_id,
-            symbol=ctx.symbol,
-            status=ctx.status,
+            deployment_id=info.deployment_id,
+            strategy_id=info.strategy_id,
+            symbols=list(info.symbols),
+            primary_symbol=ctx.symbol,
+            account_id=info.account_id,
+            venue=info.venue,
+            mode=info.mode,
+            status=_normalize_runtime_status(ctx.status),
             started_at=ctx.started_at.isoformat() if ctx.started_at else None,
             last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
             tick_count=ctx.tick_count,
+            signal_count=info.signal_count,
             error_count=ctx.error_count,
             last_error=ctx.last_error,
             stop_reason=ctx.stop_reason,
+            blocked_reason=info.blocked_reason,
         )
 
-    # Fallback to runner info if no orchestrator context
     return RuntimeContextResponse(
+        deployment_id=info.deployment_id,
         strategy_id=info.strategy_id,
-        symbol="",
-        status=info.status.value,
+        symbols=list(info.symbols),
+        primary_symbol=_primary_symbol(info.symbols),
+        account_id=info.account_id,
+        venue=info.venue,
+        mode=info.mode,
+        status=_normalize_runtime_status(info.status.value),
         started_at=info.started_at.isoformat() if info.started_at else None,
         last_tick_at=info.last_tick_at.isoformat() if info.last_tick_at else None,
         tick_count=info.tick_count,
+        signal_count=info.signal_count,
         error_count=info.error_count,
         last_error=info.last_error,
-        stop_reason=None,
+        stop_reason=info.stop_reason,
+        blocked_reason=info.blocked_reason,
     )
+
+
+@router.post(
+    "/v1/strategies/{strategy_id}/start",
+    response_model=RuntimeContextResponse,
+    deprecated=True,
+)
+async def start_strategy_legacy(
+    strategy_id: str = Path(..., description="Template Strategy ID"),
+):
+    """
+    兼容旧前端：仅当该模板下恰好存在一个 loaded deployment 时允许启动。
+    """
+    runner = get_strategy_runner()
+    deployments = runner.list_deployments_for_strategy(strategy_id)
+    if not deployments:
+        raise HTTPException(status_code=404, detail=f"No loaded deployment found for strategy {strategy_id}")
+    if len(deployments) > 1:
+        raise HTTPException(status_code=409, detail="Multiple deployments found; use /v1/deployments/{deployment_id}/start")
+    return await start_deployment(deployments[0].deployment_id)
 
 
 @router.get(
@@ -1257,6 +1362,50 @@ async def get_strategy_errors(
     filtered_events = [
         e for e in events
         if e.get("event_type") in error_event_types
+    ][:limit]
+
+    return [
+        StrategyEventResponse(
+            event_id=e.get("event_id", 0),
+            stream_key=e.get("stream_key", ""),
+            event_type=e.get("event_type", ""),
+            ts_ms=e.get("ts_ms", 0),
+            payload=e.get("data", {}),
+        )
+        for e in filtered_events
+    ]
+
+
+@router.get(
+    "/v1/strategies/{strategy_id}/events/fills",
+    response_model=List[StrategyEventResponse],
+)
+async def get_strategy_fills(
+    strategy_id: str = Path(..., description="Strategy ID"),
+    limit: int = Query(100, ge=1, le=1000, description="Max fills to return"),
+):
+    """
+    Get strategy fills (成交记录).
+
+    Returns only fill events related to the strategy.
+    """
+    storage = get_storage()
+
+    # Query fill events for this strategy
+    events = storage.list_events(
+        stream_key=f"strategy:{strategy_id}",
+        event_type=None,  # We filter manually for fill types
+        limit=limit * 3,  # Get more since we filter
+    )
+
+    # Filter for fill-related event types
+    fill_event_types = {
+        "strategy.order.filled",
+        "strategy.fill",
+    }
+    filtered_events = [
+        e for e in events
+        if e.get("event_type") in fill_event_types
     ][:limit]
 
     return [

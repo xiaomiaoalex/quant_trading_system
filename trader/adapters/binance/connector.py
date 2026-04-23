@@ -339,7 +339,10 @@ class BinanceConnector:
 
                 for handler in self._health_handlers:
                     try:
-                        handler(health_report)
+                        result = handler(health_report)
+                        # Await async handlers (health handlers can be sync or async)
+                        if asyncio.iscoroutine(result):
+                            await result
                     except Exception as e:
                         logger.error(f"[BinanceConnector] Health handler error: {e}")
 
