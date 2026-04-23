@@ -14,6 +14,7 @@ export const strategyKeys = {
   events: (deploymentId: string) => [...strategyKeys.all, 'events', deploymentId] as const,
   signals: (deploymentId: string) => [...strategyKeys.all, 'signals', deploymentId] as const,
   errors: (deploymentId: string) => [...strategyKeys.all, 'errors', deploymentId] as const,
+  fills: (deploymentId: string) => [...strategyKeys.all, 'fills', deploymentId] as const,
   tradingPairs: () => [...strategyKeys.all, 'trading-pairs'] as const,
   safetyGate: () => [...strategyKeys.all, 'safety-gate'] as const,
 }

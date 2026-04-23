@@ -14,12 +14,14 @@ import {
   useStrategyRegistry,
   useTradingPairs,
   useUnloadStrategy,
+  useStrategyFills,
 } from '@/hooks'
 import type {
   DeploymentMode,
   LoadStrategyPayload,
   RegisteredStrategy,
   StrategyRuntimeInfo,
+  StrategyEventEnvelope,
 } from '@/types'
 import {
   STRATEGY_STATUS_DISPLAY,
@@ -187,6 +189,7 @@ export function Strategies() {
   const [draftAccountId, setDraftAccountId] = useState('binance_demo')
   const [draftMode, setDraftMode] = useState<DeploymentMode>('demo')
   const [draftDeploymentId, setDraftDeploymentId] = useState('')
+  const [fillsDeployment, setFillsDeployment] = useState<StrategyRuntimeInfo | null>(null)
 
   const normalizedLoaded = useMemo(
     () => loadedStrategies.map((info) => ({ ...info, status: normalizeStatus(info.status) })),
@@ -574,6 +577,95 @@ export function Strategies() {
         isOpen={!!detailStrategy}
         onClose={() => setDetailStrategy(null)}
       />
+
+      {fillsDeployment && <FillsDialog deployment={fillsDeployment} onClose={() => setFillsDeployment(null)} />}
+    </div>
+  )
+}
+
+function FillsDialog({ deployment, onClose }: { deployment: StrategyRuntimeInfo; onClose: () => void }) {
+  const { data: fills, isLoading } = useStrategyFills(deployment.deployment_id)
+
+  const formatTime = (tsMs: number) => {
+    const date = new Date(tsMs)
+    return date.toLocaleTimeString('en-US', { hour12: false })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-4xl rounded-lg border border-gray-700 bg-gray-800 shadow-xl">
+        <div className="flex items-center justify-between border-b border-gray-700 px-6 py-4">
+          <h2 className="text-lg font-semibold text-white">Fills - {deployment.deployment_id}</h2>
+          <button
+            onClick={onClose}
+            className="rounded p-1 text-gray-400 hover:bg-gray-700 hover:text-white"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="max-h-[600px] overflow-y-auto p-6">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <LoadingSpinner size="md" />
+              <span className="ml-3 text-sm text-gray-400">Loading fills...</span>
+            </div>
+          ) : fills && fills.length > 0 ? (
+            <div className="space-y-3">
+              {fills.map((fill: StrategyEventEnvelope, i: number) => {
+                const payload = fill.payload as Record<string, unknown>
+                const side = (payload.side as string) ?? '-'
+                const symbol = (payload.symbol as string) ?? '-'
+                const quantity = (payload.quantity as string) ?? (payload.filled_qty as string) ?? '-'
+                const avgPrice = (payload.avg_price as string) ?? '-'
+                const status = (payload.status as string) ?? '-'
+                const orderId = (payload.order_id as string) ?? '-'
+
+                const isBuy = side.toLowerCase() === 'buy'
+
+                return (
+                  <div key={fill.event_id ?? i} className="rounded-lg border border-gray-700 bg-gray-900/50 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-gray-500">{formatTime(fill.ts_ms)}</span>
+                        <span className={clsx(
+                          'text-xs font-medium px-2 py-0.5 rounded',
+                          isBuy ? 'text-green-400 bg-green-900/30' : 'text-red-400 bg-red-900/30'
+                        )}>
+                          {side.toUpperCase()}
+                        </span>
+                        <span className="text-sm text-white font-mono">{symbol}</span>
+                      </div>
+                      <span className="text-xs text-gray-500 font-mono">{orderId}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-xs text-gray-500">Quantity</p>
+                        <p className="text-white font-mono">{quantity}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Avg Price</p>
+                        <p className="text-white font-mono">{avgPrice}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Status</p>
+                        <p className="text-white">{status}</p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="rounded bg-gray-900/50 p-12 text-center">
+              <p className="text-sm text-gray-500">No fills recorded</p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
