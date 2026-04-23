@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import type { RegisteredStrategy, StrategyRuntimeInfo, StrategyEventEnvelope } from '@/types'
 import { STRATEGY_STATUS_DISPLAY } from '@/types'
 import type { StrategyStatus } from '@/types'
-import { useStrategySignals, useStrategyErrors } from '@/hooks'
+import { useStrategySignals, useStrategyErrors, useStrategyEvents } from '@/hooks'
 
 interface StrategyDetailModalProps {
   strategy: RegisteredStrategy
@@ -52,7 +52,7 @@ function SignalEventRow({ event }: { event: StrategyEventEnvelope }) {
       </span>
       <div className="flex-1 min-w-0">
         <p className="text-sm text-white">
-          {payload.symbol} {payload.direction} 
+          {payload.symbol} {payload.direction}
         </p>
         <p className="text-xs text-gray-400">{payload.signal_type} - {payload.reason}</p>
       </div>
@@ -62,13 +62,13 @@ function SignalEventRow({ event }: { event: StrategyEventEnvelope }) {
 
 function ErrorEventRow({ event }: { event: StrategyEventEnvelope }) {
   const payload = event.payload as Record<string, unknown>
-  
+
   // Try multiple possible error message fields
   const errorMsg = (
-    payload.error_message ?? 
-    payload.reason ?? 
-    payload.message ?? 
-    payload.error ?? 
+    payload.error_message ??
+    payload.reason ??
+    payload.message ??
+    payload.error ??
     JSON.stringify(payload)
   ) as string
 
@@ -83,13 +83,83 @@ function ErrorEventRow({ event }: { event: StrategyEventEnvelope }) {
   )
 }
 
-type Tab = 'info' | 'signals' | 'errors'
+function OrderEventRow({ event }: { event: StrategyEventEnvelope }) {
+  const payload = event.payload as {
+    order_id?: string
+    symbol?: string
+    side?: string
+    quantity?: string
+    filled_qty?: string
+    avg_price?: string
+    price?: string
+    status?: string
+    reason?: string
+  }
+
+  const eventConfig = getEventTypeLabel(event.event_type)
+  const isRejected = event.event_type === 'strategy.order.rejected'
+  const isFilled = event.event_type === 'strategy.order.filled'
+  const isSubmitted = event.event_type === 'strategy.order.submitted'
+
+  const shortOrderId = payload.order_id ? payload.order_id.slice(-12) : '-'
+  const fillPercent = payload.quantity && payload.filled_qty
+    ? Math.min(100, Math.round((parseFloat(payload.filled_qty) / parseFloat(payload.quantity)) * 100))
+    : null
+
+  return (
+    <div className="flex items-start gap-3 py-2 border-b border-gray-800 last:border-0">
+      <span className="text-xs text-gray-500 mt-0.5 shrink-0">{formatEventTime(event.ts_ms)}</span>
+      <span className={clsx('text-xs font-medium px-1.5 py-0.5 rounded shrink-0', eventConfig.color, 'bg-gray-700/50')}>
+        {eventConfig.label}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-white font-medium">{payload.symbol}</span>
+          <span className={clsx(
+            'text-xs font-medium px-1.5 py-0.5 rounded',
+            payload.side === 'BUY' ? 'text-green-400 bg-green-900/30' : 'text-red-400 bg-red-900/30'
+          )}>
+            {payload.side}
+          </span>
+          {payload.status && (
+            <span className={clsx('text-xs px-1.5 py-0.5 rounded', 'bg-gray-700/50 text-gray-300')}>
+              {payload.status}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 mt-1 text-xs text-gray-400 flex-wrap">
+          <span>Qty: {payload.quantity ?? '-'}</span>
+          {(isFilled || isSubmitted) && payload.filled_qty && (
+            <span className={clsx(fillPercent === 100 ? 'text-emerald-400' : 'text-yellow-400')}>
+              Filled: {payload.filled_qty}
+              {fillPercent !== null && ` (${fillPercent}%)`}
+            </span>
+          )}
+          {(isFilled || isSubmitted) && payload.avg_price && (
+            <span>Avg: {payload.avg_price}</span>
+          )}
+          {isRejected && payload.reason && (
+            <span className="text-red-400">Reason: {payload.reason}</span>
+          )}
+          <span className="text-gray-500 font-mono">#{shortOrderId}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type Tab = 'info' | 'orders' | 'signals' | 'errors'
 
 export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: StrategyDetailModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>('info')
-  
+
   const { data: signals } = useStrategySignals(runtime?.deployment_id ?? '')
   const { data: errors } = useStrategyErrors(runtime?.deployment_id ?? '')
+  const { data: allEvents } = useStrategyEvents(runtime?.deployment_id ?? '')
+
+  const orders = allEvents?.filter(e =>
+    e.event_type.startsWith('strategy.order.')
+  ) ?? []
 
   if (!isOpen) return null
 
@@ -98,6 +168,7 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: 'info', label: 'Info' },
+    { id: 'orders', label: 'Orders', count: orders.length },
     { id: 'signals', label: 'Signals', count: signals?.length },
     { id: 'errors', label: 'Errors', count: errors?.length },
   ]
@@ -263,6 +334,23 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
                 </section>
               )}
             </>
+          )}
+
+          {activeTab === 'orders' && (
+            <section>
+              <h3 className="mb-3 text-sm font-medium text-gray-400 uppercase">Order History ({orders.length})</h3>
+              {orders.length > 0 ? (
+                <div className="rounded bg-gray-900/50 p-3 divide-y divide-gray-800">
+                  {orders.map((event, i) => (
+                    <OrderEventRow key={event.trace_id ?? `${event.ts_ms}-${i}`} event={event} />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded bg-gray-900/50 p-6 text-center">
+                  <p className="text-sm text-gray-500">No orders yet</p>
+                </div>
+              )}
+            </section>
           )}
 
           {activeTab === 'signals' && (
