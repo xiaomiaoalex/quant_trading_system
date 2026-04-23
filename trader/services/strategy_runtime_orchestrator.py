@@ -124,10 +124,14 @@ class StrategyRuntimeOrchestrator:
         """
         self._connector = connector
         connector.register_market_handler(self._on_market_event)
+        handler_count = 0
+        try:
+            handler_count = len(connector._public_manager._market_event_handlers)
+        except Exception:
+            pass
         logger.info(
             f"[Orchestrator] Connector injected: connector={type(connector).__name__}, "
-            f"public_manager_exists={hasattr(connector, '_public_manager')}, "
-            f"handler_count={len(getattr(connector._public_manager, '_market_event_handlers', []))}"
+            f"handler_count={handler_count}"
         )
 
     def _on_market_event(self, event: MarketEvent) -> None:
@@ -146,14 +150,15 @@ class StrategyRuntimeOrchestrator:
                 ctx for ctx in self._contexts.values()
                 if ctx.status == RuntimeStatus.RUNNING
             ]
-            pub_running = (
-                self._connector.public_stream.is_running()
-                if self._connector else "no connector"
-            )
-            logger.warning(
+            pub_running = False
+            try:
+                pub_running = self._connector.public_stream.is_running()
+            except Exception:
+                pass
+            logger.debug(
                 f"[Orchestrator] Market event diag: "
                 f"event_type={event.event_type} orch_running={self._running} "
-                f"running_strategies={len(running_contexts)} pub_stream={pub_running} "
+                f"running_strategies={len(running_contexts)} pub_stream_running={pub_running} "
                 f"(total_events_since_start={self._market_event_count})"
             )
 
