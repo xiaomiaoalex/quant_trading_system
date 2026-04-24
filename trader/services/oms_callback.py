@@ -449,11 +449,20 @@ class OMSCallbackHandler:
                                     break
                             notional = quantity * signal.price
                             if quote_balance < notional:
-                                logger.warning(
-                                    f"[OMSCallback] Insufficient {quote_asset} balance for BUY: "
-                                    f"required={notional}, available={quote_balance}, "
-                                    f"symbol={signal.symbol}, qty={quantity}, price={signal.price}"
-                                )
+                                error_msg = f"Insufficient {quote_asset} balance for BUY: required={notional}, available={quote_balance}"
+                                logger.warning(f"[OMSCallback] {error_msg}")
+                                self._publish_event(strategy_id, "strategy.order.rejected", {
+                                    "symbol": signal.symbol,
+                                    "side": side.value,
+                                    "quantity": str(quantity),
+                                    "price": str(signal.price),
+                                    "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
+                                })
+                                # Task 19: Track rejection
+                                self._order_submit_reject += 1
+                                reason = "INSUFFICIENT_BALANCE"
+                                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
+                                raise InsufficientBalanceError(error_msg)
                         elif side == OrderSide.SELL:
                             # SELL: 检查 base asset (BTC等) 余额
                             base_balance = Decimal("0")
@@ -461,6 +470,10 @@ class OMSCallbackHandler:
                                 if bal.get("asset") == base_asset:
                                     base_balance = Decimal(str(bal.get("free", "0")))
                                     break
+                            logger.info(
+                                f"[OMSCallback] SELL balance check: base_asset={base_asset}, "
+                                f"required={quantity}, available={base_balance}"
+                            )
                             if base_balance < quantity:
                                 if is_emergency:
                                     # EMERGENCY_EXIT: 强制卖出，按实际余额调整
@@ -472,11 +485,26 @@ class OMSCallbackHandler:
                                         f"symbol={signal.symbol}, strategy={strategy_id}"
                                     )
                                 else:
-                                    logger.warning(
-                                        f"[OMSCallback] Insufficient {base_asset} balance for SELL: "
-                                        f"required={quantity}, available={base_balance}, "
-                                        f"symbol={signal.symbol}, price={signal.price}"
-                                    )
+                                    error_msg = f"Insufficient {base_asset} balance for SELL: required={quantity}, available={base_balance}"
+                                    logger.warning(f"[OMSCallback] {error_msg}")
+                                    self._publish_event(strategy_id, "strategy.order.rejected", {
+                                        "symbol": signal.symbol,
+                                        "side": side.value,
+                                        "quantity": str(quantity),
+                                        "price": str(signal.price),
+                                        "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
+                                    })
+                                    # Task 19: Track rejection
+                                    self._order_submit_reject += 1
+                                    reason = "INSUFFICIENT_BALANCE"
+                                    self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
+                                    raise InsufficientBalanceError(error_msg)
+                except MinNotionalError:
+                    raise  # Re-raise to be caught by outer handler
+                except InvalidQuantityError:
+                    raise  # Re-raise to be caught by outer handler
+                except InsufficientBalanceError:
+                    raise  # Re-raise to be caught by outer handler
                 except Exception as e:
                     logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
 

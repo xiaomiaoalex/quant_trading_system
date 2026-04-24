@@ -177,7 +177,7 @@ export function Strategies() {
     refetch,
   } = useStrategyRegistry()
   const { data: loadedStrategies = [], refetch: refetchLoaded } = useLoadedStrategies()
-  const { data: tradingPairsData, isLoading: isLoadingPairs } = useTradingPairs()
+  const { data: tradingPairsData, isLoading: isLoadingPairs, refetch: refetchPairs } = useTradingPairs()
   const loadMutation = useLoadStrategy()
 
   const [detailStrategy, setDetailStrategy] = useState<RegisteredStrategy | null>(null)
@@ -510,8 +510,18 @@ export function Strategies() {
                         <LoadingSpinner size="md" />
                         <span className="ml-3 text-sm text-gray-400">Loading trading pairs...</span>
                       </div>
+                    ) : !tradingPairsData?.pairs?.length ? (
+                      <div className="flex flex-col items-center gap-2 py-4 text-sm text-gray-400">
+                        <span>No trading pairs available.</span>
+                        <button
+                          onClick={() => refetchPairs()}
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          Retry
+                        </button>
+                      </div>
                     ) : (
-                      tradingPairsData?.pairs.map((pair) => (
+                      tradingPairsData.pairs.map((pair) => (
                         <button
                           key={pair.symbol}
                           onClick={() => handleDraftSymbolChange(pair.symbol)}

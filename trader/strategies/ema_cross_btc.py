@@ -42,7 +42,7 @@ class EmaCrossBtcStrategy:
 
     fast_period: int = 12
     slow_period: int = 26
-    order_size: Decimal = Decimal("0.001")
+    order_size: Decimal = Decimal("0.01")  # 0.01 BTC/ETH ≈ 50-800 USDT，满足大多数交易对最低名义金额要求
     min_confidence: Decimal = Decimal("0.65")
 
     _prices: list[Decimal] = field(default_factory=list)

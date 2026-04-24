@@ -42,6 +42,44 @@ function getEventTypeLabel(eventType: string): { label: string; color: string } 
   }
 }
 
+function formatRejectionReason(reason: string | undefined): string {
+  if (!reason) return 'Unknown reason'
+  
+  // MIN_NOTIONAL: Notional 2.33 below minNotional 5.0
+  if (reason.startsWith('MIN_NOTIONAL:')) {
+    const match = reason.match(/Notional ([\d.]+) below minNotional ([\d.]+)/)
+    if (match) {
+      const notional = parseFloat(match[1])
+      const minNotional = parseFloat(match[2])
+      return `Order value (${notional.toFixed(2)} USDT) below minimum (${minNotional.toFixed(2)} USDT)`
+    }
+    return 'Order value below exchange minimum'
+  }
+  
+  // INSUFFICIENT_BALANCE
+  if (reason.includes('INSUFFICIENT_BALANCE')) {
+    return 'Insufficient balance'
+  }
+  
+  // INVALID_QUANTITY
+  if (reason.includes('INVALID_QUANTITY')) {
+    return 'Invalid quantity (check lot size)'
+  }
+  
+  // TRADING_DISABLED
+  if (reason.includes('TRADING_DISABLED')) {
+    return 'Trading disabled for this symbol'
+  }
+  
+  // LOT_SIZE
+  if (reason.includes('LOT_SIZE')) {
+    return 'Quantity does not meet lot size requirement'
+  }
+  
+  // Return the original reason formatted nicely
+  return reason.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').trim()
+}
+
 function SignalEventRow({ event }: { event: StrategyEventEnvelope }) {
   const payload = event.payload as { symbol?: string; direction?: string; signal_type?: string; reason?: string }
   return (
@@ -139,7 +177,7 @@ function OrderEventRow({ event }: { event: StrategyEventEnvelope }) {
             <span>Avg: {payload.avg_price}</span>
           )}
           {isRejected && payload.reason && (
-            <span className="text-red-400">Reason: {payload.reason}</span>
+            <span className="text-red-400">Reason: {formatRejectionReason(payload.reason)}</span>
           )}
           <span className="text-gray-500 font-mono">#{shortOrderId}</span>
         </div>

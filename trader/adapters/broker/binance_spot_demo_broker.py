@@ -30,6 +30,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import aiohttp
+import logging
 
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.core.application.ports import (
@@ -48,6 +49,8 @@ DEFAULT_SPOT_DEMO_WS_URL = "wss://demo-stream.binance.com/ws"
 
 DEFAULT_SPOT_TESTNET_BASE_URL = "https://testnet.binance.vision/api"
 DEFAULT_SPOT_TESTNET_WS_URL = "wss://stream.testnet.binance.vision/ws"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -716,3 +719,34 @@ class BinanceSpotDemoBroker(BrokerPort):
 
     def register_callback(self, callback: Callable[..., Any]) -> None:
         self._callbacks.append(callback)
+
+    async def get_ticker_prices(self, symbols: List[str]) -> Dict[str, Decimal]:
+        """
+        获取多个交易对的当前价格。
+        
+        Args:
+            symbols: 要查询的交易对列表，如 ["BTCUSDT", "ETHUSDT"]
+            
+        Returns:
+            Dict[str, Decimal]: symbol -> price 映射
+        """
+        if not self._connected:
+            raise ConnectionError("Broker not connected")
+        
+        prices: Dict[str, Decimal] = {}
+        for symbol in symbols:
+            try:
+                normalized = self._normalize_symbol(symbol)
+                data = await self._request(
+                    "GET",
+                    "/v3/ticker/price",
+                    params={"symbol": normalized},
+                    signed=False,
+                )
+                price_str = data.get("price", "0")
+                prices[symbol.upper()] = Decimal(price_str)
+            except Exception as e:
+                logger.warning(f"[Broker] Failed to get ticker for {symbol}: {e}")
+                prices[symbol.upper()] = Decimal("0")
+        
+        return prices
