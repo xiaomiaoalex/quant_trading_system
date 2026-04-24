@@ -609,3 +609,80 @@ class AuditEntry(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+# ==================== Position Tracking Models（Batch 1 新增） ====================
+
+class StrategyPositionView(BaseModel):
+    """策略级持仓视图"""
+    strategy_id: str = Field(description="策略ID")
+    symbol: str = Field(description="交易对")
+    qty: str = Field(description="持仓数量")
+    avg_cost: str = Field(description="平均成本价")
+    realized_pnl: str = Field(description="已实现盈亏")
+    unrealized_pnl: str = Field(description="未实现盈亏")
+    total_cost: Optional[str] = Field(default=None, description="总成本 = qty * avg_cost")
+    status: str = Field(description="持仓状态: ACTIVE / CLOSED / HISTORICAL")
+    lot_count: int = Field(default=0, description="当前 open lot 数量")
+    cost_basis_method: str = Field(default="average_cost", description="成本计算方法")
+    updated_at: Optional[str] = None
+
+
+class LotView(BaseModel):
+    """批次（Lot）视图"""
+    lot_id: str = Field(description="批次ID")
+    strategy_id: str = Field(description="策略ID")
+    symbol: str = Field(description="交易对")
+    original_qty: str = Field(description="原始成交数量")
+    remaining_qty: str = Field(description="剩余可平仓数量")
+    fill_price: str = Field(description="成交价格")
+    fee_qty: Optional[str] = Field(default=None, description="手续费数量（base asset）")
+    fee_asset: Optional[str] = Field(default=None, description="手续费币种")
+    realized_pnl: str = Field(default="0", description="该批次已实现盈亏")
+    is_closed: bool = Field(default=False, description="是否已完全平仓")
+    filled_at: str = Field(description="成交时间")
+
+
+class PositionBreakdown(BaseModel):
+    """持仓分解视图（单个标的的三层展示）"""
+    symbol: str = Field(description="交易对")
+    account_qty: str = Field(description="账户总持仓（Broker API）")
+    account_avg_cost: Optional[str] = Field(default=None, description="账户平均成本（Broker 提供）")
+    strategy_positions: List[StrategyPositionView] = Field(
+        default_factory=list,
+        description="策略级持仓列表"
+    )
+    historical: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="历史持仓信息（若有）"
+    )
+    is_reconciled: bool = Field(default=True, description="对账是否一致")
+    difference: Optional[str] = Field(default=None, description="账户 vs OMS 差异数量")
+    tolerance: str = Field(default="0.001", description="对账容忍度（相对比例）")
+
+
+class ReconciliationLogEntry(BaseModel):
+    """对账日志条目"""
+    id: int
+    symbol: str = Field(description="交易对")
+    broker_qty: str = Field(description="Broker 持仓数量")
+    oms_total_qty: str = Field(description="OMS 策略持仓合计")
+    historical_qty: str = Field(default="0", description="历史持仓数量")
+    difference: str = Field(description="差异 = broker - oms - historical")
+    tolerance: str = Field(description="容忍度")
+    status: str = Field(description="CONSISTENT / DISCREPANCY / HISTORICAL_GAP")
+    resolution: Optional[str] = Field(default=None, description="处理方式: NONE / AUTO_ALIGNED / ALERTED / KILLSWITCH_L1")
+    details: Dict[str, Any] = Field(default_factory=dict, description="附加详情")
+    created_at: str = Field(description="对账时间")
+
+
+class ReconciliationResult(BaseModel):
+    """手动触发对账的返回结果"""
+    symbol: str
+    broker_qty: str
+    oms_total_qty: str
+    historical_qty: str = "0"
+    difference: str
+    tolerance: str
+    status: str  # CONSISTENT / DISCREPANCY / HISTORICAL_GAP
+    action_taken: Optional[str] = None  # NONE / AUTO_ALIGNED / ALERTED / KILLSWITCH_L1

@@ -26,6 +26,7 @@ from typing import Optional, Dict, Any, Callable, Union
 from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
 from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
 from trader.core.domain.models.signal import Signal
+from trader.core.domain.models.position_lot_manager import PositionLedgerManager
 from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class OMSCallbackHandler:
         live_trading_enabled: Union[bool, Callable[[], bool]] = False,
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
         fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+        position_lot_manager: Optional[PositionLedgerManager] = None,
     ):
         """
         初始化OMS回调处理器
@@ -88,6 +90,7 @@ class OMSCallbackHandler:
                 确保运行时开关变更能即时生效。
             event_callback: 事件发布回调
             fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
+            position_lot_manager: Lot 账本管理器（可选，用于策略级持仓追踪）
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -97,6 +100,7 @@ class OMSCallbackHandler:
             self._live_trading_enabled_fn = lambda: bool(live_trading_enabled)
         self._event_callback = event_callback
         self._fill_callback = fill_callback
+        self._position_lot_manager = position_lot_manager
 
         # 缓存 symbol 的 stepSize
         self._step_size_cache: Dict[str, Decimal] = {}
@@ -577,6 +581,34 @@ class OMSCallbackHandler:
                     # Task 19: Track fill count (only first occurrence)
                     self._fill_latency_count += 1
 
+                    # ==================== Lot 级持仓追踪（策略隔离） ====================
+                    if self._position_lot_manager is not None:
+                        try:
+                            fee_qty = Decimal(str(execution_data.get("fee_qty") or 0))
+                            lot_events = self._position_lot_manager.on_fill(
+                                strategy_id,
+                                signal.symbol,
+                                side.value,
+                                Decimal(str(broker_order.filled_quantity)),
+                                broker_order.average_price,
+                                fee_qty=fee_qty,
+                            )
+                            for evt in lot_events:
+                                logger.info(
+                                    f"[OMSCallback] Lot event: {evt.event_type.value} "
+                                    f"strategy={strategy_id} symbol={signal.symbol}"
+                                )
+                            # 从 ledger 读取最新 realized_pnl 供后续使用
+                            ledger = self._position_lot_manager.get(strategy_id, signal.symbol)
+                            ledger_realized_pnl = (
+                                str(ledger.realized_pnl) if ledger else "0"
+                            )
+                        except Exception as e:
+                            logger.warning(f"[OMSCallback] Lot tracking failed: {e}")
+                            ledger_realized_pnl = "0"
+                    else:
+                        ledger_realized_pnl = "0"
+
                 # ==================== 更新持仓 ====================
                 try:
                     # 获取当前持仓
@@ -625,7 +657,7 @@ class OMSCallbackHandler:
                         "qty": str(new_qty),
                         "avg_cost": str(new_avg_cost),
                         "mark_price": str(broker_order.average_price),
-                        "realized_pnl": "0",  # realized P&L 需要完整交易历史计算
+                        "realized_pnl": ledger_realized_pnl,
                         "unrealized_pnl": str(unrealized_pnl),
                     })
                     logger.info(
@@ -804,6 +836,7 @@ def create_oms_callback(
     live_trading_enabled: Union[bool, Callable[[], bool]] = False,
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+    position_lot_manager: Optional[PositionLedgerManager] = None,
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -813,6 +846,7 @@ def create_oms_callback(
         live_trading_enabled: 是否允许真实下单（支持 bool 或 Callable[[], bool]）
         event_callback: 事件发布回调
         fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
+        position_lot_manager: Lot 账本管理器（可选，用于策略级持仓追踪）
 
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
@@ -825,6 +859,7 @@ def create_oms_callback(
         live_trading_enabled=live_trading_enabled,
         event_callback=event_callback,
         fill_callback=fill_callback,
+        position_lot_manager=position_lot_manager,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -960,6 +995,24 @@ def create_oms_callback(
                 # when broker_place_order returned with filled_quantity > 0.
                 # WS fill updates are the same fill arriving via different path,
                 # counting them would double-count.
+
+                # Lot 级持仓追踪（WS 路径）
+                if handler._position_lot_manager and strategy_id:
+                    try:
+                        lot_events = handler._position_lot_manager.on_fill(
+                            strategy_id,
+                            symbol,
+                            side,
+                            Decimal(str(quantity)),
+                            Decimal(str(price)),
+                        )
+                        for evt in lot_events:
+                            logger.info(
+                                f"[OMSCallback] WS Lot event: {evt.event_type.value} "
+                                f"strategy={strategy_id} symbol={symbol}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[OMSCallback] WS Lot tracking failed: {e}")
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链
