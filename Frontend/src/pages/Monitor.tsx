@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts, useSSE } from '@/hooks'
+import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts, useSSE, useStrategyPositions, usePositionBreakdown } from '@/hooks'
 import { useQueryClient } from '@tanstack/react-query'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog, HealthBadge } from '@/components/ui'
 import {
@@ -37,6 +37,7 @@ export function Monitor() {
   // UI state
   const [showClearAllDialog, setShowClearAllDialog] = useState(false)
   const [clearSuccess, setClearSuccess] = useState<string | null>(null)
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null)
 
   // Handle clear all alerts
   const handleClearAllAlerts = useCallback(async () => {
@@ -184,6 +185,7 @@ export function Monitor() {
               <table className="min-w-full divide-y divide-gray-700">
                 <thead>
                   <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase w-4"></th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase">Symbol</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Quantity</th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Avg Cost</th>
@@ -193,17 +195,29 @@ export function Monitor() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
-                  {snapshot.positions.map((pos, idx) => (
-                    <tr key={idx} className="hover:bg-gray-700/30">
-                      <td className="px-3 py-2 text-sm font-medium text-white">{pos.symbol}</td>
-                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.quantity}</td>
-                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.avg_cost || '-'}</td>
-                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.current_price || '-'}</td>
-                      <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.exposure}</td>
-                      <td className={`px-3 py-2 text-sm text-right ${parseFloat(pos.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        {pos.unrealized_pnl || '0'}
-                      </td>
-                    </tr>
+                  {snapshot.positions.map((pos) => (
+                    <>
+                      <tr
+                        key={pos.symbol}
+                        className="hover:bg-gray-700/30 cursor-pointer"
+                        onClick={() => setExpandedSymbol(expandedSymbol === pos.symbol ? null : pos.symbol)}
+                      >
+                        <td className="px-3 py-2 text-gray-400 text-right">
+                          {expandedSymbol === pos.symbol ? '▼' : '▶'}
+                        </td>
+                        <td className="px-3 py-2 text-sm font-medium text-white">{pos.symbol}</td>
+                        <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.quantity}</td>
+                        <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.avg_cost || '-'}</td>
+                        <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.current_price || '-'}</td>
+                        <td className="px-3 py-2 text-sm text-gray-300 text-right">{pos.exposure}</td>
+                        <td className={`px-3 py-2 text-sm text-right ${parseFloat(pos.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {pos.unrealized_pnl || '0'}
+                        </td>
+                      </tr>
+                      {expandedSymbol === pos.symbol && (
+                        <StrategyPositionRow key={`${pos.symbol}-detail`} symbol={pos.symbol} />
+                      )}
+                    </>
                   ))}
                 </tbody>
               </table>
@@ -310,5 +324,99 @@ export function Monitor() {
         onCancel={() => setShowClearAllDialog(false)}
       />
     </div>
+  )
+}
+
+// ─── Strategy Position Row (expandable) ──────────────────────────────────────
+
+function ReconciliationBadge({ isReconciled }: { isReconciled: boolean }) {
+  return isReconciled ? (
+    <span className="inline-flex items-center gap-1 rounded-full bg-green-900/40 px-2 py-0.5 text-xs text-green-400">
+      ✅ CONSISTENT
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-full bg-red-900/40 px-2 py-0.5 text-xs text-red-400">
+      ⚠️ DISCREPANCY
+    </span>
+  )
+}
+
+function StrategyPositionRow({ symbol }: { symbol: string }) {
+  const { data: breakdown, isLoading: breakdownLoading } = usePositionBreakdown(symbol)
+  const { data: strategyPositions, isLoading: spLoading } = useStrategyPositions({ symbol })
+
+  const isLoading = breakdownLoading || spLoading
+
+  if (isLoading) {
+    return (
+      <tr>
+        <td colSpan={7} className="px-6 py-3 text-sm text-gray-500 text-center">
+          Loading strategy breakdown...
+        </td>
+      </tr>
+    )
+  }
+
+  if (!breakdown && (!strategyPositions || strategyPositions.length === 0)) {
+    return (
+      <tr>
+        <td colSpan={7} className="px-6 py-3 text-sm text-gray-500 text-center">
+          No strategy-level data for {symbol}
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <>
+      {/* Strategy positions */}
+      {strategyPositions && strategyPositions.length > 0 && (
+        strategyPositions.map((sp) => (
+          <tr key={`${sp.strategy_id}-${symbol}`} className="bg-gray-900/50">
+            <td></td>
+            <td className="px-6 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 ml-2">├─</span>
+                <span className="text-xs font-mono text-blue-400">{sp.strategy_id}</span>
+                <span className={`text-xs rounded px-1.5 py-0.5 ${sp.status === 'ACTIVE' ? 'bg-green-900/30 text-green-400' : 'bg-gray-700 text-gray-400'}`}>
+                  {sp.status}
+                </span>
+              </div>
+            </td>
+            <td className="px-3 py-2 text-xs text-gray-300 text-right">{sp.qty}</td>
+            <td className="px-3 py-2 text-xs text-gray-300 text-right">{sp.avg_cost}</td>
+            <td className="px-3 py-2 text-right"></td>
+            <td className="px-3 py-2 text-xs text-gray-400 text-right">{sp.total_cost ?? '-'}</td>
+            <td className={`px-3 py-2 text-xs text-right ${parseFloat(sp.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {sp.unrealized_pnl}
+            </td>
+          </tr>
+        ))
+      )}
+      {/* Reconciliation status row */}
+      {breakdown && (
+        <tr className="bg-gray-900/30">
+          <td></td>
+          <td colSpan={6} className="px-6 py-2">
+            <div className="flex items-center gap-4 text-xs">
+              <ReconciliationBadge isReconciled={breakdown.is_reconciled} />
+              <span className="text-gray-500">
+                OMS total: <span className="text-gray-300">{breakdown.account_qty}</span>
+              </span>
+              {breakdown.difference && parseFloat(breakdown.difference) !== 0 && (
+                <span className="text-gray-500">
+                  Diff: <span className="text-yellow-400">{breakdown.difference}</span>
+                </span>
+              )}
+              {breakdown.strategy_positions.length > 0 && (
+                <span className="text-gray-500">
+                  Strategies: <span className="text-gray-300">{breakdown.strategy_positions.length}</span>
+                </span>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
