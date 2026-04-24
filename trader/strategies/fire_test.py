@@ -51,8 +51,8 @@ class FireTestStrategy:
     start_with: str = "BUY"
     # 发信号最小间隔（秒）
     interval_seconds: int = 30
-    # 每次建议下单数量
-    order_size: Decimal = Decimal("0.0002")
+    # 每次建议下单数量（0.01 满足大多数交易对最低名义金额要求）
+    order_size: Decimal = Decimal("0.01")
     # 信号置信度
     min_confidence: Decimal = Decimal("0.95")
     # 最大发信号次数（0 表示不限制）

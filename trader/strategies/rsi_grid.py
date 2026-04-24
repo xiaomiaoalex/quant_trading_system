@@ -44,7 +44,7 @@ class RsiGridStrategy:
     oversold: Decimal = Decimal("30")
     overbought: Decimal = Decimal("70")
     grid_step_pct: Decimal = Decimal("0.005")
-    order_size: Decimal = Decimal("0.001")
+    order_size: Decimal = Decimal("0.01")  # 满足大多数交易对最低名义金额要求
 
     _prices: list[Decimal] = field(default_factory=list)
     _last_signal_price: Decimal | None = None
