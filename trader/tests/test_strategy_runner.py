@@ -110,6 +110,8 @@ def _create_mock_module(plugin: MockStrategyPlugin):
     """创建 mock 模块"""
     mock_module = Mock()
     mock_module.get_plugin = Mock(return_value=plugin)
+    mock_module.create_plugin = Mock(return_value=plugin)
+    mock_module.build_plugin = Mock(return_value=plugin)
     return mock_module
 
 
@@ -195,7 +197,7 @@ class TestStrategyLoadUnload:
                 module_path="strategies.test",
             )
 
-            with pytest.raises(ValueError, match="策略已加载"):
+            with pytest.raises(ValueError, match="已加载"):
                 await runner.load_strategy(
                     strategy_id="test_strategy",
                     version="v2",

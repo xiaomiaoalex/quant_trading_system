@@ -96,6 +96,8 @@ class StrategyRuntimeOrchestrator:
         self._connector = connector
         self._event_callback = event_callback
 
+        self._max_errors_before_stop: int = 10
+
         # 每个策略的运行时上下文
         self._contexts: Dict[str, RuntimeContext] = {}
 
@@ -347,7 +349,7 @@ class StrategyRuntimeOrchestrator:
                     ctx.last_error = str(e)
 
                 # 错误次数过多，停止策略
-                if ctx.error_count >= 10:
+                if ctx.error_count >= self._max_errors_before_stop:
                     logger.error(
                         f"[Orchestrator] {ctx.strategy_id} error count exceeded, stopping"
                     )
