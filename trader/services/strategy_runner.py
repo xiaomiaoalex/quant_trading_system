@@ -773,28 +773,9 @@ class StrategyRunner:
                 if not signal.strategy_name:
                     signal.strategy_name = info.strategy_id
 
-                # 发布信号事件
-                if self._event_callback:
-                    try:
-                        direction = signal.signal_type.value if signal.signal_type else None
-                        self._event_callback(strategy_id, "strategy.signal", {
-                            "deployment_id": info.deployment_id,
-                            "strategy_id": info.strategy_id,
-                            "symbol": signal.symbol,
-                            "direction": direction,
-                            "signal_type": signal.signal_type.value if signal.signal_type else None,
-                            "quantity": str(signal.quantity) if signal.quantity else None,
-                            "price": str(signal.price) if signal.price else None,
-                            "reason": signal.reason,
-                        })
-                    except Exception as e:
-                        logger.error(f"事件发布失败: {strategy_id}, 错误: {e}")
-
                 # ==================== 资源限制检查 ====================
                 if limits:
-                    # 检查订单频率限制（使用滑动窗口）
                     current_time = time.time()
-                    # 清理超过60秒的旧记录
                     while info.last_order_times and info.last_order_times[0] < current_time - 60:
                         info.last_order_times.pop(0)
 
@@ -806,13 +787,32 @@ class StrategyRunner:
                         info.blocked_reason = "Order rate limit exceeded"
                         signal = None
                     else:
-                        # 记录订单时间（仅当真正下单时）
                         if self._oms_callback:
                             info.last_order_times.append(current_time)
 
+                # 信号通过资源限制后才计数和发布事件
+                if signal is not None:
+                    info.signal_count += 1
+
+                    # 发布信号事件
+                    if self._event_callback:
+                        try:
+                            direction = signal.signal_type.value if signal.signal_type else None
+                            self._event_callback(strategy_id, "strategy.signal", {
+                                "deployment_id": info.deployment_id,
+                                "strategy_id": info.strategy_id,
+                                "symbol": signal.symbol,
+                                "direction": direction,
+                                "signal_type": signal.signal_type.value if signal.signal_type else None,
+                                "quantity": str(signal.quantity) if signal.quantity else None,
+                                "price": str(signal.price) if signal.price else None,
+                                "reason": signal.reason,
+                            })
+                        except Exception as e:
+                            logger.error(f"事件发布失败: {strategy_id}, 错误: {e}")
+
                 # ==================== OMS 执行 ====================
                 if signal is not None and self._oms_callback:
-                    info.signal_count += 1  # 只统计通过资源限制检查后实际提交的信号
                     try:
                         order_result = await self._oms_callback(strategy_id, signal)
                         # 发布订单提交事件
@@ -855,6 +855,13 @@ class StrategyRunner:
             logger.error(
                 f"策略执行超时: {strategy_id}, 超时: {timeout_seconds}s"
             )
+            if self._event_callback:
+                self._event_callback(strategy_id, "strategy.error", {
+                    "deployment_id": info.deployment_id,
+                    "strategy_id": info.strategy_id,
+                    "error_message": info.last_error,
+                    "error_type": "TIMEOUT",
+                })
             return None
 
         except Exception as e:
@@ -865,6 +872,13 @@ class StrategyRunner:
                 f"策略Tick异常: {strategy_id}, 错误: {e}\n"
                 f"{traceback.format_exc()}"
             )
+            if self._event_callback:
+                self._event_callback(strategy_id, "strategy.error", {
+                    "deployment_id": info.deployment_id,
+                    "strategy_id": info.strategy_id,
+                    "error_message": str(e),
+                    "error_type": "TICK_EXCEPTION",
+                })
 
             # 错误次数过多，标记为ERROR状态
             if info.error_count >= self._max_errors_before_error_state:

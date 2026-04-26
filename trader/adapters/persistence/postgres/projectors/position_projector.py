@@ -137,10 +137,10 @@ class PositionProjector(Projectable):
         return event.aggregate_id
     
     def _init_position_state(self) -> Dict[str, Any]:
-        """初始化持仓状态"""
         return {
             "position_id": "",
             "symbol": "",
+            "strategy_id": "",
             "quantity": "0",
             "avg_price": "0",
             "current_price": "0",
@@ -155,9 +155,9 @@ class PositionProjector(Projectable):
         }
     
     def _apply_position_opened(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-        """应用开仓事件"""
         state["position_id"] = data.get("position_id", "")
         state["symbol"] = data.get("symbol", "")
+        state["strategy_id"] = data.get("strategy_id", "")
         state["quantity"] = str(data.get("quantity", "0"))
         state["avg_price"] = str(data.get("avg_price", "0"))
         state["current_price"] = str(data.get("current_price", state["avg_price"]))
@@ -355,34 +355,23 @@ class PositionProjector(Projectable):
     async def list_positions(
         self,
         symbol: Optional[str] = None,
+        strategy_id: Optional[str] = None,
         is_long: Optional[bool] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[PositionProjection]:
-        """
-        列出持仓投影
-        
-        支持按标的和方向过滤。
-        
-        Args:
-            symbol: 按标的过滤
-            is_long: 按多空过滤
-            limit: 最大返回数量
-            offset: 偏移量
-            
-        Returns:
-            PositionProjection 列表
-        """
-        # 首先获取所有投影
         projections = await self.list_projections(limit=limit * 2, offset=offset)
         
         results = []
         for proj in projections:
             pos = PositionProjection.from_state(proj["aggregate_id"], proj["state"])
             
-            # 应用过滤器
             if symbol and pos.symbol != symbol:
                 continue
+            if strategy_id:
+                pos_strategy_id = proj["state"].get("strategy_id", "")
+                if pos_strategy_id != strategy_id:
+                    continue
             if is_long is not None and pos.is_long != is_long:
                 continue
             

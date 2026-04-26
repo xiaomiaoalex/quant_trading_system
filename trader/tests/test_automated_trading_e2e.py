@@ -647,24 +647,58 @@ class TestLiveTradingDynamicCheck:
 
 
 class TestStreamKeyFormat:
-    """Test that event stream_key uses unified strategy:{id} format"""
+    """Test event stream keys keep deployment and template IDs separate."""
 
-    def test_event_callback_uses_colon_format(self):
-        """_event_callback_dispatcher should use strategy:{id} format"""
+    def test_event_callback_uses_deployment_stream(self):
+        """_event_callback_dispatcher should write runtime events to deployment:{id}."""
         from trader.api.routes.strategies import _event_callback_dispatcher
-        from trader.storage.in_memory import get_storage
+        from trader.storage.in_memory import reset_storage
 
-        storage = get_storage()
-        storage.append_event({
-            "stream_key": "strategy:test_id",
-            "event_type": "strategy.signal",
-            "ts_ms": 1000,
-            "data": {"symbol": "BTCUSDT"},
+        storage = reset_storage()
+        _event_callback_dispatcher("deploy_001", "strategy.signal", {
+            "strategy_id": "template_alpha",
+            "symbol": "BTCUSDT",
         })
 
-        events = storage.list_events(stream_key="strategy:test_id")
-        assert len(events) >= 1
-        assert events[0]["stream_key"] == "strategy:test_id"
+        events = storage.list_events(stream_key="deployment:deploy_001")
+        assert len(events) == 1
+        assert events[0]["stream_key"] == "deployment:deploy_001"
+        assert events[0]["data"]["deployment_id"] == "deploy_001"
+        assert events[0]["data"]["strategy_id"] == "template_alpha"
+
+    @pytest.mark.asyncio
+    async def test_deployment_and_strategy_event_queries_are_distinct(self):
+        """Deployment endpoints are exact; strategy endpoints aggregate by payload strategy_id."""
+        from trader.api.routes.strategies import get_deployment_signals, get_strategy_signals
+        from trader.storage.in_memory import reset_storage
+
+        storage = reset_storage()
+        storage.append_event({
+            "stream_key": "deployment:deploy_btc",
+            "event_type": "strategy.signal",
+            "ts_ms": 1000,
+            "data": {
+                "deployment_id": "deploy_btc",
+                "strategy_id": "template_alpha",
+                "symbol": "BTCUSDT",
+            },
+        })
+        storage.append_event({
+            "stream_key": "deployment:deploy_eth",
+            "event_type": "strategy.signal",
+            "ts_ms": 1001,
+            "data": {
+                "deployment_id": "deploy_eth",
+                "strategy_id": "template_alpha",
+                "symbol": "ETHUSDT",
+            },
+        })
+
+        deployment_events = await get_deployment_signals("deploy_btc", limit=10)
+        assert [event.payload["symbol"] for event in deployment_events] == ["BTCUSDT"]
+
+        strategy_events = await get_strategy_signals("template_alpha", limit=10)
+        assert {event.payload["symbol"] for event in strategy_events} == {"BTCUSDT", "ETHUSDT"}
 
     def test_strategy_event_service_uses_colon_format(self):
         """StrategyEvent.to_envelope should use strategy:{id} format"""

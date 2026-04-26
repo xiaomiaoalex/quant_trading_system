@@ -50,6 +50,7 @@ class RuntimeContext:
     started_at: Optional[datetime] = None
     last_tick_at: Optional[datetime] = None
     tick_count: int = 0
+    signal_count: int = 0
     error_count: int = 0
     last_error: Optional[str] = None
     stop_reason: Optional[str] = None
@@ -309,12 +310,17 @@ class StrategyRuntimeOrchestrator:
 
         for ctx in running_contexts:
             try:
-                # 更新上下文统计
-                ctx.tick_count += 1
-                ctx.last_tick_at = datetime.now(timezone.utc)
-
                 # 调用 runner.tick()
                 signal = await self._runner.tick(ctx.strategy_id, market_data)
+
+                # 从 StrategyRuntimeInfo (唯一真相源) 同步计数器到 ctx
+                info = self._runner.get_status(ctx.strategy_id)
+                if info is not None:
+                    ctx.tick_count = info.tick_count
+                    ctx.signal_count = info.signal_count
+                    ctx.error_count = info.error_count
+                    ctx.last_tick_at = info.last_tick_at
+                    ctx.last_error = info.last_error
 
                 # 发布 tick 事件
                 if self._event_callback:
@@ -325,11 +331,20 @@ class StrategyRuntimeOrchestrator:
                     })
 
             except Exception as e:
-                ctx.error_count += 1
-                ctx.last_error = str(e)
                 logger.error(
                     f"[Orchestrator] Tick error for {ctx.strategy_id}: {e}"
                 )
+
+                # runner.tick() 未捕获的异常，手动递增 info.error_count
+                info = self._runner.get_status(ctx.strategy_id)
+                if info is not None:
+                    info.error_count += 1
+                    info.last_error = str(e)
+                    ctx.error_count = info.error_count
+                    ctx.last_error = info.last_error
+                else:
+                    ctx.error_count += 1
+                    ctx.last_error = str(e)
 
                 # 错误次数过多，停止策略
                 if ctx.error_count >= 10:

@@ -603,7 +603,8 @@ class ControlPlaneInMemoryStorage:
 
     def upsert_position(self, position_data: Dict[str, Any]) -> Dict[str, Any]:
         """Upsert a position"""
-        key = f"{position_data.get('account_id')}:{position_data.get('venue')}:{position_data.get('instrument')}"
+        strategy_id = position_data.get("strategy_id", "")
+        key = f"{position_data.get('account_id')}:{position_data.get('venue')}:{strategy_id}:{position_data.get('instrument')}"
         position = {
             **position_data,
             "updated_ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -615,6 +616,8 @@ class ControlPlaneInMemoryStorage:
         self,
         account_id: Optional[str] = None,
         venue: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        instrument: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List positions with filters"""
         positions = list(self.positions.values())
@@ -622,6 +625,10 @@ class ControlPlaneInMemoryStorage:
             positions = [p for p in positions if p.get("account_id") == account_id]
         if venue:
             positions = [p for p in positions if p.get("venue") == venue]
+        if strategy_id:
+            positions = [p for p in positions if p.get("strategy_id") == strategy_id]
+        if instrument:
+            positions = [p for p in positions if p.get("instrument") == instrument]
         return positions
 
     def calculate_pnl(

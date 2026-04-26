@@ -269,6 +269,57 @@ class PositionRiskConstructor:
             remaining_exposure=remaining,
             message=f"币种 {signal.symbol} 剩余暴露额度: {remaining} USD"
         )
+
+    def check_per_symbol_exposure_multi_strategy(
+        self,
+        signal: Signal,
+        strategy_positions: List[Position],
+        max_exposure: Optional[Decimal] = None,
+        total_portfolio_value: Optional[Decimal] = None,
+    ) -> PerSymbolExposureResult:
+        max_per_symbol = max_exposure or self._config.max_exposure_per_symbol
+
+        current_exposure = Decimal("0")
+        for pos in strategy_positions:
+            if pos.symbol == signal.symbol and pos.quantity != 0:
+                current_exposure += abs(pos.market_value)
+
+        remaining = max_per_symbol - current_exposure
+
+        if remaining <= 0:
+            return PerSymbolExposureResult(
+                allowed=False,
+                max_allowed_qty=Decimal("0"),
+                current_exposure=current_exposure,
+                remaining_exposure=Decimal("0"),
+                rejection_reason="MAX_EXPOSURE_REACHED",
+                message=f"币种 {signal.symbol} 已达最大暴露 {max_per_symbol} USD (跨策略合计)"
+            )
+
+        if signal.price > 0:
+            max_allowed_qty = remaining / signal.price
+        else:
+            return PerSymbolExposureResult(
+                allowed=False,
+                max_allowed_qty=Decimal("0"),
+                current_exposure=current_exposure,
+                remaining_exposure=remaining,
+                rejection_reason="INVALID_SIGNAL_PRICE",
+                message=f"信号价格无效: {signal.price}"
+            )
+
+        if total_portfolio_value is not None and total_portfolio_value > 0 and self._config.max_position_size_percent > 0:
+            max_position_pct_value = total_portfolio_value * self._config.max_position_size_percent / Decimal("100")
+            max_allowed_qty_pct = max_position_pct_value / signal.price
+            max_allowed_qty = min(max_allowed_qty, max_allowed_qty_pct)
+
+        return PerSymbolExposureResult(
+            allowed=True,
+            max_allowed_qty=max_allowed_qty,
+            current_exposure=current_exposure,
+            remaining_exposure=remaining,
+            message=f"币种 {signal.symbol} 剩余暴露额度: {remaining} USD (跨策略合计)"
+        )
     
     # ==================== 总暴露控制 ====================
     

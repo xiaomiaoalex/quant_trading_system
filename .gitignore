@@ -222,3 +222,6 @@ artifacts/
 .mcp_smoke_*/
 tmp*/
 *.tmp
+
+# Claude AI IDE / Kilo CLI
+.claude/

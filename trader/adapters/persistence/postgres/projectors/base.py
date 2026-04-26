@@ -22,6 +22,7 @@ Projector Base - 投影层基类
 """
 import logging
 import json
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -100,6 +101,10 @@ class Projectable(ABC):
             event_types: 该投影处理的事件类型列表
         """
         self._pool = pool
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            raise ValueError(f"Invalid table_name: {table_name}")
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', snapshot_table_name):
+            raise ValueError(f"Invalid snapshot_table_name: {snapshot_table_name}")
         self._table_name = table_name
         self._snapshot_table_name = snapshot_table_name
         self._event_types = set(event_types)

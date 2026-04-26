@@ -4,6 +4,26 @@
 
 ---
 
+## 零、deployment_id / strategy_id 事件流语义修正（2026-04-25）
+
+### 0.0 运行实例事件不能继续挂在策略模板 ID 下
+
+**问题描述**：
+前端已按 `deployment_id` 展示和操作运行实例，但事件查询仍复用 `/v1/strategies/{id}/events...` 路径。后端运行时内部也把 `deployment_id` 当作 `_plugins/_infos` 的 key，只是许多参数名仍叫 `strategy_id`。当 `deployment_id != strategy_id` 时，事件写入和查询很容易错位。
+
+**解决方案**：
+- 运行时事件流统一写入 `deployment:{deployment_id}`。
+- payload 中同时保留 `deployment_id` 与模板级 `strategy_id`，避免丢失归类维度。
+- 新增 `/v1/deployments/{deployment_id}/events[/signals|/errors|/fills]` 作为前端查询入口。
+- 旧 `/v1/strategies/{strategy_id}/events...` 保留为模板级聚合/兼容查询。
+
+**经验**：
+- `strategy_id` 表示“策略模板”，`deployment_id` 表示“运行实例”，二者是 1:N 关系。
+- 运行期状态、tick、signal、order、fill、error 都应优先归属 deployment；策略模板只用于聚合视图。
+- 变量名漂移比接口缺失更危险，短期兼容可以保留旧路径，但新路径必须把语义写清楚。
+
+---
+
 ## 零、Task 16-18 自动化交易系统生产化经验（2026-04-20）
 
 ### 0.0 StrategyRunner.runtime_state_storage 依赖注入位置很重要

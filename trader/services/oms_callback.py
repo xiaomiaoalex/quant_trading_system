@@ -26,6 +26,10 @@ from typing import Optional, Dict, Any, Callable, Union
 from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
 from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
 from trader.core.domain.models.signal import Signal
+from trader.core.domain.services.position_lot_registry import (
+    get_lot_manager,
+    set_lot_manager,
+)
 from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,7 @@ class OMSCallbackHandler:
         live_trading_enabled: Union[bool, Callable[[], bool]] = False,
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
         fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+        position_lot_manager: Any = None,  # None = 使用全局单例
     ):
         """
         初始化OMS回调处理器
@@ -88,6 +93,7 @@ class OMSCallbackHandler:
                 确保运行时开关变更能即时生效。
             event_callback: 事件发布回调
             fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
+            position_lot_manager: None = 使用全局单例 PositionLedgerManager
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -97,6 +103,10 @@ class OMSCallbackHandler:
             self._live_trading_enabled_fn = lambda: bool(live_trading_enabled)
         self._event_callback = event_callback
         self._fill_callback = fill_callback
+        # None = 从全局 registry 获取（推荐方式）
+        self._position_lot_manager = position_lot_manager
+
+        self._position_locks: Dict[str, asyncio.Lock] = {}
 
         # 缓存 symbol 的 stepSize
         self._step_size_cache: Dict[str, Decimal] = {}
@@ -104,25 +114,63 @@ class OMSCallbackHandler:
         # 缓存 symbol 的 minNotional
         self._min_notional_cache: Dict[str, Decimal] = {}
 
-        # 已处理的 cl_ord_id 集合（内存缓存，防止同一会话内重复处理）
-        self._processed_cl_ord_ids: set = set()
-        # cl_ord_id → strategy_id 映射（解决 deployment_id 截断后无法逆向解析的问题）
+        self._processed_cl_ord_ids: Dict[str, float] = {}
         self._cl_ord_id_to_strategy: Dict[str, str] = {}
-        # 已处理成交键（cl_ord_id + exec_id）用于幂等去重
         self._processed_exec_keys: Dict[str, float] = {}
         self._exec_dedup_ttl_seconds: int = 900
+        self._cl_ord_id_ttl_seconds: int = 3600
 
-        # Task 17: 幂等去重计数器（可观测性）
-        self._cl_ord_id_dedup_hits: int = 0  # cl_ord_id 重复次数
-        self._exec_dedup_hits: int = 0  # exec_id 重复次数
+        self._cl_ord_id_dedup_hits: int = 0
+        self._exec_dedup_hits: int = 0
 
-        # Task 19: 订单可观测性指标
-        self._order_submit_ok: int = 0  # 成功提交
-        self._order_submit_reject: int = 0  # 被拒绝
-        self._order_submit_error: int = 0  # 错误
-        self._reject_reason_counts: Dict[str, int] = {}  # 按原因统计拒单
-        self._fill_latency_sum_ms: float = 0.0  # 累计成交延迟（毫秒）
-        self._fill_latency_count: int = 0  # 成交次数
+        self._order_submit_ok: int = 0
+        self._order_submit_reject: int = 0
+        self._order_submit_error: int = 0
+        self._reject_reason_counts: Dict[str, int] = {}
+        self._fill_latency_sum_ms: float = 0.0
+        self._fill_latency_count: int = 0
+
+    @property
+    def _lot_mgr(self):
+        """获取 PositionLedgerManager：优先注入，否则用全局单例"""
+        return self._position_lot_manager or get_lot_manager()
+
+    def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
+        key = f"{strategy_id}:{symbol}"
+        if key not in self._position_locks:
+            self._position_locks[key] = asyncio.Lock()
+        return self._position_locks[key]
+
+    def cleanup_expired_dedup_cache(self) -> int:
+        """
+        清理过期的幂等去重缓存，释放内存。
+
+        Returns:
+            清理的总条目数
+        """
+        now = time.time()
+        expired_cl = [
+            k for k, ts in self._processed_cl_ord_ids.items()
+            if now - ts > self._cl_ord_id_ttl_seconds
+        ]
+        for k in expired_cl:
+            del self._processed_cl_ord_ids[k]
+            self._cl_ord_id_to_strategy.pop(k, None)
+
+        expired_exec = [
+            k for k, ts in self._processed_exec_keys.items()
+            if now - ts > self._exec_dedup_ttl_seconds
+        ]
+        for k in expired_exec:
+            del self._processed_exec_keys[k]
+
+        total = len(expired_cl) + len(expired_exec)
+        if total:
+            logger.info(
+                f"[OMSCallback] Cleaned up dedup cache: "
+                f"{len(expired_cl)} cl_ord_ids, {len(expired_exec)} exec_keys"
+            )
+        return total
 
     def get_observable_metrics(self) -> Dict[str, Any]:
         """
@@ -380,7 +428,7 @@ class OMSCallbackHandler:
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
         if cl_ord_id in self._processed_cl_ord_ids:
-            self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
+            self._cl_ord_id_dedup_hits += 1
             logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (memory): {cl_ord_id}")
             return None
 
@@ -396,17 +444,16 @@ class OMSCallbackHandler:
                 existing_order_found = str(existing_order.get("cl_ord_id", "")) == cl_ord_id
 
             if existing_order_found:
-                self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
+                self._cl_ord_id_dedup_hits += 1
                 logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (storage): {cl_ord_id}")
-                # 加入内存缓存防止后续重复处理
-                self._processed_cl_ord_ids.add(cl_ord_id)
+                self._processed_cl_ord_ids[cl_ord_id] = time.time()
                 return None
         except Exception as e:
             # 存储查询失败不影响主流程，但记录警告
             logger.warning(f"[OMSCallback] Failed to check existing order: {e}")
 
         # 3. 标记为处理中
-        self._processed_cl_ord_ids.add(cl_ord_id)
+        self._processed_cl_ord_ids[cl_ord_id] = time.time()
 
         # ==================== 下单 ====================
         try:
@@ -577,61 +624,91 @@ class OMSCallbackHandler:
                     # Task 19: Track fill count (only first occurrence)
                     self._fill_latency_count += 1
 
+                    # ==================== Lot 级持仓追踪（策略隔离） ====================
+                    if self._position_lot_manager is not None:
+                        try:
+                            fee_qty = Decimal(str(execution_data.get("fee_qty") or 0))
+                            lot_events = self._lot_mgr.on_fill(
+                                strategy_id,
+                                signal.symbol,
+                                side.value,
+                                Decimal(str(broker_order.filled_quantity)),
+                                broker_order.average_price,
+                                fee_qty=fee_qty,
+                            )
+                            for evt in lot_events:
+                                logger.info(
+                                    f"[OMSCallback] Lot event: {evt.event_type.value} "
+                                    f"strategy={strategy_id} symbol={signal.symbol}"
+                                )
+                            # 从 ledger 读取最新 realized_pnl 供后续使用
+                            ledger = self._lot_mgr.get(strategy_id, signal.symbol)
+                            ledger_realized_pnl = (
+                                str(ledger.realized_pnl) if ledger else "0"
+                            )
+                        except Exception as e:
+                            logger.warning(f"[OMSCallback] Lot tracking failed: {e}")
+                            ledger_realized_pnl = "0"
+                    else:
+                        ledger_realized_pnl = "0"
+
                 # ==================== 更新持仓 ====================
                 try:
-                    # 获取当前持仓
-                    current_positions = self._storage.list_positions(
-                        account_id=None,
-                        venue=self._broker.broker_name,
-                    )
-                    current_qty = Decimal("0")
-                    current_avg_cost = Decimal("0")
-                    for pos in current_positions:
-                        if pos.get("instrument") == signal.symbol:
+                    pos_lock = self._get_position_lock(strategy_id, signal.symbol)
+                    async with pos_lock:
+                        current_positions = self._storage.list_positions(
+                            account_id=None,
+                            venue=self._broker.broker_name,
+                            strategy_id=strategy_id,
+                            instrument=signal.symbol,
+                        )
+                        current_qty = Decimal("0")
+                        current_avg_cost = Decimal("0")
+                        for pos in current_positions:
                             current_qty = Decimal(str(pos.get("qty", "0")))
                             current_avg_cost = Decimal(str(pos.get("avg_cost", "0")))
                             break
 
-                    # 计算新持仓数量和平均成本
-                    new_qty = current_qty
-                    new_avg_cost = broker_order.average_price
+                        new_qty = current_qty
+                        new_avg_cost = broker_order.average_price
 
-                    if side.value == "BUY":
-                        # 买入：更新平均成本
-                        if current_qty > 0:
-                            total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
-                            new_qty = current_qty + quantity
-                            new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                        if side.value == "BUY":
+                            if current_qty > 0:
+                                total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
+                                new_qty = current_qty + quantity
+                                new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                            else:
+                                new_qty = current_qty + quantity
                         else:
-                            new_qty = current_qty + quantity
-                    else:  # SELL
-                        # 卖出：减少持仓数量，平均成本不变
-                        new_qty = current_qty - quantity
-                        # 如果清仓，重置平均成本
-                        if new_qty <= 0:
-                            new_avg_cost = Decimal("0")
-                            new_qty = Decimal("0")
+                            if quantity > current_qty:
+                                logger.error(
+                                    f"[OMSCallback] SELL qty {quantity} > position qty {current_qty} "
+                                    f"for {signal.symbol}, strategy={strategy_id}"
+                                )
+                            new_qty = max(current_qty - quantity, Decimal("0"))
+                            if new_qty <= 0:
+                                new_avg_cost = Decimal("0")
+                                new_qty = Decimal("0")
 
-                    # 计算未实现盈亏（简单计算：持仓量 * (当前价 - 成本价)）
-                    unrealized_pnl = Decimal("0")
-                    if new_qty > 0 and new_avg_cost > 0:
-                        unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
+                        unrealized_pnl = Decimal("0")
+                        if new_qty > 0 and new_avg_cost > 0:
+                            unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
 
-                    # 更新持仓
-                    self._storage.upsert_position({
-                        "account_id": "SYSTEM",
-                        "venue": self._broker.broker_name,
-                        "instrument": signal.symbol,
-                        "qty": str(new_qty),
-                        "avg_cost": str(new_avg_cost),
-                        "mark_price": str(broker_order.average_price),
-                        "realized_pnl": "0",  # realized P&L 需要完整交易历史计算
-                        "unrealized_pnl": str(unrealized_pnl),
-                    })
-                    logger.info(
-                        f"[OMSCallback] Position updated: {signal.symbol} qty={new_qty}, "
-                        f"avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
-                    )
+                        self._storage.upsert_position({
+                            "account_id": "SYSTEM",
+                            "venue": self._broker.broker_name,
+                            "instrument": signal.symbol,
+                            "strategy_id": strategy_id,
+                            "qty": str(new_qty),
+                            "avg_cost": str(new_avg_cost),
+                            "mark_price": str(broker_order.average_price),
+                            "realized_pnl": ledger_realized_pnl,
+                            "unrealized_pnl": str(unrealized_pnl),
+                        })
+                        logger.info(
+                            f"[OMSCallback] Position updated: {signal.symbol} strategy={strategy_id} "
+                            f"qty={new_qty}, avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
+                        )
                 except Exception as e:
                     logger.warning(f"[OMSCallback] Failed to update position: {e}")
 
@@ -804,6 +881,7 @@ def create_oms_callback(
     live_trading_enabled: Union[bool, Callable[[], bool]] = False,
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+    position_lot_manager: Any = None,
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -813,6 +891,7 @@ def create_oms_callback(
         live_trading_enabled: 是否允许真实下单（支持 bool 或 Callable[[], bool]）
         event_callback: 事件发布回调
         fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
+        position_lot_manager: None = 使用全局 PositionLedgerManager 单例
 
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
@@ -825,6 +904,7 @@ def create_oms_callback(
         live_trading_enabled=live_trading_enabled,
         event_callback=event_callback,
         fill_callback=fill_callback,
+        position_lot_manager=position_lot_manager,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -960,6 +1040,24 @@ def create_oms_callback(
                 # when broker_place_order returned with filled_quantity > 0.
                 # WS fill updates are the same fill arriving via different path,
                 # counting them would double-count.
+
+                # Lot 级持仓追踪（WS 路径）
+                if handler._lot_mgr and strategy_id:
+                    try:
+                        lot_events = handler._lot_mgr.on_fill(
+                            strategy_id,
+                            symbol,
+                            side,
+                            Decimal(str(quantity)),
+                            Decimal(str(price)),
+                        )
+                        for evt in lot_events:
+                            logger.info(
+                                f"[OMSCallback] WS Lot event: {evt.event_type.value} "
+                                f"strategy={strategy_id} symbol={symbol}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[OMSCallback] WS Lot tracking failed: {e}")
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链

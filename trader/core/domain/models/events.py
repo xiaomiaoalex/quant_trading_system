@@ -33,12 +33,31 @@ class EventType(Enum):
     ORDER_CANCELLED = "ORDER_CANCELLED"           # 订单撤销
     ORDER_REJECTED = "ORDER_REJECTED"             # 订单拒绝
 
-    # 持仓事件
+# 持仓事件
     POSITION_OPENED = "POSITION_OPENED"           # 开仓
     POSITION_INCREASED = "POSITION_INCREASED"     # 加仓
     POSITION_DECREASED = "POSITION_DECREASED"     # 减仓
     POSITION_CLOSED = "POSITION_CLOSED"           # 平仓
     POSITION_UPDATED = "POSITION_UPDATED"         # 持仓更新
+
+    # Lot 级事件（Batch 1 新增）
+    POSITION_LOT_OPENED = "POSITION_LOT_OPENED"   # 新批次开仓
+    POSITION_LOT_REDUCED = "POSITION_LOT_REDUCED"  # 批次被部分平仓
+    POSITION_LOT_CLOSED = "POSITION_LOT_CLOSED"   # 批次完全平仓
+
+    # 策略持仓汇总事件（Batch 1 新增）
+    STRATEGY_POSITION_UPDATED = "STRATEGY_POSITION_UPDATED"  # 策略持仓变更
+
+    # 账户持仓事件（Batch 1 新增）
+    ACCOUNT_POSITION_UPDATED = "ACCOUNT_POSITION_UPDATED"  # 账户总持仓变更
+
+    # 历史持仓事件（Batch 1 新增）
+    HISTORICAL_POSITION_DISCOVERED = "HISTORICAL_POSITION_DISCOVERED"  # 启动时发现历史持仓
+    POSITION_COST_ALIGNED = "POSITION_COST_ALIGNED"  # 历史持仓成本已对齐
+
+    # 对账事件（Batch 1 新增）
+    RECONCILIATION_PERFORMED = "RECONCILIATION_PERFORMED"  # 对账执行
+    RECONCILIATION_DISCREPANCY = "RECONCILIATION_DISCREPANCY"  # 对账发现
 
     # 风控事件
     RISK_CHECK_PASSED = "RISK_CHECK_PASSED"      # 风控通过
@@ -117,8 +136,9 @@ class DomainEvent:
 
     @classmethod
     def from_json(cls, json_str: str) -> "DomainEvent":
-        """从JSON反序列化"""
         data = json.loads(json_str)
+        raw_data = data.get("data", {})
+        deserialized_data = cls._deserialize_data(raw_data)
         return cls(
             event_id=data["event_id"],
             event_type=EventType(data["event_type"]),
@@ -126,9 +146,26 @@ class DomainEvent:
             aggregate_type=data["aggregate_type"],
             aggregate_version=data.get("aggregate_version", 1),
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            data=data.get("data", {}),
+            data=deserialized_data,
             metadata=data.get("metadata", {}),
         )
+
+    @classmethod
+    def _deserialize_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                try:
+                    candidate = Decimal(value)
+                    if "." in value or candidate != int(candidate):
+                        result[key] = candidate
+                    else:
+                        result[key] = value
+                except Exception:
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
 
     def __repr__(self) -> str:
         return f"DomainEvent({self.event_type.value}, {self.aggregate_id}, v{self.aggregate_version})"
@@ -183,5 +220,148 @@ def create_position_updated_event(position, realized_pnl: Decimal | None = None)
             "current_price": position.current_price,
             "unrealized_pnl": position.unrealized_pnl,
             "realized_pnl": realized_pnl,
+        }
+    )
+
+
+# ==================== Lot 级事件构造函数（Batch 1 新增） ====================
+
+def create_lot_opened_event(
+    lot_id: str,
+    strategy_id: str,
+    symbol: str,
+    quantity: Decimal,
+    fill_price: Decimal,
+    fee_qty: Decimal | None = None,
+) -> DomainEvent:
+    """创建批次开仓事件"""
+    return DomainEvent(
+        event_type=EventType.POSITION_LOT_OPENED,
+        aggregate_id=lot_id,
+        aggregate_type="PositionLot",
+        data={
+            "lot_id": lot_id,
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "original_qty": quantity,
+            "remaining_qty": quantity,
+            "fill_price": fill_price,
+            "fee_qty": fee_qty,
+        }
+    )
+
+
+def create_lot_reduced_event(
+    lot_id: str,
+    strategy_id: str,
+    symbol: str,
+    reduce_qty: Decimal,
+    reduce_price: Decimal,
+    remaining_qty: Decimal,
+    realized_pnl: Decimal,
+) -> DomainEvent:
+    """创建批次减仓事件"""
+    return DomainEvent(
+        event_type=EventType.POSITION_LOT_REDUCED,
+        aggregate_id=lot_id,
+        aggregate_type="PositionLot",
+        data={
+            "lot_id": lot_id,
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "reduce_qty": reduce_qty,
+            "reduce_price": reduce_price,
+            "remaining_qty": remaining_qty,
+            "realized_pnl": realized_pnl,
+        }
+    )
+
+
+def create_lot_closed_event(
+    lot_id: str,
+    strategy_id: str,
+    symbol: str,
+    close_price: Decimal,
+    total_realized_pnl: Decimal,
+) -> DomainEvent:
+    """创建批次完全平仓事件"""
+    return DomainEvent(
+        event_type=EventType.POSITION_LOT_CLOSED,
+        aggregate_id=lot_id,
+        aggregate_type="PositionLot",
+        data={
+            "lot_id": lot_id,
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "close_price": close_price,
+            "total_realized_pnl": total_realized_pnl,
+        }
+    )
+
+
+def create_strategy_position_updated_event(
+    strategy_id: str,
+    symbol: str,
+    total_qty: Decimal,
+    avg_cost: Decimal,
+    realized_pnl: Decimal,
+    unrealized_pnl: Decimal,
+) -> DomainEvent:
+    """创建策略持仓变更事件"""
+    return DomainEvent(
+        event_type=EventType.STRATEGY_POSITION_UPDATED,
+        aggregate_id=f"{strategy_id}:{symbol}",
+        aggregate_type="StrategyPosition",
+        data={
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "total_qty": total_qty,
+            "avg_cost": avg_cost,
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+        }
+    )
+
+
+def create_historical_position_discovered_event(
+    symbol: str,
+    quantity: Decimal,
+    broker_avg_price: Decimal | None = None,
+    source: str = "broker_api",
+) -> DomainEvent:
+    """创建历史持仓发现事件"""
+    return DomainEvent(
+        event_type=EventType.HISTORICAL_POSITION_DISCOVERED,
+        aggregate_id=symbol,
+        aggregate_type="AccountPosition",
+        data={
+            "symbol": symbol,
+            "quantity": quantity,
+            "broker_avg_price": broker_avg_price,
+            "source": source,
+        }
+    )
+
+
+def create_reconciliation_discrepancy_event(
+    symbol: str,
+    broker_qty: Decimal,
+    oms_qty: Decimal,
+    difference: Decimal,
+    status: str,
+    tolerance: Decimal,
+) -> DomainEvent:
+    """创建对账差异事件"""
+    return DomainEvent(
+        event_type=EventType.RECONCILIATION_DISCREPANCY,
+        aggregate_id=symbol,
+        aggregate_type="Reconciliation",
+        data={
+            "symbol": symbol,
+            "broker_qty": broker_qty,
+            "oms_qty": oms_qty,
+            "difference": difference,
+            "status": status,
+            "tolerance": tolerance,
         }
     )

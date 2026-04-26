@@ -4,9 +4,29 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-20 18:16 (北京时间)
+2026-04-25 16:29 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：deployment_id / strategy_id 事件流语义修正
+- 完成时间: 2026-04-25 16:29 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并补充针对性回归
+- 开发前状态:
+  - 前端用 `deployment_id` 调用 `/v1/strategies/{id}/events/signals` 等策略事件端点
+  - 后端事件端点参数名为 `strategy_id`，但运行时 `StrategyRunner` / `Orchestrator` 已以 `deployment_id` 作为实例 key
+  - 事件流 `stream_key` 命名仍写作 `strategy:{id}`，在 `deployment_id != strategy_id` 时容易出现查询语义漂移
+- 开发后状态:
+  - `_event_callback_dispatcher()` 将运行时事件写入 `deployment:{deployment_id}`，payload 保留并补齐 `deployment_id` 与模板 `strategy_id`
+  - 新增 `/v1/deployments/{deployment_id}/events[/signals|/errors|/fills]`，前端事件查询改走 deployment 命名空间
+  - 旧 `/v1/strategies/{strategy_id}/events...` 保留为模板级聚合/兼容查询，可按 payload `strategy_id` 汇总多个 deployment
+  - 回归测试覆盖 deployment 精确查询与 strategy 模板聚合查询的差异
+- Issue 状态迁移:
+  - deployment_id 与 strategy_id 混用导致事件查询为空：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_automated_trading_e2e.py::TestStreamKeyFormat --tb=short` → 3 passed ✅
+  - `python -m py_compile trader/api/routes/strategies.py` → passed ✅
+  - `npm run typecheck` → 未完全通过；剩余为既有 `src/pages/Backtests.tsx` 的 `LoadStrategyPayload` 缺少 `symbols/account_id/venue/mode`，与本次事件流修正无关
 
 ### 本次任务：Task 16-20 自动化交易系统生产化
 - 完成时间: 2026-04-20 19:44 (北京时间)
