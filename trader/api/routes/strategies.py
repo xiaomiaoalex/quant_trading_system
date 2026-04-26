@@ -234,13 +234,13 @@ def get_strategy_runner() -> StrategyRunner:
     """
     global _strategy_runner_instance
     if _strategy_runner_instance is None:
-        from trader.storage.in_memory import get_storage
-        storage = get_storage()
+        from trader.adapters.persistence.runtime_state_repository import get_runtime_state_repository
+        runtime_state_storage = get_runtime_state_repository()
         _strategy_runner_instance = StrategyRunner(
             oms_callback=_oms_callback_dispatcher,
             killswitch_callback=_killswitch_callback,
             event_callback=_event_callback_dispatcher,
-            runtime_state_storage=storage,  # Task 18
+            runtime_state_storage=runtime_state_storage,  # Task 18
         )
     return _strategy_runner_instance
 
@@ -891,13 +891,23 @@ async def load_strategy(
             mode=request.mode,
         )
 
+        # 构建 merged_config，避免覆盖策略特定的 mode 配置
+        # Task 17 修复: FireTestStrategy 用 mode 表示 BUY/SELL/ALTERNATE
+        # 而 LoadStrategyRequest.mode 是部署模式 (paper/demo/live/shadow)
+        strategy_mode = request.config.get("mode", "").upper()
+        deployment_modes = {"PAPER", "DEMO", "LIVE", "SHADOW"}
         merged_config = {
             **request.config,
             "symbols": symbols,
             "account_id": request.account_id,
             "venue": request.venue,
-            "mode": request.mode,
         }
+        # 只有当策略配置没有指定交易方向时才设置部署模式
+        if strategy_mode and strategy_mode not in deployment_modes:
+            # 策略配置了交易方向 mode，保留原值
+            pass
+        else:
+            merged_config["mode"] = request.mode
 
         if request.code:
             info = await runner.load_strategy_from_code(
