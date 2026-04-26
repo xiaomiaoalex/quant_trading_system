@@ -183,6 +183,9 @@ class TestStrategyRunnerTick:
             resource_limits=StrategyResourceLimits(),
             config={},
             last_order_times=[],
+            symbols=[],  # Empty list = accept all symbols
+            deployment_id="test_deployment",
+            strategy_id="test_strategy",
         )
 
         # Create market data above threshold
@@ -228,6 +231,9 @@ class TestStrategyRunnerTick:
             resource_limits=StrategyResourceLimits(),
             config={},
             last_order_times=[],
+            symbols=[],  # Empty list = accept all symbols
+            deployment_id="test_deployment",
+            strategy_id="test_strategy",
         )
 
         # Create market data above threshold
@@ -407,6 +413,9 @@ class TestKillSwitchIntegration:
             resource_limits=StrategyResourceLimits(),
             config={},
             last_order_times=[],
+            symbols=[],  # Empty list = accept all symbols
+            deployment_id="test_deployment",
+            strategy_id="test_strategy",
         )
 
         # Create market data that would trigger a signal
@@ -444,6 +453,9 @@ class TestKillSwitchIntegration:
             resource_limits=StrategyResourceLimits(),
             config={},
             last_order_times=[],
+            symbols=[],  # Empty list = accept all symbols
+            deployment_id="test_deployment",
+            strategy_id="test_strategy",
         )
         runner._infos["test_strategy"] = info
         runner.stop = AsyncMock()
