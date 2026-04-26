@@ -191,6 +191,11 @@ class Order:
 
         self.filled_quantity += fill_quantity
 
+        if self.filled_quantity > self.quantity:
+            raise ValueError(
+                f"超量成交: filled_quantity={self.filled_quantity} > order_quantity={self.quantity}"
+            )
+
         if old_filled == 0 or old_avg == 0:
             self.average_price = fill_price
         else:

@@ -150,17 +150,18 @@ class DomainEvent:
             metadata=data.get("metadata", {}),
         )
 
+    _DECIMAL_KEY_SUFFIXES = (
+        "_qty", "_price", "_pnl", "_cost", "_value", "_amount",
+        "quantity", "fee", "avg_price", "fill_price", "notional",
+    )
+
     @classmethod
     def _deserialize_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         result = {}
         for key, value in data.items():
-            if isinstance(value, str):
+            if isinstance(value, str) and any(key.endswith(s) or key == s for s in cls._DECIMAL_KEY_SUFFIXES):
                 try:
-                    candidate = Decimal(value)
-                    if "." in value or candidate != int(candidate):
-                        result[key] = candidate
-                    else:
-                        result[key] = value
+                    result[key] = Decimal(value)
                 except Exception:
                     result[key] = value
             else:

@@ -108,11 +108,13 @@ class OMSCallbackHandler:
 
         self._position_locks: Dict[str, asyncio.Lock] = {}
 
-        # 缓存 symbol 的 stepSize
-        self._step_size_cache: Dict[str, Decimal] = {}
+        # 缓存 symbol 的 stepSize (value, cached_at)
+        self._step_size_cache: Dict[str, tuple[Decimal, float]] = {}
 
-        # 缓存 symbol 的 minNotional
-        self._min_notional_cache: Dict[str, Decimal] = {}
+        # 缓存 symbol 的 minNotional (value, cached_at)
+        self._min_notional_cache: Dict[str, tuple[Decimal, float]] = {}
+
+        self._symbol_cache_ttl_seconds: int = 3600
 
         self._processed_cl_ord_ids: Dict[str, float] = {}
         self._cl_ord_id_to_strategy: Dict[str, str] = {}
@@ -141,6 +143,16 @@ class OMSCallbackHandler:
             self._position_locks[key] = asyncio.Lock()
         return self._position_locks[key]
 
+    def _cleanup_idle_position_locks(self) -> int:
+        """清理未被持有的持仓锁，释放内存。"""
+        idle_keys = [
+            k for k, lock in self._position_locks.items()
+            if not lock.locked() and not lock._waiters
+        ]
+        for k in idle_keys:
+            del self._position_locks[k]
+        return len(idle_keys)
+
     def cleanup_expired_dedup_cache(self) -> int:
         """
         清理过期的幂等去重缓存，释放内存。
@@ -165,10 +177,31 @@ class OMSCallbackHandler:
             del self._processed_exec_keys[k]
 
         total = len(expired_cl) + len(expired_exec)
+
+        expired_step = [
+            k for k, (_, cached_at) in self._step_size_cache.items()
+            if now - cached_at > self._symbol_cache_ttl_seconds
+        ]
+        for k in expired_step:
+            del self._step_size_cache[k]
+
+        expired_min = [
+            k for k, (_, cached_at) in self._min_notional_cache.items()
+            if now - cached_at > self._symbol_cache_ttl_seconds
+        ]
+        for k in expired_min:
+            del self._min_notional_cache[k]
+
+        total += len(expired_step) + len(expired_min)
+
+        idle_locks = self._cleanup_idle_position_locks()
+        total += idle_locks
         if total:
             logger.info(
                 f"[OMSCallback] Cleaned up dedup cache: "
-                f"{len(expired_cl)} cl_ord_ids, {len(expired_exec)} exec_keys"
+                f"{len(expired_cl)} cl_ord_ids, {len(expired_exec)} exec_keys, "
+                f"{len(expired_step)} step_size, {len(expired_min)} min_notional, "
+                f"{idle_locks} idle locks"
             )
         return total
 
@@ -801,7 +834,7 @@ class OMSCallbackHandler:
 
     async def _get_step_size(self, symbol: str) -> Decimal:
         """
-        获取交易对的 stepSize（带缓存）
+        获取交易对的 stepSize（带 TTL 缓存）
 
         Args:
             symbol: 交易对符号
@@ -809,12 +842,15 @@ class OMSCallbackHandler:
         Returns:
             stepSize 或 Decimal("0")
         """
-        if symbol in self._step_size_cache:
-            return self._step_size_cache[symbol]
+        cached = self._step_size_cache.get(symbol)
+        if cached is not None:
+            value, cached_at = cached
+            if time.time() - cached_at < self._symbol_cache_ttl_seconds:
+                return value
 
         try:
             step_size = await self._broker.get_symbol_step_size(symbol)
-            self._step_size_cache[symbol] = step_size
+            self._step_size_cache[symbol] = (step_size, time.time())
             return step_size
         except Exception as e:
             logger.warning(f"[OMSCallback] Failed to get stepSize for {symbol}: {e}")
@@ -822,7 +858,7 @@ class OMSCallbackHandler:
 
     async def _get_min_notional(self, symbol: str) -> Decimal:
         """
-        获取交易对的最小名义金额（带缓存）
+        获取交易对的最小名义金额（带 TTL 缓存）
 
         从交易所 exchangeInfo 的 NOTIONAL 或 MIN_NOTIONAL 过滤器中读取。
         如果获取失败，回退到默认值 Decimal("10")。
@@ -833,15 +869,18 @@ class OMSCallbackHandler:
         Returns:
             最小名义金额
         """
-        if symbol in self._min_notional_cache:
-            return self._min_notional_cache[symbol]
+        cached = self._min_notional_cache.get(symbol)
+        if cached is not None:
+            value, cached_at = cached
+            if time.time() - cached_at < self._symbol_cache_ttl_seconds:
+                return value
 
         try:
             data = await self._broker.get_exchange_info(symbol=symbol)
             symbols = data.get("symbols", [])
             if not symbols:
                 logger.warning(f"[OMSCallback] Symbol {symbol} not found in exchangeInfo, using default minNotional")
-                self._min_notional_cache[symbol] = Decimal("10")
+                self._min_notional_cache[symbol] = (Decimal("10"), time.time())
                 return Decimal("10")
 
             filters = symbols[0].get("filters", [])
@@ -851,15 +890,15 @@ class OMSCallbackHandler:
                     min_notional_str = f.get("minNotional") or f.get("notionalMin")
                     if min_notional_str:
                         min_notional = Decimal(str(min_notional_str))
-                        self._min_notional_cache[symbol] = min_notional
+                        self._min_notional_cache[symbol] = (min_notional, time.time())
                         return min_notional
 
             logger.warning(f"[OMSCallback] No NOTIONAL/MIN_NOTIONAL filter for {symbol}, using default")
-            self._min_notional_cache[symbol] = Decimal("10")
+            self._min_notional_cache[symbol] = (Decimal("10"), time.time())
             return Decimal("10")
         except Exception as e:
             logger.warning(f"[OMSCallback] Failed to get minNotional for {symbol}: {e}, using default")
-            self._min_notional_cache[symbol] = Decimal("10")
+            self._min_notional_cache[symbol] = (Decimal("10"), time.time())
             return Decimal("10")
 
     def _publish_event(

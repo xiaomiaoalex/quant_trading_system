@@ -218,11 +218,8 @@ class TestPositionLedger:
             strategy_id="strat_a",
             symbol="BTCUSDT",
         )
-        with caplog.at_level(logging.WARNING):
-            realized, reduced = ledger.reduce(Decimal("1"), Decimal("100"))
-        assert realized == Decimal("0")
-        assert len(reduced) == 0
-        assert "empty ledger" in caplog.text
+        with pytest.raises(ValueError, match="empty ledger"):
+            ledger.reduce(Decimal("1"), Decimal("100"))
 
     def test_reduce_zero_quantity_raises(self):
         ledger = PositionLedger(
