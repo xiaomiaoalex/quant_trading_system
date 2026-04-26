@@ -183,6 +183,9 @@ class StrategyRunner:
         # 策略级别的锁，用于保护并发更新
         self._strategy_locks: Dict[str, asyncio.Lock] = {}
 
+    # 部署模式值（与策略的交易方向 mode 不冲突）
+    _DEPLOYMENT_MODES = {"paper", "demo", "live", "shadow"}
+
     def _build_runtime_init_config(
         self,
         *,
@@ -201,7 +204,15 @@ class StrategyRunner:
         merged["deployment_id"] = deployment_id
         merged["account_id"] = account_id
         merged["venue"] = venue
-        merged["mode"] = mode
+        # 避免语义冲突：如果 strategy config 中的 mode 是交易方向（而非部署模式），
+        # 则保留策略配置，不被部署模式覆盖
+        # Task 17 修复: FireTestStrategy 用 mode 表示 BUY/SELL/ALTERNATE
+        strategy_mode = merged.get("mode")
+        if strategy_mode and strategy_mode.upper() not in self._DEPLOYMENT_MODES:
+            # 策略配置了非部署模式的 mode 值（如 BUY/SELL/ALTERNATE），保留
+            pass
+        else:
+            merged["mode"] = mode
         if module_path is not None:
             merged.setdefault("module_path", module_path)
         return merged
