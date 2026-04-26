@@ -69,13 +69,24 @@ class TestStrategyRuntimePersistence:
     def fake_plugin_module(self):
         """Create a fake strategy plugin module."""
         module = MagicMock()
-        plugin = MagicMock()
-        plugin.validate.return_value = MagicMock(is_valid=True)
-        plugin.initialize = AsyncMock()
-        plugin.on_market_data = AsyncMock(return_value=None)
-        plugin.shutdown = AsyncMock()
-        plugin.version = "1.0.0"
-        module.get_plugin.return_value = plugin
+
+        # Factory function that returns a NEW plugin mock each time
+        # (to avoid "shared singleton" error)
+        def create_new_plugin(**kwargs):
+            plugin_validate = MagicMock()
+            plugin_validate.is_valid = True
+            return MagicMock(
+                validate=MagicMock(return_value=plugin_validate),
+                initialize=AsyncMock(),
+                on_market_data=AsyncMock(return_value=None),
+                shutdown=AsyncMock(),
+                version="1.0.0",
+            )
+
+        # Configure ALL possible factory methods to return new plugins
+        module.create_plugin.side_effect = create_new_plugin
+        module.build_plugin.side_effect = create_new_plugin
+        module.get_plugin.side_effect = create_new_plugin
         return module
 
     @pytest.mark.asyncio
@@ -322,15 +333,23 @@ class TestStrategyRuntimeRecovery:
         """Test updating strategy subscription info."""
         strategy_id = "test_strategy"
 
-        # Create a minimal mock plugin
-        mock_plugin = MagicMock()
-        mock_plugin.validate.return_value = MagicMock(is_valid=True)
-        mock_plugin.initialize = AsyncMock()
-        mock_plugin.on_market_data = AsyncMock(return_value=None)
-        mock_plugin.shutdown = AsyncMock()
+        # Create a minimal mock plugin with proper async methods
+        mock_plugin_validate = MagicMock()
+        mock_plugin_validate.is_valid = True
+        mock_plugin = MagicMock(
+            validate=MagicMock(return_value=mock_plugin_validate),
+            initialize=AsyncMock(),
+            on_market_data=AsyncMock(return_value=None),
+            shutdown=AsyncMock(),
+        )
 
         mock_module = MagicMock()
-        mock_module.get_plugin.return_value = mock_plugin
+        # Configure ALL possible factory methods to return a new plugin
+        def create_new_plugin(**kwargs):
+            return mock_plugin
+        mock_module.create_plugin.side_effect = create_new_plugin
+        mock_module.build_plugin.side_effect = create_new_plugin
+        mock_module.get_plugin.side_effect = create_new_plugin
 
         with patch("importlib.import_module", return_value=mock_module):
             await runner.load_strategy(
