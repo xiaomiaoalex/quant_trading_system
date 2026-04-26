@@ -181,14 +181,20 @@ class Order:
         if self.status not in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED):
             raise ValueError(f"订单状态不允许成交: 当前状态 {self.status}")
 
-        # 更新成交数量
+        if fill_quantity <= 0:
+            raise ValueError(f"成交数量必须为正数: {fill_quantity}")
+        if fill_price <= 0:
+            raise ValueError(f"成交价格必须为正数: {fill_price}")
+
+        old_filled = self.filled_quantity
+        old_avg = self.average_price
+
         self.filled_quantity += fill_quantity
 
-        # 计算加权平均价格
-        if self.average_price == 0:
+        if old_filled == 0 or old_avg == 0:
             self.average_price = fill_price
         else:
-            total_value = (self.average_price * self.filled_quantity) + (fill_price * fill_quantity)
+            total_value = (old_avg * old_filled) + (fill_price * fill_quantity)
             self.average_price = total_value / self.filled_quantity
 
         # 更新状态

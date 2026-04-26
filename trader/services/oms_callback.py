@@ -106,36 +106,71 @@ class OMSCallbackHandler:
         # None = 从全局 registry 获取（推荐方式）
         self._position_lot_manager = position_lot_manager
 
+        self._position_locks: Dict[str, asyncio.Lock] = {}
+
         # 缓存 symbol 的 stepSize
         self._step_size_cache: Dict[str, Decimal] = {}
 
         # 缓存 symbol 的 minNotional
         self._min_notional_cache: Dict[str, Decimal] = {}
 
-        # 已处理的 cl_ord_id 集合（内存缓存，防止同一会话内重复处理）
-        self._processed_cl_ord_ids: set = set()
-        # cl_ord_id → strategy_id 映射（解决 deployment_id 截断后无法逆向解析的问题）
+        self._processed_cl_ord_ids: Dict[str, float] = {}
         self._cl_ord_id_to_strategy: Dict[str, str] = {}
-        # 已处理成交键（cl_ord_id + exec_id）用于幂等去重
         self._processed_exec_keys: Dict[str, float] = {}
         self._exec_dedup_ttl_seconds: int = 900
+        self._cl_ord_id_ttl_seconds: int = 3600
+
+        self._cl_ord_id_dedup_hits: int = 0
+        self._exec_dedup_hits: int = 0
+
+        self._order_submit_ok: int = 0
+        self._order_submit_reject: int = 0
+        self._order_submit_error: int = 0
+        self._reject_reason_counts: Dict[str, int] = {}
+        self._fill_latency_sum_ms: float = 0.0
+        self._fill_latency_count: int = 0
 
     @property
     def _lot_mgr(self):
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
         return self._position_lot_manager or get_lot_manager()
 
-        # Task 17: 幂等去重计数器（可观测性）
-        self._cl_ord_id_dedup_hits: int = 0  # cl_ord_id 重复次数
-        self._exec_dedup_hits: int = 0  # exec_id 重复次数
+    def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
+        key = f"{strategy_id}:{symbol}"
+        if key not in self._position_locks:
+            self._position_locks[key] = asyncio.Lock()
+        return self._position_locks[key]
 
-        # Task 19: 订单可观测性指标
-        self._order_submit_ok: int = 0  # 成功提交
-        self._order_submit_reject: int = 0  # 被拒绝
-        self._order_submit_error: int = 0  # 错误
-        self._reject_reason_counts: Dict[str, int] = {}  # 按原因统计拒单
-        self._fill_latency_sum_ms: float = 0.0  # 累计成交延迟（毫秒）
-        self._fill_latency_count: int = 0  # 成交次数
+    def cleanup_expired_dedup_cache(self) -> int:
+        """
+        清理过期的幂等去重缓存，释放内存。
+
+        Returns:
+            清理的总条目数
+        """
+        now = time.time()
+        expired_cl = [
+            k for k, ts in self._processed_cl_ord_ids.items()
+            if now - ts > self._cl_ord_id_ttl_seconds
+        ]
+        for k in expired_cl:
+            del self._processed_cl_ord_ids[k]
+            self._cl_ord_id_to_strategy.pop(k, None)
+
+        expired_exec = [
+            k for k, ts in self._processed_exec_keys.items()
+            if now - ts > self._exec_dedup_ttl_seconds
+        ]
+        for k in expired_exec:
+            del self._processed_exec_keys[k]
+
+        total = len(expired_cl) + len(expired_exec)
+        if total:
+            logger.info(
+                f"[OMSCallback] Cleaned up dedup cache: "
+                f"{len(expired_cl)} cl_ord_ids, {len(expired_exec)} exec_keys"
+            )
+        return total
 
     def get_observable_metrics(self) -> Dict[str, Any]:
         """
@@ -393,7 +428,7 @@ class OMSCallbackHandler:
         # ==================== 幂等性检查 ====================
         # 1. 检查内存缓存
         if cl_ord_id in self._processed_cl_ord_ids:
-            self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
+            self._cl_ord_id_dedup_hits += 1
             logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (memory): {cl_ord_id}")
             return None
 
@@ -409,17 +444,16 @@ class OMSCallbackHandler:
                 existing_order_found = str(existing_order.get("cl_ord_id", "")) == cl_ord_id
 
             if existing_order_found:
-                self._cl_ord_id_dedup_hits += 1  # Task 17: 计数 cl_ord_id 重复
+                self._cl_ord_id_dedup_hits += 1
                 logger.warning(f"[OMSCallback] Duplicate cl_ord_id detected (storage): {cl_ord_id}")
-                # 加入内存缓存防止后续重复处理
-                self._processed_cl_ord_ids.add(cl_ord_id)
+                self._processed_cl_ord_ids[cl_ord_id] = time.time()
                 return None
         except Exception as e:
             # 存储查询失败不影响主流程，但记录警告
             logger.warning(f"[OMSCallback] Failed to check existing order: {e}")
 
         # 3. 标记为处理中
-        self._processed_cl_ord_ids.add(cl_ord_id)
+        self._processed_cl_ord_ids[cl_ord_id] = time.time()
 
         # ==================== 下单 ====================
         try:
@@ -620,59 +654,61 @@ class OMSCallbackHandler:
 
                 # ==================== 更新持仓 ====================
                 try:
-                    # 获取当前持仓
-                    current_positions = self._storage.list_positions(
-                        account_id=None,
-                        venue=self._broker.broker_name,
-                    )
-                    current_qty = Decimal("0")
-                    current_avg_cost = Decimal("0")
-                    for pos in current_positions:
-                        if pos.get("instrument") == signal.symbol:
+                    pos_lock = self._get_position_lock(strategy_id, signal.symbol)
+                    async with pos_lock:
+                        current_positions = self._storage.list_positions(
+                            account_id=None,
+                            venue=self._broker.broker_name,
+                            strategy_id=strategy_id,
+                            instrument=signal.symbol,
+                        )
+                        current_qty = Decimal("0")
+                        current_avg_cost = Decimal("0")
+                        for pos in current_positions:
                             current_qty = Decimal(str(pos.get("qty", "0")))
                             current_avg_cost = Decimal(str(pos.get("avg_cost", "0")))
                             break
 
-                    # 计算新持仓数量和平均成本
-                    new_qty = current_qty
-                    new_avg_cost = broker_order.average_price
+                        new_qty = current_qty
+                        new_avg_cost = broker_order.average_price
 
-                    if side.value == "BUY":
-                        # 买入：更新平均成本
-                        if current_qty > 0:
-                            total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
-                            new_qty = current_qty + quantity
-                            new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                        if side.value == "BUY":
+                            if current_qty > 0:
+                                total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
+                                new_qty = current_qty + quantity
+                                new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                            else:
+                                new_qty = current_qty + quantity
                         else:
-                            new_qty = current_qty + quantity
-                    else:  # SELL
-                        # 卖出：减少持仓数量，平均成本不变
-                        new_qty = current_qty - quantity
-                        # 如果清仓，重置平均成本
-                        if new_qty <= 0:
-                            new_avg_cost = Decimal("0")
-                            new_qty = Decimal("0")
+                            if quantity > current_qty:
+                                logger.error(
+                                    f"[OMSCallback] SELL qty {quantity} > position qty {current_qty} "
+                                    f"for {signal.symbol}, strategy={strategy_id}"
+                                )
+                            new_qty = max(current_qty - quantity, Decimal("0"))
+                            if new_qty <= 0:
+                                new_avg_cost = Decimal("0")
+                                new_qty = Decimal("0")
 
-                    # 计算未实现盈亏（简单计算：持仓量 * (当前价 - 成本价)）
-                    unrealized_pnl = Decimal("0")
-                    if new_qty > 0 and new_avg_cost > 0:
-                        unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
+                        unrealized_pnl = Decimal("0")
+                        if new_qty > 0 and new_avg_cost > 0:
+                            unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
 
-                    # 更新持仓
-                    self._storage.upsert_position({
-                        "account_id": "SYSTEM",
-                        "venue": self._broker.broker_name,
-                        "instrument": signal.symbol,
-                        "qty": str(new_qty),
-                        "avg_cost": str(new_avg_cost),
-                        "mark_price": str(broker_order.average_price),
-                        "realized_pnl": ledger_realized_pnl,
-                        "unrealized_pnl": str(unrealized_pnl),
-                    })
-                    logger.info(
-                        f"[OMSCallback] Position updated: {signal.symbol} qty={new_qty}, "
-                        f"avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
-                    )
+                        self._storage.upsert_position({
+                            "account_id": "SYSTEM",
+                            "venue": self._broker.broker_name,
+                            "instrument": signal.symbol,
+                            "strategy_id": strategy_id,
+                            "qty": str(new_qty),
+                            "avg_cost": str(new_avg_cost),
+                            "mark_price": str(broker_order.average_price),
+                            "realized_pnl": ledger_realized_pnl,
+                            "unrealized_pnl": str(unrealized_pnl),
+                        })
+                        logger.info(
+                            f"[OMSCallback] Position updated: {signal.symbol} strategy={strategy_id} "
+                            f"qty={new_qty}, avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
+                        )
                 except Exception as e:
                     logger.warning(f"[OMSCallback] Failed to update position: {e}")
 

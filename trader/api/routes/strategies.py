@@ -270,15 +270,22 @@ def _killswitch_callback(strategy_id: str) -> KillSwitchLevel:
     return KillSwitchLevel(state.get("level", 0))
 
 
-def _event_callback_dispatcher(strategy_id: str, event_type: str, payload: Dict) -> None:
-    """事件发布回调"""
+def _event_callback_dispatcher(deployment_id: str, event_type: str, payload: Dict) -> None:
+    """事件发布回调：运行时事件按 deployment_id 分流。"""
     try:
         storage = get_storage()
+        payload_data = dict(payload or {})
+        info = get_strategy_runner().get_status(deployment_id)
+        payload_data.setdefault("deployment_id", deployment_id)
+        payload_data.setdefault(
+            "strategy_id",
+            info.strategy_id if info is not None else deployment_id,
+        )
         storage.append_event({
-            "stream_key": f"strategy:{strategy_id}",
+            "stream_key": f"deployment:{deployment_id}",
             "event_type": event_type,
             "ts_ms": int(time.time() * 1000),
-            "data": payload,
+            "data": payload_data,
         })
     except Exception as e:
         logger.error(f"[EventCallback] Dispatcher error: {e}")
@@ -1048,12 +1055,12 @@ async def start_deployment(
             venue=info.venue,
             mode=info.mode,
             status=_normalize_runtime_status(ctx.status),
-            started_at=ctx.started_at.isoformat() if ctx.started_at else None,
-            last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
-            tick_count=ctx.tick_count,
+            started_at=info.started_at.isoformat() if info.started_at else None,
+            last_tick_at=info.last_tick_at.isoformat() if info.last_tick_at else None,
+            tick_count=info.tick_count,
             signal_count=info.signal_count,
-            error_count=ctx.error_count,
-            last_error=ctx.last_error,
+            error_count=info.error_count,
+            last_error=info.last_error,
             stop_reason=ctx.stop_reason,
             blocked_reason=info.blocked_reason,
         )
@@ -1092,12 +1099,12 @@ async def stop_deployment(
             venue=info.venue,
             mode=info.mode,
             status=_normalize_runtime_status(ctx.status),
-            started_at=ctx.started_at.isoformat() if ctx.started_at else None,
-            last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
-            tick_count=ctx.tick_count,
+            started_at=info.started_at.isoformat() if info.started_at else None,
+            last_tick_at=info.last_tick_at.isoformat() if info.last_tick_at else None,
+            tick_count=info.tick_count,
             signal_count=info.signal_count,
-            error_count=ctx.error_count,
-            last_error=ctx.last_error,
+            error_count=info.error_count,
+            last_error=info.last_error,
             stop_reason=ctx.stop_reason,
             blocked_reason=info.blocked_reason,
         )
@@ -1181,12 +1188,12 @@ async def get_deployment_status(
             venue=info.venue,
             mode=info.mode,
             status=_normalize_runtime_status(ctx.status),
-            started_at=ctx.started_at.isoformat() if ctx.started_at else None,
-            last_tick_at=ctx.last_tick_at.isoformat() if ctx.last_tick_at else None,
-            tick_count=ctx.tick_count,
+            started_at=info.started_at.isoformat() if info.started_at else None,
+            last_tick_at=info.last_tick_at.isoformat() if info.last_tick_at else None,
+            tick_count=info.tick_count,
             signal_count=info.signal_count,
-            error_count=ctx.error_count,
-            last_error=ctx.last_error,
+            error_count=info.error_count,
+            last_error=info.last_error,
             stop_reason=ctx.stop_reason,
             blocked_reason=info.blocked_reason,
         )
@@ -1262,6 +1269,78 @@ class StrategyEventResponse(BaseModel):
     payload: Dict[str, Any]
 
 
+def _event_response(event: Dict[str, Any]) -> StrategyEventResponse:
+    return StrategyEventResponse(
+        event_id=event.get("event_id", 0),
+        stream_key=event.get("stream_key", ""),
+        event_type=event.get("event_type", ""),
+        ts_ms=event.get("ts_ms", 0),
+        payload=event.get("data", {}),
+    )
+
+
+def _event_responses(events: List[Dict[str, Any]]) -> List[StrategyEventResponse]:
+    return [_event_response(event) for event in events]
+
+
+def _list_deployment_event_rows(
+    deployment_id: str,
+    event_type: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """List runtime events for one deployment stream."""
+    storage = get_storage()
+    return storage.list_events(
+        stream_key=f"deployment:{deployment_id}",
+        event_type=event_type,
+        limit=limit,
+    )
+
+
+def _list_strategy_event_rows(
+    strategy_id: str,
+    event_type: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    List template-level events by aggregating deployment streams.
+
+    Legacy strategy:{strategy_id} streams are still included for old in-memory data,
+    while new runtime events are keyed as deployment:{deployment_id}.
+    """
+    storage = get_storage()
+    stream_keys = {f"strategy:{strategy_id}", f"deployment:{strategy_id}"}
+
+    try:
+        runner = get_strategy_runner()
+        for info in runner.list_deployments_for_strategy(strategy_id):
+            stream_keys.add(f"deployment:{info.deployment_id}")
+    except Exception as e:
+        logger.debug(f"[StrategyEvents] Failed to resolve deployments for {strategy_id}: {e}")
+
+    # Over-fetch because unrelated deployments may share the same global event list.
+    candidates = storage.list_events(
+        event_type=event_type,
+        limit=max(limit * 5, limit),
+    )
+    rows: List[Dict[str, Any]] = []
+    for event in candidates:
+        payload = event.get("data", {}) or {}
+        if event.get("stream_key") in stream_keys or payload.get("strategy_id") == strategy_id:
+            rows.append(event)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _filter_event_rows(
+    events: List[Dict[str, Any]],
+    event_types: set[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    return [event for event in events if event.get("event_type") in event_types][:limit]
+
+
 @router.get(
     "/v1/strategies/{strategy_id}/events",
     response_model=List[StrategyEventResponse],
@@ -1276,25 +1355,8 @@ async def get_strategy_events(
 
     Returns strategy-related events such as signals, orders, fills, and errors.
     """
-    storage = get_storage()
-
-    # Query events for this strategy
-    events = storage.list_events(
-        stream_key=f"strategy:{strategy_id}",
-        event_type=event_type,
-        limit=limit,
-    )
-
-    return [
-        StrategyEventResponse(
-            event_id=e.get("event_id", 0),
-            stream_key=e.get("stream_key", ""),
-            event_type=e.get("event_type", ""),
-            ts_ms=e.get("ts_ms", 0),
-            payload=e.get("data", {}),
-        )
-        for e in events
-    ]
+    events = _list_strategy_event_rows(strategy_id, event_type, limit)
+    return _event_responses(events)
 
 
 @router.get(
@@ -1310,25 +1372,8 @@ async def get_strategy_signals(
 
     Returns only signal events generated by the strategy.
     """
-    storage = get_storage()
-
-    # Query signal events for this strategy
-    events = storage.list_events(
-        stream_key=f"strategy:{strategy_id}",
-        event_type="strategy.signal",
-        limit=limit,
-    )
-
-    return [
-        StrategyEventResponse(
-            event_id=e.get("event_id", 0),
-            stream_key=e.get("stream_key", ""),
-            event_type=e.get("event_type", ""),
-            ts_ms=e.get("ts_ms", 0),
-            payload=e.get("data", {}),
-        )
-        for e in events
-    ]
+    events = _list_strategy_event_rows(strategy_id, "strategy.signal", limit)
+    return _event_responses(events)
 
 
 @router.get(
@@ -1344,36 +1389,14 @@ async def get_strategy_errors(
 
     Returns only error events related to the strategy.
     """
-    storage = get_storage()
-
-    # Query error events for this strategy
-    events = storage.list_events(
-        stream_key=f"strategy:{strategy_id}",
-        event_type=None,  # We filter manually for error types
-        limit=limit * 3,  # Get more since we filter
-    )
-
-    # Filter for error-related event types
     error_event_types = {
         "strategy.error",
         "strategy.order.rejected",
         "strategy.tick.error",
     }
-    filtered_events = [
-        e for e in events
-        if e.get("event_type") in error_event_types
-    ][:limit]
-
-    return [
-        StrategyEventResponse(
-            event_id=e.get("event_id", 0),
-            stream_key=e.get("stream_key", ""),
-            event_type=e.get("event_type", ""),
-            ts_ms=e.get("ts_ms", 0),
-            payload=e.get("data", {}),
-        )
-        for e in filtered_events
-    ]
+    events = _list_strategy_event_rows(strategy_id, None, limit * 3)
+    filtered_events = _filter_event_rows(events, error_event_types, limit)
+    return _event_responses(filtered_events)
 
 
 @router.get(
@@ -1389,35 +1412,77 @@ async def get_strategy_fills(
 
     Returns only fill events related to the strategy.
     """
-    storage = get_storage()
-
-    # Query fill events for this strategy
-    events = storage.list_events(
-        stream_key=f"strategy:{strategy_id}",
-        event_type=None,  # We filter manually for fill types
-        limit=limit * 3,  # Get more since we filter
-    )
-
-    # Filter for fill-related event types
     fill_event_types = {
         "strategy.order.filled",
         "strategy.fill",
     }
-    filtered_events = [
-        e for e in events
-        if e.get("event_type") in fill_event_types
-    ][:limit]
+    events = _list_strategy_event_rows(strategy_id, None, limit * 3)
+    filtered_events = _filter_event_rows(events, fill_event_types, limit)
+    return _event_responses(filtered_events)
 
-    return [
-        StrategyEventResponse(
-            event_id=e.get("event_id", 0),
-            stream_key=e.get("stream_key", ""),
-            event_type=e.get("event_type", ""),
-            ts_ms=e.get("ts_ms", 0),
-            payload=e.get("data", {}),
-        )
-        for e in filtered_events
-    ]
+
+@router.get(
+    "/v1/deployments/{deployment_id}/events",
+    response_model=List[StrategyEventResponse],
+)
+async def get_deployment_events(
+    deployment_id: str = Path(..., description="Deployment ID"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    limit: int = Query(200, ge=1, le=2000, description="Max events to return"),
+):
+    """Get runtime events for one deployment instance."""
+    events = _list_deployment_event_rows(deployment_id, event_type, limit)
+    return _event_responses(events)
+
+
+@router.get(
+    "/v1/deployments/{deployment_id}/events/signals",
+    response_model=List[StrategyEventResponse],
+)
+async def get_deployment_signals(
+    deployment_id: str = Path(..., description="Deployment ID"),
+    limit: int = Query(100, ge=1, le=1000, description="Max signals to return"),
+):
+    """Get signal events for one deployment instance."""
+    events = _list_deployment_event_rows(deployment_id, "strategy.signal", limit)
+    return _event_responses(events)
+
+
+@router.get(
+    "/v1/deployments/{deployment_id}/events/errors",
+    response_model=List[StrategyEventResponse],
+)
+async def get_deployment_errors(
+    deployment_id: str = Path(..., description="Deployment ID"),
+    limit: int = Query(100, ge=1, le=1000, description="Max errors to return"),
+):
+    """Get error events for one deployment instance."""
+    error_event_types = {
+        "strategy.error",
+        "strategy.order.rejected",
+        "strategy.tick.error",
+    }
+    events = _list_deployment_event_rows(deployment_id, None, limit * 3)
+    filtered_events = _filter_event_rows(events, error_event_types, limit)
+    return _event_responses(filtered_events)
+
+
+@router.get(
+    "/v1/deployments/{deployment_id}/events/fills",
+    response_model=List[StrategyEventResponse],
+)
+async def get_deployment_fills(
+    deployment_id: str = Path(..., description="Deployment ID"),
+    limit: int = Query(100, ge=1, le=1000, description="Max fills to return"),
+):
+    """Get fill events for one deployment instance."""
+    fill_event_types = {
+        "strategy.order.filled",
+        "strategy.fill",
+    }
+    events = _list_deployment_event_rows(deployment_id, None, limit * 3)
+    filtered_events = _filter_event_rows(events, fill_event_types, limit)
+    return _event_responses(filtered_events)
 
 
 # ============================================================================

@@ -136,8 +136,9 @@ class DomainEvent:
 
     @classmethod
     def from_json(cls, json_str: str) -> "DomainEvent":
-        """从JSON反序列化"""
         data = json.loads(json_str)
+        raw_data = data.get("data", {})
+        deserialized_data = cls._deserialize_data(raw_data)
         return cls(
             event_id=data["event_id"],
             event_type=EventType(data["event_type"]),
@@ -145,9 +146,26 @@ class DomainEvent:
             aggregate_type=data["aggregate_type"],
             aggregate_version=data.get("aggregate_version", 1),
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            data=data.get("data", {}),
+            data=deserialized_data,
             metadata=data.get("metadata", {}),
         )
+
+    @classmethod
+    def _deserialize_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        result = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                try:
+                    candidate = Decimal(value)
+                    if "." in value or candidate != int(candidate):
+                        result[key] = candidate
+                    else:
+                        result[key] = value
+                except Exception:
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
 
     def __repr__(self) -> str:
         return f"DomainEvent({self.event_type.value}, {self.aggregate_id}, v{self.aggregate_version})"

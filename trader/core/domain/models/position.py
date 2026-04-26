@@ -1,18 +1,18 @@
 """
 Position - 持仓领域模型
 =======================
-持仓模型区分"券商真实持仓"与"内部账本持仓"，为对账机制提供基础。
+持仓模型区分"券商真实持仓"与"内部账本持仓",为对账机制提供基础.
 
-三层持仓架构：
-- Account Level: 账户总持仓（Broker API），唯一真相源
-- Strategy Level: 每个 strategy_id × symbol 独立持仓（OMS 事件累积）
-- Lot Level: 每笔买入的精确记录，支持 FIFO / 费用追踪
+三层持仓架构:
+- Account Level: 账户总持仓(Broker API),唯一真相源
+- Strategy Level: 每个 strategy_id × symbol 独立持仓(OMS 事件累积)
+- Lot Level: 每笔买入的精确记录,支持 FIFO / 费用追踪
 
-关键概念：
-- Position: 内部账本持仓（从成交事件累积）
-- BrokerPosition: 券商真实持仓（来自券商API查询）
-- PositionLot: 批次追踪，每笔买入一条记录
-- PositionLedger: 策略级账本，管理某策略某标的的所有 Lot
+关键概念:
+- Position: 内部账本持仓(从成交事件累积)
+- BrokerPosition: 券商真实持仓(来自券商API查询)
+- PositionLot: 批次追踪,每笔买入一条记录
+- PositionLedger: 策略级账本,管理某策略某标的的所有 Lot
 - 两者的差异就是需要对齐的地方
 """
 from dataclasses import dataclass, field
@@ -20,28 +20,31 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Optional, Dict, Any, List, Tuple
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 # ==================== 枚举定义 ====================
 
 class PositionStatus(Enum):
     """持仓状态"""
-    HISTORICAL = "HISTORICAL"   # 程序启动前已存在（成本来自 broker 或未知）
+    HISTORICAL = "HISTORICAL"   # 程序启动前已存在(成本来自 broker 或未知)
     ACTIVE = "ACTIVE"           # 正常交易中
     CLOSED = "CLOSED"           # 已平仓
 
 
 class PositionSource(Enum):
     """持仓来源"""
-    STRATEGY = "STRATEGY"           # 策略产生的持仓（有精确成本）
-    HISTORICAL = "HISTORICAL"       # 历史持仓（程序启动前已存在）
+    STRATEGY = "STRATEGY"           # 策略产生的持仓(有精确成本)
+    HISTORICAL = "HISTORICAL"       # 历史持仓(程序启动前已存在)
     RECONCILIATION = "RECONCILIATION"  # 对账调整产生的持仓
 
 
 class CostBasisMethod(Enum):
     """成本基础计算方法"""
-    AVERAGE_COST = "average_cost"          # 加权平均（默认）
+    AVERAGE_COST = "average_cost"          # 加权平均(默认)
     FIFO = "fifo"                            # 先进先出
     SPECIFIC_IDENTIFICATION = "specific_id"  # 指定批次
 
@@ -51,10 +54,10 @@ class CostBasisMethod(Enum):
 @dataclass(slots=True)
 class PositionLot:
     """
-    批次 — 每笔买入的精确记录。
+    批次 — 每笔买入的精确记录.
 
-    支持部分成交、部分平仓、费用追踪。
-    为 FIFO / Specific Identification 提供数据基础。
+    支持部分成交、部分平仓、费用追踪.
+    为 FIFO / Specific Identification 提供数据基础.
     """
     lot_id: str
     strategy_id: str
@@ -62,7 +65,7 @@ class PositionLot:
     original_qty: Decimal          # 原始成交数量
     remaining_qty: Decimal        # 剩余可平仓数量
     fill_price: Decimal           # 成交价格
-    fee_qty: Decimal = field(default_factory=lambda: Decimal("0"))  # 手续费数量（base asset）
+    fee_qty: Decimal = field(default_factory=lambda: Decimal("0"))  # 手续费数量(base asset)
     fee_asset: Optional[str] = None
     realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     filled_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -76,20 +79,24 @@ class PositionLot:
                 object.__setattr__(self, attr, Decimal(str(val)))
 
     def apply_fee(self) -> None:
-        """将手续费从 remaining_qty 中扣除（适用于 base asset 手续费）"""
         if self.fee_qty > 0 and self.remaining_qty >= self.fee_qty:
             self.remaining_qty -= self.fee_qty
+        elif self.fee_qty > 0 and self.remaining_qty < self.fee_qty:
+            logger.warning(
+                f"Fee qty {self.fee_qty} exceeds remaining_qty {self.remaining_qty} "
+                f"for lot {self.lot_id}, fee not deducted"
+            )
 
 
 @dataclass(slots=True)
 class PositionLedger:
     """
-    策略级持仓账本。
+    策略级持仓账本.
 
-    管理一个 strategy_id × symbol 的所有 Lot。
-    提供 add_lot / reduce / avg_cost / total_qty 等操作。
+    管理一个 strategy_id × symbol 的所有 Lot.
+    提供 add_lot / reduce / avg_cost / total_qty 等操作.
 
-    每个 (strategy_id, symbol) 是独立聚合根，天然线程安全。
+    每个 (strategy_id, symbol) 是独立聚合根,天然线程安全.
     """
     position_id: str  # {strategy_id}:{symbol}
     strategy_id: str
@@ -109,7 +116,7 @@ class PositionLedger:
 
     @property
     def avg_cost(self) -> Decimal:
-        """加权平均成本（仅 AVERAGE_COST 方法有效；FIFO 下始终返回 0）"""
+        """加权平均成本(仅 AVERAGE_COST 方法有效;FIFO 下始终返回 0)"""
         if self.cost_basis_method != CostBasisMethod.AVERAGE_COST:
             return Decimal("0")
         total_cost = sum((lot.remaining_qty * lot.fill_price for lot in self.lots), Decimal("0"))
@@ -124,7 +131,7 @@ class PositionLedger:
         fee_asset: Optional[str] = None,
         filled_at: Optional[datetime] = None,
     ) -> PositionLot:
-        """开仓或加仓：创建新批次"""
+        """开仓或加仓:创建新批次"""
         lot = PositionLot(
             lot_id=str(uuid.uuid4()),
             strategy_id=self.strategy_id,
@@ -147,17 +154,15 @@ class PositionLedger:
         quantity: Decimal,
         price: Decimal,
     ) -> Tuple[Decimal, List[Tuple[str, Decimal, Decimal]]]:
-        """
-        减仓（按 FIFO 顺序扣减最早批次）。
+        if quantity <= 0:
+            raise ValueError(f"Reduce quantity must be positive, got {quantity}")
 
-        Args:
-            quantity: 卖出数量
-            price: 卖出价格
+        if not self.lots and quantity > 0:
+            logger.warning(
+                f"Attempted to reduce {quantity} on empty ledger "
+                f"{self.strategy_id}:{self.symbol}"
+            )
 
-        Returns:
-            realized_pnl: 实现的盈亏
-            reduced_lots: List[(lot_id, reduce_qty, lot_fill_price)]
-        """
         remaining = quantity
         realized = Decimal("0")
         reduced_lots: List[Tuple[str, Decimal, Decimal]] = []
@@ -199,7 +204,7 @@ class PositionLedger:
             self.status = PositionStatus.CLOSED
 
     def to_summary_dict(self) -> Dict[str, Any]:
-        """序列化为摘要字典（用于 API 响应）"""
+        """序列化为摘要字典(用于 API 响应)"""
         return {
             "position_id": self.position_id,
             "strategy_id": self.strategy_id,
@@ -218,24 +223,24 @@ class PositionLedger:
 
 # ==================== 账户/策略级持仓 ====================
 
-@dataclass
+@dataclass(slots=True)
 class Position:
     """
     持仓领域模型
 
-    记录策略/账户对某个标的的持仓情况。
-    通过成交事件累积计算，而不是直接存储。
+    记录策略/账户对某个标的的持仓情况.
+    通过成交事件累积计算,而不是直接存储.
 
-    向后兼容：strategy_id 默认为空字符串（表示无策略隔离的旧数据）。
-    新代码应始终传入 strategy_id。
+    向后兼容:strategy_id 默认为空字符串(表示无策略隔离的旧数据).
+    新代码应始终传入 strategy_id.
     """
     position_id: str = ""                    # 持仓唯一ID
     symbol: str = ""                         # 交易标的
-    strategy_id: str = ""                    # 策略ID（Batch 1 新增）
+    strategy_id: str = ""                    # 策略ID(Batch 1 新增)
     quantity: Decimal = Decimal("0")          # 持仓数量
     avg_price: Decimal = Decimal("0")        # 平均持仓成本
 
-    # 实时行情（由外部更新）
+    # 实时行情(由外部更新)
     current_price: Decimal = Decimal("0")
 
     # 盈亏计算
@@ -288,7 +293,7 @@ class Position:
     # ==================== 持仓操作 ====================
 
     def update_price(self, current_price: Decimal) -> None:
-        """更新当前价格，计算未实现盈亏"""
+        """更新当前价格,计算未实现盈亏"""
         self.current_price = current_price
         if self.quantity > 0:
             self.unrealized_pnl = (current_price - self.avg_price) * self.quantity
@@ -356,9 +361,9 @@ class Position:
         self.realized_pnl += realized
         self.quantity -= actual_reduce
 
-        # 更新均价（如果是全平，均价归零）
+        # 更新均价(如果是全平,均价归零)
         if self.quantity > 0:
-            # 持仓数量减少，但平均成本不变
+            # 持仓数量减少,但平均成本不变
             pass
         else:
             self.avg_price = Decimal("0")
@@ -377,22 +382,30 @@ class Position:
                 f"qty={self.quantity}, avg={self.avg_price}, "
                 f"pnl={self.realized_pnl + self.unrealized_pnl})")
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Position):
+            return NotImplemented
+        return self.position_id == other.position_id
 
-@dataclass
+    def __hash__(self) -> int:
+        return hash(self.position_id)
+
+
+@dataclass(slots=True)
 class BrokerPosition:
     """
     券商真实持仓
 
-    来自券商API的实时持仓数据，作为对账的source of truth。
+    来自券商API的实时持仓数据,作为对账的source of truth.
     """
     symbol: str = ""
     quantity: Decimal = Decimal("0")          # 持仓数量
     avg_price: Decimal = Decimal("0")        # 持仓成本
     unrealized_pnl: Decimal = Decimal("0")  # 未实现盈亏
-    frozen_quantity: Decimal = Decimal("0")   # 冻结数量（如用于申购）
+    frozen_quantity: Decimal = Decimal("0")   # 冻结数量(如用于申购)
 
     # A股特有
-    yesterday_quantity: Decimal = Decimal("0")  # 昨仓（用于T+1）
+    yesterday_quantity: Decimal = Decimal("0")  # 昨仓(用于T+1)
 
     def __post_init__(self):
         for attr in ['quantity', 'avg_price', 'unrealized_pnl', 'frozen_quantity', 'yesterday_quantity']:
@@ -406,12 +419,12 @@ class BrokerPosition:
         return self.quantity - self.frozen_quantity
 
 
-@dataclass
+@dataclass(slots=True)
 class PositionReconciliation:
     """
     持仓对账结果
 
-    比较券商持仓与内部账本持仓的差异。
+    比较券商持仓与内部账本持仓的差异.
     """
     symbol: str = ""
     broker_quantity: Decimal = Decimal("0")  # 券商持仓

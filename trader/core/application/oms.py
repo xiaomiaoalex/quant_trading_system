@@ -20,6 +20,7 @@ OMS - 订单管理系统
 - Core Plane禁止IO（网络/DB/文件IO）
 - 重试逻辑由Adapter层处理
 """
+import asyncio
 import logging
 from typing import List, Optional, Dict, Any, Callable
 from datetime import datetime
@@ -67,10 +68,10 @@ class OMS:
         self._storage = storage
         self._event_bus = event_bus
 
-        # 内存缓存
-        self._orders: Dict[str, Order] = {}  # client_order_id -> Order
+        self._orders: Dict[str, Order] = {}
+        self._max_cached_orders: int = 5000
+        self._order_locks: Dict[str, asyncio.Lock] = {}
 
-        # 回调
         self._order_handlers: Dict[str, List[Callable]] = {
             "on_order_submitted": [],
             "on_order_filled": [],
@@ -289,8 +290,12 @@ class OMS:
     # ==================== 查询操作 ====================
 
     def _get_order(self, client_order_id: str) -> Optional[Order]:
-        """获取订单（从缓存）"""
         return self._orders.get(client_order_id)
+
+    def _get_order_lock(self, client_order_id: str) -> asyncio.Lock:
+        if client_order_id not in self._order_locks:
+            self._order_locks[client_order_id] = asyncio.Lock()
+        return self._order_locks[client_order_id]
 
     def get_order(self, client_order_id: str) -> Optional[Order]:
         """获取订单"""
@@ -314,12 +319,6 @@ class OMS:
     # ==================== 事件处理 ====================
 
     async def handle_broker_callback(self, broker_order_data: Dict) -> None:
-        """
-        处理券商回调
-
-        这是处理成交回报的入口。
-        需要处理：部分成交、完全成交、撤销等
-        """
         client_order_id = broker_order_data.get("client_order_id")
         if not client_order_id:
             return
@@ -333,8 +332,6 @@ class OMS:
         filled_qty = Decimal(str(broker_order_data.get("filled_quantity", 0)))
         avg_price = Decimal(str(broker_order_data.get("average_price", 0)))
 
-        # 处理状态更新
-        # Task 17: 终端状态单调性检查 - 不允许从终态回退
         if order.is_terminal():
             logger.warning(
                 f"[OMS] 订单已终态，忽略回调: client_order_id={client_order_id}, "
@@ -342,29 +339,31 @@ class OMS:
             )
             return
 
-        if status == "FILLED" and order.status != OrderStatus.FILLED:
-            order.fill(filled_qty, avg_price)
-            await self._storage.save_order(order)
-            await self._publish_order_event(order, EventType.ORDER_FILLED)
+        lock = self._get_order_lock(client_order_id)
+        async with lock:
+            if status == "FILLED" and order.status != OrderStatus.FILLED:
+                order.fill(filled_qty, avg_price)
+                await self._storage.save_order(order)
+                await self._publish_order_event(order, EventType.ORDER_FILLED)
 
-            self._stats["orders_filled"] += 1
-            await self._trigger_handler("on_order_filled", order)
+                self._stats["orders_filled"] += 1
+                await self._trigger_handler("on_order_filled", order)
 
-            logger.info(f"[OMS] 订单成交: {client_order_id}, 数量: {filled_qty}, 价格: {avg_price}")
+                logger.info(f"[OMS] 订单成交: {client_order_id}, 数量: {filled_qty}, 价格: {avg_price}")
 
-        elif status == "PARTIALLY_FILLED" and order.status == OrderStatus.SUBMITTED:
-            order.fill(filled_qty, avg_price)
-            await self._storage.save_order(order)
-            await self._publish_order_event(order, EventType.ORDER_PARTIALLY_FILLED)
+            elif status == "PARTIALLY_FILLED" and order.status in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED):
+                order.fill(filled_qty, avg_price)
+                await self._storage.save_order(order)
+                await self._publish_order_event(order, EventType.ORDER_PARTIALLY_FILLED)
 
-            logger.info(f"[OMS] 订单部分成交: {client_order_id}, 数量: {filled_qty}")
+                logger.info(f"[OMS] 订单部分成交: {client_order_id}, 数量: {filled_qty}")
 
-        elif status == "CANCELLED":
-            order.cancel()
-            await self._storage.save_order(order)
-            await self._publish_order_event(order, EventType.ORDER_CANCELLED)
+            elif status == "CANCELLED":
+                order.cancel()
+                await self._storage.save_order(order)
+                await self._publish_order_event(order, EventType.ORDER_CANCELLED)
 
-            self._stats["orders_cancelled"] += 1
+                self._stats["orders_cancelled"] += 1
 
     def register_handler(self, event: str, handler: Callable) -> None:
         """注册订单事件处理器"""
@@ -414,6 +413,34 @@ class OMS:
     def get_stats(self) -> Dict:
         """获取统计信息"""
         return self._stats.copy()
+
+    def cleanup_terminal_orders(self) -> int:
+        """
+        清理已终态的订单缓存，释放内存。
+
+        Returns:
+            清理的订单数量
+        """
+        terminal_ids = [
+            oid for oid, order in self._orders.items() if order.is_terminal()
+        ]
+        for oid in terminal_ids:
+            del self._orders[oid]
+
+        if terminal_ids:
+            logger.info(f"[OMS] 清理终态订单缓存: {len(terminal_ids)} 条")
+
+        if len(self._orders) > self._max_cached_orders:
+            sorted_orders = sorted(
+                self._orders.items(),
+                key=lambda x: x[1].updated_at,
+            )
+            excess = len(self._orders) - self._max_cached_orders
+            for oid, _ in sorted_orders[:excess]:
+                del self._orders[oid]
+            logger.info(f"[OMS] 清理超出上限的旧订单: {excess} 条")
+
+        return len(terminal_ids)
 
     # ==================== 恢复 ====================
 

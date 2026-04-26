@@ -36,9 +36,11 @@ class PortfolioService:
         self,
         account_id: Optional[str] = None,
         venue: Optional[str] = None,
+        strategy_id: Optional[str] = None,
+        instrument: Optional[str] = None,
     ) -> List[PositionView]:
         """Get positions"""
-        positions = self._storage.list_positions(account_id, venue)
+        positions = self._storage.list_positions(account_id, venue, strategy_id, instrument)
         return [PositionView(**p) for p in positions]
 
     def get_pnl(

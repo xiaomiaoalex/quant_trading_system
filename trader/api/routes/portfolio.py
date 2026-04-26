@@ -19,6 +19,8 @@ router = APIRouter(tags=["Portfolio"])
 async def list_positions(
     account_id: Optional[str] = Query(None, description="Filter by account ID"),
     venue: Optional[str] = Query(None, description="Filter by venue"),
+    strategy_id: Optional[str] = Query(None, description="Filter by strategy ID"),
+    instrument: Optional[str] = Query(None, description="Filter by instrument"),
 ):
     """
     Get positions.
@@ -26,7 +28,7 @@ async def list_positions(
     Returns the projected positions for the specified filters.
     """
     service = PortfolioService()
-    return service.list_positions(account_id, venue)
+    return service.list_positions(account_id, venue, strategy_id, instrument)
 
 
 @router.get("/v1/portfolio/pnl", response_model=PnlView)

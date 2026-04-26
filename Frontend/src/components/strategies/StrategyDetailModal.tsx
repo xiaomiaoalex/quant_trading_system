@@ -49,8 +49,8 @@ function formatRejectionReason(reason: string | undefined): string {
   if (reason.startsWith('MIN_NOTIONAL:')) {
     const match = reason.match(/Notional ([\d.]+) below minNotional ([\d.]+)/)
     if (match) {
-      const notional = parseFloat(match[1])
-      const minNotional = parseFloat(match[2])
+      const notional = parseFloat(match[1] ?? '0')
+      const minNotional = parseFloat(match[2] ?? '0')
       return `Order value (${notional.toFixed(2)} USDT) below minimum (${minNotional.toFixed(2)} USDT)`
     }
     return 'Order value below exchange minimum'

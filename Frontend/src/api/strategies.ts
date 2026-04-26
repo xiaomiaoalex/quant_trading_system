@@ -101,7 +101,7 @@ export class StrategiesAPI extends APIClient {
     limit = 100,
   ): Promise<StrategyEventEnvelope[]> {
     return this.get<StrategyEventEnvelope[]>(
-      `/v1/strategies/${deploymentId}/events`,
+      `/v1/deployments/${deploymentId}/events`,
       { params: { event_type: eventType, limit } },
     )
   }
@@ -111,7 +111,7 @@ export class StrategiesAPI extends APIClient {
     limit = 50,
   ): Promise<StrategyEventEnvelope[]> {
     return this.get<StrategyEventEnvelope[]>(
-      `/v1/strategies/${deploymentId}/events/signals`,
+      `/v1/deployments/${deploymentId}/events/signals`,
       { params: { limit } },
     )
   }
@@ -121,7 +121,7 @@ export class StrategiesAPI extends APIClient {
     limit = 50,
   ): Promise<StrategyEventEnvelope[]> {
     return this.get<StrategyEventEnvelope[]>(
-      `/v1/strategies/${deploymentId}/events/errors`,
+      `/v1/deployments/${deploymentId}/events/errors`,
       { params: { limit } },
     )
   }
@@ -131,7 +131,7 @@ export class StrategiesAPI extends APIClient {
     limit = 100,
   ): Promise<StrategyEventEnvelope[]> {
     return this.get<StrategyEventEnvelope[]>(
-      `/v1/strategies/${deploymentId}/events/fills`,
+      `/v1/deployments/${deploymentId}/events/fills`,
       { params: { limit } },
     )
   }

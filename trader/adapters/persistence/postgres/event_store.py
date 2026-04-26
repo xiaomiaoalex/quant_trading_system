@@ -405,6 +405,11 @@ class PostgresEventStore:
         # Use pg_advisory_xact_lock(hashtext(stream_key)) to ensure exclusive access.
         # This locks the stream_key atomically, preventing concurrent transactions from
         # both calculating the same next_seq when the stream is empty (no rows to FOR UPDATE).
+        #
+        # SAFETY CONSTRAINT: Each call must operate on exactly one stream_key per transaction.
+        # If a single transaction locks multiple stream_keys in different orders than other
+        # concurrent transactions, deadlock is possible. The current design is safe because
+        # each append_domain_event call is a single-stream operation.
         async with self._pool.acquire() as conn:
             try:
                 row = await conn.fetchrow(
