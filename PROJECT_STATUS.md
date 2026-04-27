@@ -4,9 +4,39 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-25 16:29 (北京时间)
+2026-04-27 23:24 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：重新完成 PG 集成环境 Phase 1-4
+- 完成时间: 2026-04-27 23:24 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已恢复并通过无 PG / 真实 PG 双路径验证
+- 开发前状态:
+  - `KillSwitchService` 只写内存，API 返回成功不代表 PG 审计已落库
+  - OMS fill 主路径直接写 `ControlPlaneInMemoryStorage.create_execution()`，没有进入 `ExecutionRepository`
+  - 策略 runtime recovery 仍从内存 storage 读取，进程重启后无法依赖 PG 恢复
+  - replay job、events、executions、snapshots、crawler processed ids 存在无界增长或 side index 未清理风险
+  - replay 转换只读取 `payload`，会丢失 `data` 形态控制面事件
+- 开发后状态:
+  - 新增 PG-first repositories：`ExecutionRepository`、`KillSwitchRepository`、`RuntimeStateRepository`、`PositionRepository`
+  - 新增 PG migration `007_repositories.sql`
+  - KillSwitch API/Risk side-effect 使用 `set_state_durable()`，PG 写失败时 fail-closed
+  - OMS sync/WS fill 路径通过 `ExecutionRepository` 保存 execution，保留无 PG dev/test best-effort 兜底
+  - lifespan runtime recovery 改从 `RuntimeStateRepository` 读取/回写
+  - `ControlPlaneInMemoryStorage` 增加 bounded events/executions/snapshots、execution dedup TTL、memory stats、deployment_id runtime key
+  - replay job 增加 `_MAX_REPLAY_JOBS` 和淘汰逻辑，`EventService` replay 兼容 `payload`/`data`
+  - crawler processed ids 改为 bounded membership cache
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_storage_retention.py trader/tests/test_pg_repositories.py --tb=short` → 16 passed, 4 skipped ✅
+  - `python -m pytest -q trader/tests/test_oms_idempotency.py trader/tests/test_oms_callback_fill_idempotency.py --tb=short` → 14 passed ✅
+  - `python -m pytest -q trader/tests/test_api_services.py::TestKillSwitchService trader/tests/test_api_endpoints.py::TestKillSwitchEndpoints --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestRiskEndpoints --tb=short` → 4 passed, 8 skipped（无 PG durable tests skip）✅
+  - `POSTGRES_CONNECTION_STRING=... python -m pytest -q trader/tests/test_pg_repositories.py trader/tests/test_postgres_projectors.py trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py --tb=short` → 91 passed ✅
+  - `POSTGRES_CONNECTION_STRING=... python -m pytest -q trader/tests/test_snapshot_storage.py::TestSnapshotStorageIntegration trader/tests/test_api_endpoints.py::TestKillSwitchEndpoints trader/tests/test_api_endpoints.py::TestRiskEndpoints trader/tests/test_oms_idempotency.py trader/tests/test_oms_callback_fill_idempotency.py --tb=short` → 29 passed ✅
+- 注意事项:
+  - 真实 PG 测试共享同一数据库，不要和会执行 `storage.clear()` 的测试并行运行
+  - `test_snapshot_storage.py` 的 mock 单测和真实 PG 集成用例建议隔离运行
 
 ### 本次任务：deployment_id / strategy_id 事件流语义修正
 - 完成时间: 2026-04-25 16:29 (北京时间)

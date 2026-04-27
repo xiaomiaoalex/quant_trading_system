@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from trader.api.main import app
 from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
+from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
 from trader.storage.in_memory import get_storage, reset_storage
 
@@ -23,6 +24,11 @@ async def _clear_postgres_risk_state() -> None:
     await storage.connect()
     try:
         await storage.clear()
+        try:
+            async with storage.acquire() as conn:
+                await conn.execute("DELETE FROM killswitch_log")
+        except Exception:
+            pass
     finally:
         await storage.disconnect()
         await close_pool()
@@ -63,6 +69,11 @@ async def _seed_audit_entries() -> list[str]:
     return [first.entry_id, second.entry_id]
 
 
+def _require_pg_for_durable_killswitch() -> None:
+    if not is_postgres_available():
+        pytest.skip("durable KillSwitch side effects require PostgreSQL")
+
+
 class TestHealthEndpoint:
     """Test health check endpoints"""
 
@@ -70,6 +81,7 @@ class TestHealthEndpoint:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_killswitch_repository()
         reset_risk_event_repository()
         asyncio.run(_clear_postgres_risk_state())
 
@@ -196,6 +208,7 @@ class TestStrategyEndpoints:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_killswitch_repository()
 
     def test_list_strategies_empty(self):
         """Test listing strategies when empty"""
@@ -636,6 +649,7 @@ class TestRiskEndpoints:
         """Setup for each test"""
         self.client = TestClient(app)
         reset_storage()
+        reset_killswitch_repository()
         reset_risk_event_repository()
         asyncio.run(_clear_postgres_risk_state())
 
@@ -659,6 +673,7 @@ class TestRiskEndpoints:
 
     def test_ingest_risk_event_created(self):
         """Test ingesting a new risk event"""
+        _require_pg_for_durable_killswitch()
         payload = {
             "dedup_key": "risk-key-001",
             "severity": "HIGH",
@@ -678,6 +693,7 @@ class TestRiskEndpoints:
 
     def test_ingest_risk_event_duplicate(self):
         """Test ingesting duplicate risk event by dedup_key"""
+        _require_pg_for_durable_killswitch()
         payload = {
             "dedup_key": "risk-key-dup",
             "severity": "HIGH",
@@ -721,6 +737,7 @@ class TestRiskEndpoints:
 
     def test_risk_event_upgrade_idempotency(self):
         """Test that same dedup_key does not trigger duplicate upgrade"""
+        _require_pg_for_durable_killswitch()
         payload = {
             "dedup_key": "idempotency-test-key",
             "severity": "HIGH",
@@ -747,6 +764,7 @@ class TestRiskEndpoints:
 
     def test_risk_event_no_downgrade(self):
         """Test that lower recommended_level does not cause downgrade"""
+        _require_pg_for_durable_killswitch()
         high_payload = {
             "dedup_key": "high-level-key",
             "severity": "CRITICAL",
@@ -783,6 +801,7 @@ class TestRiskEndpoints:
 
     def test_recover_pending_effects(self):
         """Test recovery endpoint replays PENDING effects with correct scope/level"""
+        _require_pg_for_durable_killswitch()
         import asyncio
         from trader.services.risk import RiskService
         from trader.storage.in_memory import reset_storage
@@ -809,6 +828,7 @@ class TestRiskEndpoints:
 
     def test_recover_failed_effects(self):
         """Test recovery endpoint replays FAILED effects with correct scope/level"""
+        _require_pg_for_durable_killswitch()
         from trader.services.risk import RiskService
         from trader.storage.in_memory import reset_storage
         
@@ -832,6 +852,7 @@ class TestRiskEndpoints:
 
     def test_ingest_risk_event_rolls_back_killswitch_when_effect_mark_fails(self, monkeypatch):
         """Test side-effect compensation restores KillSwitch when effect status write fails"""
+        _require_pg_for_durable_killswitch()
         from trader.services.risk import RiskService
 
         async def _failing_mark_effect_applied(self, upgrade_key: str) -> None:
@@ -863,6 +884,7 @@ class TestRiskEndpoints:
 
     def test_recover_pending_effects_marks_applied_when_killswitch_already_at_target(self):
         """Test recovery is idempotent if KillSwitch is already at target level"""
+        _require_pg_for_durable_killswitch()
         from trader.services.killswitch import KillSwitchService, KillSwitchSetRequest
         from trader.services.risk import RiskService
         from trader.storage.in_memory import reset_storage
@@ -1277,7 +1299,7 @@ class TestKillSwitchEndpoints:
         assert data["scope"] == "GLOBAL"
 
     def test_set_kill_switch(self):
-        """Test setting kill switch"""
+        """Test setting kill switch with fail-closed durable persistence."""
         payload = {
             "scope": "GLOBAL",
             "level": 2,
@@ -1285,9 +1307,13 @@ class TestKillSwitchEndpoints:
             "updated_by": "admin"
         }
         response = self.client.post("/v1/killswitch", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["level"] == 2
+        if is_postgres_available():
+            assert response.status_code == 200
+            data = response.json()
+            assert data["level"] == 2
+        else:
+            assert response.status_code == 503
+            assert "KillSwitch persistence failed" in response.json()["detail"]
 
 
 class TestBrokerEndpoints:

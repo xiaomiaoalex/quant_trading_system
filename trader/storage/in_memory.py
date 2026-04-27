@@ -6,6 +6,7 @@ Provides in-memory storage for strategies, deployments, orders, positions, etc.
 import logging
 import uuid
 import hashlib
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
@@ -36,7 +37,20 @@ class ControlPlaneInMemoryStorage:
     - 风控规则、订单查询、持仓查询
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        max_events: int = 100_000,
+        max_executions: int = 100_000,
+        max_snapshots_per_stream: int = 50,
+        max_replay_jobs: int = 1_000,
+        execution_dedup_ttl_seconds: int = 24 * 60 * 60,
+    ):
+        self._max_events = max_events
+        self._max_executions = max_executions
+        self._max_snapshots_per_stream = max_snapshots_per_stream
+        self._max_replay_jobs = max_replay_jobs
+        self._execution_dedup_ttl_seconds = execution_dedup_ttl_seconds
+
         # Strategies
         self.strategies: Dict[str, Dict[str, Any]] = {}
         self.strategy_versions: Dict[str, List[Dict[str, Any]]] = {}
@@ -59,6 +73,7 @@ class ControlPlaneInMemoryStorage:
         self.orders: Dict[str, Dict[str, Any]] = {}
         self.executions: List[Dict[str, Any]] = []
         self.execution_by_key: Dict[str, Dict[str, Any]] = {}
+        self._execution_dedup_timestamps: Dict[str, float] = {}
 
         # Positions & PnL
         self.positions: Dict[str, Dict[str, Any]] = {}
@@ -556,6 +571,7 @@ class ControlPlaneInMemoryStorage:
 
     def create_execution(self, execution_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create an execution with cl_ord_id + exec_id idempotency."""
+        self._cleanup_expired_dedup_keys()
         cl_ord_id = str(execution_data.get("cl_ord_id") or "").strip()
         exec_id = str(execution_data.get("exec_id") or "").strip()
         if cl_ord_id and exec_id:
@@ -565,8 +581,33 @@ class ControlPlaneInMemoryStorage:
                 self._execution_dedup_hits += 1  # Task 17: 计数重复执行
                 return existing
             self.execution_by_key[key] = execution_data
+            self._execution_dedup_timestamps[key] = time.monotonic()
         self.executions.append(execution_data)
+        while len(self.executions) > self._max_executions:
+            evicted = self.executions.pop(0)
+            evicted_key = self._execution_key(evicted)
+            if evicted_key:
+                self.execution_by_key.pop(evicted_key, None)
+                self._execution_dedup_timestamps.pop(evicted_key, None)
         return execution_data
+
+    def _execution_key(self, execution_data: Dict[str, Any]) -> Optional[str]:
+        cl_ord_id = str(execution_data.get("cl_ord_id") or "").strip()
+        exec_id = str(execution_data.get("exec_id") or "").strip()
+        if cl_ord_id and exec_id:
+            return f"{cl_ord_id}:{exec_id}"
+        return None
+
+    def _cleanup_expired_dedup_keys(self) -> int:
+        now = time.monotonic()
+        expired = [
+            key for key, created_at in self._execution_dedup_timestamps.items()
+            if now - created_at >= self._execution_dedup_ttl_seconds
+        ]
+        for key in expired:
+            self._execution_dedup_timestamps.pop(key, None)
+            self.execution_by_key.pop(key, None)
+        return len(expired)
 
     def list_executions(
         self,
@@ -666,6 +707,8 @@ class ControlPlaneInMemoryStorage:
             "event_id": self._event_counter,
         }
         self.events.append(event)
+        while len(self.events) > self._max_events:
+            self.events.pop(0)
         return event
 
     def list_events(
@@ -686,7 +729,7 @@ class ControlPlaneInMemoryStorage:
             events = [e for e in events if e.get("trace_id") == trace_id]
         if since_ts_ms:
             events = [e for e in events if e.get("ts_ms", 0) >= since_ts_ms]
-        return events[:limit]
+        return events[-limit:]
 
     # ==================== Snapshot Methods ====================
 
@@ -702,6 +745,8 @@ class ControlPlaneInMemoryStorage:
         if stream_key not in self.snapshots:
             self.snapshots[stream_key] = []
         self.snapshots[stream_key].append(snapshot)
+        while len(self.snapshots[stream_key]) > self._max_snapshots_per_stream:
+            self.snapshots[stream_key].pop(0)
         return snapshot
 
     def get_latest_snapshot(self, stream_key: str) -> Optional[Dict[str, Any]]:
@@ -742,15 +787,15 @@ class ControlPlaneInMemoryStorage:
             - last_tick_at: int (timestamp ms)
             - recovery_error: Optional[str] (if recovery failed)
         """
-        strategy_id = state.get("strategy_id")
-        if not strategy_id:
-            raise ValueError("strategy_runtime_state requires strategy_id")
-        self.strategy_runtime_states[strategy_id] = state.copy()
-        return self.strategy_runtime_states[strategy_id]
+        state_id = state.get("deployment_id") or state.get("strategy_id")
+        if not state_id:
+            raise ValueError("strategy_runtime_state requires deployment_id or strategy_id")
+        self.strategy_runtime_states[state_id] = state.copy()
+        return self.strategy_runtime_states[state_id]
 
-    def get_strategy_runtime_state(self, strategy_id: str) -> Optional[Dict[str, Any]]:
-        """Get strategy runtime state by strategy_id."""
-        return self.strategy_runtime_states.get(strategy_id)
+    def get_strategy_runtime_state(self, deployment_id: str) -> Optional[Dict[str, Any]]:
+        """Get strategy runtime state by deployment_id or legacy strategy_id."""
+        return self.strategy_runtime_states.get(deployment_id)
 
     def list_strategy_runtime_states(self) -> List[Dict[str, Any]]:
         """List all strategy runtime states."""
@@ -763,12 +808,27 @@ class ControlPlaneInMemoryStorage:
             if s.get("status") == "RUNNING"
         ]
 
-    def delete_strategy_runtime_state(self, strategy_id: str) -> bool:
+    def delete_strategy_runtime_state(self, deployment_id: str) -> bool:
         """Delete strategy runtime state."""
-        if strategy_id in self.strategy_runtime_states:
-            del self.strategy_runtime_states[strategy_id]
+        if deployment_id in self.strategy_runtime_states:
+            del self.strategy_runtime_states[deployment_id]
             return True
         return False
+
+    def get_memory_stats(self) -> Dict[str, Dict[str, int]]:
+        snapshot_count = sum(len(history) for history in self.snapshots.values())
+        return {
+            "events": {"count": len(self.events), "max": self._max_events},
+            "executions": {"count": len(self.executions), "max": self._max_executions},
+            "snapshots": {
+                "count": snapshot_count,
+                "max_per_stream": self._max_snapshots_per_stream,
+            },
+            "dedup_keys": {
+                "count": len(self.execution_by_key),
+                "ttl_seconds": self._execution_dedup_ttl_seconds,
+            },
+        }
 
     # ==================== KillSwitch Methods ====================
 

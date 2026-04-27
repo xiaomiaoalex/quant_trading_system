@@ -30,6 +30,11 @@ from trader.core.domain.services.position_lot_registry import (
     get_lot_manager,
     set_lot_manager,
 )
+from trader.adapters.persistence.execution_repository import (
+    ExecutionRepository,
+    get_execution_repository,
+)
+from trader.adapters.persistence.postgres import is_postgres_available
 from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
 
 logger = logging.getLogger(__name__)
@@ -81,6 +86,7 @@ class OMSCallbackHandler:
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
         fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
         position_lot_manager: Any = None,  # None = 使用全局单例
+        execution_repository: Optional[ExecutionRepository] = None,
     ):
         """
         初始化OMS回调处理器
@@ -105,6 +111,7 @@ class OMSCallbackHandler:
         self._fill_callback = fill_callback
         # None = 从全局 registry 获取（推荐方式）
         self._position_lot_manager = position_lot_manager
+        self._execution_repository = execution_repository or get_execution_repository()
 
         self._position_locks: Dict[str, asyncio.Lock] = {}
 
@@ -142,6 +149,17 @@ class OMSCallbackHandler:
         if key not in self._position_locks:
             self._position_locks[key] = asyncio.Lock()
         return self._position_locks[key]
+
+    async def _save_execution_durable(self, execution_data: Dict[str, Any]) -> tuple[str, bool]:
+        """Persist execution through PG-first repository, then update process cache."""
+        if is_postgres_available():
+            execution_id, created = await self._execution_repository.save_execution(execution_data)
+        else:
+            execution_id, created = await self._execution_repository.save_execution_best_effort(
+                execution_data
+            )
+        self._storage.create_execution({**execution_data, "execution_id": execution_id})
+        return execution_id, created
 
     def _cleanup_idle_position_locks(self) -> int:
         """清理未被持有的持仓锁，释放内存。"""
@@ -651,9 +669,9 @@ class OMSCallbackHandler:
                         "quantity": str(broker_order.filled_quantity),
                         "price": str(broker_order.average_price),
                         "strategy_id": strategy_id,
-                        "venue": self._broker.broker_name,
+                        "venue": str(self._broker.broker_name),
                     }
-                    self._storage.create_execution(execution_data)
+                    await self._save_execution_durable(execution_data)
                     # Task 19: Track fill count (only first occurrence)
                     self._fill_latency_count += 1
 
@@ -1040,9 +1058,9 @@ def create_oms_callback(
                     "quantity": str(quantity),
                     "price": str(price),
                     "strategy_id": strategy_id,
-                    "venue": handler._broker.broker_name,
+                    "venue": str(handler._broker.broker_name),
                 }
-                handler._storage.create_execution(execution_data)
+                await handler._save_execution_durable(execution_data)
 
                 # 尽力更新订单视图（不阻断主流程）
                 existing_order = handler._storage.get_order(cl_ord_id)
