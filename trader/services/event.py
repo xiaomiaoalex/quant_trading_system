@@ -58,7 +58,9 @@ class EventService:
         stream_events: List[StreamEvent] = []
         for seq, event in enumerate(raw_events):
             ts_ms = int(event.get("ts_ms", 0))
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                payload = event.get("data") if isinstance(event.get("data"), dict) else {}
             aggregate_id = str(
                 payload.get("client_order_id")
                 or payload.get("cl_ord_id")

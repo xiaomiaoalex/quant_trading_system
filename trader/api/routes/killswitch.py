@@ -5,7 +5,7 @@ Kill switch (emergency stop) management endpoints.
 """
 import logging
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from trader.api.models.schemas import KillSwitchState, KillSwitchSetRequest
 from trader.services import KillSwitchService
@@ -55,7 +55,19 @@ async def set_kill_switch(request: KillSwitchSetRequest):
         request.updated_by,
     )
 
-    new_state = service.set_state(request)
+    try:
+        new_state = await service.set_state_durable(request)
+    except Exception as exc:
+        logger.exception(
+            "[KillSwitch] [API] Durable state write failed: scope=%s level=%s updated_by=%s",
+            request.scope,
+            request.level,
+            request.updated_by,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"KillSwitch persistence failed: {exc}",
+        ) from exc
 
     logger.info(
         "[KillSwitch] [API] State changed: "

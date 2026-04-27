@@ -182,7 +182,7 @@ class StrategyEventService:
                 before = len(self._events)
                 self._events = [
                     e for e in self._events 
-                    if f"strategy.{strategy_id}." not in e.stream_key
+                    if e.stream_key != f"strategy:{strategy_id}"
                 ]
                 return before - len(self._events)
             else:

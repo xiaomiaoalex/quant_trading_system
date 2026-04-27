@@ -453,9 +453,11 @@ async def lifespan(app: FastAPI):
                 4. 恢复策略到 RUNNING 状态
                 5. 发布 strategy.recovered 事件
                 """
-                from trader.storage.in_memory import get_storage
-                storage = get_storage()
-                running_states = storage.list_running_strategy_states()
+                from trader.adapters.persistence.runtime_state_repository import (
+                    get_runtime_state_repository,
+                )
+                runtime_repo = get_runtime_state_repository()
+                running_states = await runtime_repo.list_running_strategy_states()
 
                 if not running_states:
                     logger.info("[Recovery] No running strategies to recover")
@@ -468,7 +470,8 @@ async def lifespan(app: FastAPI):
                 orchestrator = get_strategy_orchestrator()
 
                 for state in running_states:
-                    strategy_id = state.get("strategy_id")
+                    deployment_id = state.get("deployment_id") or state.get("strategy_id")
+                    strategy_id = state.get("strategy_id") or deployment_id
                     saved_env = state.get("env", "demo")
                     symbols = state.get("symbols", [])
 
@@ -480,7 +483,7 @@ async def lifespan(app: FastAPI):
                         )
                         # 更新状态为错误
                         state["recovery_error"] = f"env_mismatch: saved={saved_env} current={binance_env}"
-                        storage.save_strategy_runtime_state(state)
+                        await runtime_repo.save_strategy_runtime_state(state)
                         continue
 
                     # 验证策略是否已加载
@@ -488,7 +491,7 @@ async def lifespan(app: FastAPI):
                     if info is None:
                         logger.warning("[Recovery] Strategy %s not loaded, skipping", strategy_id)
                         state["recovery_error"] = "strategy_not_loaded"
-                        storage.save_strategy_runtime_state(state)
+                        await runtime_repo.save_strategy_runtime_state(state)
                         continue
 
                     # 恢复订阅（如果有 symbols）
@@ -512,7 +515,8 @@ async def lifespan(app: FastAPI):
                         # 发布恢复事件
                         from trader.api.routes.strategies import _event_callback_dispatcher
                         if _event_callback_dispatcher:
-                            _event_callback_dispatcher(strategy_id, "strategy.recovered", {
+                            _event_callback_dispatcher(deployment_id, "strategy.recovered", {
+                                "deployment_id": deployment_id,
                                 "strategy_id": strategy_id,
                                 "symbols": symbols,
                                 "env": binance_env,
@@ -521,7 +525,7 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         logger.error("[Recovery] Failed to recover strategy %s: %s", strategy_id, e)
                         state["recovery_error"] = str(e)
-                        storage.save_strategy_runtime_state(state)
+                        await runtime_repo.save_strategy_runtime_state(state)
 
             # 执行恢复（在 lifespan 启动阶段执行，不使用 fire-and-forget）
             await _recover_runtime_state()

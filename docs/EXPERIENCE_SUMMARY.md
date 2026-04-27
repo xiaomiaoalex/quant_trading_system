@@ -2699,6 +2699,49 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 
 ---
 
+## 二十六、PG 集成验证与存储边界修复经验
+
+### 26.1 踩坑记录：Repository 存在不等于主路径已接入
+
+**场景**：
+新增 PG repository 后，如果 API、OMS、lifespan recovery 仍直接使用内存 storage，测试仓库本身会通过，但真实业务仍然不持久化。
+
+**经验**：
+- 必须用端到端主路径测试验证 repository 是否真正接入
+- 对交易关键副作用，API 返回成功前必须等待持久化成功
+
+### 26.2 设计模式：strict PG-first + dev/test best-effort
+
+**实现模式**：
+- KillSwitch 使用 `set_state_durable()`，PG 审计写失败直接 503/fail-closed
+- Execution 在配置 PG 时使用 strict `save_execution()`，未配置 PG 的单测/dev 使用 `save_execution_best_effort()`
+- Risk recovery 和 Risk upgrade 复用同一 durable KillSwitch 入口
+
+**收益**：
+- 生产路径不假成功
+- 本地无 PG 的单元测试仍能验证幂等与控制流
+
+### 26.3 踩坑记录：有界列表必须同步清理 side index
+
+**场景**：
+`executions` 列表加上限后，如果 `execution_by_key` 和 timestamp index 不跟着清，内存仍会涨。
+
+**经验**：
+- 每个 bounded primary container 都要列出所有 side index
+- 淘汰 primary record 时同步清理 side index
+- 测试要同时断言主列表长度和 side index 长度
+
+### 26.4 测试隔离经验：PG 集成测试不要并行共享库
+
+**场景**：
+一组 PG 测试执行 `storage.clear()`，另一组测试读取 snapshot/event，会出现偶发空结果。
+
+**经验**：
+- 共享数据库的 PG 集成测试应顺序执行
+- mock asyncpg 的单测和真实 PG 用例最好隔离运行
+
+---
+
 ## 十五、Truth Gap 修复经验
 
 ### 15.1 API 契约优先原则

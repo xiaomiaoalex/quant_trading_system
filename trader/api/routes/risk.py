@@ -90,7 +90,7 @@ async def _apply_killswitch_effect(
                 reason,
                 updated_by,
             )
-            killswitch_service.set_state(
+            await killswitch_service.set_state_durable(
                 KillSwitchSetRequest(
                     scope=scope,
                     level=level,
@@ -136,7 +136,7 @@ async def _apply_killswitch_effect(
                         level_names.get(previous_state.level, f"LEVEL_{previous_state.level}"),
                         exc,
                     )
-                    killswitch_service.set_state(
+                    await killswitch_service.set_state_durable(
                         KillSwitchSetRequest(
                             scope=previous_state.scope,
                             level=previous_state.level,

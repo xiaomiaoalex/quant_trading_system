@@ -15,6 +15,7 @@ from trader.services import EventService
 router = APIRouter(tags=["Events", "Snapshots", "Replay"])
 
 # Replay job storage
+_MAX_REPLAY_JOBS = 1000
 _replay_jobs: Dict[str, ReplayJob] = {}
 _replay_jobs_lock = asyncio.Lock()
 
@@ -26,6 +27,27 @@ def _utc_now_iso() -> str:
 def clear_replay_jobs() -> None:
     """Clear replay jobs storage (tests helper)."""
     _replay_jobs.clear()
+
+
+def _evict_replay_jobs_locked() -> None:
+    """Keep replay job cache bounded."""
+    if len(_replay_jobs) <= _MAX_REPLAY_JOBS:
+        return
+    evictable = [
+        job for job in _replay_jobs.values()
+        if job.status.upper() in {"COMPLETED", "FAILED"}
+    ]
+    evictable.sort(key=lambda item: item.requested_at)
+    for job in evictable:
+        if len(_replay_jobs) <= _MAX_REPLAY_JOBS:
+            break
+        _replay_jobs.pop(job.job_id, None)
+    if len(_replay_jobs) > _MAX_REPLAY_JOBS:
+        remaining = sorted(_replay_jobs.values(), key=lambda item: item.requested_at)
+        for job in remaining:
+            if len(_replay_jobs) <= _MAX_REPLAY_JOBS:
+                break
+            _replay_jobs.pop(job.job_id, None)
 
 
 async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
@@ -116,6 +138,7 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
     # 存储 job
     async with _replay_jobs_lock:
         _replay_jobs[job_id] = job
+        _evict_replay_jobs_locked()
     
     # 使用 BackgroundTasks 异步执行
     background_tasks.add_task(_run_replay_task, job_id, request)

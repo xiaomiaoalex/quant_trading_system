@@ -96,6 +96,7 @@ class BinanceAnnouncementCrawler:
         poll_interval_seconds: int = 300,  # 5分钟轮询一次
         locale: str = "zh",
         max_concurrent_requests: int = 1,  # 并发请求限制，防止API限流
+        max_processed_ids: int = 10_000,
         # Orchestration Layer 新增参数
         ws_source: Optional[Any] = None,  # BinanceWsAnnouncementSource
         html_source: Optional[Any] = None,  # BinanceHtmlAnnouncementSource
@@ -120,13 +121,22 @@ class BinanceAnnouncementCrawler:
         self._locale = locale
         self._running = False
         self._last_fetch_time: Optional[datetime] = None
-        self._processed_ids: set[str] = set()  # 已处理的公告ID（内存缓存）
+        self._max_processed_ids = max_processed_ids
+        self._processed_ids: dict[str, None] = {}  # bounded membership cache
         self._semaphore = asyncio.Semaphore(max_concurrent_requests)
         
         # Orchestration Layer
         self._ws_source = ws_source
         self._html_source = html_source
         self._use_ws_primary = use_ws_primary
+
+    def _mark_processed(self, announcement_id: str) -> None:
+        if announcement_id in self._processed_ids:
+            return
+        self._processed_ids[announcement_id] = None
+        while len(self._processed_ids) > self._max_processed_ids:
+            oldest = next(iter(self._processed_ids))
+            self._processed_ids.pop(oldest, None)
     
     def _get_ws_source(self) -> Any:
         """获取或创建 WS Source"""
@@ -408,7 +418,7 @@ class BinanceAnnouncementCrawler:
                 seq=next_seq,
             )
             
-            self._processed_ids.add(ann_event.aggregate_id)
+            self._mark_processed(ann_event.aggregate_id)
             
             logger.info(
                 "ANNOUNCEMENT_EVENT_WRITTEN",
