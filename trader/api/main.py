@@ -331,7 +331,7 @@ async def lifespan(app: FastAPI):
             execution_budget = ExecutionBudgetService(account_state)
 
             bridge_config = AccountStreamBridgeConfig(
-                account_id="binance_demo",
+                account_id=connector.broker_name,
                 venue=connector.broker_name,
             )
             bridge = AccountStreamBridge(account_state, bridge_config)
@@ -479,7 +479,7 @@ async def lifespan(app: FastAPI):
 
             # 初始 REST snapshot 校准 + 周期校准
             async def _fetch_balances() -> list[dict]:
-                account = await broker._fetch_account()
+                account = await connector._fetch_account()
                 return account.get("balances", [])
 
             await bridge.fetch_and_apply_rest_snapshot(_fetch_balances)
