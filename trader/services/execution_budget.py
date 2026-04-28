@@ -7,21 +7,27 @@ ExecutionBudgetService - 下单前预算管理
 2. 创建 reservation 占用预算，防止超卖
 3. 管理 reservation 生命周期（PENDING_SUBMIT → ACCEPTED → TERMINAL/EXPIRED）
 4. 过期清理
+5. 可选 PG 持久化（best-effort）
 
 数据流：
-  策略信号 → reserve_order → 检查余额 → 创建 PENDING_SUBMIT reservation
-  Broker 返回 → accept_reservation → ACCEPTED
-  成交/取消/拒单 → release_reservation → TERMINAL
-  超时 → expire_stale_reservations → EXPIRED
+  策略信号 → reserve_order → 检查余额 → 创建 PENDING_SUBMIT reservation + PG 持久化
+  Broker 返回 → accept_reservation → ACCEPTED + PG 持久化
+  成交/取消/拒单 → release_reservation → TERMINAL + PG 删除
+  超时 → expire_stale_reservations → EXPIRED + PG 删除
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from trader.services.account_state import AccountStateService
+
+if TYPE_CHECKING:
+    from trader.adapters.persistence.budget_reservation_repository import BudgetReservationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +83,10 @@ def _parse_symbol(symbol: str) -> tuple[int, str, str]:
     例：BTCUSDT → (1, "BTC", "USDT")
         1000SHIBUSDT → (1000, "SHIB", "USDT")
     """
-    # 按长度降序排列 quote assets，优先最长匹配
     sorted_quotes = sorted(QUOTE_ASSETS, key=len, reverse=True)
     for quote in sorted_quotes:
         if symbol.endswith(quote) and len(symbol) > len(quote):
             base_raw = symbol[: -len(quote)]
-            # base 本身可能是乘数 symbol（如 "1000SHIB" → 真实 base = "SHIB"）
             if base_raw in MULTIPLIER_SYMBOLS:
                 real_base, multiplier = MULTIPLIER_SYMBOLS[base_raw]
                 return multiplier, real_base, quote
@@ -112,14 +116,23 @@ class ExecutionBudgetService:
 
     Storage layout:
       _reservations: {cl_ord_id: BalanceReservation}
+
+    Args:
+        account_state: 账户状态服务（必填）
+        default_ttl_ms: reservation 默认过期 TTL（毫秒）
+        repository: 可选的 PG 持久化层（best-effort，不可用时不抛异常）
     """
 
     def __init__(
-        self, account_state: AccountStateService, default_ttl_ms: int = 30_000
+        self,
+        account_state: AccountStateService,
+        default_ttl_ms: int = 30_000,
+        repository: "BudgetReservationRepository | None" = None,
     ) -> None:
         self._account_state = account_state
         self._default_ttl_ms = default_ttl_ms
         self._reservations: dict[str, BalanceReservation] = {}
+        self._repository = repository
 
     # ------------------------------------------------------------------
     # Write methods
@@ -138,7 +151,7 @@ class ExecutionBudgetService:
         """申请预算占用。检查 spendable >= required，通过则创建 reservation。
 
         BUY: asset=quote_asset, required=qty*price
-        SELL: asset=base_asset, required=qty
+        SELL: asset=base_asset, required=qty*multiplier
 
         Returns: (approved: bool, reason: str)
         """
@@ -175,7 +188,7 @@ class ExecutionBudgetService:
 
         # 创建 reservation
         now_ms = int(time.time() * 1000)
-        self._reservations[cl_ord_id] = BalanceReservation(
+        res = BalanceReservation(
             reservation_id=cl_ord_id,
             account_id=account_id,
             venue=venue,
@@ -185,6 +198,9 @@ class ExecutionBudgetService:
             created_at_ms=now_ms,
             expires_at_ms=now_ms + self._default_ttl_ms,
         )
+        self._reservations[cl_ord_id] = res
+        # Best-effort PG 持久化
+        self._persist_reservation(res)
         return True, ""
 
     def accept_reservation(self, cl_ord_id: str) -> None:
@@ -197,6 +213,7 @@ class ExecutionBudgetService:
                 f"Cannot accept reservation {cl_ord_id} in status {res.status}"
             )
         res.status = ACCEPTED
+        self._persist_reservation(res)
 
     def release_reservation(self, cl_ord_id: str, reason: str) -> None:
         """释放 reservation（拒单/成交/取消/过期）。"""
@@ -212,14 +229,20 @@ class ExecutionBudgetService:
             f"[ExecBudget] Reservation released: cl_ord_id={cl_ord_id}, "
             f"reason={reason}, asset={res.asset}, amount={res.amount}"
         )
+        # 从 PG 删除
+        self._delete_reservation(cl_ord_id)
 
     def expire_stale_reservations(self, now_ms: int) -> int:
         """清理过期 reservation，返回清理数量。"""
         count = 0
+        expired_ids: list[str] = []
         for res in self._reservations.values():
             if res.status in (PENDING_SUBMIT, ACCEPTED) and res.expires_at_ms <= now_ms:
                 res.status = EXPIRED
+                expired_ids.append(res.reservation_id)
                 count += 1
+        for rid in expired_ids:
+            self._delete_reservation(rid)
         return count
 
     # ------------------------------------------------------------------
@@ -242,3 +265,60 @@ class ExecutionBudgetService:
     def get_reservation(self, cl_ord_id: str) -> BalanceReservation | None:
         """获取单个 reservation。"""
         return self._reservations.get(cl_ord_id)
+
+    # ------------------------------------------------------------------
+    # Persistence helpers (best-effort, never raise)
+    # ------------------------------------------------------------------
+
+    def _persist_reservation(self, res: BalanceReservation) -> None:
+        """Best-effort PG 持久化（fire-and-forget）。"""
+        if self._repository is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._repository.save_reservation(res))
+        except RuntimeError:
+            pass
+        except Exception as exc:
+            logger.warning("[ExecBudget] _persist_reservation failed: %s", exc)
+
+    def _delete_reservation(self, reservation_id: str) -> None:
+        """Best-effort PG 删除（fire-and-forget）。"""
+        if self._repository is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._repository.delete_reservation(reservation_id))
+        except RuntimeError:
+            pass
+        except Exception as exc:
+            logger.warning("[ExecBudget] _delete_reservation failed: %s", exc)
+
+    async def load_from_pg(self) -> int:
+        """从 PG 加载活跃 reservation。Returns loaded count."""
+        if self._repository is None:
+            return 0
+        try:
+            rows = await self._repository.load_active()
+            if rows is None:
+                return 0
+            count = 0
+            for row in rows:
+                rid = row["reservation_id"]
+                if rid not in self._reservations:
+                    self._reservations[rid] = BalanceReservation(
+                        reservation_id=rid,
+                        account_id=row["account_id"],
+                        venue=row["venue"],
+                        asset=row["asset"],
+                        amount=Decimal(str(row["amount"])),
+                        status=row["status"],
+                        created_at_ms=row["created_at_ms"],
+                        expires_at_ms=row["expires_at_ms"],
+                    )
+                    count += 1
+            logger.info("[ExecBudget] Loaded %d reservations from PG", count)
+            return count
+        except Exception as exc:
+            logger.warning("[ExecBudget] load_from_pg failed: %s", exc)
+            return 0
