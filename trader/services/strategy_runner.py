@@ -207,9 +207,9 @@ class StrategyRunner:
         # 避免语义冲突：如果 strategy config 中的 mode 是交易方向（而非部署模式），
         # 则保留策略配置，不被部署模式覆盖
         # Task 17 修复: FireTestStrategy 用 mode 表示 BUY/SELL/ALTERNATE
-        strategy_mode = merged.get("mode")
-        if strategy_mode and strategy_mode.upper() not in self._DEPLOYMENT_MODES:
-            # 策略配置了非部署模式的 mode 值（如 BUY/SELL/ALTERNATE），保留
+        # 只有当 config 中明确指定了 mode 且为非部署模式值时，才保留策略配置
+        if config and config.get("mode") and config["mode"].upper() not in self._DEPLOYMENT_MODES:
+            # 策略 config 明确指定了交易方向（BUY/SELL/ALTERNATE），保留
             pass
         else:
             merged["mode"] = mode
