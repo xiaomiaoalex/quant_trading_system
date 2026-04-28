@@ -51,27 +51,51 @@ def _make_budget(
 
 class TestSymbolParsing:
     def test_parse_usdt_pair(self) -> None:
-        base, quote = _parse_symbol("BTCUSDT")
+        mult, base, quote = _parse_symbol("BTCUSDT")
+        assert mult == 1
         assert base == "BTC"
         assert quote == "USDT"
 
     def test_parse_fdusd_pair(self) -> None:
-        base, quote = _parse_symbol("ETHFDUSD")
+        mult, base, quote = _parse_symbol("ETHFDUSD")
+        assert mult == 1
         assert base == "ETH"
         assert quote == "FDUSD"
 
     def test_parse_btc_pair(self) -> None:
-        base, quote = _parse_symbol("ETHBTC")
+        mult, base, quote = _parse_symbol("ETHBTC")
+        assert mult == 1
         assert base == "ETH"
         assert quote == "BTC"
 
+    def test_parse_multiplier_symbol(self) -> None:
+        """1000SHIBUSDT → multiplier=1000, base=SHIB, quote=USDT"""
+        mult, base, quote = _parse_symbol("1000SHIBUSDT")
+        assert mult == 1000
+        assert base == "SHIB"
+        assert quote == "USDT"
+
+    def test_parse_10000sats_symbol(self) -> None:
+        mult, base, quote = _parse_symbol("10000SATSUSDT")
+        assert mult == 10000
+        assert base == "SATS"
+        assert quote == "USDT"
+
     def test_buy_resolves_to_quote(self) -> None:
-        assert _resolve_asset("BTCUSDT", "BUY") == "USDT"
-        assert _resolve_asset("ETHBTC", "BUY") == "BTC"
+        assert _resolve_asset("BTCUSDT", "BUY") == ("USDT", 1)
+        assert _resolve_asset("ETHBTC", "BUY") == ("BTC", 1)
+
+    def test_buy_multiplier_resolves_to_quote_with_multiplier(self) -> None:
+        """BUY 1000SHIB/USDT → 扣 USDT，乘数不影响"""
+        assert _resolve_asset("1000SHIBUSDT", "BUY") == ("USDT", 1000)
 
     def test_sell_resolves_to_base(self) -> None:
-        assert _resolve_asset("BTCUSDT", "SELL") == "BTC"
-        assert _resolve_asset("ETHBTC", "SELL") == "ETH"
+        assert _resolve_asset("BTCUSDT", "SELL") == ("BTC", 1)
+        assert _resolve_asset("ETHBTC", "SELL") == ("ETH", 1)
+
+    def test_sell_multiplier_resolves_to_real_base(self) -> None:
+        """SELL 1000SHIB/USDT → 扣 SHIB（不是 1000SHIB），乘数=1000"""
+        assert _resolve_asset("1000SHIBUSDT", "SELL") == ("SHIB", 1000)
 
     def test_parse_symbol_equal_to_quote_raises(self) -> None:
         with pytest.raises(ValueError, match="Cannot parse symbol"):
@@ -466,3 +490,67 @@ class TestBuyVsSellAssetResolution:
         assert res_sell is not None
         assert res_sell.asset == "BTC"
         assert res_sell.amount == Decimal("0.5")  # SELL: qty only
+
+
+# ------------------------------------------------------------------
+# Multiplier symbols (1000SHIB etc.)
+# ------------------------------------------------------------------
+
+
+class TestMultiplierSymbols:
+    def test_sell_multiplier_applies_to_required(self) -> None:
+        """SELL 1000SHIBUSDT → 扣 SHIB，required = qty × 1000"""
+        account_state = _make_account([("SHIB", "500000", "0")])
+        svc = _make_budget(account_state)
+
+        ok, _ = svc.reserve_order(
+            account_id="acct1",
+            venue="binance",
+            cl_ord_id="sell1",
+            symbol="1000SHIBUSDT",
+            side="SELL",
+            quantity=Decimal("10"),
+            reference_price=Decimal("0.00002"),
+        )
+        assert ok is True
+        res = svc.get_reservation("sell1")
+        assert res is not None
+        assert res.asset == "SHIB"
+        assert res.amount == Decimal("10000")  # 10 × 1000
+
+    def test_sell_multiplier_insufficient_balance(self) -> None:
+        """余额不够乘数后的真实数量 → 拒绝"""
+        account_state = _make_account([("SHIB", "5000", "0")])
+        svc = _make_budget(account_state)
+
+        ok, reason = svc.reserve_order(
+            account_id="acct1",
+            venue="binance",
+            cl_ord_id="sell1",
+            symbol="1000SHIBUSDT",
+            side="SELL",
+            quantity=Decimal("10"),
+            reference_price=Decimal("0.00002"),
+        )
+        assert ok is False
+        assert "INSUFFICIENT_BALANCE" in reason
+
+    def test_buy_multiplier_still_uses_quote_asset(self) -> None:
+        """BUY 1000SHIBUSDT → 扣 USDT（乘数不改变 quote asset）"""
+        account_state = _make_account([("USDT", "10000", "0")])
+        svc = _make_budget(account_state)
+
+        ok, _ = svc.reserve_order(
+            account_id="acct1",
+            venue="binance",
+            cl_ord_id="buy1",
+            symbol="1000SHIBUSDT",
+            side="BUY",
+            quantity=Decimal("100"),
+            reference_price=Decimal("0.00002"),
+        )
+        assert ok is True
+        res = svc.get_reservation("buy1")
+        assert res is not None
+        assert res.asset == "USDT"
+        assert res.amount == Decimal("0.002")  # 100 * 0.00002

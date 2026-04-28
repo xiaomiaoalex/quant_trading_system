@@ -103,6 +103,7 @@ class OMSCallbackHandler:
         execution_repository: Optional[ExecutionRepository] = None,
         execution_budget: Optional[ExecutionBudgetService] = None,
         account_state: Optional[AccountStateService] = None,
+        account_id: str = "binance_demo",
     ):
         """
         初始化OMS回调处理器
@@ -118,6 +119,7 @@ class OMSCallbackHandler:
             position_lot_manager: None = 使用全局单例 PositionLedgerManager
             execution_budget: 预算管理服务（可选，未传入时回退到进程内 reservation）
             account_state: 账户状态服务（可选，配合 execution_budget 使用）
+            account_id: 账户标识符（用于 budget 预留和余额查询，默认 "binance_demo"）
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -132,6 +134,7 @@ class OMSCallbackHandler:
         self._execution_repository = execution_repository or get_execution_repository()
         self._execution_budget = execution_budget
         self._account_state = account_state
+        self._account_id = account_id
         if execution_budget is not None and account_state is None:
             logger.warning(
                 "[OMSCallback] execution_budget provided without account_state — "
@@ -427,7 +430,7 @@ class OMSCallbackHandler:
 
         # ==================== ExecutionBudget 路径 ====================
         if self._execution_budget is not None:
-            account_id = "binance_demo"
+            account_id = self._account_id
             venue = self._broker.broker_name
             approved, reason = self._execution_budget.reserve_order(
                 account_id=account_id,
@@ -1206,6 +1209,7 @@ def create_oms_callback(
     position_lot_manager: Any = None,
     execution_budget: Optional[ExecutionBudgetService] = None,
     account_state: Optional[AccountStateService] = None,
+    account_id: str = "binance_demo",
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -1218,6 +1222,7 @@ def create_oms_callback(
         position_lot_manager: None = 使用全局 PositionLedgerManager 单例
         execution_budget: 预算管理服务（可选）
         account_state: 账户状态服务（可选）
+        account_id: 账户标识符（默认 "binance_demo"）
 
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
@@ -1233,6 +1238,7 @@ def create_oms_callback(
         position_lot_manager=position_lot_manager,
         execution_budget=execution_budget,
         account_state=account_state,
+        account_id=account_id,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:

@@ -27,8 +27,20 @@ logger = logging.getLogger(__name__)
 
 # Quote assets — 用于区分 BUY 时扣哪个 asset
 QUOTE_ASSETS: frozenset[str] = frozenset(
-    ("USDT", "FDUSD", "BUSD", "USDC", "USD", "BTC", "ETH")
+    ("USDT", "FDUSD", "BUSD", "USDC", "USD", "BTC", "ETH",
+     "1000SHIB", "1000FLOKI", "1000LUNC", "1000BONK", "10000SATS", "1000000MOG")
 )
+
+# 带数字前缀的 symbol（乘数单位）：symbol → (实际 asset, 乘数)
+# 例：1000SHIB 代表 1000 个 SHIB，卖出 1 单 = 实际扣 1000 SHIB
+MULTIPLIER_SYMBOLS: dict[str, tuple[str, int]] = {
+    "1000SHIB": ("SHIB", 1000),
+    "1000FLOKI": ("FLOKI", 1000),
+    "1000LUNC": ("LUNC", 1000),
+    "1000BONK": ("BONK", 1000),
+    "10000SATS": ("SATS", 10000),
+    "1000000MOG": ("MOG", 1000000),
+}
 
 # Reservation 生命周期状态
 PENDING_SUBMIT = "PENDING_SUBMIT"
@@ -49,32 +61,48 @@ class BalanceReservation:
     expires_at_ms: int
 
 
-def _parse_symbol(symbol: str) -> tuple[str, str]:
-    """从交易对拆出 base/quote assets。
+def _parse_symbol(symbol: str) -> tuple[int, str, str]:
+    """从交易对拆出 multiplier/base/quote。
 
-    规则：从右往左匹配已知 quote asset，最长匹配优先。
-    例：BTCUSDT → ("BTC", "USDT"), BTCFDUSD → ("BTC", "FDUSD")
+    Returns: (multiplier, base, quote)
+      multiplier: 乘数（普通 symbol 为 1，1000SHIB 类为 1000）
+      base: 基础资产（如 "BTC"、"SHIB"，不是 "1000SHIB"）
+      quote: 报价资产（如 "USDT"）
+
+    规则：
+      1. 先尝试匹配乘数 symbol（1000SHIB 等），命中则从右剥离 quote
+      2. 否则从右往左匹配已知 quote asset，最长匹配优先
+      3. 如果 base 是乘数 symbol 本身，解析其真实 base
+
+    例：BTCUSDT → (1, "BTC", "USDT")
+        1000SHIBUSDT → (1000, "SHIB", "USDT")
     """
     # 按长度降序排列 quote assets，优先最长匹配
     sorted_quotes = sorted(QUOTE_ASSETS, key=len, reverse=True)
     for quote in sorted_quotes:
         if symbol.endswith(quote) and len(symbol) > len(quote):
-            base = symbol[: -len(quote)]
-            return base, quote
+            base_raw = symbol[: -len(quote)]
+            # base 本身可能是乘数 symbol（如 "1000SHIB" → 真实 base = "SHIB"）
+            if base_raw in MULTIPLIER_SYMBOLS:
+                real_base, multiplier = MULTIPLIER_SYMBOLS[base_raw]
+                return multiplier, real_base, quote
+            return 1, base_raw, quote
     raise ValueError(f"Cannot parse symbol: {symbol}")
 
 
-def _resolve_asset(symbol: str, side: str) -> str:
-    """根据 symbol 和 side 确定要扣预算的 asset。
+def _resolve_asset(symbol: str, side: str) -> tuple[str, int]:
+    """根据 symbol 和 side 确定要扣预算的 asset 和乘数。
 
-    BUY  → 扣 quote asset（买 BTC/USDT 扣 USDT）
-    SELL → 扣 base asset（卖 BTC/USDT 扣 BTC）
+    BUY  → 扣 quote asset（买 BTC/USDT 扣 USDT），乘数不影响
+    SELL → 扣 base asset（卖 1000SHIB/USDT 扣 SHIB），乘数计入 required
+
+    Returns: (asset_name, multiplier)
     """
-    base, quote = _parse_symbol(symbol)
+    multiplier, base, quote = _parse_symbol(symbol)
     if side.upper() == "BUY":
-        return quote
+        return quote, multiplier
     elif side.upper() == "SELL":
-        return base
+        return base, multiplier
     else:
         raise ValueError(f"Unknown side: {side}")
 
@@ -118,17 +146,17 @@ class ExecutionBudgetService:
         if cl_ord_id in self._reservations:
             return False, f"DUPLICATE_RESERVATION: cl_ord_id={cl_ord_id} already exists"
 
-        # 解析 asset
+        # 解析 asset 和乘数
         try:
-            asset = _resolve_asset(symbol, side)
+            asset, multiplier = _resolve_asset(symbol, side)
         except ValueError as exc:
             return False, f"SYMBOL_PARSE_ERROR: {exc}"
 
-        # 计算 required amount
+        # 计算 required amount（SELL 乘数计入：1000SHIB × qty = 实际 SHIB 数量）
         if side.upper() == "BUY":
             required = quantity * reference_price
         else:
-            required = quantity
+            required = quantity * multiplier
 
         if required <= Decimal("0"):
             return False, f"INVALID_AMOUNT: required={required} must be positive"
