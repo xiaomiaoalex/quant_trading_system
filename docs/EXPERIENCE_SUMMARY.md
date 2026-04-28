@@ -2697,6 +2697,51 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+
+---
+
+## 二十六、OMS 余额预检查与执行预算经验
+
+### 26.1 踩坑记录：余额预检查不能只覆盖限价单
+
+**场景**：
+策略运行时连续出现交易所 `insufficient balance` 拒单。
+
+**问题**：
+- 原逻辑只在 `signal.price > 0` 时做余额检查
+- 市价单或无价信号会绕过本地检查，直接把错误交给交易所
+- 交易所拒单会污染策略事件、监控指标和执行质量判断
+
+**经验**：
+- 交易所拒单只能作为最后防线，执行层必须先做本地可执行性检查
+- 市价买单也需要参考价，用于估算 quoteOrderQty、minNotional 和余额占用
+- 无法拿到账户余额时必须 fail-closed，不能 warning 后继续下单
+
+### 26.2 设计模式：Pre-trade Balance Gate
+
+**实现模式**：
+```python
+quantity, balance_requirement = await pretrade_balance_check(
+    side=side,
+    quantity=quantity,
+    reference_price=reference_price,
+    cl_ord_id=cl_ord_id,
+)
+```
+
+**关键点**：
+- BUY 检查 quote asset（如 USDT）可用余额
+- SELL 检查 base asset（如 BTC）可用余额
+- 账户余额使用 REST snapshot 刷新，测试 fake 也必须实现同等端口语义
+- 本地下单前建立短 TTL reservation，降低连续信号复用同一 stale balance 的风险
+
+### 26.3 边界约束：进程内 Reservation 只是防抖，不是最终账本
+
+**经验**：
+- 进程内 reservation 可以减少同一进程内的短时间超额提交
+- 它不能替代交易所账户流、REST 对账和持久化账户状态
+- 更完整的方案应把 reservation 独立成 AccountState/ExecutionBudget 服务，由 private stream 成交/撤单事件和 REST snapshot 共同校准
+
 ---
 
 ## 二十六、PG 集成验证与存储边界修复经验

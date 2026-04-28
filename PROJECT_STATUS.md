@@ -4,9 +4,35 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-27 23:24 (北京时间)
+2026-04-28 07:49 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：OMS Pre-trade 余额 Gate 完善
+- 完成时间: 2026-04-28 07:49 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过针对性回归
+- 开发前状态:
+  - 策略运行时可能持续产生交易所 rejected，典型原因是 `insufficient balance`
+  - `OMSCallbackHandler` 虽有余额预检查，但只在 `signal.price > 0` 时触发，市价/无价信号会绕过检查
+  - 余额刷新失败只打 warning 后继续下单，执行层存在 fail-open 风险
+  - 多个订单共享同一账户余额时缺少本地短期 reservation，容易连续提交超额订单
+- 开发后状态:
+  - 新增 OMS pre-trade balance gate，所有下单路径先解析 base/quote asset、刷新账户余额、扣减本地 reservation 后再提交 broker
+  - BUY 使用 quote asset 可用余额校验，SELL 使用 base asset 可用余额校验
+  - `signal.price <= 0` 时尝试从 broker ticker 获取参考价，用于市价买单的 quoteOrderQty 估算、余额检查和 minNotional 检查
+  - 账户余额不可获取时 fail-closed，不再继续向交易所提交订单
+  - 下单前通过 `cl_ord_id` 建立短 TTL 余额 reservation，降低短时间连续信号造成的本地超额提交
+  - 测试 fake broker 补齐 `get_account()` / `get_positions()` / `get_exchange_info()` / `get_ticker_prices()`，匹配真实执行端口语义
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_runtime_observability.py trader/tests/test_oms_idempotency.py --tb=short` → 29 passed ✅
+  - `python -m pytest -q trader/tests/test_automated_trading_e2e.py --tb=short` → 27 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_runtime_observability.py trader/tests/test_oms_idempotency.py trader/tests/test_automated_trading_e2e.py --tb=short` → 56 passed ✅
+  - `python -m py_compile trader\services\oms_callback.py trader\tests\test_oms_pretrade_balance.py trader\tests\test_automated_trading_e2e.py trader\api\main.py` → passed ✅
+  - `git diff --check` → passed ✅
+- 注意事项:
+  - 当前 reservation 是进程内短 TTL 防抖，不替代交易所账户流/REST 对账
+  - 后续更完整的执行预算应进入独立 AccountState/Reservation 服务，并由 private stream + REST snapshot 驱动释放与校准
 
 ### 本次任务：重新完成 PG 集成环境 Phase 1-4
 - 完成时间: 2026-04-27 23:24 (北京时间)

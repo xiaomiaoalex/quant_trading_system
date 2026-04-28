@@ -21,6 +21,7 @@ from typing import Dict, Any
 
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.core.domain.models.signal import Signal, SignalType
+from trader.core.application.ports import BrokerAccount
 from trader.services.strategy_runner import StrategyRunner, StrategyStatus
 from trader.services.strategy_runtime_orchestrator import StrategyRuntimeOrchestrator
 from trader.services.oms_callback import OMSCallbackHandler, create_oms_callback
@@ -142,6 +143,27 @@ class FakeBroker:
 
     async def get_symbol_step_size(self, symbol: str) -> Decimal:
         return Decimal("0.00001")
+
+    async def get_exchange_info(self, symbol: str):
+        return {
+            "symbols": [{
+                "symbol": symbol,
+                "filters": [{"filterType": "NOTIONAL", "minNotional": "10"}],
+            }]
+        }
+
+    async def get_ticker_prices(self, symbols):
+        return {symbol: Decimal("50000") for symbol in symbols}
+
+    async def get_account(self):
+        return BrokerAccount(
+            total_equity=Decimal("10000"),
+            available_cash=Decimal("10000"),
+            currency="USDT",
+        )
+
+    async def get_positions(self):
+        return []
 
 
 # ============================================================================

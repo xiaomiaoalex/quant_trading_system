@@ -66,6 +66,35 @@ API_PORT = 8080
 import re
 
 
+def _enable_windows_ansi_colors() -> None:
+    """Enable ANSI color rendering for Windows console hosts."""
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        enable_virtual_terminal_processing = 0x0004
+        std_handles = (-11, -12)  # STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+
+        for std_handle in std_handles:
+            handle = kernel32.GetStdHandle(std_handle)
+            mode = ctypes.c_uint()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                continue
+            kernel32.SetConsoleMode(
+                handle,
+                mode.value | enable_virtual_terminal_processing,
+            )
+    except Exception:
+        # Best-effort console setup only; logging must never block app startup.
+        return
+
+
+_enable_windows_ansi_colors()
+
+
 # ANSI 颜色代码
 class LogColors:
     """日志颜色定义"""

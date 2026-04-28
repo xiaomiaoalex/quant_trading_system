@@ -19,6 +19,7 @@ import logging
 import time
 import uuid
 import inspect
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional, Dict, Any, Callable, Union
@@ -38,6 +39,16 @@ from trader.adapters.persistence.postgres import is_postgres_available
 from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class BalanceRequirement:
+    """Pre-trade balance requirement for one order."""
+
+    asset: str
+    required: Decimal
+    available: Decimal
+    reserved: Decimal
 
 
 class OMSCallbackError(Exception):
@@ -126,8 +137,10 @@ class OMSCallbackHandler:
         self._processed_cl_ord_ids: Dict[str, float] = {}
         self._cl_ord_id_to_strategy: Dict[str, str] = {}
         self._processed_exec_keys: Dict[str, float] = {}
+        self._balance_reservations: Dict[str, tuple[str, Decimal, float]] = {}
         self._exec_dedup_ttl_seconds: int = 900
         self._cl_ord_id_ttl_seconds: int = 3600
+        self._balance_reservation_ttl_seconds: int = 30
 
         self._cl_ord_id_dedup_hits: int = 0
         self._exec_dedup_hits: int = 0
@@ -252,6 +265,192 @@ class OMSCallbackHandler:
         ]
         for key in expired_keys:
             del self._processed_exec_keys[key]
+
+    def _cleanup_balance_reservations(self) -> None:
+        now = time.time()
+        expired = [
+            cl_ord_id
+            for cl_ord_id, (_, _, expires_at) in self._balance_reservations.items()
+            if expires_at <= now
+        ]
+        for cl_ord_id in expired:
+            del self._balance_reservations[cl_ord_id]
+
+    def _reserved_balance(self, asset: str) -> Decimal:
+        self._cleanup_balance_reservations()
+        asset_norm = asset.upper()
+        return sum(
+            amount
+            for reserved_asset, amount, _ in self._balance_reservations.values()
+            if reserved_asset == asset_norm
+        )
+
+    def _reserve_balance(self, cl_ord_id: str, asset: str, amount: Decimal) -> None:
+        self._cleanup_balance_reservations()
+        if amount <= 0:
+            return
+        self._balance_reservations[cl_ord_id] = (
+            asset.upper(),
+            amount,
+            time.time() + self._balance_reservation_ttl_seconds,
+        )
+
+    def _release_balance_reservation(self, cl_ord_id: str) -> None:
+        self._balance_reservations.pop(cl_ord_id, None)
+
+    def _record_rejection(
+        self,
+        strategy_id: str,
+        signal: Signal,
+        side: str | None,
+        quantity: Decimal | None,
+        price: Decimal | None,
+        reason: str,
+        counter_key: str,
+    ) -> None:
+        self._publish_event(strategy_id, "strategy.order.rejected", {
+            "symbol": signal.symbol,
+            "side": side or (str(signal.signal_type) if signal.signal_type else None),
+            "quantity": str(quantity) if quantity is not None else None,
+            "price": str(price) if price is not None else None,
+            "reason": reason,
+        })
+        self._order_submit_reject += 1
+        self._reject_reason_counts[counter_key] = (
+            self._reject_reason_counts.get(counter_key, 0) + 1
+        )
+
+    def _split_symbol_assets(self, symbol: str) -> tuple[str, str]:
+        symbol_norm = symbol.upper().strip()
+        quote_assets = ("USDT", "FDUSD", "BUSD", "USDC", "USD", "BTC", "ETH")
+        for quote_asset in quote_assets:
+            if symbol_norm.endswith(quote_asset) and len(symbol_norm) > len(quote_asset):
+                return symbol_norm[:-len(quote_asset)], quote_asset
+        raise OMSCallbackError(f"Cannot infer base/quote assets for symbol={symbol}")
+
+    async def _resolve_reference_price(self, symbol: str, signal_price: Decimal) -> Decimal:
+        if signal_price > 0:
+            return signal_price
+
+        get_ticker_prices = getattr(self._broker, "get_ticker_prices", None)
+        if callable(get_ticker_prices):
+            prices_result = get_ticker_prices([symbol])
+            prices = await prices_result if inspect.isawaitable(prices_result) else prices_result
+            price = Decimal(str(prices.get(symbol) or prices.get(symbol.upper()) or "0"))
+            if price > 0:
+                return price
+
+        raise OMSCallbackError(
+            f"Positive signal price or ticker price is required before placing {symbol}"
+        )
+
+    async def _fetch_available_balances(self) -> Dict[str, Decimal]:
+        balances: Dict[str, Decimal] = {}
+
+        fetch_account = getattr(self._broker, "_fetch_account", None)
+        if callable(fetch_account):
+            try:
+                account_result = fetch_account()
+                fetched = await account_result if inspect.isawaitable(account_result) else account_result
+            except Exception as exc:
+                raise OMSCallbackError(
+                    f"Unable to fetch account balances for pre-trade check: {exc}"
+                ) from exc
+            account = getattr(self._broker, "_account_cache", None) or fetched
+            if isinstance(account, dict):
+                for bal in account.get("balances", []):
+                    asset = str(bal.get("asset", "")).upper()
+                    if not asset:
+                        continue
+                    balances[asset] = Decimal(str(bal.get("free", "0")))
+                if balances:
+                    return balances
+
+        get_account = getattr(self._broker, "get_account", None)
+        if callable(get_account):
+            try:
+                account_result = get_account()
+                account = await account_result if inspect.isawaitable(account_result) else account_result
+            except Exception as exc:
+                raise OMSCallbackError(
+                    f"Unable to fetch account balances for pre-trade check: {exc}"
+                ) from exc
+            currency = str(getattr(account, "currency", "USDT")).upper()
+            balances[currency] = Decimal(str(getattr(account, "available_cash", "0")))
+
+        get_positions = getattr(self._broker, "get_positions", None)
+        if callable(get_positions):
+            positions_result = get_positions()
+            positions = await positions_result if inspect.isawaitable(positions_result) else positions_result
+            for pos in positions or []:
+                asset = str(getattr(pos, "symbol", "")).upper()
+                qty = Decimal(str(getattr(pos, "quantity", "0")))
+                if asset and qty > 0:
+                    balances[asset] = balances.get(asset, Decimal("0")) + qty
+
+        if not balances:
+            raise OMSCallbackError("Unable to fetch account balances for pre-trade check")
+        return balances
+
+    async def _pretrade_balance_check(
+        self,
+        strategy_id: str,
+        signal: Signal,
+        side: OrderSide,
+        quantity: Decimal,
+        reference_price: Decimal,
+        cl_ord_id: str,
+        is_emergency: bool,
+    ) -> tuple[Decimal, BalanceRequirement]:
+        base_asset, quote_asset = self._split_symbol_assets(signal.symbol)
+        balances = await self._fetch_available_balances()
+
+        if side == OrderSide.BUY:
+            asset = quote_asset
+            required = quantity * reference_price
+        else:
+            asset = base_asset
+            required = quantity
+
+        available = balances.get(asset, Decimal("0"))
+        reserved = self._reserved_balance(asset)
+        spendable = available - reserved
+
+        requirement = BalanceRequirement(
+            asset=asset,
+            required=required,
+            available=available,
+            reserved=reserved,
+        )
+
+        if spendable >= required:
+            self._reserve_balance(cl_ord_id, asset, required)
+            return quantity, requirement
+
+        if side == OrderSide.SELL and is_emergency and spendable > 0:
+            logger.critical(
+                f"[OMSCallback] EMERGENCY_EXIT quantity clipped by balance: "
+                f"strategy={strategy_id}, symbol={signal.symbol}, "
+                f"requested={quantity}, available={spendable}"
+            )
+            clipped_qty = spendable
+            self._reserve_balance(cl_ord_id, asset, clipped_qty)
+            return clipped_qty, BalanceRequirement(asset, clipped_qty, available, reserved)
+
+        error_msg = (
+            f"Insufficient {asset} balance: required={required}, "
+            f"available={available}, reserved={reserved}, spendable={spendable}"
+        )
+        self._record_rejection(
+            strategy_id=strategy_id,
+            signal=signal,
+            side=side.value,
+            quantity=quantity,
+            price=reference_price,
+            reason=f"INSUFFICIENT_BALANCE: {error_msg}",
+            counter_key="INSUFFICIENT_BALANCE",
+        )
+        raise InsufficientBalanceError(error_msg)
 
     def _determine_order_side(self, signal: Signal) -> tuple[OrderSide, bool]:
         """
@@ -445,27 +644,42 @@ class OMSCallbackHandler:
             logger.warning(f"[OMSCallback] Quantity quantization failed: {e}")
             quantity = Decimal(str(signal.quantity))
 
-        # ==================== 最小名义金额检查 ====================
+        # ==================== 方向、订单类型、参考价格 ====================
+        side, is_emergency = self._determine_order_side(signal)
+        order_type = OrderType.MARKET
+        if signal.price and signal.price > 0:
+            order_type = OrderType.LIMIT
+
         price = signal.price or Decimal("0")
-        if price <= 0:
-            logger.warning(f"[OMSCallback] Signal price is zero, cannot validate minNotional")
-        else:
-            notional = quantity * price
-            min_notional = await self._get_min_notional(signal.symbol)
-            if notional < min_notional:
-                error_msg = f"Notional {notional} below minNotional {min_notional}"
-                self._publish_event(strategy_id, "strategy.order.rejected", {
-                    "symbol": signal.symbol,
-                    "side": str(signal.signal_type) if signal.signal_type else None,
-                    "quantity": str(quantity),
-                    "price": str(price),
-                    "reason": f"MIN_NOTIONAL: {error_msg}",
-                })
-                # Task 19: Track rejection
-                self._order_submit_reject += 1
-                reason = "MIN_NOTIONAL"
-                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                raise MinNotionalError(error_msg)
+        try:
+            reference_price = await self._resolve_reference_price(signal.symbol, price)
+        except OMSCallbackError as e:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=price,
+                reason=str(e),
+                counter_key="MISSING_REFERENCE_PRICE",
+            )
+            raise
+
+        # ==================== 最小名义金额检查 ====================
+        notional = quantity * reference_price
+        min_notional = await self._get_min_notional(signal.symbol)
+        if notional < min_notional:
+            error_msg = f"Notional {notional} below minNotional {min_notional}"
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=reference_price,
+                reason=f"MIN_NOTIONAL: {error_msg}",
+                counter_key="MIN_NOTIONAL",
+            )
+            raise MinNotionalError(error_msg)
 
         # ==================== 生成订单ID ====================
         # 币安要求 cl_ord_id 必须符合 ^[a-zA-Z0-9-_]{1,36}$
@@ -508,103 +722,22 @@ class OMSCallbackHandler:
 
         # ==================== 下单 ====================
         try:
-            # 转换方向
-            side, is_emergency = self._determine_order_side(signal)
-            
-            # 转换订单类型（默认市价单）
-            order_type = OrderType.MARKET
-            if signal.price and signal.price > 0:
-                order_type = OrderType.LIMIT
-
-            # 下单前余额预检查
-            if signal.price and signal.price > 0:
-                try:
-                    # 刷新账户信息确保余额最新
-                    await self._broker._fetch_account()
-                    account = self._broker._account_cache
-                    if account:
-                        # 解析交易对的 base 和 quote asset
-                        # 例如: BTCUSDT -> base=BTC, quote=USDT
-                        #      ETHUSDT -> base=ETH, quote=USDT
-                        #      BTCUSDC -> base=BTC, quote=USDC
-                        symbol = signal.symbol.upper()
-                        # 常见的 quote assets
-                        quote_assets = ("USDT", "BUSD", "USDC", "FDUSD", "USD", "BTC", "ETH")
-                        base_asset = symbol
-                        quote_asset = None
-                        for qa in quote_assets:
-                            if symbol.endswith(qa):
-                                base_asset = symbol[:-len(qa)]
-                                quote_asset = qa
-                                break
-                        
-                        if side == OrderSide.BUY:
-                            # BUY: 检查 quote asset (USDT等) 余额
-                            quote_balance = Decimal("0")
-                            for bal in account.get("balances", []):
-                                if bal.get("asset") == quote_asset:
-                                    quote_balance = Decimal(str(bal.get("free", "0")))
-                                    break
-                            notional = quantity * signal.price
-                            if quote_balance < notional:
-                                error_msg = f"Insufficient {quote_asset} balance for BUY: required={notional}, available={quote_balance}"
-                                logger.warning(f"[OMSCallback] {error_msg}")
-                                self._publish_event(strategy_id, "strategy.order.rejected", {
-                                    "symbol": signal.symbol,
-                                    "side": side.value,
-                                    "quantity": str(quantity),
-                                    "price": str(signal.price),
-                                    "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
-                                })
-                                # Task 19: Track rejection
-                                self._order_submit_reject += 1
-                                reason = "INSUFFICIENT_BALANCE"
-                                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                                raise InsufficientBalanceError(error_msg)
-                        elif side == OrderSide.SELL:
-                            # SELL: 检查 base asset (BTC等) 余额
-                            base_balance = Decimal("0")
-                            for bal in account.get("balances", []):
-                                if bal.get("asset") == base_asset:
-                                    base_balance = Decimal(str(bal.get("free", "0")))
-                                    break
-                            logger.info(
-                                f"[OMSCallback] SELL balance check: base_asset={base_asset}, "
-                                f"required={quantity}, available={base_balance}"
-                            )
-                            if base_balance < quantity:
-                                if is_emergency:
-                                    # EMERGENCY_EXIT: 强制卖出，按实际余额调整
-                                    original_qty = quantity
-                                    quantity = base_balance
-                                    logger.critical(
-                                        f"[OMSCallback] 🚨 EMERGENCY EXIT: 余额不足强制调整! "
-                                        f"原订单={original_qty} {base_asset}, 实际卖出={quantity} {base_asset}, "
-                                        f"symbol={signal.symbol}, strategy={strategy_id}"
-                                    )
-                                else:
-                                    error_msg = f"Insufficient {base_asset} balance for SELL: required={quantity}, available={base_balance}"
-                                    logger.warning(f"[OMSCallback] {error_msg}")
-                                    self._publish_event(strategy_id, "strategy.order.rejected", {
-                                        "symbol": signal.symbol,
-                                        "side": side.value,
-                                        "quantity": str(quantity),
-                                        "price": str(signal.price),
-                                        "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
-                                    })
-                                    # Task 19: Track rejection
-                                    self._order_submit_reject += 1
-                                    reason = "INSUFFICIENT_BALANCE"
-                                    self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                                    raise InsufficientBalanceError(error_msg)
-                except MinNotionalError:
-                    raise  # Re-raise to be caught by outer handler
-                except InvalidQuantityError:
-                    raise  # Re-raise to be caught by outer handler
-                except InsufficientBalanceError:
-                    raise  # Re-raise to be caught by outer handler
-                except Exception as e:
-                    logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
+            # 下单前余额预检查：失败即拒绝，避免依赖交易所 insufficient balance 拒单。
+            quantity, balance_requirement = await self._pretrade_balance_check(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side,
+                quantity=quantity,
+                reference_price=reference_price,
+                cl_ord_id=cl_ord_id,
+                is_emergency=is_emergency,
+            )
+            logger.info(
+                f"[OMSCallback] Balance pre-check passed: asset={balance_requirement.asset}, "
+                f"required={balance_requirement.required}, "
+                f"available={balance_requirement.available}, "
+                f"reserved={balance_requirement.reserved}"
+            )
 
             # 下单
             order_desc = f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
@@ -618,7 +751,9 @@ class OMSCallbackHandler:
                 side=side,
                 order_type=order_type,
                 quantity=quantity,
-                price=signal.price if order_type == OrderType.LIMIT else None,
+                price=signal.price if order_type == OrderType.LIMIT else (
+                    reference_price if side == OrderSide.BUY else None
+                ),
                 client_order_id=cl_ord_id,
             )
 
@@ -832,7 +967,11 @@ class OMSCallbackHandler:
                 "avg_price": str(broker_order.average_price),
             }
 
+        except (InsufficientBalanceError, MinNotionalError, InvalidQuantityError):
+            self._release_balance_reservation(cl_ord_id)
+            raise
         except Exception as e:
+            self._release_balance_reservation(cl_ord_id)
             error_msg = str(e)
             logger.error(f"[OMSCallback] Order failed: {error_msg}")
 
