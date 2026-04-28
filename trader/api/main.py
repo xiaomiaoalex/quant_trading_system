@@ -318,6 +318,36 @@ async def lifespan(app: FastAPI):
                 logger.warning("[Lifespan] Fill handler not available yet")
 
             # ============================================================
+            # AccountStateService + ExecutionBudgetService + Bridge
+            # ============================================================
+            from trader.services.account_state import AccountStateService
+            from trader.services.execution_budget import ExecutionBudgetService
+            from trader.services.account_stream_bridge import (
+                AccountStreamBridge,
+                AccountStreamBridgeConfig,
+            )
+
+            account_state = AccountStateService()
+            execution_budget = ExecutionBudgetService(account_state)
+
+            bridge_config = AccountStreamBridgeConfig(
+                account_id="binance_demo",
+                venue=connector.broker_name,
+            )
+            bridge = AccountStreamBridge(account_state, bridge_config)
+
+            # 注册 account/balance handler 到 connector
+            connector.register_account_update_handler(bridge.on_account_update)
+            connector.register_balance_update_handler(bridge.on_balance_update)
+
+            # 注入到 strategies 模块，供 OMS 使用
+            from trader.api.routes.strategies import set_execution_budget, set_account_state
+            set_execution_budget(execution_budget)
+            set_account_state(account_state)
+
+            logger.info("[Lifespan] AccountState + ExecutionBudget + Bridge initialized")
+
+            # ============================================================
             # Task 9.11: DegradedCascadeController 初始化和注册
             # ============================================================
             from trader.adapters.binance.degraded_cascade import (
@@ -446,6 +476,15 @@ async def lifespan(app: FastAPI):
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()
             _binance_connector_instance = connector
+
+            # 初始 REST snapshot 校准 + 周期校准
+            async def _fetch_balances() -> list[dict]:
+                account = await broker._fetch_account()
+                return account.get("balances", [])
+
+            await bridge.fetch_and_apply_rest_snapshot(_fetch_balances)
+            bridge.start_periodic_calibration(_fetch_balances)
+            logger.info("[Lifespan] Account state REST calibration started")
 
             # Run self-check (but don't block startup)
             self_check_passed = await _run_startup_self_check(connector)

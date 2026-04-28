@@ -170,11 +170,15 @@ class BinanceConnector:
         self._public_manager.register_market_handler(self._on_public_data)
         self._private_manager.register_order_handler(self._on_order_update)
         self._private_manager.register_fill_handler(self._on_fill_update)
+        self._private_manager.register_account_update_handler(self._on_account_update)
+        self._private_manager.register_balance_update_handler(self._on_balance_update)
         self._private_manager.set_force_resync_callback(self._on_force_resync)
         self._rest_coordinator.register_snapshot_handler(self._on_rest_snapshot)
 
         self._order_update_handlers: List[Callable[[RawOrderUpdate], None]] = []
         self._fill_update_handlers: List[Callable[[RawFillUpdate], None]] = []
+        self._account_update_handlers: List[Callable[[dict], None]] = []
+        self._balance_update_handlers: List[Callable[[dict], None]] = []
         self._market_event_handlers: List[Callable[[MarketEvent], None]] = []
         self._snapshot_handlers: List[Callable[[RestAlignmentSnapshot], None]] = []
         self._health_handlers: List[Callable[[AdapterHealthReport], None]] = []
@@ -190,6 +194,14 @@ class BinanceConnector:
     def register_fill_handler(self, handler: Callable[[RawFillUpdate], None]) -> None:
         """注册成交更新处理器"""
         self._fill_update_handlers.append(handler)
+
+    def register_account_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册账户余额更新处理器（outboundAccountPosition）"""
+        self._account_update_handlers.append(handler)
+
+    def register_balance_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册余额变动处理器（balanceUpdate）"""
+        self._balance_update_handlers.append(handler)
 
     def register_market_handler(self, handler: Callable[[MarketEvent], None]) -> None:
         """注册市场事件处理器"""
@@ -311,6 +323,16 @@ class BinanceConnector:
         """处理成交更新"""
         for handler in self._fill_update_handlers:
             self._dispatch_handler(handler, update)
+
+    def _on_account_update(self, data: dict) -> None:
+        """处理账户余额更新（outboundAccountPosition）"""
+        for handler in self._account_update_handlers:
+            self._dispatch_handler(handler, data)
+
+    def _on_balance_update(self, data: dict) -> None:
+        """处理余额变动（balanceUpdate）"""
+        for handler in self._balance_update_handlers:
+            self._dispatch_handler(handler, data)
 
     def _on_rest_snapshot(self, snapshot: RestAlignmentSnapshot) -> None:
         """处理 REST 对齐快照"""

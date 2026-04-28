@@ -166,6 +166,8 @@ class PrivateStreamManager(BaseStreamFSM):
 
         self._order_update_handlers: List[Callable[[RawOrderUpdate], None]] = []
         self._fill_update_handlers: List[Callable[[RawFillUpdate], None]] = []
+        self._account_update_handlers: List[Callable[[dict], None]] = []
+        self._balance_update_handlers: List[Callable[[dict], None]] = []
         self._force_resync_callback: Optional[Callable[[str], Awaitable[None]]] = None
 
         self._ping_task: Optional[asyncio.Task] = None
@@ -184,6 +186,14 @@ class PrivateStreamManager(BaseStreamFSM):
     def register_fill_handler(self, handler: Callable[[RawFillUpdate], None]) -> None:
         """注册成交更新处理器"""
         self._fill_update_handlers.append(handler)
+
+    def register_account_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册账户余额更新处理器（outboundAccountPosition）"""
+        self._account_update_handlers.append(handler)
+
+    def register_balance_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册余额变动处理器（balanceUpdate）"""
+        self._balance_update_handlers.append(handler)
 
     async def _dispatch_handler(self, handler: Callable, *args) -> None:
         """分发处理器调用，自动处理同步/异步函数"""
@@ -802,7 +812,19 @@ class PrivateStreamManager(BaseStreamFSM):
 
             event_type = data.get("e")
 
-            if event_type in ("outboundAccountInfo", "outboundAccountPosition", "balanceUpdate"):
+            if event_type == "outboundAccountPosition":
+                self._last_user_event_ts = now
+                self._has_seen_user_event = True
+                for handler in self._account_update_handlers:
+                    await self._dispatch_handler(handler, data)
+
+            elif event_type == "balanceUpdate":
+                self._last_user_event_ts = now
+                self._has_seen_user_event = True
+                for handler in self._balance_update_handlers:
+                    await self._dispatch_handler(handler, data)
+
+            elif event_type == "outboundAccountInfo":
                 self._last_user_event_ts = now
                 self._has_seen_user_event = True
 

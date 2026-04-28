@@ -136,6 +136,20 @@ async def _create_broker():
 _oms_handler: Optional[Any] = None
 _oms_handler_instance: Optional[Any] = None  # 实际 handler 实例，用于获取 metrics
 _fill_handler: Optional[Any] = None
+_execution_budget: Optional[Any] = None
+_account_state: Optional[Any] = None
+
+
+def set_execution_budget(budget: Any) -> None:
+    """注入 ExecutionBudgetService 实例（在 main.py lifespan 中调用）。"""
+    global _execution_budget
+    _execution_budget = budget
+
+
+def set_account_state(state: Any) -> None:
+    """注入 AccountStateService 实例（在 main.py lifespan 中调用）。"""
+    global _account_state
+    _account_state = state
 
 
 async def _get_oms_handler():
@@ -165,6 +179,8 @@ async def _get_oms_handler():
             live_trading_enabled=_is_live_trading_enabled,
             event_callback=_event_callback_dispatcher,
             fill_callback=fill_callback,
+            execution_budget=_execution_budget,
+            account_state=_account_state,
         )
         _oms_handler = oms_cb
         _oms_handler_instance = handler_instance  # 保存实际 handler 实例，用于获取 metrics
