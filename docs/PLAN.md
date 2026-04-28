@@ -33,6 +33,7 @@
 | **自动交易生产化** | `env_config.py`, `proxy_failover.py`, `oms_idempotency.py` | **Task 16-20 完成（2026-04-20）：环境统一、成交去重、重启恢复、运行时可观测性** |
 | **SSE实时更新** | `oms_callback.py`, `strategy_runner.py`, `monitor_service.py` | **Task 9.11 完成：SSE广播集成OMS/StrategyRunner/Reconciler，Monitor和Strategies页面实时更新** |
 | **持仓追踪** | `oms.py`, `monitor_service.py` | **Task 9.11 完成：PositionExposure计算、OMS Metrics修复、Adapter Health修复** |
+| **账户状态与执行预算** | `services/account_state.py`, `services/execution_budget.py`, `services/oms_callback.py` | **Phase 1-2 完成（2026-04-28）：AccountStateService + ExecutionBudgetService 领域模型 + OMS集成。REST snapshot 校准、private stream 增量、budget reservation 状态机、broker 异常分类处理** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 

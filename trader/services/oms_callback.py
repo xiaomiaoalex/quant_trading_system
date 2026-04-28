@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import Optional, Dict, Any, Callable, Union
 
 from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
+from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
 from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
 from trader.core.domain.models.signal import Signal
 from trader.core.domain.services.position_lot_registry import (
@@ -37,6 +38,8 @@ from trader.adapters.persistence.execution_repository import (
 )
 from trader.adapters.persistence.postgres import is_postgres_available
 from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
+from trader.services.execution_budget import ExecutionBudgetService
+from trader.services.account_state import AccountStateService
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,8 @@ class OMSCallbackHandler:
         fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
         position_lot_manager: Any = None,  # None = 使用全局单例
         execution_repository: Optional[ExecutionRepository] = None,
+        execution_budget: Optional[ExecutionBudgetService] = None,
+        account_state: Optional[AccountStateService] = None,
     ):
         """
         初始化OMS回调处理器
@@ -111,6 +116,8 @@ class OMSCallbackHandler:
             event_callback: 事件发布回调
             fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
             position_lot_manager: None = 使用全局单例 PositionLedgerManager
+            execution_budget: 预算管理服务（可选，未传入时回退到进程内 reservation）
+            account_state: 账户状态服务（可选，配合 execution_budget 使用）
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -123,6 +130,13 @@ class OMSCallbackHandler:
         # None = 从全局 registry 获取（推荐方式）
         self._position_lot_manager = position_lot_manager
         self._execution_repository = execution_repository or get_execution_repository()
+        self._execution_budget = execution_budget
+        self._account_state = account_state
+        if execution_budget is not None and account_state is None:
+            logger.warning(
+                "[OMSCallback] execution_budget provided without account_state — "
+                "emergency SELL clipping will be disabled in budget path"
+            )
 
         self._position_locks: Dict[str, asyncio.Lock] = {}
 
@@ -403,7 +417,6 @@ class OMSCallbackHandler:
         is_emergency: bool,
     ) -> tuple[Decimal, BalanceRequirement]:
         base_asset, quote_asset = self._split_symbol_assets(signal.symbol)
-        balances = await self._fetch_available_balances()
 
         if side == OrderSide.BUY:
             asset = quote_asset
@@ -412,6 +425,71 @@ class OMSCallbackHandler:
             asset = base_asset
             required = quantity
 
+        # ==================== ExecutionBudget 路径 ====================
+        if self._execution_budget is not None:
+            account_id = "binance_demo"
+            venue = self._broker.broker_name
+            approved, reason = self._execution_budget.reserve_order(
+                account_id=account_id,
+                venue=venue,
+                cl_ord_id=cl_ord_id,
+                symbol=signal.symbol,
+                side=side.value,
+                quantity=quantity,
+                reference_price=reference_price,
+            )
+            if approved:
+                requirement = BalanceRequirement(
+                    asset=asset,
+                    required=required,
+                    available=Decimal("0"),
+                    reserved=Decimal("0"),
+                )
+                return quantity, requirement
+
+            # Emergency sell: 尝试用 budget service 的余额信息做 clipping
+            if side == OrderSide.SELL and is_emergency and self._account_state is not None:
+                account_spendable = self._account_state.get_spendable(account_id, venue, asset)
+                budget_reserved = self._execution_budget.get_reserved(account_id, venue, asset)
+                spendable = account_spendable - budget_reserved
+                if spendable > 0:
+                    # 释放之前的拒绝 reservation，用 clipping 后的数量重试
+                    clipped_qty = min(spendable, quantity)
+                    approved2, reason2 = self._execution_budget.reserve_order(
+                        account_id=account_id,
+                        venue=venue,
+                        cl_ord_id=cl_ord_id,
+                        symbol=signal.symbol,
+                        side=side.value,
+                        quantity=clipped_qty,
+                        reference_price=reference_price,
+                    )
+                    if approved2:
+                        logger.critical(
+                            f"[OMSCallback] EMERGENCY_EXIT quantity clipped by budget: "
+                            f"strategy={strategy_id}, symbol={signal.symbol}, "
+                            f"requested={quantity}, clipped={clipped_qty}"
+                        )
+                        requirement = BalanceRequirement(
+                            asset=asset, required=clipped_qty,
+                            available=account_spendable, reserved=budget_reserved,
+                        )
+                        return clipped_qty, requirement
+
+            # 预算不足，本地拒单
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=reference_price,
+                reason=f"EXECUTION_BUDGET_REJECT: {reason}",
+                counter_key="INSUFFICIENT_BALANCE",
+            )
+            raise InsufficientBalanceError(f"Execution budget rejected: {reason}")
+
+        # ==================== 回退路径：进程内 reservation ====================
+        balances = await self._fetch_available_balances()
         available = balances.get(asset, Decimal("0"))
         reserved = self._reserved_balance(asset)
         spendable = available - reserved
@@ -746,16 +824,43 @@ class OMSCallbackHandler:
             order_desc += f"side={side.value}, type={order_type.value}, qty={quantity}, "
             order_desc += f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
             logger.info(order_desc)
-            broker_order = await self._broker.place_order(
-                symbol=signal.symbol,
-                side=side,
-                order_type=order_type,
-                quantity=quantity,
-                price=signal.price if order_type == OrderType.LIMIT else (
-                    reference_price if side == OrderSide.BUY else None
-                ),
-                client_order_id=cl_ord_id,
-            )
+            try:
+                broker_order = await self._broker.place_order(
+                    symbol=signal.symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=quantity,
+                    price=signal.price if order_type == OrderType.LIMIT else (
+                        reference_price if side == OrderSide.BUY else None
+                    ),
+                    client_order_id=cl_ord_id,
+                )
+            except BrokerBusinessError as e:
+                # 业务拒单（如交易所 insufficient balance）→ 释放 budget reservation
+                if self._execution_budget is not None:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="business_reject")
+                raise
+            except BrokerNetworkError as e:
+                # 网络异常 → 保持 reservation 不释放，标记需后续 reconciliation
+                logger.warning(
+                    f"[OMSCallback] Broker network error for cl_ord_id={cl_ord_id}: {e}. "
+                    f"Budget reservation preserved for reconciliation."
+                )
+                raise
+            except Exception as e:
+                # 其他异常 → 释放 budget reservation
+                if self._execution_budget is not None:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="unknown_error")
+                raise
+
+            # broker 成功 → 标记 reservation 为 ACCEPTED
+            if self._execution_budget is not None:
+                try:
+                    self._execution_budget.accept_reservation(cl_ord_id)
+                except (KeyError, ValueError) as e:
+                    logger.warning(
+                        f"[OMSCallback] Failed to accept budget reservation for cl_ord_id={cl_ord_id}: {e}"
+                    )
 
             # ==================== 保存订单到存储 ====================
             order_data = {
@@ -783,6 +888,15 @@ class OMSCallbackHandler:
 
             # ==================== 如果有成交，保存成交记录 ====================
             if broker_order.filled_quantity > 0:
+                # 释放 budget reservation（已成交，预算可回收）
+                if self._execution_budget is not None:
+                    try:
+                        self._execution_budget.release_reservation(cl_ord_id, reason="filled")
+                    except (KeyError, ValueError) as e:
+                        logger.warning(
+                            f"[OMSCallback] Failed to release budget reservation on fill "
+                            f"for cl_ord_id={cl_ord_id}: {e}"
+                        )
                 exec_id = f"{broker_order.broker_order_id}:init"
                 # Task 19: 幂等检查：避免重复计数
                 if not self._mark_exec_seen(cl_ord_id, exec_id):
@@ -968,10 +1082,22 @@ class OMSCallbackHandler:
             }
 
         except (InsufficientBalanceError, MinNotionalError, InvalidQuantityError):
-            self._release_balance_reservation(cl_ord_id)
+            # Budget reservation 已在 _pretrade_balance_check 或 broker 异常中处理
+            if self._execution_budget is None:
+                self._release_balance_reservation(cl_ord_id)
+            raise
+        except (BrokerBusinessError, BrokerNetworkError):
+            # Broker 异常已在内层 try/except 处理 budget，此处只 re-raise
             raise
         except Exception as e:
-            self._release_balance_reservation(cl_ord_id)
+            if self._execution_budget is None:
+                self._release_balance_reservation(cl_ord_id)
+            else:
+                # 非 broker 异常且有 budget：确保释放（兜底）
+                try:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="unknown_error")
+                except (KeyError, ValueError):
+                    pass
             error_msg = str(e)
             logger.error(f"[OMSCallback] Order failed: {error_msg}")
 
@@ -1078,6 +1204,8 @@ def create_oms_callback(
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
     position_lot_manager: Any = None,
+    execution_budget: Optional[ExecutionBudgetService] = None,
+    account_state: Optional[AccountStateService] = None,
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -1088,6 +1216,8 @@ def create_oms_callback(
         event_callback: 事件发布回调
         fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
         position_lot_manager: None = 使用全局 PositionLedgerManager 单例
+        execution_budget: 预算管理服务（可选）
+        account_state: 账户状态服务（可选）
 
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
@@ -1101,6 +1231,8 @@ def create_oms_callback(
         event_callback=event_callback,
         fill_callback=fill_callback,
         position_lot_manager=position_lot_manager,
+        execution_budget=execution_budget,
+        account_state=account_state,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -1181,6 +1313,13 @@ def create_oms_callback(
                         exec_id,
                     )
                     return
+
+                # 释放 budget reservation（WS 成交路径）
+                if handler._execution_budget is not None:
+                    try:
+                        handler._execution_budget.release_reservation(cl_ord_id, reason="filled")
+                    except (KeyError, ValueError):
+                        pass  # 可能已被 sync 路径释放
 
                 # 写执行记录（按 cl_ord_id + exec_id 幂等）
                 execution_data = {

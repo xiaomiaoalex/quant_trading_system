@@ -4,9 +4,62 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-28 07:49 (北京时间)
+2026-04-28 14:00 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：增加开发记录文档规范
+- 完成时间: 2026-04-28 07:55 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `PLAN.md` 负责计划，`PROJECT_STATUS.md` 负责状态，`docs/EXPERIENCE_SUMMARY.md` 负责经验沉淀
+  - 缺少按时间追加的开发流水账，难以快速复盘每次任务的背景、决策、验证和遗留风险
+- 开发后状态:
+  - 新增 `DEVELOPMENT_LOG.md`，作为只追加的开发记录文档
+  - 更新 `AGENTS.md`，将 `DEVELOPMENT_LOG.md` 纳入必需文档闭环
+  - 后续功能性变更需同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md` 和 `docs/EXPERIENCE_SUMMARY.md`
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - `DEVELOPMENT_LOG.md` 记录过程，`PROJECT_STATUS.md` 记录状态，二者不要互相替代
+
+### 本次任务：AccountStateService + ExecutionBudgetService 领域模型与 OMS 集成
+- 完成时间: 2026-04-28 14:00 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过规格合规 + 代码质量双审查
+- 开发前状态:
+  - OMS 内部使用进程内短 TTL `_balance_reservations` 做预算占用
+  - 没有独立的账户余额状态管理，余额检查依赖 broker API 实时查询
+  - reservation 无状态机（无 PENDING_SUBMIT → ACCEPTED → TERMINAL 生命周期）
+  - broker 异常时一律释放 reservation，不区分业务拒单 vs 网络异常
+- 开发后状态:
+  - 新增 `trader/services/account_state.py`：AccountBalance 领域模型 + AccountStateService
+    - 支持 REST snapshot 全量校准（覆盖所有 assets + 清除 stale）
+    - 支持 private stream 增量更新（outboundAccountPosition 格式）
+    - 支持 balance update delta 更新
+    - stale/fail-closed 标记（private stream 不清除 stale，只有 REST 可以）
+    - get_spendable = free - locked，下限 0
+  - 新增 `trader/services/execution_budget.py`：BalanceReservation 领域模型 + ExecutionBudgetService
+    - reserve_order：检查 spendable = account_spendable - reserved >= required
+    - 状态机：PENDING_SUBMIT → ACCEPTED（broker 成功）→ TERMINAL（成交/取消）
+    - BUY 用 quote asset，SELL 用 base asset
+    - cl_ord_id 幂等拒绝重复 reservation
+    - expire_stale_reservations 过期清理
+  - 修改 `trader/services/oms_callback.py`：OMS 集成 ExecutionBudgetService
+    - 向后兼容：不传 execution_budget 时走原有进程内逻辑
+    - budget 路径：reserve_order → broker → accept_reservation / release_reservation
+    - BrokerBusinessError → release（业务拒单）
+    - BrokerNetworkError → 不释放（保持 PENDING_SUBMIT，待 reconciliation）
+    - 成交时 release_reservation(reason="filled")（同步路径 + WS 路径）
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_account_state_service.py --tb=short` → 18 passed ✅
+  - `python -m pytest -q trader/tests/test_execution_budget_service.py --tb=short` → 23 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_automated_trading_e2e.py --tb=short` → 31 passed ✅
+  - P0 回归测试 → 109 passed ✅
+- 注意事项:
+  - budget 路径目前无专用集成测试（向后兼容保证 legacy 路径不受影响）
+  - Phase 3（private stream + REST snapshot 接入）为下一步工作
 
 ### 本次任务：OMS Pre-trade 余额 Gate 完善
 - 完成时间: 2026-04-28 07:49 (北京时间)

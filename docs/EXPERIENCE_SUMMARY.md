@@ -2742,6 +2742,26 @@ quantity, balance_requirement = await pretrade_balance_check(
 - 它不能替代交易所账户流、REST 对账和持久化账户状态
 - 更完整的方案应把 reservation 独立成 AccountState/ExecutionBudget 服务，由 private stream 成交/撤单事件和 REST snapshot 共同校准
 
+
+---
+
+## 二十七、开发记录文档闭环经验
+
+### 27.1 踩坑记录：计划、状态、经验不能替代开发流水账
+
+**场景**：
+项目已有 `PLAN.md`、`PROJECT_STATUS.md` 和 `docs/EXPERIENCE_SUMMARY.md`，但缺少按时间追加的开发过程记录。
+
+**问题**：
+- `PLAN.md` 适合表达下一步计划，不适合记录每次任务的真实执行过程
+- `PROJECT_STATUS.md` 适合表达当前状态，不适合承载过多过程细节
+- `EXPERIENCE_SUMMARY.md` 适合沉淀模式和踩坑，不适合记录每次改动的完整流水
+
+**经验**：
+- 增加 `DEVELOPMENT_LOG.md` 作为只追加的开发流水账
+- 每次记录背景、决策、改动、验证、风险/遗留和关联文档
+- 复盘时先看 `DEVELOPMENT_LOG.md`，判断现状时看 `PROJECT_STATUS.md`，规划时看 `PLAN.md`
+
 ---
 
 ## 二十六、PG 集成验证与存储边界修复经验
