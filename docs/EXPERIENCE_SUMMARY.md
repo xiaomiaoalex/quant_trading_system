@@ -4,6 +4,81 @@
 
 ---
 
+## 零、AI 协作规范双入口同步经验（2026-04-28）
+
+### 0.0 多模型入口的流程要求必须同源
+
+**问题描述**：
+仓库同时存在 `AGENTS.md` 和 `CLAUDE.md`，分别面向不同 AI 助手。如果文档闭环、计划更新条件、开发记录要求只更新其中一个入口，不同模型会在同一个仓库里执行不同流程。
+
+**解决方案**：
+- 以 `AGENTS.md` 的 Mandatory Workflow 为准，同步 `CLAUDE.md` 的 Documentation Updates 段落。
+- 明确 `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`DEVELOPMENT_LOG.md` 的职责。
+- 将 `PLAN.md` 更新条件限定为排期、阶段切换、优先级重排等会影响计划新鲜度的任务。
+
+**经验**：
+- AI 协作规范本身也是项目接口，多个入口必须保持行为一致。
+- 后续修改规范时，应把 `AGENTS.md` 和 `CLAUDE.md` 视为同一约束的两个呈现面。
+
+---
+
+## 零、测试全局状态污染隔离经验（2026-04-28）
+
+### 0.0 pytest rootdir 会决定 conftest 是否生效
+
+**问题描述**：
+全量测试使用 `python -m pytest -q trader/tests/ --tb=short` 时，pytest 的 rootdir 可能落在 `trader/`，仓库根目录的 `conftest.py` 不一定覆盖 `trader/tests`。隔离逻辑如果只放在根目录，目标测试单跑可能表现正常，全量运行仍会遗漏 reset。
+
+**解决方案**：
+- 在 `trader/tests/conftest.py` 放置面向测试目录的 autouse 隔离 fixture。
+- 每个测试前后都重置控制面单例、服务层 registry、内存 storage、proxy failover、strategy event service 和敏感环境变量。
+- root `conftest.py` 可作为更外层兼容，但 `trader/tests` 的隔离入口必须自洽。
+
+**经验**：
+- 测试隔离必须位于 pytest 实际加载路径内，不能假设仓库根 conftest 一定生效。
+- 顺序污染类问题优先用“每个测试前后重置”解决，而不是依赖测试间隐含顺序。
+
+### 0.1 本地 .env 不能泄漏进默认单测路径
+
+**问题描述**：
+本地 `.env` 中的 `LIVE_TRADING_ENABLED=true`、Binance API key 和 proxy failover 配置会影响控制面测试。即使测试语义是 dry-run，如果 dispatcher 仍继续初始化 broker，就可能触发真实账户/网络路径。
+
+**解决方案**：
+- 测试夹具在每个测试前后恢复基线环境，并清空 live/API key/proxy 相关变量。
+- `live_trading_enabled=false` 时 OMS callback dispatcher 直接短路返回，不创建 broker。
+
+**经验**：
+- 单测默认路径必须 fail-closed 且无网络；真实交易、真实代理、真实 key 只能在显式集成测试中打开。
+- live 开关应该尽早短路，不能只在下单末端阻止。
+
+### 0.2 collection-time mock 比 fixture mock 更容易污染全局
+
+**问题描述**：
+某些测试模块在 import/collection 阶段写入 `sys.modules["asyncpg"] = MagicMock()`。这类污染发生在 fixture 执行之前，会让后续 PostgreSQL 测试无法区分真实 `asyncpg` 和 mock module。
+
+**解决方案**：
+- 在 `trader/tests/conftest.py` collection 早期保存真实 `asyncpg` 引用。
+- 每个测试前后如果发现 `sys.modules["asyncpg"]` 被替换为 mock，则恢复真实模块。
+
+**经验**：
+- `sys.modules` 是进程全局状态，collection-time 修改必须有统一恢复点。
+- 依赖可选三方库的测试应优先 skip 或局部 monkeypatch，避免把 mock 写进全局 module cache。
+
+### 0.3 自定义 logger handler 会让 caplog 失明
+
+**问题描述**：
+应用启动代码把 `trader` logger 的 `propagate` 设为 `False`，导致全量测试中依赖 `caplog` 的断言在顺序变化后失效。
+
+**解决方案**：
+- 测试夹具显式设置 `logging.getLogger("trader").propagate = True`。
+- 保留应用运行时 logger 配置，但测试环境以 pytest 捕获为准。
+
+**经验**：
+- 日志也是全局状态。测试断言日志内容时，应在 fixture 中固定 logger propagate/level 行为。
+- 应用运行时优化日志输出和测试捕获日志是两个场景，需要分层处理。
+
+---
+
 ## 零、deployment_id / strategy_id 事件流语义修正（2026-04-25）
 
 ### 0.0 运行实例事件不能继续挂在策略模板 ID 下
@@ -2696,6 +2771,102 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+
+---
+
+## 二十八、接口契约与命名一致性经验
+
+### 28.1 踩坑记录：同一概念多种命名会制造隐蔽故障
+
+**场景**：
+多人协作和 AI 修改代码时，常见问题不是业务逻辑本身，而是接口名称漂移：
+- `cl_ord_id` vs `client_order_id` vs `clientOrderId`
+- `qty` vs `quantity`
+- `signal_type` vs `direction`
+- `deployment_id` vs `strategy_id`
+
+**问题**：
+- 类型检查不一定能发现跨层语义错位
+- Pydantic / dict 转换可能静默丢字段
+- Adapter 原始字段泄漏到 Core 后，会破坏确定性层的领域边界
+- 回放、幂等、REST Alignment 和前端展示容易各用一套字段口径
+
+**经验**：
+- 命名规范必须从“建议”升级为“契约”
+- 契约需要覆盖字段语义、转换边界、兼容策略和测试要求
+- 文档负责统一认知，类型和测试负责防止认知失效
+
+### 28.2 设计模式：Interface Contracts 作为接口单一真相源
+
+**实现模式**：
+1. 新增 `docs/INTERFACE_CONTRACTS.md`
+2. 记录标准领域词汇和禁止混用名称
+3. 明确外部字段到内部字段的映射位置
+4. 约束 Core / Adapter / Persistence / Service / API 各层接口责任
+5. 把接口变更流程写入 `AGENTS.md`、`CLAUDE.md` 和 `.traerules`
+
+**关键约束**：
+- 先契约，后实现
+- 外部字段只在 Adapter/API 边界转换
+- 内部 DTO、事件、持久化字段必须使用标准领域词汇
+- 接口改名必须同步类型定义、实现、测试和状态文档
+
+### 28.3 后续维护经验：契约文档必须随代码一起演进
+
+**经验**：
+- `docs/INTERFACE_CONTRACTS.md` 不是一次性说明书，而是接口演进日志的当前版本
+- 每次新增 DTO、事件 Schema、API 字段或跨层调用，都应先检查是否已有标准名称
+- 如果为了兼容保留旧字段，必须明确 legacy 字段的转换边界和退出策略
+
+### 28.4 规则入口同步经验：公共约束一致，工具专属内容可保留
+
+**场景**：
+仓库同时存在 `AGENTS.md`、`CLAUDE.md` 和 `.traerules`。它们面向不同 AI/工具入口，但都会影响后续开发行为。
+
+**问题**：
+- 如果只同步 `AGENTS.md` 和 `CLAUDE.md`，Trae/Kilo 入口仍可能遵守旧规则
+- `.traerules` 曾保留旧三平面架构、旧文档更新流程和 Python 3.10+ 描述
+- 多入口规则漂移会让同一仓库出现“不同助手执行不同工程纪律”的问题
+
+**经验**：
+- 三份规则文档不必逐字相同，但公共工程约束必须一致
+- 公共约束包括架构边界、接口契约、测试规范、文档闭环、技术栈和红线操作
+- 工具专属内容（如 Trae/Kilo 的分支、PR、角色流程）可以保留，但不能覆盖公共约束
+- 修改任一规则入口时，必须检查另外两个入口是否需要同步
+
+### 28.5 TDD 防幻觉经验：先让真实接口失败，再写实现
+
+**场景**：
+AI 修改代码时，常见幻觉不是语法错误，而是“看起来合理但仓库里不存在”的函数、DTO、字段或调用链。
+
+**问题**：
+- 先写实现容易围绕臆造 API 展开，后续测试也可能只是在验证虚构接口
+- 只要求“补测试”不够，因为测试本身也可能绑定错误命名或错误层级
+- 在交易系统里，虚构接口可能绕过 Core/Adapter/Persistence 边界，造成更隐蔽的状态污染
+
+**经验**：
+- 行为变更必须先走 Red → Green → Refactor
+- Red 阶段先检索真实接口和调用点，失败测试必须失败在目标行为上，而不是 import error 或拼写错误
+- 如果确实需要新增接口，先更新 `docs/INTERFACE_CONTRACTS.md`，再写测试和实现
+- Green 阶段只做最小实现，避免 AI 顺手扩展无证据抽象
+- Refactor 阶段必须保持测试、接口契约和核心不变性同时成立
+
+### 28.6 架构图维护经验：图必须成为当前状态入口
+
+**场景**：
+仓库已有长篇架构说明，但新人、用户或 AI 需要快速判断当前系统边界时，长文档不如图文入口高效。
+
+**问题**：
+- 如果只有长篇架构说明，AI 容易只抓局部段落，忽略主数据流和跨层边界
+- 架构变更后若不更新图，图会迅速变成误导性资料
+- 文档、接口契约、状态记录之间如果没有关系图，后续维护者不清楚该先更新哪一个
+
+**经验**：
+- 新增 `docs/PROJECT_ARCHITECTURE.md` 作为当前架构图文入口
+- 架构图应覆盖层级边界、主数据流、关键业务闭环、恢复闭环和文档契约关系
+- 架构变更必须先更新图，再更新接口契约、实现、测试和状态文档
+- 长篇架构说明负责背景和原则，架构图文档负责当前拓扑和维护触发条件
 
 
 ---

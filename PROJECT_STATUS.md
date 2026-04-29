@@ -4,9 +4,121 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-28 14:00 (北京时间)
+2026-04-29 23:18 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：新增项目架构图文档与维护约束
+- 完成时间: 2026-04-29 23:18 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 已存在长篇架构说明 `docs/quant_trading_system Crypto v3.4.0_Architecture.md`
+  - 缺少轻量的“当前架构图入口”，无法快速查看五层架构、主数据流、下单闭环和恢复闭环
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 未明确要求架构变更时同步更新架构图
+- 开发后状态:
+  - 新增 `docs/PROJECT_ARCHITECTURE.md`，包含五层平面架构图、主数据流图、策略下单闭环、对账恢复闭环和文档契约关系
+  - 明确架构图文档的更新触发条件：层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、运行拓扑变化
+  - 三个规则入口均新增架构图同步要求，防止架构图与实现漂移
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续架构性代码改动必须先检查 `docs/PROJECT_ARCHITECTURE.md` 是否需要同步
+
+### 本次任务：新增 AI TDD 防幻觉流程约束
+- 完成时间: 2026-04-29 23:13 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 已要求高密度测试覆盖
+  - 现有规则强调“代码必须有测试”，但未明确要求 AI 先写失败测试再实现
+  - AI 仍可能先臆造函数/DTO/API，再补看似合理但绑定虚构接口的测试
+- 开发后状态:
+  - 三个规则入口均新增 TDD 防幻觉流程：Red → Green → Refactor
+  - 明确测试必须基于已检索的真实接口失败，不能失败在 import error、拼写错误或虚构接口上
+  - 如果测试需要的新函数、字段或 DTO 尚不存在，必须先更新 `docs/INTERFACE_CONTRACTS.md` 并说明兼容策略
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续行为变更应优先提交能复现目标行为或缺陷的测试，再做最小实现
+
+### 本次任务：同步 `.traerules` 与 AI 规则入口
+- 完成时间: 2026-04-29 23:04 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md` 与 `CLAUDE.md` 已包含接口契约、文档闭环、测试与架构约束
+  - `.traerules` 仍保留较旧的三平面架构、旧文档更新规则和 Python 3.10+ 描述
+  - 三个 AI/工具入口缺少“任一入口变更时检查另外两个”的显式同步约束
+- 开发后状态:
+  - `.traerules` 已同步任务处理原则、项目扫描、常用命令、五层架构、测试规范、工程纪律、文档闭环和红线操作
+  - `.traerules` 的技术栈约束同步为 Python 3.12.5、`@dataclass(slots=True)` 优先和 asyncio/Actor 并发模式
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 均新增规则入口同步要求，避免后续公共工程约束漂移
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续修改任一 AI/工具规则入口时，需要同步检查另外两个入口
+
+### 本次任务：新增接口契约与命名规范约束
+- 完成时间: 2026-04-29 22:50 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 仓库已有 `AGENTS.md` / `CLAUDE.md` 约束架构、测试和文档闭环
+  - 缺少统一记录函数签名、DTO、事件 Schema、API 字段、跨层调用与命名映射的接口契约文档
+  - AI 或多人协作改动时，容易出现 `cl_ord_id` / `clientOrderId`、`qty` / `quantity`、`deployment_id` / `strategy_id` 等同义不同名问题
+- 开发后状态:
+  - 新增 `docs/INTERFACE_CONTRACTS.md`，作为接口契约与命名规范单一真相源
+  - `AGENTS.md`、`CLAUDE.md` 与 `.traerules` 均新增接口契约优先规则，要求涉及签名、DTO、事件、API 字段、跨层调用或命名重构时先查阅并按需更新契约
+  - 明确外部字段只能在 Adapter/API 边界转换，内部字段必须遵守标准领域词汇
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续接口改名必须先改契约，再改类型定义、实现与测试
+  - `docs/DATA_CONTRACT.md` 继续负责研究数据字段契约；`docs/INTERFACE_CONTRACTS.md` 负责代码接口契约
+
+### 本次任务：同步 Claude 与 Agents 文档闭环要求
+- 完成时间: 2026-04-28 14:44 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md` 已要求同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md`、`EXPERIENCE_SUMMARY.md`，并保持计划文档新鲜
+  - `CLAUDE.md` 的 Documentation Updates 仍保留旧规则：开发前必须更新 `PLAN.md`，且未纳入 `DEVELOPMENT_LOG.md`
+- 开发后状态:
+  - `CLAUDE.md` 的文档闭环规则已同步为与 `AGENTS.md` 一致
+  - `PLAN.md` 改为仅在排期、阶段切换、优先级重排时更新
+  - `DEVELOPMENT_LOG.md` 被明确纳入 Claude 工作流
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续更新 AI 协作规范时，应同时检查 `AGENTS.md` 与 `CLAUDE.md`
+
+### 本次任务：测试全局状态污染隔离与全量回归恢复
+- 完成时间: 2026-04-28 14:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过全量测试 + P0 回归
+- 开发前状态:
+  - 部分测试单独运行通过，但全量运行受测试顺序污染影响，表现为路由单例、仓库单例、内存 storage、logger、环境变量和 mock module 泄漏
+  - 本地 `.env` 中的 live trading、Binance key、proxy failover 配置会进入单测默认路径，导致 dry-run 场景仍可能初始化真实 broker
+  - `test_postgres_projectors.py` 在 collection 阶段写入 `sys.modules["asyncpg"] = MagicMock()`，会污染后续 PostgreSQL 集成判断
+  - API 旧客户端/旧测试仍传 `version=1`，与当前 schema 的 string version 要求不兼容
+- 开发后状态:
+  - 新增 `trader/tests/conftest.py` 全局 autouse 隔离：测试前后清理策略路由单例、monitor 单例、仓库/registry 单例、proxy failover、strategy event service、内存 storage、敏感环境变量与 `asyncpg` module
+  - `trader/api/routes/strategies.py` 增加 `reset_strategy_route_state_for_tests()`；`live_trading_enabled=false` 时 OMS dispatcher 直接短路，不再初始化 broker
+  - Deployment schema 兼容 int/string version；legacy deployment start/stop 在 runtime 未加载时回落到 `DeploymentService`
+  - 动态 load 默认补齐 `BTCUSDT`，避免缺 symbols 抢先掩盖 explicit code_version 404
+  - 控制面异步 backtest 改为确定性 synthetic 回测路径，避免全量测试中的轮询竞态和外部依赖
+- Issue 状态迁移:
+  - 全量测试顺序污染：`待确认` → `已验证`
+  - `.env` / live / proxy / API key 污染测试：`待确认` → `已验证`
+  - `asyncpg` MagicMock collection-time 污染：`待确认` → `已验证`
+  - 旧版 `version=1` API 兼容性：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/ --tb=short` → passed ✅
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → passed ✅
+- 注意事项:
+  - 仍存在既有 warnings：`chat.py` Pydantic V2 deprecated config、snapshot integration unknown mark、onchain AsyncMock coroutine warning
+  - root `conftest.py` 与 `trader/tests/conftest.py` 均保留隔离逻辑；`trader/tests` 下以本地 conftest 为主
 
 ### 本次任务：增加开发记录文档规范
 - 完成时间: 2026-04-28 07:55 (北京时间)

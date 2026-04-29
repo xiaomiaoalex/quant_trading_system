@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 进入项目后，先扫描：
 - 目录结构：`trader/` (核心) / `trader/adapters/` (IO) / `trader/api/` (控制面) / `trader/services/` (业务逻辑) / `trader/tests/` / `Frontend/`
 - 关键配置文件：`.env`（API Key）、`compose.yml`（Postgres）
+- 架构图：`docs/PROJECT_ARCHITECTURE.md`（当前架构图、主数据流、闭环拓扑）
+- 接口契约：`docs/INTERFACE_CONTRACTS.md`（命名、DTO、事件、跨层调用的单一真相源）
 - 启动方式：`uvicorn trader.api.main:app --port 8080`
 - 数据流主路径：Binance WS → Connector → OMS → Portfolio → API → Frontend
 - 验证命令：P0 回归测试（见下方）
@@ -116,6 +118,7 @@ uvicorn trader.api.main:app --port 8080
 3. **Fail-Closed**：无法确认一致性时进入 `DEGRADED_MODE` 并触发 KillSwitch。禁止裸 `except: pass`
 4. **确定性并发**：同一 `cl_ord_id` 并发处理必须加锁，不依赖时序假设
 5. **Broker 是真相源**：WS 低延迟驱动，REST 纠偏恢复。重连后必须先 REST Alignment
+6. **接口契约一致**：内部字段名必须遵守 `docs/INTERFACE_CONTRACTS.md`，外部字段只允许在 Adapter/API 边界转换
 
 ## Monitor Rules — 监控数据异常排查
 
@@ -153,6 +156,10 @@ uvicorn trader.api.main:app --port 8080
 - 大改动前先给方案、范围、风险、验证方式
 - 能局部修复就不要全局翻修
 - 涉及规范变更时，先改文档，再改代码
+- 涉及层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环或运行拓扑变更时，先查阅并更新 `docs/PROJECT_ARCHITECTURE.md`
+- 涉及函数签名、DTO、事件 Schema、API 字段、跨层调用或命名重构时，先查阅并更新 `docs/INTERFACE_CONTRACTS.md`
+- 修改 `AGENTS.md`、`CLAUDE.md`、`.traerules` 任一 AI/工具规则入口时，必须检查另外两个入口，保持公共工程约束一致
+- 涉及代码行为变更时，执行 TDD 防幻觉流程：先用真实接口写失败测试，再做最小实现，最后重构
 - **涉及前后端联调时，优先画出最小数据流**：
   ```
   请求发出 → API层(如 /v1/monitor/snapshot) → Service层(如 MonitorService.get_snapshot)
@@ -163,6 +170,13 @@ uvicorn trader.api.main:app --port 8080
 ## Testing Requirements
 
 测试必须密集。AI 生成的代码若无法被测试验证，不得合并。
+
+### TDD 开发流程（防止 AI 幻觉）
+- Red：先检索现有接口、类型和调用点，再编写失败测试。测试必须失败在目标行为上，而不是 import error、拼写错误或虚构接口。
+- Green：只写让测试通过的最小实现，优先复用既有模块和契约，不新增无证据抽象。
+- Refactor：测试通过后再做小步重构，并保持核心不变性和接口契约不变。
+- No Hallucinated API：如果测试需要的新函数、字段或 DTO 尚不存在，必须先更新 `docs/INTERFACE_CONTRACTS.md` 并说明兼容策略，再修改测试和实现。
+- Verification：至少运行新增/修改测试；涉及共享核心逻辑时，继续运行相关回归或 P0 回归集。
 
 ### 单元测试（必须覆盖）
 - 状态机：每个状态迁移路径，合法/非法迁移拒绝、终态不可覆盖
@@ -192,18 +206,38 @@ uvicorn trader.api.main:app --port 8080
 
 ## Documentation Updates — 必须流程
 
-### PLAN.md (开发计划)
-- 开始开发动作前，必须更新 PLAN.md
+完成任务后，AI 必须按以下模板更新文档，确保 Claude 与 Agents 遵守同一套项目文档闭环。
 
-### PROJECT_STATUS.md (滚动追踪)
-- 开发前状态 → 本次开发动作 → 下一步计划
-- 更新 `## 最后更新时间` 时间戳
-- 将完成 issue 从"待确认"移到"已验证"
+### 0. 更新 `docs/PROJECT_ARCHITECTURE.md`
+- 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新架构图文档。
+- 图文必须反映当前仓库现状，禁止让架构图停留在旧阶段。
 
-### EXPERIENCE_SUMMARY.md (经验总结)
-- 问题 + 解决方案
-- 可复用设计模式
-- 踩坑记录
+### 1. 更新 `docs/INTERFACE_CONTRACTS.md`
+- 任何涉及函数签名、DTO、事件 Schema、API 字段、跨层调用或命名重构的变更，必须先更新接口契约。
+- 明确标准字段名、旧字段兼容策略、转换边界和对应测试。
+
+### 2. 更新 `PROJECT_STATUS.md`
+- 记录开发前后状态对比。
+- 将 Issue 从"待确认"移至"已验证"。
+- 更新最后操作时间戳。
+- 如果本次任务改变了下一步优先级、阶段目标或完成度判断，必须同步更新对应段落。
+
+### 3. 更新 `docs/EXPERIENCE_SUMMARY.md`
+- **踩坑记录**：记录本次开发中遇到的逻辑陷阱。
+- **设计模式**：记录本次实现的优秀代码片段或设计模式。
+
+### 4. 更新 `DEVELOPMENT_LOG.md`
+- 追加本次开发记录，说明背景、决策、改动、验证、风险/遗留和关联文档。
+- `DEVELOPMENT_LOG.md` 只追加不重写历史；如果后续推翻前一条判断，在新记录中说明。
+
+### 5. 保持计划文档新鲜
+- 涉及排期、阶段切换、优先级重排时，必须同步更新 `PLAN.md`。
+- 如果存在独立阶段计划文档（如 `plans/` 下文件），必须一并更新，确保只有一个当前执行入口。
+- 严禁出现同一任务在不同文档中同时处于"已完成"和"待开始"状态。
+
+### 6. 保持 AI/工具规则入口同步
+- 修改 `AGENTS.md`、`CLAUDE.md`、`.traerules` 任一文件时，必须检查另外两个文件是否需要同步。
+- 公共工程约束（架构、接口契约、测试、文档闭环、红线操作）不得在不同入口中出现冲突。
 
 ## CI Gate Order
 
