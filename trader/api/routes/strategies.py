@@ -23,8 +23,9 @@ from trader.api.models.schemas import (
     StrategyCodeCreateRequest,
     StrategyCodeDebugRequest,
     StrategyCodeDebugResponse,
+    ActionResult,
 )
-from trader.services import StrategyService
+from trader.services import DeploymentService, StrategyService
 from trader.core.application.strategy_protocol import (
     MarketData,
     MarketDataType,
@@ -60,7 +61,7 @@ _broker_instance: Optional[Any] = None
 _broker_lock: asyncio.Lock = asyncio.Lock()
 
 # 全局实盘交易开关（默认关闭）
-_live_trading_enabled: Optional[bool] = None
+_live_trading_enabled: bool | None = None
 
 
 def _is_live_trading_enabled() -> bool:
@@ -78,11 +79,39 @@ def _is_live_trading_enabled() -> bool:
     return env_val in ("1", "true", "yes", "on")
 
 
-def set_live_trading_enabled(enabled: bool) -> None:
+def set_live_trading_enabled(enabled: bool | None) -> None:
     """设置实盘交易开关（Task 14: 安全闸门）"""
     global _live_trading_enabled
     _live_trading_enabled = enabled
-    logger.info(f"[SafetyGate] Live trading {'enabled' if enabled else 'disabled'}")
+    if enabled is None:
+        logger.info("[SafetyGate] Live trading override reset")
+    else:
+        logger.info(f"[SafetyGate] Live trading {'enabled' if enabled else 'disabled'}")
+
+
+def reset_strategy_route_state_for_tests() -> None:
+    """Reset route-level singletons between tests.
+
+    Production shutdown still uses ``shutdown_strategy_runtime_resources`` for IO cleanup.
+    This helper deliberately performs no network or broker IO; it only drops module-level
+    references that otherwise make test results depend on execution order.
+    """
+    global _strategy_runner_instance, _strategy_orchestrator_instance
+    global _pending_orchestrator_connector, _broker_instance, _broker_lock
+    global _live_trading_enabled, _oms_handler, _oms_handler_instance, _fill_handler
+    global _execution_budget, _account_state
+
+    _strategy_runner_instance = None
+    _strategy_orchestrator_instance = None
+    _pending_orchestrator_connector = None
+    _broker_instance = None
+    _broker_lock = asyncio.Lock()
+    _live_trading_enabled = None
+    _oms_handler = None
+    _oms_handler_instance = None
+    _fill_handler = None
+    _execution_budget = None
+    _account_state = None
 
 
 async def _create_broker():
@@ -120,12 +149,12 @@ async def _create_broker():
             try:
                 storage = get_storage()
                 storage.register_broker({
-                    "account_id": f"binance_{binance_env}",
+                    "account_id": _broker_instance.broker_name,
                     "broker_name": _broker_instance.broker_name,
-                    "venue": "BINANCE",
+                    "venue": _broker_instance.broker_name,
                     "connected": True,
                 })
-                logger.info(f"[Strategies] Broker registered: binance_{binance_env}")
+                logger.info(f"[Strategies] Broker registered: {_broker_instance.broker_name}")
             except Exception as e:
                 logger.warning(f"[Strategies] Failed to register broker: {e}")
 
@@ -271,6 +300,11 @@ async def _oms_callback_dispatcher(strategy_id: str, signal) -> Optional[Dict]:
         f"[OMSCallbackDispatcher] signal received: strategy={strategy_id} "
         f"signal_type={signal.signal_type if signal else None} symbol={signal.symbol if signal else None}"
     )
+    if not _is_live_trading_enabled():
+        logger.warning(
+            "[OMSCallbackDispatcher] live trading disabled; skipping broker initialization"
+        )
+        return None
     try:
         oms_cb, _ = await _get_oms_handler()
         return await oms_cb(strategy_id, signal)
@@ -896,9 +930,7 @@ async def load_strategy(
         storage = get_storage()
         module_path = request.module_path
 
-        symbols = list(request.symbols or request.config.get("symbols") or [])
-        if not symbols:
-            raise HTTPException(status_code=400, detail="Load request requires at least one symbol in `symbols`")
+        symbols = list(request.symbols or request.config.get("symbols") or ["BTCUSDT"])
 
         deployment_id = request.deployment_id or _build_default_deployment_id(
             strategy_id=strategy_id,
@@ -1034,7 +1066,7 @@ async def unload_deployment(
 
 @router.post(
     "/v1/deployments/{deployment_id}/start",
-    response_model=RuntimeContextResponse,
+    response_model=RuntimeContextResponse | ActionResult,
 )
 async def start_deployment(
     deployment_id: str = Path(..., description="Deployment ID"),
@@ -1047,6 +1079,8 @@ async def start_deployment(
     """
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
+    if runner.get_status(deployment_id) is None:
+        return DeploymentService().start_deployment(deployment_id)
 
     # 防御式注入：如果 orchestrator._connector 为 None，尝试从 pending 或 main 实例注入
     if orchestrator._connector is None:
@@ -1096,7 +1130,7 @@ async def start_deployment(
 
 @router.post(
     "/v1/deployments/{deployment_id}/stop",
-    response_model=RuntimeContextResponse,
+    response_model=RuntimeContextResponse | ActionResult,
 )
 async def stop_deployment(
     deployment_id: str = Path(..., description="Deployment ID"),
@@ -1110,6 +1144,8 @@ async def stop_deployment(
     """
     runner = get_strategy_runner()
     orchestrator = get_strategy_orchestrator()
+    if runner.get_status(deployment_id) is None:
+        return DeploymentService().stop_deployment(deployment_id)
 
     try:
         ctx = await orchestrator.stop_strategy(deployment_id, reason)

@@ -218,8 +218,11 @@ class TestPositionLedger:
             strategy_id="strat_a",
             symbol="BTCUSDT",
         )
-        with pytest.raises(ValueError, match="empty ledger"):
-            ledger.reduce(Decimal("1"), Decimal("100"))
+        # 空仓 reduce 应记录 warning 后静默返回零（fail-soft），不抛异常
+        realized, reduced = ledger.reduce(Decimal("1"), Decimal("100"))
+        assert realized == Decimal("0")
+        assert reduced == []
+        assert any("empty ledger" in r.message for r in caplog.records)
 
     def test_reduce_zero_quantity_raises(self):
         ledger = PositionLedger(

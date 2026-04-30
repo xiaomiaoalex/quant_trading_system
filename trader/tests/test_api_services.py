@@ -97,7 +97,7 @@ class TestStrategyService:
         self.service.register_strategy(request)
 
         version_request = StrategyVersionCreateRequest(
-            version=1,
+            version="1",
             code_ref="git:abc123",
             param_schema={"param1": {"type": "number"}}
         )
@@ -110,7 +110,7 @@ class TestStrategyService:
         request = StrategyRegisterRequest(strategy_id="strat_001", name="Test", entrypoint="test:Strategy")
         self.service.register_strategy(request)
 
-        version_request = StrategyVersionCreateRequest(version=1, code_ref="git:v1", param_schema={})
+        version_request = StrategyVersionCreateRequest(version="1", code_ref="git:v1", param_schema={})
         self.service.create_version("strat_001", version_request)
 
         versions = self.service.list_versions("strat_001")
@@ -144,7 +144,7 @@ class TestDeploymentService:
         request = DeploymentCreateRequest(
             deployment_id="deploy_001",
             strategy_id="strat_001",
-            version=1,
+            version="1",
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT"],
@@ -159,7 +159,7 @@ class TestDeploymentService:
         request = DeploymentCreateRequest(
             deployment_id="deploy_001",
             strategy_id="strat_001",
-            version=1,
+            version="1",
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT"],
@@ -175,7 +175,7 @@ class TestDeploymentService:
         request = DeploymentCreateRequest(
             deployment_id="deploy_001",
             strategy_id="strat_001",
-            version=1,
+            version="1",
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT"],
@@ -194,7 +194,7 @@ class TestDeploymentService:
         request = DeploymentCreateRequest(
             deployment_id="deploy_001",
             strategy_id="strat_001",
-            version=1,
+            version="1",
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT"],
@@ -230,7 +230,7 @@ class TestBacktestService:
         """Test creating a backtest"""
         request = BacktestRequest(
             strategy_id="strat_001",
-            version=1,
+            version="1",
             symbols=["BTCUSDT"],
             start_ts_ms=1700000000000,
             end_ts_ms=1700100000000,
@@ -245,7 +245,7 @@ class TestBacktestService:
         """Test getting a backtest"""
         request = BacktestRequest(
             strategy_id="strat_001",
-            version=1,
+            version="1",
             symbols=["BTCUSDT"],
             start_ts_ms=1700000000000,
             end_ts_ms=1700100000000,

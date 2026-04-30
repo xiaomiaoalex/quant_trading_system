@@ -201,3 +201,9 @@ def get_strategy_event_service() -> StrategyEventService:
     if _strategy_event_service is None:
         _strategy_event_service = StrategyEventService()
     return _strategy_event_service
+
+
+def reset_strategy_event_service() -> None:
+    """重置全局策略事件服务实例（用于测试隔离）。"""
+    global _strategy_event_service
+    _strategy_event_service = None

@@ -340,8 +340,12 @@ class StrategyRunner:
             if hasattr(plugin, 'version'):
                 plugin.version = version
 
-            # 初始化策略
-            await plugin.initialize(runtime_config)
+# 初始化策略：剔除部署元数据字段，只保留策略需要的 config
+            init_config = {
+                k: v for k, v in runtime_config.items()
+                if k not in ("mode", "account_id", "venue", "deployment_id", "module_path", "strategy_id", "symbols")
+            }
+            await plugin.initialize(init_config)
 
             # 注册策略
             self._plugins[runtime_id] = plugin

@@ -215,6 +215,13 @@ class BinanceConnector:
         """注册健康状态处理器"""
         self._health_handlers.append(handler)
 
+    @property
+    def broker_name(self) -> str:
+        """Broker 名称（与 BrokerService 保持一致）。"""
+        if self._config.testnet:
+            return "binance_spot_testnet"
+        return "binance_spot"
+
     async def start(self) -> None:
         """启动连接器"""
         if self._running:

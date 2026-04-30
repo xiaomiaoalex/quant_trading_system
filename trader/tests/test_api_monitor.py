@@ -71,8 +71,7 @@ class TestMonitorEndpoints:
         response = self.client.get("/v1/monitor/alerts")
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
-        assert len(data) == 0
+        assert data == {"alerts": [], "total_count": 0}
 
     def test_add_alert_rule(self):
         """Test adding an alert rule"""

@@ -394,9 +394,9 @@ class TestEventServiceSnapshotHandling:
 
 class TestSnapshotStorageIntegration:
     """Integration tests for snapshot storage (require PostgreSQL)"""
-    
+
     @pytest.fixture
-    def pg_connection_string(self):
+    def pg_connection_string(self, request):
         """Get PostgreSQL connection string from environment"""
         import os
         conn_str = os.environ.get("POSTGRES_CONNECTION_STRING")
@@ -407,6 +407,8 @@ class TestSnapshotStorageIntegration:
         db = os.environ.get("POSTGRES_DB", "trading")
         user = os.environ.get("POSTGRES_USER", "trader")
         password = os.environ.get("POSTGRES_PASSWORD", "")
+        if not conn_str and not password:
+            pytest.skip("PostgreSQL not configured (set POSTGRES_CONNECTION_STRING)")
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
     
     def _is_docker_available(self):

@@ -1,11 +1,13 @@
-import os
 import logging
+import os
+import importlib
+import sys
 from collections.abc import Iterator
 
 import pytest
 from dotenv import load_dotenv
 
-# 优先加载 postgres 测试环境
+
 if os.path.exists(".env.postgres"):
     load_dotenv(".env.postgres")
 else:
@@ -36,11 +38,14 @@ _BASE_ENV = {
     key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key)
     for key in _TRACKED_ENV_KEYS
 }
+try:
+    _REAL_ASYNCPG = importlib.import_module("asyncpg")
+except Exception:
+    _REAL_ASYNCPG = None
 
 
 def _enable_pytest_log_capture() -> None:
-    trader_logger = logging.getLogger("trader")
-    trader_logger.propagate = True
+    logging.getLogger("trader").propagate = True
 
 
 def _restore_tracked_env() -> None:
@@ -52,13 +57,20 @@ def _restore_tracked_env() -> None:
     _enable_pytest_log_capture()
 
 
+def _restore_asyncpg_module() -> None:
+    if _REAL_ASYNCPG is None:
+        sys.modules.pop("asyncpg", None)
+    else:
+        sys.modules["asyncpg"] = _REAL_ASYNCPG
+
+
 def _reset_global_test_state() -> None:
+    from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.adapters.persistence.execution_repository import reset_execution_repository
     from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
     from trader.adapters.persistence.position_repository import reset_position_repository
     from trader.adapters.persistence.risk_repository import reset_risk_event_repository
     from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
-    from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.api.routes import monitor
     from trader.api.routes.strategies import reset_strategy_route_state_for_tests
     from trader.core.domain.services.order_ownership_registry import (
@@ -82,6 +94,7 @@ def _reset_global_test_state() -> None:
     reset_runtime_state_repository()
     reset_storage()
     _restore_tracked_env()
+    _restore_asyncpg_module()
 
 
 @pytest.fixture(autouse=True)

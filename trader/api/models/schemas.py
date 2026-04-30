@@ -7,7 +7,7 @@ This module defines all request/response models for the API endpoints.
 """
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ==================== Common Models ====================
@@ -177,6 +177,11 @@ class Deployment(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, value: Any) -> str:
+        return str(value)
+
 
 class DeploymentCreateRequest(BaseModel):
     """创建部署请求"""
@@ -192,6 +197,11 @@ class DeploymentCreateRequest(BaseModel):
     params_version: Optional[int] = None
     risk_profile_id: Optional[str] = None
     created_by: str
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, value: Any) -> str:
+        return str(value)
 
 
 class DeploymentRuntime(BaseModel):

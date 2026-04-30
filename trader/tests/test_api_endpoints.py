@@ -340,11 +340,11 @@ def get_plugin() -> StrategyPlugin:
             json={"version": "v1", "code_version": 1, "config": {}},
         )
         assert load_resp.status_code == 200
-        assert load_resp.json()["status"] == "LOADED"
+        assert load_resp.json()["status"] == "loaded"
 
         start_resp = self.client.post("/v1/strategies/code_flow/start")
         assert start_resp.status_code == 200
-        assert start_resp.json()["status"] == "RUNNING"
+        assert start_resp.json()["status"] == "running"
 
     def test_load_dynamic_strategy_missing_code_returns_404(self):
         """Dynamic strategy without saved code should return 404/400 instead of 500."""

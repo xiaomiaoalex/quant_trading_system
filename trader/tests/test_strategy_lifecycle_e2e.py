@@ -111,9 +111,9 @@ def mock_runner():
     """Mock运行器夹具"""
     runner = MagicMock()
     runner.load_strategy = AsyncMock(return_value=MagicMock())
-    runner.start_strategy = AsyncMock(return_value=MagicMock())
-    runner.stop_strategy = AsyncMock(return_value=MagicMock())
-    runner.tick_strategy = AsyncMock(return_value=None)
+    runner.start = AsyncMock(return_value=MagicMock())
+    runner.stop = AsyncMock(return_value=MagicMock())
+    runner.unload_strategy = AsyncMock(return_value=MagicMock())
     return runner
 
 
