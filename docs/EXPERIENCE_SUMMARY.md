@@ -2865,6 +2865,31 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 快照提供者必须把目标 symbol、现有持仓 symbol、在途订单 symbol 合并成 portfolio symbols
 - 任一参与风险预算的 symbol 缺少 mark price 都应 fail-closed
 
+### 26.4 踩坑记录：启动期创建 handler 后再注入风控会失效
+
+**场景**：
+lifespan 为了把 fill handler 注册到 BinanceConnector，会先初始化 `OMSCallbackHandler`；而 crypto risk source 需要在账户/运行时配置准备好后才创建。
+
+**问题**：
+- 如果只在 `create_oms_callback()` 构造参数里传 `pre_trade_risk_check`，后续启用的 runtime risk check 不会进入已存在 handler
+- 这会造成日志显示“风控已配置”，实际下单入口仍没有独立风控的假安全感
+
+**经验**：
+- 运行时接线必须支持 late binding：route-level setter 更新全局待注入值，也要同步更新已存在的 handler
+- 对这种接线问题，测试要直接断言 setter 调用了 handler 的 `set_pre_trade_risk_check()`
+
+### 26.5 设计模式：显式启用 + 配置失败注入 fail-closed check
+
+**实现模式**：
+1. `CRYPTO_RISK_ENABLED` 默认关闭，只有显式 truthy 值才创建 Binance USD-M source
+2. 环境变量解析集中在 Control Plane runtime 模块，输出 `CryptoRiskRuntimeConfig`
+3. 缺凭证、非法 decimal、source wiring 失败时，不让 OMS 保持空风控，而是注入一个永远返回 `RISK_SYSTEM_ERROR` 的 pre-trade check
+
+**收益**：
+- 配置错误会让订单命运变成“拒绝”，而不是变成“绕过”
+- testnet/live 联调前可以安全地把接线逻辑放进主启动链路
+- 后续做热更新时可以复用同一个 runtime config + component factory
+
 ---
 
 ## 二十六、研究到自动组合运行纵向切片经验

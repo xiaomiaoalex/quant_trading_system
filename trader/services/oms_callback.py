@@ -195,6 +195,13 @@ class OMSCallbackHandler:
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
         return self._position_lot_manager or get_lot_manager()
 
+    def set_pre_trade_risk_check(
+        self,
+        check: Optional[Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]],
+    ) -> None:
+        """Late-bind or clear the independent pre-trade risk callback."""
+        self._pre_trade_risk_check = check
+
     def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
         key = f"{strategy_id}:{symbol}"
         if key not in self._position_locks:

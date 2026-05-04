@@ -108,3 +108,29 @@ async def test_oms_pretrade_risk_pass_allows_existing_order_flow() -> None:
     assert result is not None
     risk_check.assert_awaited_once()
     broker.place_order.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_oms_pretrade_risk_check_can_be_late_bound_after_handler_creation() -> None:
+    risk_check = AsyncMock(
+        return_value=RiskCheckResult(
+            passed=False,
+            risk_level=RiskLevel.HIGH,
+            rejection_reason=RejectionReason.CRYPTO_MARGIN_LIMIT,
+            message="late-bound risk rejected",
+        )
+    )
+    broker = _broker()
+    handler = OMSCallbackHandler(
+        broker=broker,
+        storage=ControlPlaneInMemoryStorage(),
+        live_trading_enabled=True,
+    )
+
+    handler.set_pre_trade_risk_check(risk_check)
+
+    with pytest.raises(RiskRejectedError, match="late-bound risk rejected"):
+        await handler.execute_signal("test_strategy", _signal())
+
+    risk_check.assert_awaited_once()
+    broker.place_order.assert_not_awaited()

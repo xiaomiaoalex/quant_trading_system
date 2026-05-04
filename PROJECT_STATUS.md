@@ -4,9 +4,36 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 10:16 (北京时间)
+2026-05-04 15:21 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P2 运行时启用与 lifespan 接线
+- 完成时间: 2026-05-04 15:21 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P2 第一版
+- 开发前状态:
+  - P1 已有 Binance USD-M risk source、snapshot provider 与 OMS `pre_trade_risk_check` 注入点
+  - 应用启动时仍不会根据配置创建 source，也不会把真实 risk check 注入已初始化的 OMS handler
+  - 显式启用但配置错误时缺少统一 fail-closed runtime check
+- 开发后状态:
+  - 新增 `trader/api/crypto_risk_runtime.py`，解析 `CRYPTO_RISK_ENABLED`、USD-M base URL、基础 symbols、总/symbol notional cap、margin/强平缓冲阈值、timeout/proxy/retry 等运行时配置
+  - `trader/api/main.py` 在 lifespan 中默认关闭 crypto risk；显式启用时创建 Binance USD-M source、snapshot provider 与 pre-trade risk check，并保存 source 用于 shutdown close
+  - `OMSCallbackHandler.set_pre_trade_risk_check()` 与策略路由 `set_pre_trade_risk_check()` 支持 handler 已创建后的 late binding
+  - 启用但凭证缺失、配置非法或 runtime wiring 失败时，注入 fail-closed risk check，避免无声绕过独立风控
+- Issue 状态迁移:
+  - Crypto risk source 只存在代码未接入启动链路：`待确认` → `已验证（lifespan wiring）`
+  - OMS handler 先创建导致后续 risk check 注入不生效：`待确认` → `已验证（late binding）`
+  - `CRYPTO_RISK_ENABLED=true` 配置错误可能 fail-open：`待确认` → `已验证（setup failure check）`
+- 测试结果:
+  - P2/受影响 crypto/OMS/risk 回归（runtime config、route injection、Binance mapper/source、snapshot provider、OMS pretrade、balance、observability、crypto P0、risk engine layers）→ 53 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 7 files unchanged ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - P2 仍未做真实 Binance USD-M testnet/live 网络联调；下一步进入 Crypto Risk P3
+  - 风险预算当前通过环境变量配置，尚未提供热更新 API 或前端运维入口
 
 ### 本次任务：数字货币独立风控 P1 快照采集与 OMS 接线
 - 完成时间: 2026-05-04 10:16 (北京时间)

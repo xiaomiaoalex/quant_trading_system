@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 15:21 - 数字货币独立风控 P2 运行时接线
+
+- 背景: P1 已完成 Binance USD-M risk source、snapshot provider 与 OMS pre-trade 注入点，但应用启动链路尚未根据配置创建真实 risk check，也不支持 handler 先创建后的后注入。
+- 决策: 把具体 source 装配放在 Control Plane runtime 模块，默认关闭；`CRYPTO_RISK_ENABLED=true` 时由 lifespan 创建 Binance USD-M source/provider/check 并 late-bind 到 OMS，配置或接线失败时注入 fail-closed check。
+- 改动: 新增 `trader/api/crypto_risk_runtime.py`；`main.py` 接入 runtime 配置、source 生命周期与 shutdown close；`OMSCallbackHandler` 和策略路由支持 `set_pre_trade_risk_check()` late binding；同步接口契约、架构图、计划和状态文档。
+- 验证: P2/受影响 crypto/OMS/risk 回归 53 passed；P0 回归集 99 passed；`py_compile` passed；scoped `black --check` passed；`isort` 因当前环境未安装未执行成功。
+- 风险/遗留: 尚未做 Binance USD-M testnet/live 真实联调；风险预算仍是环境变量静态配置，后续进入 P3 做热更新和运维入口。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 10:16 - 数字货币独立风控 P1 快照采集与 OMS 接线
 
 - 背景: P0 已完成 crypto 风控纯计算与 `CryptoPreTradeRiskPlugin`，但真实账户/交易所规则/在途订单快照还没有 Adapter/Service 实现，OMS 下单链路也没有独立风控硬闸。

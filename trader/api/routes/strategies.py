@@ -197,6 +197,13 @@ def set_pre_trade_risk_check(check: Any) -> None:
     """注入独立 pre-trade 风控回调（在 main.py lifespan 或测试中调用）。"""
     global _pre_trade_risk_check
     _pre_trade_risk_check = check
+    if _oms_handler_instance is not None:
+        _oms_handler_instance.set_pre_trade_risk_check(check)
+
+
+def get_oms_broker() -> Any | None:
+    """返回已初始化的 OMS broker；不会触发网络连接或懒加载。"""
+    return _broker_instance
 
 
 async def _get_oms_handler():
