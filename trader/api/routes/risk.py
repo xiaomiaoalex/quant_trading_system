@@ -23,7 +23,9 @@ Risk limits management endpoints (versioned).
 
 import asyncio
 import logging
-from typing import Optional
+import time
+import uuid
+from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query, Response
 
 from trader.api.models.schemas import (
@@ -34,11 +36,13 @@ from trader.api.models.schemas import (
     KillSwitchSetRequest,
     CryptoRiskBudgetUpdateRequest,
     CryptoRiskRuntimeStatus,
+    EventEnvelope,
     TimeWindowConfigSchema,
     TimeWindowConfigUpdateRequest,
     TimeWindowSlotSchema,
 )
 from trader.api.crypto_risk_runtime import (
+    crypto_risk_budget_to_dict,
     crypto_risk_runtime_status_to_dict,
     get_crypto_risk_runtime_manager,
     merge_crypto_risk_budget,
@@ -49,11 +53,14 @@ from trader.core.domain.rules.time_window_policy import (
     TimeWindowSlot,
     TimeWindowPeriod,
 )
-from trader.services import RiskService, KillSwitchService
+from trader.services import RiskService, KillSwitchService, EventService
+from trader.storage.in_memory import get_storage
 
 router = APIRouter(tags=["Risk"])
 logger = logging.getLogger(__name__)
 EFFECT_STATUS_TIMEOUT_SEC = 2.0
+CRYPTO_RISK_STREAM_KEY = "risk:crypto"
+CRYPTO_RISK_BUDGET_UPDATED_EVENT = "crypto_risk.budget_updated"
 
 
 def _killswitch_matches(current_state, expected_state) -> bool:
@@ -255,15 +262,17 @@ async def get_crypto_risk_runtime_status():
 async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
     """Hot-update crypto risk budget and late-bind the rebuilt pre-trade check."""
     manager = get_crypto_risk_runtime_manager()
+    before_status = manager.status()
     try:
         budget = merge_crypto_risk_budget(
-            manager.status().risk_budget,
+            before_status.risk_budget,
             symbol_notional_caps=request.symbol_notional_caps,
             total_notional_cap=request.total_notional_cap,
             max_margin_ratio=request.max_margin_ratio,
             min_liquidation_buffer_ratio=request.min_liquidation_buffer_ratio,
         )
         status = await manager.update_budget(budget, updated_by=request.updated_by)
+        _append_crypto_budget_audit_event(before_status, status, request.updated_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -273,6 +282,53 @@ async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return crypto_risk_runtime_status_to_dict(status)
+
+
+@router.get("/v1/risk/crypto/budget/audit", response_model=list[EventEnvelope])
+async def list_crypto_risk_budget_audit(
+    since_ts_ms: Optional[int] = Query(None, description="Filter by timestamp (ms)"),
+    limit: int = Query(200, ge=1, le=2000, description="Max audit events"),
+):
+    """List crypto risk budget update audit events."""
+    return EventService().list_events(
+        stream_key=CRYPTO_RISK_STREAM_KEY,
+        event_type=CRYPTO_RISK_BUDGET_UPDATED_EVENT,
+        since_ts_ms=since_ts_ms,
+        limit=limit,
+    )
+
+
+def _append_crypto_budget_audit_event(
+    before_status: Any,
+    after_status: Any,
+    updated_by: str,
+) -> None:
+    get_storage().append_event(
+        {
+            "stream_key": CRYPTO_RISK_STREAM_KEY,
+            "event_type": CRYPTO_RISK_BUDGET_UPDATED_EVENT,
+            "schema_version": 1,
+            "trace_id": f"crypto-risk-budget:{uuid.uuid4().hex}",
+            "ts_ms": int(time.time() * 1000),
+            "payload": {
+                "updated_by": updated_by,
+                "previous_budget": crypto_risk_budget_to_dict(before_status.risk_budget),
+                "new_budget": crypto_risk_budget_to_dict(after_status.risk_budget),
+                "runtime_before": _crypto_runtime_audit_view(before_status),
+                "runtime_after": _crypto_runtime_audit_view(after_status),
+            },
+        }
+    )
+
+
+def _crypto_runtime_audit_view(status: Any) -> dict[str, Any]:
+    return {
+        "enabled": bool(status.enabled),
+        "wired": bool(status.wired),
+        "fail_closed": bool(status.fail_closed),
+        "base_symbols": list(status.base_symbols),
+        "last_error": status.last_error,
+    }
 
 
 @router.post("/v1/risk/events", response_model=ActionResult)

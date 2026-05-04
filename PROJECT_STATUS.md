@@ -4,9 +4,36 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 19:05 (北京时间)
+2026-05-04 19:41 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P3.2a 预算热更新审计
+- 完成时间: 2026-05-04 19:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2a
+- 开发前状态:
+  - P3.1 已有 runtime status API 与预算热更新 API
+  - 成功热更新预算后没有独立审计事件，后续难以回放“谁在何时把阈值从多少改到多少”
+  - 运维只能通过通用状态接口看当前值，无法查询历史变更
+- 开发后状态:
+  - `PATCH /v1/risk/crypto/budget` 成功后写入控制面事件流 `stream_key=risk:crypto`
+  - 新增事件类型 `crypto_risk.budget_updated`，payload 记录 `updated_by`、`previous_budget`、`new_budget`、`runtime_before`、`runtime_after`
+  - 新增 `GET /v1/risk/crypto/budget/audit`，按同一 event log 来源查询预算热更新审计记录
+  - 未 wired/runtime 冲突导致的失败更新不会写入成功审计事件
+- Issue 状态迁移:
+  - 预算热更新无历史审计：`待确认` → `已验证（event log audit）`
+  - 风险预算运维入口只能看当前值：`待确认` → `已验证（audit query）`
+- 测试结果:
+  - P3.2a/受影响 crypto/OMS/risk/API 回归 → 65 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\routes\risk.py trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\models\schemas.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 11 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 审计事件当前写入控制面 in-memory event log；生产级 PG event log 持久化仍属于后续基础设施任务
+  - Binance USD-M testnet/live 真实联调和前端运维入口仍留给 P3.2b
 
 ### 本次任务：数字货币独立风控 P3.1 Runtime API 与预算热更新
 - 完成时间: 2026-05-04 19:05 (北京时间)

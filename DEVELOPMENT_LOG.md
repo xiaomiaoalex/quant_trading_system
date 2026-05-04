@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 19:41 - 数字货币独立风控 P3.2a 预算热更新审计
+
+- 背景: P3.1 已提供 runtime status 与预算热更新 API，但预算变更没有历史审计，事故复盘无法知道阈值从多少被谁改到多少。
+- 决策: 复用控制面 event log，不混入 AI audit log；成功热更新写入 `risk:crypto` / `crypto_risk.budget_updated`，并提供专用查询入口。
+- 改动: `PATCH /v1/risk/crypto/budget` 成功后写入包含 `previous_budget`、`new_budget`、runtime 前后状态和 `updated_by` 的审计事件；新增 `GET /v1/risk/crypto/budget/audit`；失败更新不写成功审计。
+- 验证: P3.2a/受影响 crypto/OMS/risk/API 回归 65 passed；P0 回归集 99 passed；`py_compile` passed；scoped `black --check` passed；`git diff --check` passed；`isort` 因当前环境未安装未执行成功。
+- 风险/遗留: 审计事件当前写入控制面 in-memory event log；生产级 PG event log 持久化、前端运维入口和 Binance USD-M testnet/live 联调仍待后续。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 19:05 - 数字货币独立风控 P3.1 Runtime API 与预算热更新
 
 - 背景: P2 已把 crypto risk source 接入 lifespan，但 runtime 状态不可查询，风险预算只能通过环境变量静态配置，运维侧无法热更新。
