@@ -36,6 +36,10 @@ from trader.api.routes import (
     monitor,
     chat,
     portfolio_research,
+    strategy_candidates,
+    allocations,
+    portfolio_autopilot,
+    data_catalog,
     audit,
     sse,
 )
@@ -775,6 +779,10 @@ app.include_router(reconciler.router)
 app.include_router(monitor.router)
 app.include_router(chat.router)
 app.include_router(portfolio_research.router)
+app.include_router(strategy_candidates.router)
+app.include_router(allocations.router)
+app.include_router(portfolio_autopilot.router)
+app.include_router(data_catalog.router)
 app.include_router(audit.router)
 app.include_router(sse.router)
 

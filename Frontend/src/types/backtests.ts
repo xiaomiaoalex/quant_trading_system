@@ -31,6 +31,12 @@ export interface BacktestRequest {
   end_ts_ms: number
   venue: string
   requested_by: string
+  feature_version?: string
+  initial_capital?: number
+  fee_bps?: number
+  slippage_bps?: number
+  benchmark?: string
+  data_mode?: 'real_feature_store' | 'dev_smoke'
 }
 
 // Backtest report from GET /v1/backtests/{run_id}/report

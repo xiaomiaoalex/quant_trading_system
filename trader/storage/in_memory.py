@@ -63,6 +63,14 @@ class ControlPlaneInMemoryStorage:
         # Backtests
         self.backtests: Dict[str, Dict[str, Any]] = {}
 
+        # Strategy research lifecycle
+        self.strategy_candidates: Dict[str, Dict[str, Any]] = {}
+
+        # Allocation / autopilot views
+        self.allocation_profiles: Dict[str, Dict[str, Any]] = {}
+        self.allocation_traces: Dict[str, List[Dict[str, Any]]] = {}
+        self.autopilot_decisions: List[Dict[str, Any]] = []
+
         # Risk limits
         self.risk_limits: List[Dict[str, Any]] = []
         self.risk_events_by_key: Dict[str, Dict[str, Any]] = {}
@@ -329,6 +337,112 @@ class ControlPlaneInMemoryStorage:
             backtest.update(updates)
             backtest["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
         return backtest
+
+    # ==================== Strategy Candidate Methods ====================
+
+    def create_strategy_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
+        candidate_id = candidate_data.get("candidate_id") or str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        candidate = {
+            **candidate_data,
+            "candidate_id": candidate_id,
+            "status": candidate_data.get("status", "DRAFT"),
+            "feature_version": candidate_data.get("feature_version", "dev_smoke"),
+            "events": list(candidate_data.get("events", [])),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.strategy_candidates[candidate_id] = candidate
+        return candidate
+
+    def get_strategy_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        return self.strategy_candidates.get(candidate_id)
+
+    def list_strategy_candidates(
+        self,
+        strategy_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        candidates = list(self.strategy_candidates.values())
+        if strategy_id:
+            candidates = [c for c in candidates if c.get("strategy_id") == strategy_id]
+        if status:
+            candidates = [c for c in candidates if c.get("status") == status]
+        candidates.sort(key=lambda c: c.get("updated_at", ""), reverse=True)
+        return candidates[:limit]
+
+    def update_strategy_candidate(
+        self, candidate_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        candidate = self.strategy_candidates.get(candidate_id)
+        if candidate:
+            candidate.update(updates)
+            candidate["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+        return candidate
+
+    def delete_strategy_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        """Delete a research candidate from the control-plane list."""
+        return self.strategy_candidates.pop(candidate_id, None)
+
+    # ==================== Allocation / Autopilot Methods ====================
+
+    def upsert_allocation_profile(
+        self, deployment_id: str, profile_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat() + "Z"
+        current = self.allocation_profiles.get(deployment_id, {})
+        profile = {
+            **current,
+            **profile_data,
+            "deployment_id": deployment_id,
+            "updated_at": now,
+        }
+        profile.setdefault("current_notional", 0.0)
+        profile["remaining_notional"] = max(
+            0.0,
+            float(profile.get("max_notional", 0.0)) - float(profile.get("current_notional", 0.0)),
+        )
+        self.allocation_profiles[deployment_id] = profile
+        return profile
+
+    def list_allocation_profiles(self) -> List[Dict[str, Any]]:
+        profiles = list(self.allocation_profiles.values())
+        profiles.sort(key=lambda p: (p.get("priority", 100), p.get("deployment_id", "")))
+        return profiles
+
+    def get_allocation_profile(self, deployment_id: str) -> Optional[Dict[str, Any]]:
+        return self.allocation_profiles.get(deployment_id)
+
+    def append_allocation_trace(
+        self, deployment_id: str, trace_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        trace_id = trace_data.get("trace_id") or str(uuid.uuid4())
+        trace = {
+            **trace_data,
+            "trace_id": trace_id,
+            "deployment_id": deployment_id,
+            "created_at": datetime.now(timezone.utc).isoformat() + "Z",
+        }
+        self.allocation_traces.setdefault(deployment_id, []).append(trace)
+        return trace
+
+    def list_allocation_traces(self, deployment_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        return list(self.allocation_traces.get(deployment_id, []))[-limit:]
+
+    def append_autopilot_decision(self, decision_data: Dict[str, Any]) -> Dict[str, Any]:
+        decision_id = decision_data.get("decision_id") or str(uuid.uuid4())
+        decision = {
+            **decision_data,
+            "decision_id": decision_id,
+            "created_at": datetime.now(timezone.utc).isoformat() + "Z",
+        }
+        self.autopilot_decisions.append(decision)
+        self.autopilot_decisions = self.autopilot_decisions[-1000:]
+        return decision
+
+    def list_autopilot_decisions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return list(self.autopilot_decisions)[-limit:]
 
     # ==================== Risk Methods ====================
 

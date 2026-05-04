@@ -9,10 +9,14 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/monitor', label: 'Monitor', phase: 'P0' },
+  { path: '/data', label: 'Data', phase: 'P0' },
+  { path: '/research', label: 'Research', phase: 'P0' },
   { path: '/strategies', label: 'Strategies', phase: 'P0' },
   { path: '/reconcile', label: 'Reconcile', phase: 'P0' },
   { path: '/chat', label: 'AI Chat', phase: 'P0' },
   { path: '/backtests', label: 'Backtests', phase: 'P1' },
+  { path: '/portfolio-allocation', label: 'Portfolio Allocation', phase: 'P1' },
+  { path: '/portfolio-autopilot', label: 'Portfolio Autopilot', phase: 'P1' },
   { path: '/reports', label: 'Reports', phase: 'P1' },
   { path: '/audit', label: 'Audit', phase: 'P2' },
   { path: '/replay', label: 'Replay', phase: 'P2' },

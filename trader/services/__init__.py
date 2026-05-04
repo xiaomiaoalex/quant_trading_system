@@ -21,3 +21,6 @@ from trader.services.capital_allocator import (
     PortfolioStateProviderPort,
     SimplePortfolioState,
 )
+from trader.services.strategy_candidate import StrategyCandidateService
+from trader.services.allocation_management import AllocationManagementService
+from trader.services.portfolio_autopilot import PortfolioRuntimeController

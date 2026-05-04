@@ -51,6 +51,25 @@ class StrategyCodeVersion(BaseModel):
     notes: Optional[str] = None
 
 
+class StrategyCodeView(BaseModel):
+    """策略源码视图。
+
+    saved_code 表示 Strategy Lab 保存的版本；module_entrypoint 表示后端包内
+    trader.* 模块源码。该视图只用于研究/运维查看，不改变部署入口语义。
+    """
+
+    strategy_id: str
+    source_type: Literal["saved_code", "module_entrypoint"]
+    code: str
+    code_version: Optional[int] = None
+    checksum: Optional[str] = None
+    module_path: Optional[str] = None
+    entrypoint: Optional[str] = None
+    created_at: Optional[str] = None
+    created_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class StrategyCodeCreateRequest(BaseModel):
     """策略代码新建/保存请求"""
     strategy_id: str
@@ -240,6 +259,12 @@ class BacktestRequest(BaseModel):
     venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     requested_by: str
     strategy_code_version: Optional[int] = None
+    feature_version: str = Field(default="dev_smoke")
+    initial_capital: float = Field(default=100000.0, ge=0.0)
+    fee_bps: float = Field(default=10.0, ge=0.0)
+    slippage_bps: float = Field(default=5.0, ge=0.0)
+    benchmark: Optional[str] = None
+    data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
 
 
 class BacktestRun(BaseModel):
@@ -282,6 +307,202 @@ class BacktestReport(BaseModel):
     equity_curve: Optional[List[Dict[str, Any]]] = None
     metrics: Optional[Dict[str, Any]] = None
     artifact_ref: Optional[str] = None
+
+
+StrategyCandidateStatus = Literal[
+    "DRAFT",
+    "DEBUG_PASSED",
+    "BACKTEST_RUNNING",
+    "BACKTEST_PASSED",
+    "VALIDATION_PASSED",
+    "APPROVED_FOR_PAPER",
+    "PAPER_RUNNING",
+    "PAUSED_BY_RISK",
+    "STOPPED",
+    "REJECTED",
+]
+
+
+class BacktestDatasetSpec(BaseModel):
+    """研究回测数据集选择。"""
+
+    symbols: List[str] = Field(default_factory=lambda: ["BTCUSDT"])
+    start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
+    end_ts_ms: int = Field(..., description="End timestamp in milliseconds")
+    feature_version: str = "dev_smoke"
+    venue: str = "BINANCE"
+    initial_capital: float = Field(default=100000.0, ge=0.0)
+    fee_bps: float = Field(default=10.0, ge=0.0)
+    slippage_bps: float = Field(default=5.0, ge=0.0)
+    benchmark: Optional[str] = None
+    data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
+
+
+class BacktestGateResult(BaseModel):
+    """策略准入门禁结果。"""
+
+    passed: bool = False
+    failed_rules: List[str] = Field(default_factory=list)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: Dict[str, str] = Field(default_factory=dict)
+
+
+class StrategyCandidateCreateRequest(BaseModel):
+    """创建策略研究候选。"""
+
+    strategy_id: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    code: Optional[str] = None
+    code_version: Optional[int] = Field(default=None, ge=1)
+    config: Dict[str, Any] = Field(default_factory=dict)
+    dataset: Optional[BacktestDatasetSpec] = None
+    created_by: str = "console_user"
+
+
+class StrategyCandidate(BaseModel):
+    """策略研究到部署生命周期实体。"""
+
+    candidate_id: str
+    strategy_id: str
+    status: StrategyCandidateStatus = "DRAFT"
+    name: Optional[str] = None
+    description: Optional[str] = None
+    code: Optional[str] = None
+    code_version: Optional[int] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
+    dataset: Optional[BacktestDatasetSpec] = None
+    feature_version: str = "dev_smoke"
+    backtest_run_id: Optional[str] = None
+    deployment_id: Optional[str] = None
+    validation: Optional[BacktestGateResult] = None
+    events: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class StrategyCandidateDebugRequest(BaseModel):
+    code: Optional[str] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyCandidateBacktestRequest(BaseModel):
+    dataset: BacktestDatasetSpec
+    requested_by: str = "console_user"
+
+
+class StrategyCandidatePromoteRequest(BaseModel):
+    deployment_id: Optional[str] = None
+    symbols: List[str] = Field(default_factory=lambda: ["BTCUSDT"])
+    account_id: str = "binance_demo"
+    venue: str = "BINANCE"
+    mode: DeploymentMode = "paper"
+    version: str = "v1"
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class StrategyAllocationProfileUpdateRequest(BaseModel):
+    strategy_id: str
+    max_notional: float = Field(..., ge=0.0)
+    max_symbol_exposure: float = Field(..., ge=0.0)
+    max_portfolio_weight: float = Field(..., ge=0.0, le=1.0)
+    min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    allow_short: bool = False
+    priority: int = Field(default=100, ge=0)
+    enabled: bool = True
+
+
+class StrategyAllocationProfile(BaseModel):
+    deployment_id: str
+    strategy_id: str
+    max_notional: float
+    max_symbol_exposure: float
+    max_portfolio_weight: float
+    min_confidence: float = 0.5
+    allow_short: bool = False
+    priority: int = 100
+    enabled: bool = True
+    current_notional: float = 0.0
+    remaining_notional: float = 0.0
+    updated_at: Optional[str] = None
+
+
+class AllocationTraceCreateRequest(BaseModel):
+    strategy_id: str
+    symbol: str
+    raw_requested_size: float
+    risk_sized_qty: float
+    allocated_qty: float
+    final_order_qty: float
+    allocation_decision: Literal["approved", "clipped", "rejected"]
+    reject_or_clip_reason: Optional[str] = None
+
+
+class AllocationTrace(BaseModel):
+    trace_id: str
+    deployment_id: str
+    strategy_id: str
+    symbol: str
+    raw_requested_size: float
+    risk_sized_qty: float
+    allocated_qty: float
+    final_order_qty: float
+    allocation_decision: Literal["approved", "clipped", "rejected"]
+    reject_or_clip_reason: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+PortfolioAutopilotAction = Literal[
+    "START",
+    "PAUSE",
+    "RESUME",
+    "STOP",
+    "REDUCE_ALLOCATION",
+    "DISABLE_ALLOCATION",
+]
+
+
+class PortfolioAutopilotDecision(BaseModel):
+    decision_id: str
+    action: PortfolioAutopilotAction
+    deployment_id: Optional[str] = None
+    reason: str
+    input_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    mode: Literal["paper", "shadow", "live"] = "paper"
+
+
+class PortfolioAutopilotTickRequest(BaseModel):
+    kill_switch_level: int = Field(default=0, ge=0, le=3)
+    data_stale: bool = False
+    portfolio_exposure: float = Field(default=0.0, ge=0.0)
+    max_portfolio_exposure: float = Field(default=0.0, ge=0.0)
+    deployment_errors: Dict[str, int] = Field(default_factory=dict)
+
+
+class PortfolioAutopilotSnapshot(BaseModel):
+    ts_ms: int
+    kill_switch_level: int = 0
+    portfolio_exposure: float = 0.0
+    max_portfolio_exposure: float = 0.0
+    data_stale: bool = False
+    profiles: List[StrategyAllocationProfile] = Field(default_factory=list)
+    decisions: List[PortfolioAutopilotDecision] = Field(default_factory=list)
+
+
+class DataSourceStatus(BaseModel):
+    source: str
+    status: Literal["available", "stub", "missing"]
+    symbols: List[str] = Field(default_factory=list)
+    latest_ts_ms: Optional[int] = None
+    feature_version: str = "dev_smoke"
+    quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    notes: Optional[str] = None
+
+
+class DataCatalogResponse(BaseModel):
+    feature_version: str
+    sources: List[DataSourceStatus]
 
 
 # ==================== Order & Execution Models ====================

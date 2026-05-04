@@ -17,6 +17,11 @@ from trader.api.routes import (
     reconciler,
     monitor,
     chat,
+    portfolio_research,
+    strategy_candidates,
+    allocations,
+    portfolio_autopilot,
+    data_catalog,
     audit,
     sse,
 )
@@ -35,6 +40,11 @@ __all__ = [
     "reconciler",
     "monitor",
     "chat",
+    "portfolio_research",
+    "strategy_candidates",
+    "allocations",
+    "portfolio_autopilot",
+    "data_catalog",
     "audit",
     "sse",
 ]

@@ -504,6 +504,15 @@ class BacktestService:
             "risk": risk,
             "trades": trades,
             "equity_curve": equity_curve,
+            "backtest_data_mode": request.data_mode,
+            "feature_version": request.feature_version,
+            "fee_bps": request.fee_bps,
+            "slippage_bps": request.slippage_bps,
+            "benchmark": request.benchmark,
+            "data_quality_summary": {
+                "quality_score": 0.0 if request.data_mode == "dev_smoke" else 1.0,
+                "missing_data": request.data_mode == "dev_smoke",
+            },
         }
 
         return {
