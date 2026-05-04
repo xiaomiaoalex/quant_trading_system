@@ -19,6 +19,20 @@ def _decimal_dict(values: dict[str, Decimal] | None) -> dict[str, Decimal]:
     return {key: _decimal(value) for key, value in (values or {}).items()}
 
 
+def _normalize_symbol(symbol: str) -> str:
+    return str(symbol).upper().replace("-", "").replace("/", "").strip()
+
+
+def _normalize_cluster(cluster: str) -> str:
+    return str(cluster).upper().strip()
+
+
+def _text_dict(values: dict[str, str] | None) -> dict[str, str]:
+    return {
+        _normalize_symbol(key): _normalize_cluster(value) for key, value in (values or {}).items()
+    }
+
+
 class CryptoMarketType(str, Enum):
     SPOT = "spot"
     USD_M_FUTURES = "usd_m_futures"
@@ -156,12 +170,22 @@ class OpenOrderRisk:
 @dataclass(slots=True)
 class CryptoRiskBudget:
     symbol_notional_caps: dict[str, Decimal] = field(default_factory=dict)
+    symbol_clusters: dict[str, str] = field(default_factory=dict)
+    cluster_notional_caps: dict[str, Decimal] = field(default_factory=dict)
     total_notional_cap: Decimal = Decimal("0")
     max_margin_ratio: Decimal = Decimal("0.80")
     min_liquidation_buffer_ratio: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
-        self.symbol_notional_caps = _decimal_dict(self.symbol_notional_caps)
+        self.symbol_notional_caps = {
+            _normalize_symbol(symbol): value
+            for symbol, value in _decimal_dict(self.symbol_notional_caps).items()
+        }
+        self.symbol_clusters = _text_dict(self.symbol_clusters)
+        self.cluster_notional_caps = {
+            _normalize_cluster(cluster): value
+            for cluster, value in _decimal_dict(self.cluster_notional_caps).items()
+        }
         self.total_notional_cap = _decimal(self.total_notional_cap)
         self.max_margin_ratio = _decimal(self.max_margin_ratio)
         self.min_liquidation_buffer_ratio = _decimal(self.min_liquidation_buffer_ratio)

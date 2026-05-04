@@ -5,10 +5,12 @@ import pytest
 
 from trader.api.crypto_risk_runtime import (
     CRYPTO_RISK_BASE_SYMBOLS_ENV,
+    CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS_ENV,
     CRYPTO_RISK_ENABLED_ENV,
     CRYPTO_RISK_FUTURES_BASE_URL_ENV,
     CRYPTO_RISK_MAX_MARGIN_RATIO_ENV,
     CRYPTO_RISK_MIN_LIQUIDATION_BUFFER_RATIO_ENV,
+    CRYPTO_RISK_SYMBOL_CLUSTERS_ENV,
     CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV,
     CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV,
     build_crypto_risk_setup_failure_check,
@@ -36,6 +38,8 @@ def test_crypto_risk_runtime_config_parses_enabled_budget_and_symbols() -> None:
             CRYPTO_RISK_BASE_SYMBOLS_ENV: " btc/usdt, ETH-USDT, btcusdt ",
             CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV: "25000.5",
             CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV: "btcusdt=10000, ETH-USDT=5000.25",
+            CRYPTO_RISK_SYMBOL_CLUSTERS_ENV: "btcusdt=BTC_BETA, eth-usdt=ETH_BETA",
+            CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS_ENV: "BTC_BETA=15000, ETH_BETA=7500",
             CRYPTO_RISK_MAX_MARGIN_RATIO_ENV: "0.65",
             CRYPTO_RISK_MIN_LIQUIDATION_BUFFER_RATIO_ENV: "0.08",
         }
@@ -48,6 +52,14 @@ def test_crypto_risk_runtime_config_parses_enabled_budget_and_symbols() -> None:
     assert config.risk_budget.symbol_notional_caps == {
         "BTCUSDT": Decimal("10000"),
         "ETHUSDT": Decimal("5000.25"),
+    }
+    assert config.risk_budget.symbol_clusters == {
+        "BTCUSDT": "BTC_BETA",
+        "ETHUSDT": "ETH_BETA",
+    }
+    assert config.risk_budget.cluster_notional_caps == {
+        "BTC_BETA": Decimal("15000"),
+        "ETH_BETA": Decimal("7500"),
     }
     assert config.risk_budget.max_margin_ratio == Decimal("0.65")
     assert config.risk_budget.min_liquidation_buffer_ratio == Decimal("0.08")

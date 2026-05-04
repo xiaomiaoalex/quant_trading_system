@@ -172,6 +172,8 @@ class CryptoRiskBudgetSchema(BaseModel):
     """数字货币独立风控预算视图。"""
 
     symbol_notional_caps: Dict[str, str] = Field(default_factory=dict)
+    symbol_clusters: Dict[str, str] = Field(default_factory=dict)
+    cluster_notional_caps: Dict[str, str] = Field(default_factory=dict)
     total_notional_cap: str = "0"
     max_margin_ratio: str = "0.80"
     min_liquidation_buffer_ratio: str = "0"
@@ -195,6 +197,8 @@ class CryptoRiskBudgetUpdateRequest(BaseModel):
     """数字货币独立风控预算热更新请求。"""
 
     symbol_notional_caps: Optional[Dict[str, str]] = None
+    symbol_clusters: Optional[Dict[str, str]] = None
+    cluster_notional_caps: Optional[Dict[str, str]] = None
     total_notional_cap: Optional[str] = None
     max_margin_ratio: Optional[str] = None
     min_liquidation_buffer_ratio: Optional[str] = None

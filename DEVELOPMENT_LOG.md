@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 20:55 - 数字货币独立风控 P3.2b 组合级 Cluster 风险预算
+
+- 背景: P0/P1/P2/P3.1 已把单币种 cap、账户总 cap、保证金和强平缓冲接入 pre-trade，但多个 alt 仓位共享 BTC/ETH beta 时仍缺少组合级预算约束。
+- 决策: 先实现可配置静态 cluster，而不是直接上动态相关性优化器；cluster 预算进入 `CryptoRiskBudget`，由 Core 纯计算聚合，Policy 层在下单前拒绝超限。
+- 改动: 新增 `PortfolioExposureAggregator`；`CryptoRiskBudget` 新增 `symbol_clusters` / `cluster_notional_caps`；`CryptoPreTradeRiskPlugin` 将本次拟下单一起纳入 cluster exposure 并返回 `CRYPTO_CLUSTER_EXPOSURE`；运行时环境变量、状态视图和预算热更新 API 同步支持 cluster 字段。
+- 验证: P3.2b/受影响 crypto/runtime/API/risk/OMS 回归 67 passed；P0 回归集 99 passed；`py_compile` passed；scoped `black --check` passed；`git diff --check` passed；`isort` 因当前环境未安装未执行成功。
+- 风险/遗留: 当前 cluster 映射依赖人工配置，尚未做动态相关性矩阵、BTC beta adjusted exposure、Funding 系数和 testnet/live 真实联调。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 19:41 - 数字货币独立风控 P3.2a 预算热更新审计
 
 - 背景: P3.1 已提供 runtime status 与预算热更新 API，但预算变更没有历史审计，事故复盘无法知道阈值从多少被谁改到多少。

@@ -92,6 +92,8 @@ async def test_runtime_manager_hot_updates_budget_and_replaces_check_without_res
         CryptoRiskBudget(
             total_notional_cap=Decimal("25000"),
             symbol_notional_caps={"ETHUSDT": Decimal("5000")},
+            symbol_clusters={"ETHUSDT": "ETH_BETA"},
+            cluster_notional_caps={"ETH_BETA": Decimal("12000")},
             max_margin_ratio=Decimal("0.70"),
             min_liquidation_buffer_ratio=Decimal("0.05"),
         ),
@@ -102,6 +104,8 @@ async def test_runtime_manager_hot_updates_budget_and_replaces_check_without_res
     assert status.updated_by == "operator"
     assert status.risk_budget.total_notional_cap == Decimal("25000")
     assert status.risk_budget.symbol_notional_caps == {"ETHUSDT": Decimal("5000")}
+    assert status.risk_budget.symbol_clusters == {"ETHUSDT": "ETH_BETA"}
+    assert status.risk_budget.cluster_notional_caps == {"ETH_BETA": Decimal("12000")}
     assert status.risk_budget.max_margin_ratio == Decimal("0.70")
     assert status.risk_budget.min_liquidation_buffer_ratio == Decimal("0.05")
     assert source.start_count == 1

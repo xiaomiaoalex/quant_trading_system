@@ -21,6 +21,9 @@ from trader.core.domain.models.signal import Signal, SignalType
 from trader.core.domain.services.exchange_rule_guard import ExchangeRuleGuard
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
 from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
+from trader.core.domain.services.portfolio_exposure_aggregator import (
+    PortfolioExposureAggregator,
+)
 
 
 def d(value: str) -> Decimal:
@@ -40,9 +43,33 @@ def btc_spec() -> CryptoInstrumentSpec:
     )
 
 
+def eth_spec() -> CryptoInstrumentSpec:
+    return CryptoInstrumentSpec(
+        symbol="ETHUSDT",
+        market_type=CryptoMarketType.USD_M_FUTURES,
+        price_tick=d("0.01"),
+        qty_step=d("0.001"),
+        min_qty=d("0.001"),
+        max_qty=d("1000"),
+        min_notional=d("10"),
+        max_notional=d("1000000"),
+    )
+
+
 def btc_bracket() -> LeverageBracket:
     return LeverageBracket(
         symbol="BTCUSDT",
+        notional_floor=d("0"),
+        notional_cap=d("50000"),
+        initial_leverage=d("20"),
+        maint_margin_ratio=d("0.004"),
+        maint_amount=d("0"),
+    )
+
+
+def eth_bracket() -> LeverageBracket:
+    return LeverageBracket(
+        symbol="ETHUSDT",
         notional_floor=d("0"),
         notional_cap=d("50000"),
         initial_leverage=d("20"),
@@ -136,6 +163,44 @@ def test_open_order_exposure_counts_pending_orders_without_crediting_reduce_only
     assert result.total_risk_notional == d("144.0")
 
 
+def test_portfolio_exposure_aggregator_groups_cluster_risk() -> None:
+    exposures = PortfolioExposureAggregator().calculate_cluster_exposures(
+        positions=[
+            CryptoPositionRisk(
+                symbol="BTCUSDT",
+                qty=d("0.1"),
+                entry_price=d("49000"),
+                mark_price=d("50000"),
+                leverage=d("5"),
+            )
+        ],
+        open_orders=[
+            OpenOrderRisk(
+                cl_ord_id="eth-open",
+                symbol="ETHUSDT",
+                side=OrderSide.BUY,
+                qty=d("2"),
+                filled_qty=d("0"),
+                price=d("3000"),
+            ),
+            OpenOrderRisk(
+                cl_ord_id="eth-reduce",
+                symbol="ETHUSDT",
+                side=OrderSide.SELL,
+                qty=d("1"),
+                filled_qty=d("0"),
+                price=d("2990"),
+                reduce_only=True,
+            ),
+        ],
+        mark_prices={"BTCUSDT": d("50000"), "ETHUSDT": d("3000")},
+        symbol_clusters={"BTCUSDT": "BTC_BETA", "ETHUSDT": "BTC_BETA"},
+    )
+
+    assert exposures["BTC_BETA"].symbols == ("BTCUSDT", "ETHUSDT")
+    assert exposures["BTC_BETA"].total_risk_notional == d("11000")
+
+
 def test_margin_risk_calculator_uses_leverage_bracket_and_fails_closed() -> None:
     calculator = MarginRiskCalculator()
     position = CryptoPositionRisk(
@@ -208,6 +273,59 @@ async def test_crypto_pre_trade_plugin_rejects_cap_breach_from_open_orders() -> 
     assert result is not None
     assert result.passed is False
     assert result.rejection_reason == RejectionReason.CRYPTO_OPEN_ORDER_EXPOSURE
+
+
+@pytest.mark.asyncio
+async def test_crypto_pre_trade_plugin_rejects_cluster_cap_breach() -> None:
+    snapshot = CryptoRiskSnapshot(
+        account=account(),
+        instrument_specs={"BTCUSDT": btc_spec(), "ETHUSDT": eth_spec()},
+        leverage_brackets={"BTCUSDT": [btc_bracket()], "ETHUSDT": [eth_bracket()]},
+        positions=[
+            CryptoPositionRisk(
+                symbol="BTCUSDT",
+                qty=d("0.1"),
+                entry_price=d("49000"),
+                mark_price=d("50000"),
+                leverage=d("10"),
+            )
+        ],
+        open_orders=[
+            OpenOrderRisk(
+                cl_ord_id="pending-eth",
+                symbol="ETHUSDT",
+                side=OrderSide.BUY,
+                qty=d("1"),
+                filled_qty=d("0"),
+                price=d("3000"),
+            )
+        ],
+        mark_prices={"BTCUSDT": d("50000"), "ETHUSDT": d("3000")},
+        risk_budget=CryptoRiskBudget(
+            symbol_notional_caps={"BTCUSDT": d("50000"), "ETHUSDT": d("50000")},
+            total_notional_cap=d("100000"),
+            max_margin_ratio=d("0.50"),
+            symbol_clusters={"BTCUSDT": "BTC_BETA", "ETHUSDT": "BTC_BETA"},
+            cluster_notional_caps={"BTC_BETA": d("10000")},
+        ),
+    )
+    plugin = CryptoPreTradeRiskPlugin(StaticSnapshotProvider(snapshot))
+
+    result = await plugin.check(
+        signal=Signal(
+            signal_type=SignalType.LONG,
+            symbol="ETHUSDT",
+            price=d("3000"),
+            quantity=d("1"),
+        ),
+        metrics=RiskMetrics(),
+        engine=None,
+    )
+
+    assert result is not None
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.CRYPTO_CLUSTER_EXPOSURE
+    assert result.details["cluster"] == "BTC_BETA"
 
 
 @pytest.mark.asyncio

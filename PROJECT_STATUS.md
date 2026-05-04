@@ -4,9 +4,37 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 19:41 (北京时间)
+2026-05-04 20:55 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P3.2b 组合级 Cluster 风险预算
+- 完成时间: 2026-05-04 20:55 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2b
+- 开发前状态:
+  - P0/P1/P2/P3.1 已能按单 symbol、账户总 notional、margin ratio 和强平缓冲做 pre-trade 拦截
+  - 不同 alt 仓位仍只在 total cap 下合并，缺少 BTC beta / ETH beta 等组合级风险簇预算
+  - 预算热更新 API 不支持 symbol→cluster 映射和 cluster cap
+- 开发后状态:
+  - `CryptoRiskBudget` 新增 `symbol_clusters` 与 `cluster_notional_caps`
+  - 新增 `PortfolioExposureAggregator`，按 `已成交持仓 + active open orders + 本次拟下单` 聚合 cluster risk notional
+  - `CryptoPreTradeRiskPlugin` 新增 cluster cap 检查，超限返回 `CRYPTO_CLUSTER_EXPOSURE` 并建议 L1 `NO_NEW_POSITIONS`
+  - `CRYPTO_RISK_SYMBOL_CLUSTERS`、`CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS` 环境变量和 `PATCH /v1/risk/crypto/budget` 均支持 cluster 预算
+- Issue 状态迁移:
+  - Alt 仓位只受单币种/账户总 cap 约束：`待确认` → `已验证（cluster exposure cap）`
+  - BTC beta / ETH beta 等相关性风险无法配置预算：`待确认` → `已验证（symbol_clusters + cluster_notional_caps）`
+  - 组合级预算无法热更新：`待确认` → `已验证（runtime budget API）`
+- 测试结果:
+  - P3.2b/受影响 crypto/runtime/API/risk/OMS 回归 → 67 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 12 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 当前 cluster 风险以配置映射为准，尚未实现动态相关性矩阵或 BTC beta 回归估计
+  - Binance USD-M testnet/live 真实联调、前端运维入口和 PG 级预算审计持久化仍留给后续
 
 ### 本次任务：数字货币独立风控 P3.2a 预算热更新审计
 - 完成时间: 2026-05-04 19:41 (北京时间)

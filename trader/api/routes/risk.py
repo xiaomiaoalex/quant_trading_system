@@ -267,6 +267,8 @@ async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
         budget = merge_crypto_risk_budget(
             before_status.risk_budget,
             symbol_notional_caps=request.symbol_notional_caps,
+            symbol_clusters=request.symbol_clusters,
+            cluster_notional_caps=request.cluster_notional_caps,
             total_notional_cap=request.total_notional_cap,
             max_margin_ratio=request.max_margin_ratio,
             min_liquidation_buffer_ratio=request.min_liquidation_buffer_ratio,

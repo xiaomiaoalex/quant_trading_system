@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-04 19:41 (北京时间)
+- 最后更新: 2026-05-04 20:55 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -36,7 +36,7 @@ flowchart TB
         OMS["OMS Monotonic State Machine"]
         Deterministic["Deterministic Layer / Replay"]
         Domain["Domain Models: Order, Position, Signal"]
-        CryptoRisk["Crypto Risk Models / Margin / Open Orders"]
+        CryptoRisk["Crypto Risk Models / Margin / Open Orders / Cluster Exposure"]
     end
 
     subgraph Adapter["Adapter Plane: trader/adapters/"]
@@ -145,7 +145,7 @@ sequenceDiagram
     Policy->>Snapshot: build account/rule/mark/open-order risk snapshot
     Snapshot->>Broker: Adapter-mapped REST/account data
     Snapshot-->>Policy: CryptoRiskSnapshot or fail-closed error
-    Policy->>Policy: exchange rules / open-order exposure / margin check
+    Policy->>Policy: exchange rules / open-order exposure / cluster exposure / margin check
     Policy-->>Runner: approve / reject / reduce
     Runner->>OMS: submit order command
     OMS->>OMS: cl_ord_id idempotency + monotonic state
@@ -172,7 +172,8 @@ sequenceDiagram
 - `GET /v1/risk/crypto/runtime` 暴露 runtime 状态；`PATCH /v1/risk/crypto/budget` 仅热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，不重新创建 Binance source 或泄露凭证。
 - 每次预算热更新成功后写入控制面事件流 `risk:crypto` / `crypto_risk.budget_updated`；专用审计查询与通用 `/v1/events` 共用同一来源，便于回放与运维追踪。
 - `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
-- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用和合约保证金纯计算。
+- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 cluster 敞口和合约保证金纯计算。
+- `CryptoRiskBudget` 支持 `symbol_clusters` 与 `cluster_notional_caps`；cluster 风险按“已成交持仓 + active open orders + 本次拟下单”聚合，命中 cap 时由 Policy Plane 拒绝，不修改 OMS 状态。
 - 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
 - OMS 下单入口可注入独立 `pre_trade_risk_check` 回调；该回调拒绝或异常时必须在 broker `place_order` 之前阻断订单。
 

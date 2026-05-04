@@ -64,6 +64,10 @@ from trader.core.domain.services.alternative_data_health_gate import (
     DataReliabilityResult,
     DataSourceType,
 )
+from trader.core.domain.services.portfolio_exposure_aggregator import (
+    ClusterExposure,
+    PortfolioExposureAggregator,
+)
 
 __all__ = [
     # DepthChecker
@@ -112,4 +116,7 @@ __all__ = [
     "DataHealthThresholds",
     "DataReliabilityResult",
     "DataSourceType",
+    # PortfolioExposureAggregator (Crypto Risk P3)
+    "ClusterExposure",
+    "PortfolioExposureAggregator",
 ]

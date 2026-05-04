@@ -29,6 +29,8 @@ CRYPTO_RISK_FUTURES_BASE_URL_ENV = "CRYPTO_RISK_FUTURES_BASE_URL"
 CRYPTO_RISK_BASE_SYMBOLS_ENV = "CRYPTO_RISK_BASE_SYMBOLS"
 CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV = "CRYPTO_RISK_TOTAL_NOTIONAL_CAP"
 CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV = "CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS"
+CRYPTO_RISK_SYMBOL_CLUSTERS_ENV = "CRYPTO_RISK_SYMBOL_CLUSTERS"
+CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS_ENV = "CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS"
 CRYPTO_RISK_MAX_MARGIN_RATIO_ENV = "CRYPTO_RISK_MAX_MARGIN_RATIO"
 CRYPTO_RISK_MIN_LIQUIDATION_BUFFER_RATIO_ENV = "CRYPTO_RISK_MIN_LIQUIDATION_BUFFER_RATIO"
 CRYPTO_RISK_TIMEOUT_SECONDS_ENV = "CRYPTO_RISK_TIMEOUT_SECONDS"
@@ -316,6 +318,14 @@ def get_crypto_risk_runtime_config(
                 source.get(CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV),
                 CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV,
             ),
+            symbol_clusters=_parse_symbol_text_map(
+                source.get(CRYPTO_RISK_SYMBOL_CLUSTERS_ENV),
+                CRYPTO_RISK_SYMBOL_CLUSTERS_ENV,
+            ),
+            cluster_notional_caps=_parse_text_decimal_map(
+                source.get(CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS_ENV),
+                CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS_ENV,
+            ),
             total_notional_cap=_parse_decimal(
                 source.get(CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV),
                 CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV,
@@ -436,6 +446,12 @@ def crypto_risk_budget_to_dict(budget: CryptoRiskBudget) -> dict[str, Any]:
         "symbol_notional_caps": {
             symbol: str(value) for symbol, value in sorted(budget.symbol_notional_caps.items())
         },
+        "symbol_clusters": {
+            symbol: cluster for symbol, cluster in sorted(budget.symbol_clusters.items())
+        },
+        "cluster_notional_caps": {
+            cluster: str(value) for cluster, value in sorted(budget.cluster_notional_caps.items())
+        },
         "total_notional_cap": str(budget.total_notional_cap),
         "max_margin_ratio": str(budget.max_margin_ratio),
         "min_liquidation_buffer_ratio": str(budget.min_liquidation_buffer_ratio),
@@ -446,6 +462,8 @@ def merge_crypto_risk_budget(
     current: CryptoRiskBudget,
     *,
     symbol_notional_caps: Mapping[str, str] | None = None,
+    symbol_clusters: Mapping[str, str] | None = None,
+    cluster_notional_caps: Mapping[str, str] | None = None,
     total_notional_cap: str | None = None,
     max_margin_ratio: str | None = None,
     min_liquidation_buffer_ratio: str | None = None,
@@ -458,6 +476,19 @@ def merge_crypto_risk_budget(
             )
             if symbol_notional_caps is not None
             else dict(current.symbol_notional_caps)
+        ),
+        symbol_clusters=(
+            _parse_symbol_text_map_from_mapping(symbol_clusters, "symbol_clusters")
+            if symbol_clusters is not None
+            else dict(current.symbol_clusters)
+        ),
+        cluster_notional_caps=(
+            _parse_text_decimal_map_from_mapping(
+                cluster_notional_caps,
+                "cluster_notional_caps",
+            )
+            if cluster_notional_caps is not None
+            else dict(current.cluster_notional_caps)
         ),
         total_notional_cap=_parse_decimal(
             total_notional_cap,
@@ -490,6 +521,40 @@ def _parse_symbol_decimal_map_from_mapping(
         if not symbol:
             raise ValueError(f"{field_name} contains empty symbol")
         values[symbol] = _parse_decimal(
+            value_raw,
+            field_name,
+            default=Decimal("0"),
+            min_value=Decimal("0"),
+        )
+    return values
+
+
+def _parse_symbol_text_map_from_mapping(
+    raw: Mapping[str, str],
+    field_name: str,
+) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for symbol_raw, value_raw in raw.items():
+        symbol = _normalize_symbol(symbol_raw)
+        if not symbol:
+            raise ValueError(f"{field_name} contains empty symbol")
+        cluster = _normalize_cluster(value_raw)
+        if not cluster:
+            raise ValueError(f"{field_name} contains empty cluster for {symbol}")
+        values[symbol] = cluster
+    return values
+
+
+def _parse_text_decimal_map_from_mapping(
+    raw: Mapping[str, str],
+    field_name: str,
+) -> dict[str, Decimal]:
+    values: dict[str, Decimal] = {}
+    for key_raw, value_raw in raw.items():
+        key = _normalize_cluster(key_raw)
+        if not key:
+            raise ValueError(f"{field_name} contains empty key")
+        values[key] = _parse_decimal(
             value_raw,
             field_name,
             default=Decimal("0"),
@@ -551,6 +616,52 @@ def _parse_symbol_decimal_map(raw: str | None, env_name: str) -> dict[str, Decim
         if not symbol:
             raise ValueError(f"{env_name} contains empty symbol in item: {part!r}")
         values[symbol] = _parse_decimal(
+            value_raw,
+            env_name,
+            default=Decimal("0"),
+            min_value=Decimal("0"),
+        )
+    return values
+
+
+def _parse_symbol_text_map(raw: str | None, env_name: str) -> dict[str, str]:
+    if raw is None or str(raw).strip() == "":
+        return {}
+
+    values: dict[str, str] = {}
+    for item in str(raw).split(","):
+        part = item.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"{env_name} item must use SYMBOL=CLUSTER format: {part!r}")
+        symbol_raw, cluster_raw = part.split("=", 1)
+        symbol = _normalize_symbol(symbol_raw)
+        cluster = _normalize_cluster(cluster_raw)
+        if not symbol:
+            raise ValueError(f"{env_name} contains empty symbol in item: {part!r}")
+        if not cluster:
+            raise ValueError(f"{env_name} contains empty cluster in item: {part!r}")
+        values[symbol] = cluster
+    return values
+
+
+def _parse_text_decimal_map(raw: str | None, env_name: str) -> dict[str, Decimal]:
+    if raw is None or str(raw).strip() == "":
+        return {}
+
+    values: dict[str, Decimal] = {}
+    for item in str(raw).split(","):
+        part = item.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"{env_name} item must use KEY=DECIMAL format: {part!r}")
+        key_raw, value_raw = part.split("=", 1)
+        key = _normalize_cluster(key_raw)
+        if not key:
+            raise ValueError(f"{env_name} contains empty key in item: {part!r}")
+        values[key] = _parse_decimal(
             value_raw,
             env_name,
             default=Decimal("0"),
@@ -624,3 +735,7 @@ def _parse_optional_text(raw: str | None) -> str | None:
 
 def _normalize_symbol(symbol: str) -> str:
     return symbol.upper().replace("-", "").replace("/", "").strip()
+
+
+def _normalize_cluster(cluster: str) -> str:
+    return str(cluster).upper().strip()

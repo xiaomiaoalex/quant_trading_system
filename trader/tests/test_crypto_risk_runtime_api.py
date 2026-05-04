@@ -55,6 +55,8 @@ async def test_patch_crypto_risk_budget_updates_runtime_manager() -> None:
         json={
             "total_notional_cap": "25000",
             "symbol_notional_caps": {"btc/usdt": "10000"},
+            "symbol_clusters": {"btc/usdt": "BTC_BETA"},
+            "cluster_notional_caps": {"BTC_BETA": "15000"},
             "max_margin_ratio": "0.70",
             "updated_by": "operator",
         },
@@ -66,6 +68,8 @@ async def test_patch_crypto_risk_budget_updates_runtime_manager() -> None:
     assert payload["updated_by"] == "operator"
     assert payload["risk_budget"]["total_notional_cap"] == "25000"
     assert payload["risk_budget"]["symbol_notional_caps"] == {"BTCUSDT": "10000"}
+    assert payload["risk_budget"]["symbol_clusters"] == {"BTCUSDT": "BTC_BETA"}
+    assert payload["risk_budget"]["cluster_notional_caps"] == {"BTC_BETA": "15000"}
     assert payload["risk_budget"]["max_margin_ratio"] == "0.70"
     assert payload["risk_budget"]["min_liquidation_buffer_ratio"] == "0"
 
@@ -86,6 +90,8 @@ async def test_patch_crypto_risk_budget_writes_audit_event() -> None:
         json={
             "total_notional_cap": "25000",
             "symbol_notional_caps": {"ETHUSDT": "6000"},
+            "symbol_clusters": {"ETHUSDT": "ETH_BETA"},
+            "cluster_notional_caps": {"ETH_BETA": "12000"},
             "updated_by": "risk_operator",
         },
     )
@@ -106,6 +112,8 @@ async def test_patch_crypto_risk_budget_writes_audit_event() -> None:
     assert payload["previous_budget"]["symbol_notional_caps"] == {"BTCUSDT": "5000"}
     assert payload["new_budget"]["total_notional_cap"] == "25000"
     assert payload["new_budget"]["symbol_notional_caps"] == {"ETHUSDT": "6000"}
+    assert payload["new_budget"]["symbol_clusters"] == {"ETHUSDT": "ETH_BETA"}
+    assert payload["new_budget"]["cluster_notional_caps"] == {"ETH_BETA": "12000"}
     assert payload["runtime_before"]["wired"] is True
     assert payload["runtime_after"]["wired"] is True
 

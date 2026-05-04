@@ -20,6 +20,9 @@ from trader.core.domain.models.signal import Signal, SignalType
 from trader.core.domain.services.exchange_rule_guard import ExchangeRuleGuard
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
 from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
+from trader.core.domain.services.portfolio_exposure_aggregator import (
+    PortfolioExposureAggregator,
+)
 
 if TYPE_CHECKING:
     from trader.core.application.risk_engine import RiskEngine
@@ -44,6 +47,7 @@ class CryptoPreTradeRiskPlugin:
         self._config = config or CryptoPreTradeRiskConfig()
         self._rule_guard = ExchangeRuleGuard()
         self._open_order_exposure = OpenOrderExposureCalculator()
+        self._portfolio_exposure = PortfolioExposureAggregator()
         self._margin = MarginRiskCalculator()
 
     async def check(
@@ -136,6 +140,14 @@ class CryptoPreTradeRiskPlugin:
                     details={"total_cap": str(total_cap), "total_risk_notional": str(total_risk)},
                 )
 
+        cluster_result = self._evaluate_cluster_exposure(
+            signal=signal,
+            snapshot=snapshot,
+            proposed_order=proposed_order,
+        )
+        if cluster_result is not None:
+            return cluster_result
+
         margin_result = self._evaluate_projected_margin(
             signal=signal,
             snapshot=snapshot,
@@ -181,6 +193,53 @@ class CryptoPreTradeRiskPlugin:
                 message="Signal type NONE is not a trade intent",
                 details={"symbol": signal.symbol, "signal_type": signal.signal_type.value},
             )
+        return None
+
+    def _evaluate_cluster_exposure(
+        self,
+        signal: Signal,
+        snapshot: CryptoRiskSnapshot,
+        proposed_order: OpenOrderRisk,
+    ) -> RiskCheckResult | None:
+        cluster_caps = snapshot.risk_budget.cluster_notional_caps
+        if not cluster_caps:
+            return None
+        if proposed_order.reduce_only:
+            return None
+
+        symbol_clusters = snapshot.risk_budget.symbol_clusters
+        if signal.symbol not in symbol_clusters:
+            return self._reject(
+                level=RiskLevel.CRITICAL,
+                reason=RejectionReason.RISK_SYSTEM_ERROR,
+                message="Missing crypto cluster mapping while cluster budget is enabled",
+                details={"symbol": signal.symbol},
+            )
+
+        cluster_exposures = self._portfolio_exposure.calculate_cluster_exposures(
+            positions=snapshot.positions,
+            open_orders=[*snapshot.open_orders, proposed_order],
+            mark_prices=snapshot.mark_prices,
+            symbol_clusters=symbol_clusters,
+        )
+        for cluster, cap in sorted(cluster_caps.items()):
+            if cap <= 0:
+                continue
+            exposure = cluster_exposures.get(cluster)
+            if exposure is None:
+                continue
+            if exposure.total_risk_notional > cap:
+                return self._reject(
+                    level=RiskLevel.HIGH,
+                    reason=RejectionReason.CRYPTO_CLUSTER_EXPOSURE,
+                    message=f"{cluster} crypto cluster risk notional exceeds cap",
+                    details={
+                        "cluster": cluster,
+                        "cluster_cap": str(cap),
+                        "cluster_risk_notional": str(exposure.total_risk_notional),
+                        "symbols": list(exposure.symbols),
+                    },
+                )
         return None
 
     def _evaluate_projected_margin(
