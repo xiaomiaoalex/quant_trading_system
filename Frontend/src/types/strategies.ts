@@ -116,6 +116,19 @@ export interface StrategyCodeVersion {
   notes?: string
 }
 
+export interface StrategyCodeView {
+  strategy_id: string
+  source_type: 'saved_code' | 'module_entrypoint'
+  code: string
+  code_version?: number | null
+  checksum?: string | null
+  module_path?: string | null
+  entrypoint?: string | null
+  created_at?: string | null
+  created_by?: string | null
+  notes?: string | null
+}
+
 export interface StrategyCodeCreateRequest {
   strategy_id: string
   code: string

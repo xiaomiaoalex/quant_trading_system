@@ -5,12 +5,14 @@
  """
 import asyncio
 import hashlib
+import importlib.util
 import logging
 import os
 import threading
 import time
 import uuid
 from decimal import Decimal
+from pathlib import Path as FilePath
 from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
@@ -20,6 +22,7 @@ from trader.api.models.schemas import (
     StrategyVersion, StrategyVersionCreateRequest,
     VersionedConfig, VersionedConfigUpsertRequest,
     StrategyCodeVersion,
+    StrategyCodeView,
     StrategyCodeCreateRequest,
     StrategyCodeDebugRequest,
     StrategyCodeDebugResponse,
@@ -425,6 +428,71 @@ def _build_debug_market_data(raw: Dict, fallback_symbol: str = "BTCUSDT") -> Mar
     )
 
 
+def _module_path_from_entrypoint(entrypoint: str) -> str | None:
+    """Return import module path for package entrypoints, excluding dynamic code refs."""
+    raw = entrypoint.strip()
+    if not raw or raw.startswith("dynamic:"):
+        return None
+    module_path = raw.split(":", 1)[0].strip()
+    return module_path or None
+
+
+def _read_strategy_module_code(strategy_id: str, entrypoint: str) -> StrategyCodeView:
+    """Read source for a registered trader.* module entrypoint.
+
+    This endpoint is intentionally constrained to modules inside the local trader package
+    so Strategy Details can display built-in strategy code without exposing arbitrary files.
+    """
+    module_path = _module_path_from_entrypoint(entrypoint)
+    if module_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No saved code or module entrypoint source found for strategy {strategy_id}",
+        )
+    if module_path != "trader" and not module_path.startswith("trader."):
+        raise HTTPException(
+            status_code=403,
+            detail="Only trader.* strategy module source can be viewed",
+        )
+
+    spec = importlib.util.find_spec(module_path)
+    if spec is None or not spec.origin:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Module source not found for strategy {strategy_id}: {module_path}",
+        )
+
+    source_path = FilePath(spec.origin).resolve()
+    trader_root = FilePath(__file__).resolve().parents[2]
+    if (
+        spec.origin in {"built-in", "namespace"}
+        or source_path.suffix != ".py"
+        or not source_path.is_relative_to(trader_root)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Strategy module source is outside the allowed trader package",
+        )
+
+    try:
+        code = source_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read strategy module source: {exc}",
+        ) from exc
+
+    checksum = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    return StrategyCodeView(
+        strategy_id=strategy_id,
+        source_type="module_entrypoint",
+        code=code,
+        checksum=checksum,
+        module_path=module_path,
+        entrypoint=entrypoint,
+    )
+
+
 @router.get("/v1/strategies/registry", response_model=List[Strategy])
 async def list_strategies():
     """
@@ -505,6 +573,30 @@ async def get_latest_strategy_code(strategy_id: str = Path(..., description="Str
     if entry is None:
         raise HTTPException(status_code=404, detail=f"No code found for strategy {strategy_id}")
     return StrategyCodeVersion(**entry)
+
+
+@router.get("/v1/strategies/{strategy_id}/code/view", response_model=StrategyCodeView)
+async def get_strategy_code_view(strategy_id: str = Path(..., description="Strategy ID")):
+    """Get displayable strategy source code for Strategy Details.
+
+    Saved Strategy Lab code is returned first. Built-in package strategies fall back to
+    their registered trader.* module source.
+    """
+    storage = get_storage()
+    entry = storage.get_latest_strategy_code(strategy_id)
+    if entry is not None:
+        return StrategyCodeView(
+            source_type="saved_code",
+            module_path=None,
+            entrypoint=None,
+            **entry,
+        )
+
+    service = StrategyService()
+    strategy = service.get_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+    return _read_strategy_module_code(strategy_id, strategy.entrypoint)
 
 
 @router.get("/v1/strategies/{strategy_id}/code/{code_version}", response_model=StrategyCodeVersion)

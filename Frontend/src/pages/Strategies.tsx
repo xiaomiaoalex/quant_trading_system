@@ -581,12 +581,14 @@ export function Strategies() {
         </div>
       )}
 
-      <StrategyDetailModal
-        strategy={detailStrategy!}
-        runtime={detailStrategy ? (deploymentsByStrategy.get(detailStrategy.strategy_id)?.[0] ?? null) : null}
-        isOpen={!!detailStrategy}
-        onClose={() => setDetailStrategy(null)}
-      />
+      {detailStrategy && (
+        <StrategyDetailModal
+          strategy={detailStrategy}
+          runtime={deploymentsByStrategy.get(detailStrategy.strategy_id)?.[0] ?? null}
+          isOpen={true}
+          onClose={() => setDetailStrategy(null)}
+        />
+      )}
 
       {fillsDeployment && <FillsDialog deployment={fillsDeployment} onClose={() => setFillsDeployment(null)} />}
     </div>

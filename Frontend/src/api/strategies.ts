@@ -8,6 +8,7 @@ import type {
   StrategyParams,
   StrategyEventEnvelope,
   StrategyCodeVersion,
+  StrategyCodeView,
   StrategyCodeCreateRequest,
   StrategyCodeDebugRequest,
   StrategyCodeDebugResponse,
@@ -50,6 +51,10 @@ export class StrategiesAPI extends APIClient {
 
   async getLatestStrategyCode(strategyId: string): Promise<StrategyCodeVersion> {
     return this.get<StrategyCodeVersion>(`/v1/strategies/${strategyId}/code/latest`)
+  }
+
+  async getStrategyCodeView(strategyId: string): Promise<StrategyCodeView> {
+    return this.get<StrategyCodeView>(`/v1/strategies/${strategyId}/code/view`)
   }
 
   async getStrategyCodeVersion(
