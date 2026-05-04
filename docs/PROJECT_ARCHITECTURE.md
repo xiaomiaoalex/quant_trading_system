@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-04-29 23:18 (北京时间)
+- 最后更新: 2026-05-03 00:00 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -25,6 +25,7 @@ flowchart TB
     subgraph Policy["Policy Plane: trader/core/application/, trader/services/risk.py"]
         Risk["Risk Engine"]
         Gate["Pre-trade Gates"]
+        CryptoGate["Crypto Pre-trade Risk Plugin"]
         Kill["KillSwitch L0-L3"]
         Budget["Execution Budget"]
     end
@@ -33,6 +34,7 @@ flowchart TB
         OMS["OMS Monotonic State Machine"]
         Deterministic["Deterministic Layer / Replay"]
         Domain["Domain Models: Order, Position, Signal"]
+        CryptoRisk["Crypto Risk Models / Margin / Open Orders"]
     end
 
     subgraph Adapter["Adapter Plane: trader/adapters/"]
@@ -52,6 +54,8 @@ flowchart TB
     API --> Lifecycle
     Lifecycle --> Gate
     Gate --> Risk
+    Risk --> CryptoGate
+    CryptoGate --> CryptoRisk
     Risk --> Kill
     Gate --> OMS
     OMS --> Deterministic
@@ -127,6 +131,7 @@ sequenceDiagram
     FE->>Runner: start / tick / market data
     Runner->>Runner: strategy produces Signal
     Runner->>Policy: pre-trade validation
+    Policy->>Policy: build risk snapshot / exchange rules / open-order exposure / margin check
     Policy-->>Runner: approve / reject / reduce
     Runner->>OMS: submit order command
     OMS->>OMS: cl_ord_id idempotency + monotonic state
@@ -143,6 +148,13 @@ sequenceDiagram
 - 订单幂等主键是 `cl_ord_id`；成交幂等键是 `cl_ord_id + exec_id`。
 - 终态订单不得回退。
 - Broker 异常必须按业务拒单和网络不确定性区分处理。
+
+### Crypto 独立风控补充
+
+- 策略只提交 `Signal` / trade intent；最终放行、拒绝、缩量建议和 KillSwitch 建议由 Policy Plane 决定。
+- `CryptoPreTradeRiskPlugin` 通过 `CryptoRiskSnapshot` 读取账户、规则、mark price、在途订单、持仓和风险预算；快照构建可由 Adapter/Service 注入，但 Core 计算保持无 IO。
+- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用和合约保证金纯计算。
+- 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
 
 ---
 
@@ -195,7 +207,33 @@ flowchart LR
 
 ---
 
-## 6. 架构变更更新规则
+## 6. 研究到自动组合运行闭环
+
+```mermaid
+flowchart LR
+    Data["Crypto Core Data Sources"] --> FeatureStore["FeatureStore / feature_version"]
+    FeatureStore --> Candidate["StrategyCandidate Lifecycle"]
+    Candidate --> Debug["Code Debug Gate"]
+    Debug --> Backtest["Backtest Dataset + Report"]
+    Backtest --> Validation["Validation Gate"]
+    Validation --> Promote["Promote to Deployment"]
+    Promote --> Allocation["Capital Allocation / RiskSizer"]
+    Allocation --> Runtime["Paper/Shadow Runtime"]
+    Runtime --> Autopilot["Portfolio Runtime Controller"]
+    Autopilot -->|"START/PAUSE/STOP/REDUCE"| Runtime
+    Autopilot --> Audit["Audit / Replay Events"]
+```
+
+### 闭环规则
+
+- `candidate_id` 管策略研究生命周期，`strategy_id` 管策略模板，`deployment_id` 管运行实例，三者不得混用。
+- 回测必须显式记录 `feature_version` 和 `data_mode`；`dev_smoke` 只能用于开发烟测，不能作为部署准入。
+- 策略信号进入 OMS 前必须经过仓位分配与风险裁剪，分配结果写入 `AllocationTrace`。
+- Portfolio Runtime Controller 第一版面向 paper/shadow 自动运行，所有启停/降仓决策写入审计事件。
+
+---
+
+## 7. 架构变更更新规则
 
 以下情况必须更新本文档：
 

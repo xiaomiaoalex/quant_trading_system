@@ -4,9 +4,152 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-29 23:18 (北京时间)
+2026-05-04 09:40 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：安装并固定 Black 格式化工具
+- 完成时间: 2026-05-04 09:40 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 当前 Python 环境没有安装 `black`，无法执行项目约定的格式化命令
+  - 直接安装最新 `black==26.3.1` 后，在仓库固定的 Python 3.12.5 上被 Black 硬阻断
+- 开发后状态:
+  - 已安装并验证 `black==24.4.2`
+  - `pyproject.toml` 和 `trader/requirements-ci.txt` 均新增 `black==24.4.2`
+  - 已对 crypto 风控相关 Python 文件和 `risk_engine.py` 运行 scoped black 格式化
+- 测试结果:
+  - `python -m black --version` → `black 24.4.2`, Python 3.12.5 ✅
+  - `python -m black --check ... --line-length 100` → 8 files unchanged ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m pytest -q trader\tests\test_crypto_risk_p0.py --tb=short` → 7 passed ✅
+  - 风控核心回归（`test_risk_engine_layers.py`、`test_risk_sizer.py`、`test_position_risk_constructor.py`、`test_risk_intervention_matrix.py`、`test_risk_intervention_tracker.py`）→ 157 passed ✅
+- 注意事项:
+  - Black 25.1.0/26.3.1 会因 Python 3.12.5 的 AST safety check 风险拒绝实际格式化；在仓库继续固定 Python 3.12.5 时，`black==24.4.2` 是当前可运行选择
+
+### 本次任务：数字货币独立风控 P0 模块落地
+- 完成时间: 2026-05-03 00:00 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P0 纯计算与插件骨架
+- 开发前状态:
+  - 风控已有 `RiskSizer`、`PositionRiskConstructor`、`RiskEngine` 和 KillSwitch 框架
+  - 数字货币合约特有的交易所规则、在途订单占用、mark price、leverage bracket、保证金/强平缓冲尚未形成独立门禁
+  - 策略信号仍可能只按数量/金额进入通用 pre-trade 风控
+- 开发后状态:
+  - 新增 `CryptoRiskSnapshot`、`CryptoInstrumentSpec`、`LeverageBracket`、`CryptoPositionRisk`、`OpenOrderRisk` 和 `CryptoRiskBudget`
+  - 新增 `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator` 三个 Core 纯计算服务
+  - 新增 `CryptoPreTradeRiskPlugin`，通过快照提供者把交易所规则、在途订单和保证金检查接入 `RiskEngine` pre-trade 插件体系
+  - `RejectionReason` 增加 crypto 风控拒绝原因，KillSwitch 推荐保持单调保守
+- Issue 状态迁移:
+  - 数字货币合约仓位风险维度缺失：`待确认` → `已验证（P0 纯计算）`
+  - 在途订单未占用风险预算：`待确认` → `已验证（OpenOrderExposure）`
+  - 交易所规则未统一进入 Core 风控：`待确认` → `已验证（ExchangeRuleGuard）`
+  - 保证金/杠杆分层未独立校验：`待确认` → `已验证（MarginRiskCalculator 初版）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py --tb=short` → 7 passed ✅
+  - `python -m pytest -q trader\tests\test_risk_engine_layers.py trader\tests\test_risk_sizer.py trader\tests\test_position_risk_constructor.py trader\tests\test_risk_intervention_matrix.py trader\tests\test_risk_intervention_tracker.py --tb=short` → 157 passed ✅
+  - `python -m py_compile trader\core\domain\models\crypto_risk.py trader\core\domain\services\exchange_rule_guard.py trader\core\domain\services\open_order_exposure.py trader\core\domain\services\margin_risk_calculator.py trader\core\application\plugins\crypto_pre_trade_risk_plugin.py trader\core\application\risk_engine.py` → passed ✅
+  - `python -m pytest -q trader\tests\test_binance_connector.py trader\tests\test_binance_private_stream.py trader\tests\test_binance_degraded_cascade.py trader\tests\test_deterministic_layer.py trader\tests\test_hard_properties.py --tb=short` → 99 passed ✅
+- 注意事项:
+  - 当前插件依赖外部注入 `CryptoRiskSnapshotProvider`；Binance Adapter/Service 真实快照采集与 wiring 是下一步
+  - `black` 未安装，格式化命令未执行；已用 `py_compile`、新增测试、P0 回归和 100 字符长行扫描兜底
+
+### 本次任务：Strategy Details 支持查看模块 entrypoint 源码
+- 完成时间: 2026-04-30 17:29 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Strategy Details 的 Info 项只调用 `/v1/strategies/{strategy_id}/code/latest`
+  - 内置 `trader.*` module entrypoint 策略没有 saved code version，只能显示 “No saved code version is available”
+- 开发后状态:
+  - 新增 `StrategyCodeView` DTO 与 `GET /v1/strategies/{strategy_id}/code/view`
+  - 该接口优先返回 Strategy Lab saved code；没有 saved code 时安全读取本仓库 `trader.*` 模块源码
+  - Frontend Strategy Details 的 Strategy Code 区块改为展示 `saved code` 或 `module entrypoint` 源码
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_code_view.py --tb=short` → 2 passed ✅
+  - `python -m py_compile trader\api\routes\strategies.py trader\api\models\schemas.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `git diff --check` → passed ✅
+
+### 本次任务：修复 Strategy Management 空白页
+- 完成时间: 2026-04-30 16:48 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 问题原因:
+  - `StrategyDetailModal` 在未选中策略时仍被渲染
+  - `strategy={detailStrategy!}` 只影响 TypeScript 类型，运行时仍可能传入 `null`
+  - 新增的最新代码查询会提前访问 `strategy.strategy_id`，导致 `/strategies` 页面运行时崩溃为空白
+- 修复:
+  - `Strategies.tsx` 改为只有 `detailStrategy` 存在时才渲染 `StrategyDetailModal`
+- 测试结果:
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `Invoke-WebRequest http://127.0.0.1:5173/strategies` → 200 ✅
+- 注意事项:
+  - `npm run build` 在诊断时仍受既有 `tsconfig.node.json` 的 `allowImportingTsExtensions` 配置限制失败，和本次空白页问题无关
+
+### 本次任务：Strategy Details Info 展示最新策略代码
+- 完成时间: 2026-04-30 16:45 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Strategy Management 的 Strategy Details 卡片 Info 项只展示元数据、运行指标、配置和错误信息
+  - 已保存的动态策略代码只能在 Backtests/Strategy Lab 或 API 中查看，管理页无法直接核对源码
+- 开发后状态:
+  - 新增前端 `useLatestStrategyCode(strategy_id)` 查询，复用 `/v1/strategies/{strategy_id}/code/latest`
+  - Strategy Details 的 Info 项新增 Strategy Code 区块，展示最新 `code_version`、checksum、创建时间和代码内容
+  - 对未保存代码版本的模块 entrypoint 策略显示清晰的无代码提示
+- 测试结果:
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 当前展示的是最新保存代码版本，不是历史版本选择器；后续可加版本下拉和 diff
+
+### 本次任务：Research 页面支持删除 StrategyCandidate
+- 完成时间: 2026-04-30 16:37 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Research 页面只能创建并列出 candidate，无法删除误建或废弃的研究候选
+  - 后端 `StrategyCandidate` API 也缺少删除入口
+- 开发后状态:
+  - 新增 `DELETE /v1/strategy-candidates/{candidate_id}`，只删除研究候选实体，不删除策略模板、代码版本、回测报告或 deployment
+  - `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 状态会拒绝删除，避免删除仍关联运行链路的候选
+  - 删除动作写入 `strategy_candidate.deleted` 审计事件
+  - Frontend Research 页面每个候选增加 Delete 按钮，受保护状态自动禁用
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py --tb=short` → 6 passed ✅
+  - `python -m py_compile trader\api\routes\strategy_candidates.py trader\services\strategy_candidate.py trader\storage\in_memory.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 当前删除是控制面 in-memory 删除；生产级 PG 持久化落地时应保留相同行为和审计事件
+
+### 本次任务：端到端研究与自动组合运行第一版纵向切片
+- 完成时间: 2026-04-30 16:17 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成第一版纵向切片
+- 开发前状态:
+  - Strategy Lab 已有代码调试、保存、回测、加载、启动、停止按钮，但加载策略缺少 `symbols/account_id/venue/mode`，前端 typecheck 失败
+  - `startStrategy` / `stopStrategy` 在 Strategy Lab 中仍使用 `strategy_id`，与当前 `/v1/deployments/{deployment_id}` 运行实例契约不一致
+  - 策略生命周期、回测门禁、仓位分配和组合自动控制能力分散存在，缺少统一 API 入口和前端工作台入口
+- 开发后状态:
+  - 新增 `StrategyCandidate` 控制面 API，覆盖创建、调试、回测、验证和 promote 前置门禁；未到 `VALIDATION_PASSED` 的候选策略会拒绝部署
+  - 新增 Allocation API 与 Portfolio Autopilot API，支持策略预算配置、分配 trace 记录、data stale 自动暂停和组合超暴露降仓决策记录
+  - Backtest DTO 增加 `feature_version`、`data_mode`、手续费、滑点、benchmark 等研究字段；synthetic/dev_smoke 回测会被标记，不能作为部署准入
+  - Frontend 修复 Strategy Lab deployment 契约，新增 Data、Research、Portfolio Allocation、Portfolio Autopilot 工作台入口
+  - `docs/INTERFACE_CONTRACTS.md` 与 `docs/PROJECT_ARCHITECTURE.md` 已同步新增研究到自动组合运行闭环
+- Issue 状态迁移:
+  - Strategy Lab load/start/stop 契约断裂：`待确认` → `已验证`
+  - 缺少候选策略生命周期 API：`待确认` → `已验证（第一版）`
+  - dev_smoke 回测可能被误用为部署依据：`待确认` → `已验证（门禁阻断）`
+  - 缺少仓位分配与自动组合控制面 API：`待确认` → `已验证（第一版）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_api_strategy_runner_endpoints.py --tb=short` → 3 passed ✅
+  - `python -m py_compile trader\api\routes\strategy_candidates.py trader\api\routes\allocations.py trader\api\routes\portfolio_autopilot.py trader\api\routes\data_catalog.py trader\services\strategy_candidate.py trader\services\allocation_management.py trader\services\portfolio_autopilot.py trader\api\models\schemas.py trader\storage\in_memory.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 第一版持久化仍使用控制面 in-memory storage；生产级默认 PG 持久化仍需后续补齐
+  - Portfolio Autopilot 第一版记录和模拟控制决策，完整 live 执行闭环仍需接入真实 runtime/orchestrator 安全门禁
 
 ### 本次任务：新增项目架构图文档与维护约束
 - 完成时间: 2026-04-29 23:18 (北京时间)

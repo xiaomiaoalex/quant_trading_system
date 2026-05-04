@@ -25,6 +25,69 @@
 
 ## 最近记录
 
+### 2026-05-04 09:40 - 安装并固定 Black 格式化工具
+
+- 背景: 上次 crypto 风控 P0 落地后需要按项目约定运行 `black --line-length 100`，但当前 Python 环境未安装 Black。
+- 决策: 将 Black 写入 `pyproject.toml` 和 `trader/requirements-ci.txt`，并选择与仓库固定 Python 3.12.5 实际兼容的版本。
+- 改动: 安装 `black==24.4.2`；依赖文件新增同版本 pin；对 crypto 风控相关 Python 文件与 `risk_engine.py` 运行 scoped black，避免格式化无关工作区改动。
+- 验证: `python -m black --version` 显示 24.4.2；`black --check` 8 files unchanged；`py_compile` passed；`test_crypto_risk_p0.py` 7 passed；风控核心回归 157 passed。
+- 风险/遗留: Black 25.1.0/26.3.1 在 Python 3.12.5 上会因 AST safety check 风险硬阻断；若项目未来升级到 Python 3.12.6+，可再评估升级 Black。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-03 00:00 - 数字货币独立风控 P0 模块落地
+
+- 背景: 用户要求按“风控系统独立于策略”的原则执行完善计划；现有通用风控框架已经存在，但数字货币合约特有的交易所规则、在途订单风险、mark price、leverage bracket 和保证金风险还没有统一门禁。
+- 决策: 先落 P0 生存级纯计算能力，不直接接 Binance IO；Adapter/Service 后续负责构建 `CryptoRiskSnapshot`，Core/Policy 只做确定性审批，策略不能绕过。
+- 改动: 更新接口契约与架构图；新增 `crypto_risk.py` DTO；新增 `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator`；新增 `CryptoPreTradeRiskPlugin` 接入 `RiskEngine` pre-trade 插件体系；扩展 crypto 风控拒绝原因与 KillSwitch 推荐。
+- 验证: `test_crypto_risk_p0.py` 7 passed；风险相关回归 157 passed；新增/修改 Python 文件 `py_compile` passed；P0 回归集 99 passed；`black` 未安装，格式化命令未执行，已做 100 字符长行扫描。
+- 风险/遗留: 当前尚未接入真实 Binance futures/account/exchangeInfo/leverage bracket 快照，下一步应实现 `CryptoRiskSnapshotProvider` 并把规则/mark price/open orders/account margin 从 Adapter 边界转换为 Core DTO。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-04-30 16:48 - 修复 Strategy Management 空白页
+
+- 背景: 用户反馈 `http://localhost:5173/strategies` 打开为空白。
+- 决策: 修复运行时空值渲染，而不是改动代码展示 API；详情弹窗只有在选中策略时才需要挂载。
+- 改动: `Strategies.tsx` 将 `StrategyDetailModal` 包裹在 `detailStrategy && (...)` 中，移除运行时 `null` 被非空断言掩盖的问题。
+- 验证: Frontend `npm run typecheck` passed；`/strategies` dev server 路由返回 200。
+- 风险/遗留: 诊断时发现 `npm run build` 仍受既有 `tsconfig.node.json` 配置影响失败，后续可单独处理。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-04-30 16:45 - Strategy Details Info 展示最新策略代码
+
+- 背景: 用户希望在 Strategy Management 页面的 Strategy Details 卡片 Info 项下直接看到策略代码，方便核对运行/管理对象对应的源码。
+- 决策: 复用已有 `/v1/strategies/{strategy_id}/code/latest` API，不新增后端接口；在前端 hook 层增加 `useLatestStrategyCode`，由详情弹窗 Info 页签按需加载。
+- 改动: `StrategyDetailModal` 新增 Strategy Code 区块，显示最新 code version、checksum、创建时间和代码内容；未保存代码的 entrypoint 策略显示无保存代码提示。
+- 验证: Frontend `npm run typecheck` passed。
+- 风险/遗留: 当前只展示最新版本；如果需要审查历史版本和变更差异，后续应增加 code version selector 和 diff 视图。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-04-30 16:37 - Research 页面支持删除 StrategyCandidate
+
+- 背景: Research 页面只有 Create Candidate 和列表，没有删除误建/废弃候选的操作；用户明确指出这一前端缺口。
+- 决策: 增加安全删除而不是无条件删除；只删除研究候选实体，不删除策略模板、代码版本、回测报告或 deployment，并保护已进入运行关系的状态。
+- 改动: 新增 `DELETE /v1/strategy-candidates/{candidate_id}`、storage 删除方法、service 删除保护和 `strategy_candidate.deleted` 事件；Research 页面增加 Delete 按钮，受保护状态禁用；接口契约补充删除语义。
+- 验证: `test_strategy_candidate_workflow.py` 6 passed；相关后端模块 `py_compile` passed；Frontend `npm run typecheck` passed。
+- 风险/遗留: 未来切到 PG 持久化时，需要把 hard delete/soft delete 策略定清楚；当前第一版按控制面列表删除并保留审计事件。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-04-30 17:29 - Strategy Details 支持模块 entrypoint 源码视图
+
+- 背景: Strategy Management 的 Strategy Details 已能展示最新 saved code，但内置 `trader.*` module entrypoint 策略没有 saved code version，用户打开后仍只能看到无代码提示。
+- 决策: 不改变 `/code/latest` 的版本语义，新增只读 `StrategyCodeView`；优先返回 saved code，缺省时安全读取本仓库 `trader.*` 模块源码。
+- 改动: 新增 `StrategyCodeView` DTO 与 `GET /v1/strategies/{strategy_id}/code/view`；限制源码读取在 `trader` 包内 `.py` 文件；Frontend Strategy Details 改用 code view 展示 `saved code` 或 `module entrypoint`。
+- 验证: `test_strategy_code_view.py` 2 passed；后端 `py_compile` passed；Frontend `npm run typecheck` passed；`git diff --check` passed。
+- 风险/遗留: 当前只显示最新 saved code 或完整模块源码；后续若需要历史审查，应新增版本选择、diff 和权限控制。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-04-30 16:17 - 端到端研究与自动组合运行第一版纵向切片
+
+- 背景: 用户目标升级为从 Crypto 多源数据、策略开发、回测、门禁、部署、仓位管理到组合自动启停的流畅工作台；现有仓库已有很多后端能力，但 Strategy Lab 前端契约断裂，生命周期、仓位和自动组合控制未形成统一入口。
+- 决策: 先做可验证纵向切片，而不是一次性重写全系统；新增 `StrategyCandidate` 作为研究到运行主实体，`dev_smoke` 回测默认不能作为部署准入，仓位分配和 Portfolio Autopilot 先落控制面 API 与审计事件。
+- 改动: 更新接口契约和架构图；新增 strategy candidates、allocations、portfolio autopilot、data catalog 后端路由与服务；扩展 backtest DTO/metrics；修复 Frontend Strategy Lab 的 `deployment_id` 链路；新增 Data、Research、Portfolio Allocation、Portfolio Autopilot 页面入口。
+- 验证: `test_strategy_candidate_workflow.py` 4 passed；`test_api_strategy_runner_endpoints.py` 3 passed；新增后端模块 `py_compile` passed；Frontend `npm run typecheck` passed。
+- 风险/遗留: 生产级 PG 持久化、真实 FeatureStore 回测读取、自动组合控制器对 live runtime 的安全执行、Allocation/RiskSizer 在 OMS 主下单路径的强制接入仍是后续任务。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-04-29 23:18 - 新增项目架构图文档与维护约束
 
 - 背景: 仓库已有长篇架构说明，但缺少快速查看当前层级边界、主数据流和关键闭环的架构图入口；架构变更时也没有明确要求同步图文。

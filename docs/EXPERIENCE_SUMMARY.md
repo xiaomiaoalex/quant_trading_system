@@ -4,6 +4,56 @@
 
 ---
 
+## 二十七、Black 与 Python 3.12.5 兼容经验（2026-05-04）
+
+### 27.1 踩坑记录：新版 Black 会在 Python 3.12.5 上拒绝格式化
+
+**问题描述**：
+仓库技术栈固定为 Python 3.12.5。安装最新 `black==26.3.1` 或 `black==25.1.0` 后，`python -m black ...` 会提示 Python 3.12.5 存在可能影响 AST safety checks 的内存安全问题，并要求升级到 3.12.6 或降级到 3.12.4，导致格式化命令硬阻断。
+
+**解决方案**：
+- 使用 `black==24.4.2`，该版本可以在当前 Python 3.12.5 环境实际运行。
+- 在 `pyproject.toml` 与 `trader/requirements-ci.txt` 中固定同一版本，保证本地与 CI 口径一致。
+- 格式化时优先 scoped 到本次触碰的 Python 文件，避免改动用户或其他任务的未提交代码。
+
+**经验**：
+- 格式化工具也需要和项目 Python 版本形成兼容矩阵，不能只追最新版本。
+- 对已有大量未提交改动的工作区，格式化应收窄范围，避免制造无关 diff。
+
+---
+
+## 二十六、数字货币独立风控 P0 经验（2026-05-03）
+
+### 26.1 踩坑记录：reduce-only 未成交订单不能提前释放风险
+
+**问题描述**：
+合约交易中，减仓单或平仓单看起来会降低风险，但在成交确认前它仍只是交易所挂单状态。如果风控在下单时提前把未成交的 `reduce_only` 数量从风险预算中扣掉，就可能在网络延迟、撤单未确认或部分成交场景下继续允许新开仓，形成隐形超额风险。
+
+**解决方案**：
+- `OpenOrderExposureCalculator` 只把非 `reduce_only` 在途订单计入新增风险。
+- `reduce_only` 订单不提前释放当前持仓风险；只有成交事件进入账本后，真实持仓和风险才下降。
+- 风控快照中的 `OpenOrderRisk` 使用内部标准字段 `cl_ord_id`、`qty`、`filled_qty`，避免 Binance 原始字段污染 Core Plane。
+
+**经验**：
+- 在途订单风险应按“最坏成交假设”处理，而不是按交易意图处理。
+- 风险释放必须由成交回报驱动，不能由策略意图或挂单意图驱动。
+
+### 26.2 设计模式：Snapshot Provider 隔离 IO 与 Core 纯计算
+
+**问题描述**：
+加密货币风控需要交易所规则、mark price、leverage bracket、账户保证金、在途订单等大量外部状态。如果直接在风控计算里拉 REST/WS，会破坏 Core Plane 无 IO 和确定性约束。
+
+**解决方案**：
+- Adapter/Service 负责构建 `CryptoRiskSnapshot`。
+- Core domain service 只接收快照并做纯计算。
+- `CryptoPreTradeRiskPlugin` 作为 Policy Plane 门禁组合多个纯计算结果，返回明确的 `RiskCheckResult`。
+
+**经验**：
+- “快照输入 + 纯函数判断”是交易系统风控模块保持可测试、可回放、可审计的关键模式。
+- 策略只提交意图，风控只消费快照并裁决，两者之间不要共享可变状态。
+
+---
+
 ## 零、AI 协作规范双入口同步经验（2026-04-28）
 
 ### 0.0 多模型入口的流程要求必须同源
@@ -2771,6 +2821,86 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+---
+
+## 二十六、研究到自动组合运行纵向切片经验
+
+### 26.1 踩坑记录：Strategy Lab 必须以 `deployment_id` 驱动运行实例
+
+**场景**：
+前端 Strategy Lab 已经有 Load/Run/Stop 按钮，但当前 API 客户端的 start/stop 端点是 `/v1/deployments/{deployment_id}`。
+
+**问题**：
+- 页面仍传 `strategy_id`，会把“策略模板”和“运行实例”混在一起
+- `loadStrategy` 缺少 `symbols/account_id/venue/mode`，导致前端 typecheck 直接失败
+
+**经验**：
+- 策略开发页面可以围绕 `strategy_id` 编辑代码，但一旦进入运行态，所有控制动作必须切换到 `deployment_id`
+- 表单中应显式展示 deployment id，避免用户和代码都误以为一个策略只能有一个运行实例
+
+### 26.2 设计模式：`StrategyCandidate` 作为研究生命周期主键
+
+**实现模式**：
+1. `candidate_id` 串联草稿、调试、回测、门禁和 promote
+2. `strategy_id` 保持策略模板语义
+3. `deployment_id` 只在通过门禁后出现
+4. 每次状态迁移写 `strategy_candidate.lifecycle` 事件
+
+**收益**：
+- 前端可以显示策略从研究到运行的完整状态链
+- 后端可以阻止“未回测/未门禁就部署”的非法跳转
+- 审计和 Replay 有稳定主键可查
+
+### 26.3 隐蔽风险：synthetic/dev_smoke 回测不能当成准入证据
+
+**场景**：
+控制面已有确定性 synthetic 回测，对开发烟测很方便。
+
+**风险**：
+- 如果不标记数据来源，用户可能把 synthetic 结果当成真实研究回测
+- 自动部署链路会放大这个误判
+
+**经验**：
+- 回测 metrics 必须带 `backtest_data_mode` 和 `feature_version`
+- 门禁必须显式拒绝 `dev_smoke`，直到接入真实 FeatureStore 数据和数据质量报告
+
+### 26.4 设计模式：删除研究候选不等于删除运行资产
+
+**场景**：
+Research 页面需要删除误建或废弃的 `StrategyCandidate`。
+
+**风险**：
+- 如果删除联动清理策略模板、代码版本、回测报告或 deployment，会破坏审计和复盘链路
+- 如果允许删除已进入运行态的 candidate，前端列表会干净，但运行系统和审计系统会失去上下文
+
+**经验**：
+- 删除 candidate 只应影响研究候选列表
+- `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 等状态必须先停止/解除运行关系
+- 删除动作本身也要写审计事件，例如 `strategy_candidate.deleted`
+
+### 26.5 设计模式：管理页源码展示使用只读源码视图
+
+**场景**：
+Strategy Details 的 Info 项需要显示策略代码。
+
+**经验**：
+- `/code/latest` 只代表 saved code version，不能拿它表达内置模块源码
+- 适合新增 `StrategyCodeView` 这种只读视图：优先返回 saved code，缺省时回退到 `trader.*` module entrypoint 源码
+- 源码读取必须限制在本仓库 `trader` 包内，避免把任意 import path 变成文件读取接口
+- 最新源码展示适合快速核对；历史审查应单独做版本选择、diff 和权限控制
+
+### 26.6 踩坑记录：TypeScript 非空断言不等于运行时非空
+
+**场景**：
+`StrategyDetailModal` 在 `isOpen=false` 时仍被挂载，父组件用 `strategy={detailStrategy!}` 传参。
+
+**问题**：
+`!` 只让 TypeScript 编译通过，不会改变运行时值；当子组件在 early return 之前访问 `strategy.strategy_id` 时，页面会直接崩溃为空白。
+
+**经验**：
+- 弹窗类组件若依赖必填对象，父组件应在对象存在时才渲染
+- 不要用非空断言掩盖 React 条件渲染问题
 
 
 ---
