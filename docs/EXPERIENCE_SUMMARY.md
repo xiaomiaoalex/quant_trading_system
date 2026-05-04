@@ -2890,6 +2890,20 @@ lifespan 为了把 fill handler 注册到 BinanceConnector，会先初始化 `OM
 - testnet/live 联调前可以安全地把接线逻辑放进主启动链路
 - 后续做热更新时可以复用同一个 runtime config + component factory
 
+### 26.6 设计模式：Runtime Manager 作为运维状态单一入口
+
+**场景**：
+P2 后 lifespan 已能创建 crypto risk source，但运维 API 还需要读取状态和热更新预算。
+
+**问题**：
+- 如果 lifespan 持有 source/check，API 另建一套状态，会出现日志显示已启用但 API 认为未启用的分叉
+- 预算热更新只修改内存数字不够，必须让新的 `CryptoRiskBudget` 真正进入 OMS pre-trade check
+
+**经验**：
+- 把 runtime source、snapshot provider、pre-trade check 和状态视图收敛到 `CryptoRiskRuntimeManager`
+- 热更新预算时复用已有 source，但重建 snapshot provider 与 risk check，并通过 route setter late-bind 到已存在 handler
+- 状态 API 不暴露 key/secret，只暴露 enabled/wired/fail_closed、预算和最近错误
+
 ---
 
 ## 二十六、研究到自动组合运行纵向切片经验

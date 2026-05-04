@@ -198,7 +198,6 @@ _configure_trader_logging()
 # 全局 BinanceConnector 实例（用于成交回调）
 _binance_connector_instance: Optional[Any] = None
 _binance_cascade_controller: Optional[Any] = None
-_crypto_risk_source_instance: Optional[Any] = None
 
 _BUILTIN_STRATEGIES = [
     StrategyRegisterRequest(
@@ -239,7 +238,6 @@ def _seed_strategies() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _binance_connector_instance, _binance_cascade_controller
-    global _crypto_risk_source_instance
 
     # 初始化策略
     _seed_strategies()
@@ -257,12 +255,16 @@ async def lifespan(app: FastAPI):
     )
 
     crypto_risk_config = None
+    crypto_risk_manager = None
     try:
         from trader.api.crypto_risk_runtime import (
-            build_crypto_risk_setup_failure_check,
+            get_crypto_risk_runtime_manager,
             get_crypto_risk_runtime_config,
         )
+        from trader.api.routes.strategies import set_pre_trade_risk_check
 
+        crypto_risk_manager = get_crypto_risk_runtime_manager()
+        crypto_risk_manager.bind_pre_trade_setter(set_pre_trade_risk_check)
         crypto_risk_config = get_crypto_risk_runtime_config()
         if crypto_risk_config.enabled:
             logger.warning(
@@ -271,12 +273,9 @@ async def lifespan(app: FastAPI):
                 crypto_risk_config.base_symbols,
             )
             if not api_key or not secret_key:
-                from trader.api.routes.strategies import set_pre_trade_risk_check
-
-                set_pre_trade_risk_check(
-                    build_crypto_risk_setup_failure_check(
-                        "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing"
-                    )
+                await crypto_risk_manager.set_fail_closed(
+                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing",
+                    config=crypto_risk_config,
                 )
                 logger.error(
                     "[CryptoRisk] Enabled without Binance credentials; OMS risk check "
@@ -285,10 +284,10 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("[CryptoRisk] Runtime disabled")
     except Exception as e:
-        from trader.api.crypto_risk_runtime import build_crypto_risk_setup_failure_check
-        from trader.api.routes.strategies import set_pre_trade_risk_check
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
 
-        set_pre_trade_risk_check(build_crypto_risk_setup_failure_check(str(e)))
+        crypto_risk_manager = crypto_risk_manager or get_crypto_risk_runtime_manager()
+        await crypto_risk_manager.set_fail_closed(str(e), config=crypto_risk_config)
         logger.exception(
             "[CryptoRisk] Runtime config invalid; OMS risk check is set to fail-closed"
         )
@@ -397,34 +396,31 @@ async def lifespan(app: FastAPI):
             logger.info("[Lifespan] AccountState + ExecutionBudget + Bridge initialized")
 
             if crypto_risk_config is not None and crypto_risk_config.enabled:
-                from trader.api.crypto_risk_runtime import (
-                    build_crypto_risk_runtime_components,
-                    build_crypto_risk_setup_failure_check,
-                )
-                from trader.api.routes.strategies import get_oms_broker, set_pre_trade_risk_check
+                from trader.api.routes.strategies import get_oms_broker
 
                 try:
                     oms_broker = get_oms_broker()
                     if oms_broker is None:
                         raise RuntimeError("OMS broker is not initialized")
 
-                    crypto_risk_components = build_crypto_risk_runtime_components(
+                    if crypto_risk_manager is None:
+                        raise RuntimeError("crypto risk runtime manager is not initialized")
+
+                    await crypto_risk_manager.configure(
                         broker=oms_broker,
                         api_key=api_key,
                         secret_key=secret_key,
                         config=crypto_risk_config,
                     )
-                    if crypto_risk_components is None:
-                        raise RuntimeError("crypto risk runtime returned no components")
-
-                    await crypto_risk_components.source.start()
-                    set_pre_trade_risk_check(crypto_risk_components.pre_trade_risk_check)
-                    _crypto_risk_source_instance = crypto_risk_components.source
                     logger.info(
                         "[CryptoRisk] Binance USD-M risk source wired into OMS pre-trade gate"
                     )
                 except Exception as e:
-                    set_pre_trade_risk_check(build_crypto_risk_setup_failure_check(str(e)))
+                    if crypto_risk_manager is not None:
+                        await crypto_risk_manager.set_fail_closed(
+                            str(e),
+                            config=crypto_risk_config,
+                        )
                     logger.exception(
                         "[CryptoRisk] Runtime wiring failed; OMS risk check is fail-closed"
                     )
@@ -856,14 +852,13 @@ async def lifespan(app: FastAPI):
         connector_getter=_connector_getter,
     )
     yield
-    if _crypto_risk_source_instance is not None:
-        try:
-            await _crypto_risk_source_instance.close()
-            logger.info("[CryptoRisk] Binance USD-M risk source closed")
-        except Exception as e:
-            logger.error(f"[CryptoRisk] Error closing risk source: {e}")
-        finally:
-            _crypto_risk_source_instance = None
+    try:
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
+
+        await get_crypto_risk_runtime_manager().close()
+        logger.info("[CryptoRisk] Runtime manager closed")
+    except Exception as e:
+        logger.error(f"[CryptoRisk] Error closing runtime manager: {e}")
     try:
         await strategies.shutdown_strategy_runtime_resources()
     except Exception as e:

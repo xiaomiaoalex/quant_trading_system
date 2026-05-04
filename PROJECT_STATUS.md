@@ -4,9 +4,37 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 15:21 (北京时间)
+2026-05-04 19:05 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P3.1 Runtime API 与预算热更新
+- 完成时间: 2026-05-04 19:05 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.1
+- 开发前状态:
+  - P2 已能在 lifespan 显式启用 Binance USD-M source 并注入 OMS pre-trade 风控
+  - runtime 状态只存在于启动日志/局部变量，外部无法查询当前是否 enabled/wired/fail_closed
+  - 风险预算只能通过环境变量静态配置，调整 symbol/total/margin 阈值需要重启
+- 开发后状态:
+  - 新增 `CryptoRiskRuntimeManager`，作为 lifespan 和 Risk API 共用的单一 runtime 状态源
+  - 新增 `GET /v1/risk/crypto/runtime`，返回 enabled、wired、fail_closed、base symbols、预算、最近错误等状态，不暴露凭证
+  - 新增 `PATCH /v1/risk/crypto/budget`，热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，late-bind 到已存在 OMS handler
+  - `main.py` 改为通过 runtime manager 完成启用、fail-closed 和 shutdown close，避免 lifespan 与 API 状态分叉
+- Issue 状态迁移:
+  - Crypto risk runtime 无可观测状态：`待确认` → `已验证（runtime status API）`
+  - 风险预算只能重启生效：`待确认` → `已验证（budget hot update API）`
+  - lifespan 与运维 API 可能出现双状态源：`待确认` → `已验证（runtime manager 单一状态源）`
+- 测试结果:
+  - P3.1/受影响 crypto/OMS/risk/API 回归 → passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\routes\risk.py trader\api\models\schemas.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 11 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 真实 Binance USD-M testnet/live 联调尚未执行，需要有效 futures key、testnet/live base URL 和人工确认
+  - 预算热更新当前是进程内 runtime 更新，尚未持久化审计；下一步 P3.2 补前端入口和审计记录
 
 ### 本次任务：数字货币独立风控 P2 运行时启用与 lifespan 接线
 - 完成时间: 2026-05-04 15:21 (北京时间)

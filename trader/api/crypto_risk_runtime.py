@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
+from dataclasses import replace
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 from trader.adapters.binance.crypto_risk_source import (
     BINANCE_USD_M_FUTURES_BASE_URL,
@@ -53,6 +56,245 @@ class CryptoRiskRuntimeComponents:
     source: BinanceFuturesRiskDataSource
     snapshot_provider: DataSourceCryptoRiskSnapshotProvider
     pre_trade_risk_check: Callable[[Signal], Awaitable[RiskCheckResult]]
+
+
+@dataclass(frozen=True, slots=True)
+class CryptoRiskRuntimeStatusData:
+    enabled: bool = False
+    wired: bool = False
+    fail_closed: bool = False
+    futures_base_url: str | None = None
+    base_symbols: tuple[str, ...] = ()
+    risk_budget: CryptoRiskBudget = field(default_factory=CryptoRiskBudget)
+    last_error: str | None = None
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+ComponentBuilder = Callable[..., CryptoRiskRuntimeComponents | None]
+PreTradeSetter = Callable[[Callable[[Signal], Awaitable[RiskCheckResult]] | None], None]
+
+
+class CryptoRiskRuntimeManager:
+    def __init__(
+        self,
+        *,
+        pre_trade_setter: PreTradeSetter | None = None,
+        component_builder: ComponentBuilder | None = None,
+    ) -> None:
+        self._pre_trade_setter = pre_trade_setter
+        self._component_builder = component_builder or build_crypto_risk_runtime_components
+        self._config = CryptoRiskRuntimeConfig()
+        self._components: CryptoRiskRuntimeComponents | None = None
+        self._broker: BrokerPort | None = None
+        self._status = CryptoRiskRuntimeStatusData(risk_budget=self._config.risk_budget)
+        self._lock = asyncio.Lock()
+
+    def bind_pre_trade_setter(self, setter: PreTradeSetter) -> None:
+        self._pre_trade_setter = setter
+
+    def status(self) -> CryptoRiskRuntimeStatusData:
+        return self._status
+
+    async def configure(
+        self,
+        *,
+        broker: BrokerPort,
+        api_key: str | None,
+        secret_key: str | None,
+        config: CryptoRiskRuntimeConfig,
+        updated_by: str = "lifespan",
+    ) -> CryptoRiskRuntimeStatusData:
+        async with self._lock:
+            if not config.enabled:
+                old_components = self._components
+                self._config = config
+                self._broker = None
+                self._components = None
+                self._status = self._build_status(
+                    config=config,
+                    wired=False,
+                    fail_closed=False,
+                    last_error=None,
+                    updated_by=updated_by,
+                )
+                self._apply_pre_trade_check(None)
+                if old_components is not None:
+                    await old_components.source.close()
+                return self._status
+
+            components = self._component_builder(
+                broker=broker,
+                api_key=api_key,
+                secret_key=secret_key,
+                config=config,
+            )
+            if components is None:
+                raise RuntimeError("crypto risk runtime returned no components")
+
+            await components.source.start()
+            old_components = self._components
+            self._config = config
+            self._broker = broker
+            self._components = components
+            self._apply_pre_trade_check(components.pre_trade_risk_check)
+            self._status = self._build_status(
+                config=config,
+                wired=True,
+                fail_closed=False,
+                last_error=None,
+                updated_by=updated_by,
+            )
+
+            if old_components is not None and old_components.source is not components.source:
+                await old_components.source.close()
+
+            return self._status
+
+    async def set_fail_closed(
+        self,
+        reason: str,
+        *,
+        config: CryptoRiskRuntimeConfig | None = None,
+        updated_by: str = "lifespan",
+    ) -> CryptoRiskRuntimeStatusData:
+        async with self._lock:
+            runtime_config = config or self._config
+            old_components = self._components
+            self._config = runtime_config
+            self._components = None
+            self._apply_pre_trade_check(build_crypto_risk_setup_failure_check(reason))
+            self._status = self._build_status(
+                config=runtime_config,
+                wired=False,
+                fail_closed=True,
+                last_error=reason,
+                updated_by=updated_by,
+            )
+            if old_components is not None:
+                await old_components.source.close()
+            return self._status
+
+    async def update_budget(
+        self,
+        risk_budget: CryptoRiskBudget,
+        *,
+        updated_by: str,
+    ) -> CryptoRiskRuntimeStatusData:
+        async with self._lock:
+            if not self._config.enabled or self._components is None or self._broker is None:
+                raise RuntimeError("crypto risk runtime is not wired")
+
+            new_config = replace(self._config, risk_budget=risk_budget)
+            snapshot_provider = DataSourceCryptoRiskSnapshotProvider(
+                self._components.source,
+                config=CryptoRiskSnapshotProviderConfig(
+                    base_symbols=new_config.base_symbols,
+                    risk_budget=risk_budget,
+                ),
+            )
+            pre_trade_risk_check = build_crypto_pre_trade_risk_check(
+                broker=self._broker,
+                snapshot_provider=snapshot_provider,
+            )
+            self._components = CryptoRiskRuntimeComponents(
+                source=self._components.source,
+                snapshot_provider=snapshot_provider,
+                pre_trade_risk_check=pre_trade_risk_check,
+            )
+            self._config = new_config
+            self._apply_pre_trade_check(pre_trade_risk_check)
+            self._status = self._build_status(
+                config=new_config,
+                wired=True,
+                fail_closed=False,
+                last_error=None,
+                updated_by=updated_by,
+            )
+            return self._status
+
+    async def close(self) -> None:
+        async with self._lock:
+            components = self._components
+            self._components = None
+            self._broker = None
+            self._apply_pre_trade_check(None)
+            self._status = self._build_status(
+                config=self._config,
+                wired=False,
+                fail_closed=False,
+                last_error=None,
+                updated_by="shutdown",
+            )
+            if components is not None:
+                await components.source.close()
+
+    def reset_for_tests(self) -> None:
+        self._config = CryptoRiskRuntimeConfig()
+        self._components = None
+        self._broker = None
+        self._pre_trade_setter = None
+        self._status = CryptoRiskRuntimeStatusData(risk_budget=self._config.risk_budget)
+        self._lock = asyncio.Lock()
+
+    def set_runtime_for_tests(
+        self,
+        *,
+        risk_budget: CryptoRiskBudget,
+        pre_trade_setter: PreTradeSetter | None = None,
+    ) -> None:
+        class _NoopSource:
+            async def start(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        if pre_trade_setter is not None:
+            self._pre_trade_setter = pre_trade_setter
+        source = _NoopSource()
+        self._config = CryptoRiskRuntimeConfig(enabled=True, risk_budget=risk_budget)
+        self._broker = object()  # type: ignore[assignment]
+        self._components = CryptoRiskRuntimeComponents(
+            source=source,  # type: ignore[arg-type]
+            snapshot_provider=DataSourceCryptoRiskSnapshotProvider(source),  # type: ignore[arg-type]
+            pre_trade_risk_check=build_crypto_risk_setup_failure_check("test runtime"),
+        )
+        self._status = self._build_status(
+            config=self._config,
+            wired=True,
+            fail_closed=False,
+            last_error=None,
+            updated_by="test",
+        )
+
+    def _apply_pre_trade_check(
+        self,
+        check: Callable[[Signal], Awaitable[RiskCheckResult]] | None,
+    ) -> None:
+        if self._pre_trade_setter is not None:
+            self._pre_trade_setter(check)
+
+    def _build_status(
+        self,
+        *,
+        config: CryptoRiskRuntimeConfig,
+        wired: bool,
+        fail_closed: bool,
+        last_error: str | None,
+        updated_by: str | None,
+    ) -> CryptoRiskRuntimeStatusData:
+        return CryptoRiskRuntimeStatusData(
+            enabled=config.enabled,
+            wired=wired,
+            fail_closed=fail_closed,
+            futures_base_url=config.futures_base_url if config.enabled else None,
+            base_symbols=config.base_symbols,
+            risk_budget=config.risk_budget,
+            last_error=last_error,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            updated_by=updated_by,
+        )
 
 
 def get_crypto_risk_runtime_config(
@@ -166,6 +408,94 @@ def build_crypto_risk_setup_failure_check(
         )
 
     return _reject
+
+
+_crypto_risk_runtime_manager = CryptoRiskRuntimeManager()
+
+
+def get_crypto_risk_runtime_manager() -> CryptoRiskRuntimeManager:
+    return _crypto_risk_runtime_manager
+
+
+def crypto_risk_runtime_status_to_dict(status: CryptoRiskRuntimeStatusData) -> dict[str, Any]:
+    return {
+        "enabled": status.enabled,
+        "wired": status.wired,
+        "fail_closed": status.fail_closed,
+        "futures_base_url": status.futures_base_url,
+        "base_symbols": list(status.base_symbols),
+        "risk_budget": crypto_risk_budget_to_dict(status.risk_budget),
+        "last_error": status.last_error,
+        "updated_at": status.updated_at,
+        "updated_by": status.updated_by,
+    }
+
+
+def crypto_risk_budget_to_dict(budget: CryptoRiskBudget) -> dict[str, Any]:
+    return {
+        "symbol_notional_caps": {
+            symbol: str(value) for symbol, value in sorted(budget.symbol_notional_caps.items())
+        },
+        "total_notional_cap": str(budget.total_notional_cap),
+        "max_margin_ratio": str(budget.max_margin_ratio),
+        "min_liquidation_buffer_ratio": str(budget.min_liquidation_buffer_ratio),
+    }
+
+
+def merge_crypto_risk_budget(
+    current: CryptoRiskBudget,
+    *,
+    symbol_notional_caps: Mapping[str, str] | None = None,
+    total_notional_cap: str | None = None,
+    max_margin_ratio: str | None = None,
+    min_liquidation_buffer_ratio: str | None = None,
+) -> CryptoRiskBudget:
+    return CryptoRiskBudget(
+        symbol_notional_caps=(
+            _parse_symbol_decimal_map_from_mapping(
+                symbol_notional_caps,
+                "symbol_notional_caps",
+            )
+            if symbol_notional_caps is not None
+            else dict(current.symbol_notional_caps)
+        ),
+        total_notional_cap=_parse_decimal(
+            total_notional_cap,
+            "total_notional_cap",
+            default=current.total_notional_cap,
+            min_value=Decimal("0"),
+        ),
+        max_margin_ratio=_parse_decimal(
+            max_margin_ratio,
+            "max_margin_ratio",
+            default=current.max_margin_ratio,
+            min_value=Decimal("0"),
+        ),
+        min_liquidation_buffer_ratio=_parse_decimal(
+            min_liquidation_buffer_ratio,
+            "min_liquidation_buffer_ratio",
+            default=current.min_liquidation_buffer_ratio,
+            min_value=Decimal("0"),
+        ),
+    )
+
+
+def _parse_symbol_decimal_map_from_mapping(
+    raw: Mapping[str, str],
+    field_name: str,
+) -> dict[str, Decimal]:
+    values: dict[str, Decimal] = {}
+    for symbol_raw, value_raw in raw.items():
+        symbol = _normalize_symbol(symbol_raw)
+        if not symbol:
+            raise ValueError(f"{field_name} contains empty symbol")
+        values[symbol] = _parse_decimal(
+            value_raw,
+            field_name,
+            default=Decimal("0"),
+            min_value=Decimal("0"),
+        )
+    return values
 
 
 def _parse_enabled(raw: str | None) -> bool:

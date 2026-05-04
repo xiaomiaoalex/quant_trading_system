@@ -5,6 +5,7 @@ Based on OpenAPI 3.0.3 specification v0.2.0
 
 This module defines all request/response models for the API endpoints.
 """
+
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Literal
 from pydantic import BaseModel, Field, field_validator
@@ -12,16 +13,20 @@ from pydantic import BaseModel, Field, field_validator
 
 # ==================== Common Models ====================
 
+
 class ActionResult(BaseModel):
     """通用操作结果"""
+
     ok: bool
     message: Optional[str] = None
 
 
 # ==================== Strategy Models ====================
 
+
 class Strategy(BaseModel):
     """策略元数据"""
+
     strategy_id: str
     name: str
     description: Optional[str] = None
@@ -33,15 +38,19 @@ class Strategy(BaseModel):
 
 class StrategyRegisterRequest(BaseModel):
     """注册策略请求"""
+
     strategy_id: str
     name: str
     description: Optional[str] = None
-    entrypoint: str = Field(..., json_schema_extra={"example": "strategies.mean_reversion:Strategy"})
+    entrypoint: str = Field(
+        ..., json_schema_extra={"example": "strategies.mean_reversion:Strategy"}
+    )
     language: str = "python"
 
 
 class StrategyCodeVersion(BaseModel):
     """策略代码版本"""
+
     strategy_id: str
     code_version: int
     code: str
@@ -72,6 +81,7 @@ class StrategyCodeView(BaseModel):
 
 class StrategyCodeCreateRequest(BaseModel):
     """策略代码新建/保存请求"""
+
     strategy_id: str
     code: str = Field(..., min_length=1)
     name: Optional[str] = None
@@ -83,6 +93,7 @@ class StrategyCodeCreateRequest(BaseModel):
 
 class StrategyCodeDebugRequest(BaseModel):
     """策略代码调试请求"""
+
     strategy_id: Optional[str] = None
     code: str = Field(..., min_length=1)
     config: Dict[str, Any] = Field(default_factory=dict)
@@ -91,6 +102,7 @@ class StrategyCodeDebugRequest(BaseModel):
 
 class StrategyCodeDebugResponse(BaseModel):
     """策略代码调试响应"""
+
     ok: bool
     syntax_ok: bool
     protocol_ok: bool
@@ -103,6 +115,7 @@ class StrategyCodeDebugResponse(BaseModel):
 
 class StrategyVersion(BaseModel):
     """策略版本"""
+
     strategy_id: str
     version: int
     code_ref: str = Field(..., json_schema_extra={"example": "git:abcd1234"})
@@ -114,6 +127,7 @@ class StrategyVersion(BaseModel):
 
 class StrategyVersionCreateRequest(BaseModel):
     """创建策略版本请求"""
+
     version: int
     code_ref: str
     requirements: Optional[Dict[str, Any]] = None
@@ -123,6 +137,7 @@ class StrategyVersionCreateRequest(BaseModel):
 
 class VersionedConfig(BaseModel):
     """版本化配置"""
+
     scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     version: int
     config: Dict[str, Any]
@@ -132,6 +147,7 @@ class VersionedConfig(BaseModel):
 
 class VersionedConfigUpsertRequest(BaseModel):
     """版本化配置更新请求"""
+
     scope: str
     config: Dict[str, Any]
     created_by: str
@@ -139,6 +155,7 @@ class VersionedConfigUpsertRequest(BaseModel):
 
 class RiskEventIngestRequest(BaseModel):
     """风险事件上报请求"""
+
     dedup_key: str
     severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
     reason: str
@@ -151,8 +168,42 @@ class RiskEventIngestRequest(BaseModel):
     account_id: Optional[str] = None
 
 
+class CryptoRiskBudgetSchema(BaseModel):
+    """数字货币独立风控预算视图。"""
+
+    symbol_notional_caps: Dict[str, str] = Field(default_factory=dict)
+    total_notional_cap: str = "0"
+    max_margin_ratio: str = "0.80"
+    min_liquidation_buffer_ratio: str = "0"
+
+
+class CryptoRiskRuntimeStatus(BaseModel):
+    """数字货币独立风控运行时状态。"""
+
+    enabled: bool
+    wired: bool
+    fail_closed: bool
+    futures_base_url: Optional[str] = None
+    base_symbols: List[str] = Field(default_factory=list)
+    risk_budget: CryptoRiskBudgetSchema = Field(default_factory=CryptoRiskBudgetSchema)
+    last_error: Optional[str] = None
+    updated_at: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class CryptoRiskBudgetUpdateRequest(BaseModel):
+    """数字货币独立风控预算热更新请求。"""
+
+    symbol_notional_caps: Optional[Dict[str, str]] = None
+    total_notional_cap: Optional[str] = None
+    max_margin_ratio: Optional[str] = None
+    min_liquidation_buffer_ratio: Optional[str] = None
+    updated_by: str = Field(..., min_length=1)
+
+
 class TimeWindowSlotSchema(BaseModel):
     """时间窗口时段槽"""
+
     period: Literal["PRIME", "OFF_PEAK", "RESTRICTED"]
     start_hour: int = Field(..., ge=0, le=23)
     start_minute: int = Field(..., ge=0, le=59)
@@ -164,12 +215,14 @@ class TimeWindowSlotSchema(BaseModel):
 
 class TimeWindowConfigSchema(BaseModel):
     """时间窗口配置"""
+
     slots: List[TimeWindowSlotSchema] = Field(default_factory=list)
     default_coefficient: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class TimeWindowConfigUpdateRequest(BaseModel):
     """时间窗口配置更新请求"""
+
     slots: List[TimeWindowSlotSchema]
     default_coefficient: float = Field(default=1.0, ge=0.0, le=1.0)
     updated_by: str = Field(..., min_length=1)
@@ -179,8 +232,10 @@ class TimeWindowConfigUpdateRequest(BaseModel):
 
 DeploymentMode = Literal["paper", "demo", "live", "shadow"]
 
+
 class Deployment(BaseModel):
     """部署实例"""
+
     deployment_id: str
     strategy_id: str
     version: str
@@ -204,6 +259,7 @@ class Deployment(BaseModel):
 
 class DeploymentCreateRequest(BaseModel):
     """创建部署请求"""
+
     deployment_id: Optional[str] = None
     strategy_id: str
     version: str = "v1"
@@ -248,8 +304,10 @@ class DeploymentRuntime(BaseModel):
 
 # ==================== Backtest Models ====================
 
+
 class BacktestRequest(BaseModel):
     """回测请求"""
+
     strategy_id: str
     version: int
     params: Optional[Dict[str, Any]] = None
@@ -269,6 +327,7 @@ class BacktestRequest(BaseModel):
 
 class BacktestRun(BaseModel):
     """回测运行"""
+
     run_id: str
     status: str = Field(..., json_schema_extra={"example": "RUNNING"})
     strategy_id: str
@@ -289,6 +348,7 @@ class BacktestRun(BaseModel):
 
 class BacktestReport(BaseModel):
     """回测报告详情 (Task 9.5)"""
+
     run_id: str
     status: str
     strategy_id: str
@@ -507,8 +567,10 @@ class DataCatalogResponse(BaseModel):
 
 # ==================== Order & Execution Models ====================
 
+
 class OrderView(BaseModel):
     """订单视图"""
+
     cl_ord_id: str
     trace_id: Optional[str] = None
     account_id: str
@@ -533,6 +595,7 @@ class OrderView(BaseModel):
 
 class ExecutionView(BaseModel):
     """成交视图"""
+
     cl_ord_id: str
     exec_id: str
     ts_ms: int
@@ -544,8 +607,10 @@ class ExecutionView(BaseModel):
 
 # ==================== Portfolio Models ====================
 
+
 class PositionView(BaseModel):
     """持仓视图"""
+
     account_id: str
     venue: str
     instrument: str
@@ -559,6 +624,7 @@ class PositionView(BaseModel):
 
 class PositionDetail(BaseModel):
     """Monitor 页面使用的详细持仓信息"""
+
     symbol: str = Field(description="交易对，如 BTCUSDT")
     quantity: str = Field(description="持仓数量")
     avg_cost: Optional[str] = Field(default=None, description="平均成本价")
@@ -569,6 +635,7 @@ class PositionDetail(BaseModel):
 
 class PnlView(BaseModel):
     """盈亏视图"""
+
     account_id: str
     venue: str
     realized_pnl: str
@@ -579,8 +646,10 @@ class PnlView(BaseModel):
 
 # ==================== Event & Snapshot Models ====================
 
+
 class EventEnvelope(BaseModel):
     """事件包装"""
+
     event_id: Optional[int] = None
     stream_key: str
     event_type: str
@@ -592,6 +661,7 @@ class EventEnvelope(BaseModel):
 
 class SnapshotEnvelope(BaseModel):
     """快照包装"""
+
     snapshot_id: Optional[int] = None
     stream_key: str
     snapshot_type: str
@@ -602,6 +672,7 @@ class SnapshotEnvelope(BaseModel):
 
 class ReplayRequest(BaseModel):
     """重放请求"""
+
     stream_key: str
     from_ts_ms: Optional[int] = None
     to_ts_ms: Optional[int] = None
@@ -610,6 +681,7 @@ class ReplayRequest(BaseModel):
 
 class ReplayJob(BaseModel):
     """Replay 任务状态 (Task 9.7)"""
+
     job_id: str
     stream_key: str
     status: str = Field(..., description="PENDING/RUNNING/COMPLETED/FAILED")
@@ -623,8 +695,10 @@ class ReplayJob(BaseModel):
 
 # ==================== KillSwitch Models ====================
 
+
 class KillSwitchState(BaseModel):
     """熔断状态"""
+
     scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     level: int = Field(..., ge=0, le=3)
     reason: Optional[str] = None
@@ -634,6 +708,7 @@ class KillSwitchState(BaseModel):
 
 class KillSwitchSetRequest(BaseModel):
     """设置熔断请求"""
+
     scope: str = Field(..., json_schema_extra={"example": "GLOBAL"})
     level: int = Field(..., ge=0, le=3)
     reason: Optional[str] = None
@@ -642,8 +717,10 @@ class KillSwitchSetRequest(BaseModel):
 
 # ==================== Broker Models ====================
 
+
 class BrokerAccount(BaseModel):
     """券商账户"""
+
     account_id: str
     venue: str
     broker_type: str = Field(..., json_schema_extra={"example": "BINANCE"})
@@ -653,6 +730,7 @@ class BrokerAccount(BaseModel):
 
 class BrokerStatus(BaseModel):
     """券商状态"""
+
     account_id: str
     connected: bool
     last_heartbeat_ts_ms: Optional[int] = None
@@ -661,6 +739,7 @@ class BrokerStatus(BaseModel):
 
 # ==================== Health Models ====================
 
+
 def _utc_time() -> str:
     """Get current UTC time in ISO format (RFC3339 compliant)"""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -668,12 +747,14 @@ def _utc_time() -> str:
 
 class HealthResponse(BaseModel):
     """健康检查响应"""
+
     status: str = "ok"
     time: str = Field(default_factory=_utc_time)
 
 
 class ComponentHealth(BaseModel):
     """组件健康状态"""
+
     status: str = "healthy"
     message: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
@@ -681,12 +762,14 @@ class ComponentHealth(BaseModel):
 
 class DependencyStatus(BaseModel):
     """依赖项状态"""
+
     postgresql: ComponentHealth
     storage: ComponentHealth
 
 
 class HealthCheckResponse(BaseModel):
     """三级健康检查响应"""
+
     status: str = "ok"
     time: str = Field(default_factory=_utc_time)
     checks: Dict[str, ComponentHealth] = Field(default_factory=dict)
@@ -700,16 +783,20 @@ AlertSeverity = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
 class AlertRule(BaseModel):
     """告警规则"""
+
     rule_name: str
     metric_key: str
     threshold: float
-    comparison: Literal["gt", "lt", "gte", "lte", "eq"] = Field(..., description="Comparison operator")
+    comparison: Literal["gt", "lt", "gte", "lte", "eq"] = Field(
+        ..., description="Comparison operator"
+    )
     severity: AlertSeverity
     cooldown_seconds: int = Field(default=60, description="告警冷却时间（秒）")
 
 
 class Alert(BaseModel):
     """告警实例"""
+
     alert_id: str
     rule_name: str
     severity: AlertSeverity
@@ -722,6 +809,7 @@ class Alert(BaseModel):
 
 class AdapterHealthStatus(BaseModel):
     """适配器健康状态"""
+
     adapter_name: str
     status: str = Field(..., description="HEALTHY, DEGRADED, DOWN")
     last_heartbeat_ts_ms: Optional[int] = None
@@ -731,62 +819,70 @@ class AdapterHealthStatus(BaseModel):
 
 class MonitorSnapshot(BaseModel):
     """系统监控快照"""
+
     timestamp: str = Field(default_factory=_utc_time)
-    
+
     # 持仓信息
     total_positions: int = 0
     total_exposure: str = "0"
     positions: List["PositionDetail"] = Field(default_factory=list, description="详细持仓列表")
-    
+
     # 订单信息
     open_orders_count: int = 0
     pending_orders_count: int = 0
-    
+
     # PnL信息
     daily_pnl: str = "0"
     daily_pnl_pct: str = "0"
     realized_pnl: str = "0"
     unrealized_pnl: str = "0"
-    
+
     # KillSwitch状态
     killswitch_level: int = 0
     killswitch_scope: str = "GLOBAL"
-    
+
     # 适配器状态
     adapters: Dict[str, AdapterHealthStatus] = Field(default_factory=dict)
-    
+
     # 告警信息
     active_alerts: List[Alert] = Field(default_factory=list)
     alert_count_by_severity: Dict[str, int] = Field(default_factory=dict)
-    
+
     # Task 19: 运行时可观测性指标
     tick_rate: Optional[float] = Field(default=None, description="每秒Tick数")
     tick_lag_ms: Optional[float] = Field(default=None, description="Tick处理延迟（毫秒）")
     order_submit_ok: int = Field(default=0, description="成功提交订单数")
     order_submit_reject: int = Field(default=0, description="被拒绝订单数")
     order_submit_error: int = Field(default=0, description="错误订单数")
-    reject_reason_counts: Dict[str, int] = Field(default_factory=dict, description="按原因统计的拒单数")
+    reject_reason_counts: Dict[str, int] = Field(
+        default_factory=dict, description="按原因统计的拒单数"
+    )
     fill_latency_ms_avg: Optional[float] = Field(default=None, description="平均成交延迟（毫秒）")
     fill_latency_count: int = Field(default=0, description="成交次数")
     ws_reconnect_count: int = Field(default=0, description="WebSocket重连次数")
     cl_ord_id_dedup_hits: int = Field(default=0, description="cl_ord_id重复去重次数")
     exec_dedup_hits: int = Field(default=0, description="exec_id重复去重次数")
-    
+
     # 元信息 (Task 9.2 - 真聚合化)
-    snapshot_source: Optional[str] = Field(default="aggregated", description="数据来源: aggregated/query")
+    snapshot_source: Optional[str] = Field(
+        default="aggregated", description="数据来源: aggregated/query"
+    )
     freshness: Optional[str] = Field(default=None, description="数据新鲜度时间戳")
 
 
 class MonitorAlertsResponse(BaseModel):
     """告警列表响应包装器"""
+
     alerts: List[Alert] = Field(default_factory=list)
     total_count: int = Field(default=0, description="告警总数")
 
 
 # ==================== Heartbeat Models ====================
 
+
 class ProcessHeartbeatSchema(BaseModel):
     """进程心跳"""
+
     event_loop_lag_ms: float
     last_event_loop_check_ts_ms: int
     active_tasks: int
@@ -797,6 +893,7 @@ class ProcessHeartbeatSchema(BaseModel):
 
 class ExchangeConnectivitySchema(BaseModel):
     """交易所连接状态"""
+
     public_stream_state: str
     private_stream_state: str
     last_pong_ts_ms: Optional[int] = None
@@ -806,6 +903,7 @@ class ExchangeConnectivitySchema(BaseModel):
 
 class FrontendConnectionSchema(BaseModel):
     """前端连接状态"""
+
     active_sessions: int = 0
     last_seen_ts_ms: Optional[int] = None
     status: str = Field(description="IDLE/HEALTHY/DEGRADED")
@@ -813,6 +911,7 @@ class FrontendConnectionSchema(BaseModel):
 
 class HeartbeatResponse(BaseModel):
     """三层心跳响应"""
+
     timestamp: str = Field(default_factory=_utc_time)
     process: ProcessHeartbeatSchema
     exchange: ExchangeConnectivitySchema
@@ -821,8 +920,10 @@ class HeartbeatResponse(BaseModel):
 
 # ==================== Audit Models (Task 9.6) ====================
 
+
 class AuditEntry(BaseModel):
     """AI 审计条目"""
+
     entry_id: str
     strategy_id: str
     strategy_name: Optional[str] = None
@@ -844,8 +945,10 @@ class AuditEntry(BaseModel):
 
 # ==================== Position Tracking Models（Batch 1 新增） ====================
 
+
 class StrategyPositionView(BaseModel):
     """策略级持仓视图"""
+
     strategy_id: str = Field(description="策略ID")
     symbol: str = Field(description="交易对")
     qty: str = Field(description="持仓数量")
@@ -861,6 +964,7 @@ class StrategyPositionView(BaseModel):
 
 class LotView(BaseModel):
     """批次（Lot）视图"""
+
     lot_id: str = Field(description="批次ID")
     strategy_id: str = Field(description="策略ID")
     symbol: str = Field(description="交易对")
@@ -876,17 +980,14 @@ class LotView(BaseModel):
 
 class PositionBreakdown(BaseModel):
     """持仓分解视图（单个标的的三层展示）"""
+
     symbol: str = Field(description="交易对")
     account_qty: str = Field(description="账户总持仓（Broker API）")
     account_avg_cost: Optional[str] = Field(default=None, description="账户平均成本（Broker 提供）")
     strategy_positions: List[StrategyPositionView] = Field(
-        default_factory=list,
-        description="策略级持仓列表"
+        default_factory=list, description="策略级持仓列表"
     )
-    historical: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="历史持仓信息（若有）"
-    )
+    historical: Optional[Dict[str, Any]] = Field(default=None, description="历史持仓信息（若有）")
     is_reconciled: bool = Field(default=True, description="对账是否一致")
     difference: Optional[str] = Field(default=None, description="账户 vs OMS 差异数量")
     tolerance: str = Field(default="0.001", description="对账容忍度（相对比例）")
@@ -894,6 +995,7 @@ class PositionBreakdown(BaseModel):
 
 class ReconciliationLogEntry(BaseModel):
     """对账日志条目"""
+
     id: int
     symbol: str = Field(description="交易对")
     broker_qty: str = Field(description="Broker 持仓数量")
@@ -902,13 +1004,16 @@ class ReconciliationLogEntry(BaseModel):
     difference: str = Field(description="差异 = broker - oms - historical")
     tolerance: str = Field(description="容忍度")
     status: str = Field(description="CONSISTENT / DISCREPANCY / HISTORICAL_GAP")
-    resolution: Optional[str] = Field(default=None, description="处理方式: NONE / AUTO_ALIGNED / ALERTED / KILLSWITCH_L1")
+    resolution: Optional[str] = Field(
+        default=None, description="处理方式: NONE / AUTO_ALIGNED / ALERTED / KILLSWITCH_L1"
+    )
     details: Dict[str, Any] = Field(default_factory=dict, description="附加详情")
     created_at: str = Field(description="对账时间")
 
 
 class ReconciliationResult(BaseModel):
     """手动触发对账的返回结果"""
+
     symbol: str
     broker_qty: str
     oms_total_qty: str

@@ -37,6 +37,7 @@
 | **数字货币独立风控 P0** | `core/domain/models/crypto_risk.py`, `core/domain/services/*risk*`, `core/application/plugins/crypto_pre_trade_risk_plugin.py` | **2026-05-03 完成：CryptoRiskSnapshot 契约、交易所规则校验、在途订单风险、合约保证金估算和 RiskEngine pre-trade 插件** |
 | **数字货币独立风控 P1** | `adapters/binance/crypto_risk_*`, `services/crypto_risk_snapshot.py`, `services/oms_callback.py` | **2026-05-04 完成：Binance USD-M Adapter mapper/source、Service snapshot provider、OMS pre-trade 风控注入点** |
 | **数字货币独立风控 P2** | `api/crypto_risk_runtime.py`, `api/main.py`, `api/routes/strategies.py` | **2026-05-04 完成：Control Plane env 配置默认关闭、显式启用 Binance USD-M source、OMS late-binding、配置/接线失败 fail-closed** |
+| **数字货币独立风控 P3.1** | `api/crypto_risk_runtime.py`, `api/routes/risk.py`, `api/models/schemas.py` | **2026-05-04 完成：runtime 状态 API、风险预算热更新 API、manager 单一状态源、热更新 late-bind pre-trade check** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 
@@ -60,7 +61,7 @@
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
-- **Crypto Risk P3**: 完成 Binance USD-M testnet/live 真实联调、风险预算配置热更新与前端/接口化运维入口
+- **Crypto Risk P3.2**: 完成 Binance USD-M testnet/live 真实联调、前端运维入口和预算变更持久化审计
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成

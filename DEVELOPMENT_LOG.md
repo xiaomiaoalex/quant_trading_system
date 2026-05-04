@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 19:05 - 数字货币独立风控 P3.1 Runtime API 与预算热更新
+
+- 背景: P2 已把 crypto risk source 接入 lifespan，但 runtime 状态不可查询，风险预算只能通过环境变量静态配置，运维侧无法热更新。
+- 决策: 新增 `CryptoRiskRuntimeManager` 作为 lifespan 与 Risk API 共用的单一状态源；热更新只替换 `CryptoRiskBudget`、snapshot provider 和 pre-trade check，不重建 Binance source 或暴露凭证。
+- 改动: 新增 runtime manager/status helper；`GET /v1/risk/crypto/runtime` 暴露 enabled/wired/fail_closed/预算/错误；`PATCH /v1/risk/crypto/budget` 支持 symbol/total/margin/强平缓冲预算热更新；`main.py` 改为通过 manager 启用、fail-closed 和关闭。
+- 验证: P3.1/受影响 crypto/OMS/risk/API 回归 passed；P0 回归集 99 passed；`py_compile` passed；scoped `black --check` passed；`git diff --check` passed；`isort` 因当前环境未安装未执行成功。
+- 风险/遗留: 尚未做 Binance USD-M testnet/live 真实联调；预算热更新仍是进程内配置，后续需要持久化审计和前端运维入口。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 15:21 - 数字货币独立风控 P2 运行时接线
 
 - 背景: P1 已完成 Binance USD-M risk source、snapshot provider 与 OMS pre-trade 注入点，但应用启动链路尚未根据配置创建真实 risk check，也不支持 handler 先创建后的后注入。
