@@ -70,6 +70,12 @@ from trader.adapters.binance.proxy_failover import (
     ProxyFailoverController,
     get_proxy_failover_controller,
 )
+from trader.adapters.binance.crypto_risk_source import (
+    BINANCE_USD_M_FUTURES_BASE_URL,
+    BinanceFuturesRiskDataSource,
+    BinanceFuturesRiskDataSourceConfig,
+    BinanceFuturesRiskDataSourceError,
+)
 
 
 __all__ = [
@@ -121,4 +127,9 @@ __all__ = [
     "ProxyFailoverConfig",
     "ProxyFailoverController",
     "get_proxy_failover_controller",
+    # Crypto Risk Source
+    "BINANCE_USD_M_FUTURES_BASE_URL",
+    "BinanceFuturesRiskDataSource",
+    "BinanceFuturesRiskDataSourceConfig",
+    "BinanceFuturesRiskDataSourceError",
 ]

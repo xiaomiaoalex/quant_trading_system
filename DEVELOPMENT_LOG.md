@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 10:16 - 数字货币独立风控 P1 快照采集与 OMS 接线
+
+- 背景: P0 已完成 crypto 风控纯计算与 `CryptoPreTradeRiskPlugin`，但真实账户/交易所规则/在途订单快照还没有 Adapter/Service 实现，OMS 下单链路也没有独立风控硬闸。
+- 决策: 保持 Core 无 IO，把 Binance 原始字段清洗放在 Adapter mapper/source，把快照聚合放在 Service provider，把最终阻断点接到 OMS 的 `pre_trade_risk_check` 注入回调。
+- 改动: 新增 `crypto_risk_mapper.py`、`crypto_risk_source.py`、`crypto_risk_snapshot.py`；`OMSCallbackHandler` 支持 pre-trade 风控拒绝/异常 fail-closed；策略路由增加 `set_pre_trade_risk_check()`；同步接口契约和架构图。
+- 验证: P1 新增测试 13 passed；受影响 OMS/crypto/risk 回归 28 passed；P0 回归集 99 passed；`py_compile` passed；scoped `black --check` passed。
+- 风险/遗留: 生产环境还需要在 lifespan/配置层实例化 Binance USD-M source、风险预算与 risk check，并用真实 testnet/live key 做联调；当前单测不访问网络。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 09:40 - 安装并固定 Black 格式化工具
 
 - 背景: 上次 crypto 风控 P0 落地后需要按项目约定运行 `black --line-length 100`，但当前 Python 环境未安装 Black。

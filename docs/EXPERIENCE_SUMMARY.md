@@ -2822,6 +2822,49 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+
+---
+
+## 二十六、数字货币风控快照接线经验
+
+### 26.1 踩坑记录：有插件接口不等于运行链路真的受控
+
+**场景**：
+`CryptoPreTradeRiskPlugin` 已能消费 `CryptoRiskSnapshot`，但策略运行实际路径是 `StrategyRunner -> OMSCallbackHandler`。
+
+**问题**：
+- 如果 OMS 下单入口没有硬闸，独立风控仍可能停留在测试旁路
+- 风控拒绝必须改变订单命运，不能只产生一个计算结果
+
+**经验**：
+- 独立风控要接在真实下单前的最后公共入口
+- 测试必须断言 broker `place_order` 没有被调用，而不只断言返回了拒绝结果
+
+### 26.2 设计模式：Adapter mapper + Service snapshot provider
+
+**实现模式**：
+1. `trader/adapters/binance/crypto_risk_mapper.py` 只处理 Binance 原始字段
+2. `BinanceFuturesRiskDataSource` 负责 REST endpoint 与签名请求
+3. `DataSourceCryptoRiskSnapshotProvider` 只接收内部 DTO，聚合账户、规则、mark price、持仓和在途订单
+4. Core/Policy 只消费 `CryptoRiskSnapshot`，不接触 `clientOrderId`、`positionAmt`、`markPrice` 等外部字段
+
+**收益**：
+- 字段污染被限制在 Adapter 边界
+- Service 层可替换 fake source、Binance source 或未来多交易所 source
+- 缺 mark price / leverage bracket 时可统一 fail-closed
+
+### 26.3 隐蔽风险：总风险预算不能跳过缺价 symbol
+
+**场景**：
+总 notional cap 需要统计所有持仓与 active open orders。
+
+**问题**：
+如果某个非目标 symbol 缺少 mark price，简单跳过会低估总敞口。
+
+**经验**：
+- 快照提供者必须把目标 symbol、现有持仓 symbol、在途订单 symbol 合并成 portfolio symbols
+- 任一参与风险预算的 symbol 缺少 mark price 都应 fail-closed
+
 ---
 
 ## 二十六、研究到自动组合运行纵向切片经验

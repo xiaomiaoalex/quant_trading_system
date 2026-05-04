@@ -35,6 +35,7 @@
 | **持仓追踪** | `oms.py`, `monitor_service.py` | **Task 9.11 完成：PositionExposure计算、OMS Metrics修复、Adapter Health修复** |
 | **账户状态与执行预算** | `services/account_state.py`, `services/execution_budget.py`, `services/oms_callback.py` | **Phase 1-2 完成（2026-04-28）：AccountStateService + ExecutionBudgetService 领域模型 + OMS集成。REST snapshot 校准、private stream 增量、budget reservation 状态机、broker 异常分类处理** |
 | **数字货币独立风控 P0** | `core/domain/models/crypto_risk.py`, `core/domain/services/*risk*`, `core/application/plugins/crypto_pre_trade_risk_plugin.py` | **2026-05-03 完成：CryptoRiskSnapshot 契约、交易所规则校验、在途订单风险、合约保证金估算和 RiskEngine pre-trade 插件** |
+| **数字货币独立风控 P1** | `adapters/binance/crypto_risk_*`, `services/crypto_risk_snapshot.py`, `services/oms_callback.py` | **2026-05-04 完成：Binance USD-M Adapter mapper/source、Service snapshot provider、OMS pre-trade 风控注入点** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 
@@ -58,7 +59,7 @@
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
-- **Crypto Risk P1**: Binance Adapter/Service 实现 `CryptoRiskSnapshotProvider`，把 exchangeInfo、leverage bracket、mark price、account/margin、open orders 接入独立风控插件
+- **Crypto Risk P2**: 在应用 lifespan/config 层显式启用 Binance USD-M risk source，完成 testnet/live 真实联调与风险预算配置热更新
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成

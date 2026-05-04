@@ -4,9 +4,37 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 09:40 (北京时间)
+2026-05-04 10:16 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P1 快照采集与 OMS 接线
+- 完成时间: 2026-05-04 10:16 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P1 第一版
+- 开发前状态:
+  - `CryptoPreTradeRiskPlugin` 已能消费 `CryptoRiskSnapshot`，但快照仍依赖外部 fake/static provider
+  - Binance 原始字段到 Core DTO 的转换边界尚未固化
+  - `StrategyRunner -> OMSCallbackHandler` 运行链路没有可注入的独立 pre-trade 风控检查点
+- 开发后状态:
+  - 新增 `trader/adapters/binance/crypto_risk_mapper.py`，将 Binance `clientOrderId`、`origQty`、`positionAmt`、`markPrice`、`notionalCap` 等字段转换为内部 DTO
+  - 新增 `BinanceFuturesRiskDataSource`，提供 USD-M futures account、positionRisk、openOrders、exchangeInfo、leverageBracket、premiumIndex 的 Adapter 边界数据源
+  - 新增 `DataSourceCryptoRiskSnapshotProvider`，聚合账户、持仓、在途订单、规则、杠杆分层和 mark price；缺关键数据 fail-closed
+  - `OMSCallbackHandler` 新增 `pre_trade_risk_check` 注入点；拒绝或异常时在 broker `place_order` 前阻断订单
+  - `trader/api/routes/strategies.py` 新增 `set_pre_trade_risk_check()`，为应用启动期接入独立风控预留运行入口
+- Issue 状态迁移:
+  - `CryptoRiskSnapshotProvider` 只存在接口无实现：`待确认` → `已验证（Service Provider + Binance Source）`
+  - Binance 原始字段可能泄漏到 Service/Core：`待确认` → `已验证（Adapter mapper 边界）`
+  - OMS 下单前缺少独立风控硬闸：`待确认` → `已验证（pre_trade_risk_check 阻断 place_order）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_crypto_risk_mapper.py trader/tests/test_binance_crypto_risk_source.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 13 passed ✅
+  - 受影响回归（`test_oms_pretrade_balance.py`、`test_runtime_observability.py`、`test_crypto_risk_p0.py`、`test_risk_engine_layers.py`）→ 28 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m black --check ... --line-length 100` → 9 files unchanged ✅
+- 注意事项:
+  - 当前提供的是可注入接线和 USD-M Adapter source；生产启动时仍需在 lifespan/配置层显式创建 `BinanceFuturesRiskDataSource`、风险预算和 `build_crypto_pre_trade_risk_check()` 后注入
+  - Binance Futures 真实联调需要有效 API key 与 testnet/live 环境，当前单测不访问网络
 
 ### 本次任务：安装并固定 Black 格式化工具
 - 完成时间: 2026-05-04 09:40 (北京时间)
@@ -52,8 +80,8 @@
   - `python -m py_compile trader\core\domain\models\crypto_risk.py trader\core\domain\services\exchange_rule_guard.py trader\core\domain\services\open_order_exposure.py trader\core\domain\services\margin_risk_calculator.py trader\core\application\plugins\crypto_pre_trade_risk_plugin.py trader\core\application\risk_engine.py` → passed ✅
   - `python -m pytest -q trader\tests\test_binance_connector.py trader\tests\test_binance_private_stream.py trader\tests\test_binance_degraded_cascade.py trader\tests\test_deterministic_layer.py trader\tests\test_hard_properties.py --tb=short` → 99 passed ✅
 - 注意事项:
-  - 当前插件依赖外部注入 `CryptoRiskSnapshotProvider`；Binance Adapter/Service 真实快照采集与 wiring 是下一步
-  - `black` 未安装，格式化命令未执行；已用 `py_compile`、新增测试、P0 回归和 100 字符长行扫描兜底
+  - P1 已补齐 Binance Adapter/Service 快照提供者与 OMS 前置风控注入点；真实交易环境仍需在启动配置层显式启用
+  - 当时 `black` 未安装；后续已固定 `black==24.4.2` 并完成 scoped format
 
 ### 本次任务：Strategy Details 支持查看模块 entrypoint 源码
 - 完成时间: 2026-04-30 17:29 (北京时间)

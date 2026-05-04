@@ -3,6 +3,7 @@
  ==================
  Strategy registry, version management, and runner control endpoints.
  """
+
 import asyncio
 import hashlib
 import importlib.util
@@ -18,9 +19,12 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from trader.api.models.schemas import (
-    Strategy, StrategyRegisterRequest,
-    StrategyVersion, StrategyVersionCreateRequest,
-    VersionedConfig, VersionedConfigUpsertRequest,
+    Strategy,
+    StrategyRegisterRequest,
+    StrategyVersion,
+    StrategyVersionCreateRequest,
+    VersionedConfig,
+    VersionedConfigUpsertRequest,
     StrategyCodeVersion,
     StrategyCodeView,
     StrategyCodeCreateRequest,
@@ -102,7 +106,7 @@ def reset_strategy_route_state_for_tests() -> None:
     global _strategy_runner_instance, _strategy_orchestrator_instance
     global _pending_orchestrator_connector, _broker_instance, _broker_lock
     global _live_trading_enabled, _oms_handler, _oms_handler_instance, _fill_handler
-    global _execution_budget, _account_state
+    global _execution_budget, _account_state, _pre_trade_risk_check
 
     _strategy_runner_instance = None
     _strategy_orchestrator_instance = None
@@ -115,6 +119,7 @@ def reset_strategy_route_state_for_tests() -> None:
     _fill_handler = None
     _execution_budget = None
     _account_state = None
+    _pre_trade_risk_check = None
 
 
 async def _create_broker():
@@ -131,6 +136,7 @@ async def _create_broker():
                 BinanceSpotDemoBroker,
                 BinanceSpotDemoBrokerConfig,
             )
+
             api_key = os.environ.get("BINANCE_API_KEY", "test_key")
             secret_key = os.environ.get("BINANCE_SECRET_KEY", "test_secret")
             binance_env = os.environ.get("BINANCE_ENV", "demo").lower()
@@ -151,12 +157,14 @@ async def _create_broker():
             # 注册broker到storage，以便Monitor API能获取adapter health
             try:
                 storage = get_storage()
-                storage.register_broker({
-                    "account_id": _broker_instance.broker_name,
-                    "broker_name": _broker_instance.broker_name,
-                    "venue": _broker_instance.broker_name,
-                    "connected": True,
-                })
+                storage.register_broker(
+                    {
+                        "account_id": _broker_instance.broker_name,
+                        "broker_name": _broker_instance.broker_name,
+                        "venue": _broker_instance.broker_name,
+                        "connected": True,
+                    }
+                )
                 logger.info(f"[Strategies] Broker registered: {_broker_instance.broker_name}")
             except Exception as e:
                 logger.warning(f"[Strategies] Failed to register broker: {e}")
@@ -170,6 +178,7 @@ _oms_handler_instance: Optional[Any] = None  # 实际 handler 实例，用于获
 _fill_handler: Optional[Any] = None
 _execution_budget: Optional[Any] = None
 _account_state: Optional[Any] = None
+_pre_trade_risk_check: Optional[Any] = None
 
 
 def set_execution_budget(budget: Any) -> None:
@@ -184,10 +193,16 @@ def set_account_state(state: Any) -> None:
     _account_state = state
 
 
+def set_pre_trade_risk_check(check: Any) -> None:
+    """注入独立 pre-trade 风控回调（在 main.py lifespan 或测试中调用）。"""
+    global _pre_trade_risk_check
+    _pre_trade_risk_check = check
+
+
 async def _get_oms_handler():
     """
     获取全局 OMSCallbackHandler 实例（延迟初始化）
-    
+
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数)
     """
@@ -195,14 +210,18 @@ async def _get_oms_handler():
     if _oms_handler is None:
         broker = await _create_broker()
         from trader.services.oms_callback import create_oms_callback
-        
+
         # 创建 fill_callback 用于接收成交通知
-        async def fill_callback(strategy_id: str, order_id: str, symbol: str, side: str, qty: float, price: float):
+        async def fill_callback(
+            strategy_id: str, order_id: str, symbol: str, side: str, qty: float, price: float
+        ):
             """成交回调：调用 runner.on_fill 通知策略"""
             runner = get_strategy_runner()
             try:
                 await runner.on_fill(strategy_id, order_id, symbol, side, qty, price)
-                logger.info(f"[FillCallback] on_fill called: strategy={strategy_id}, order={order_id}")
+                logger.info(
+                    f"[FillCallback] on_fill called: strategy={strategy_id}, order={order_id}"
+                )
             except Exception as e:
                 logger.error(f"[FillCallback] on_fill error: {e}")
 
@@ -213,6 +232,7 @@ async def _get_oms_handler():
             fill_callback=fill_callback,
             execution_budget=_execution_budget,
             account_state=_account_state,
+            pre_trade_risk_check=_pre_trade_risk_check,
         )
         _oms_handler = oms_cb
         _oms_handler_instance = handler_instance  # 保存实际 handler 实例，用于获取 metrics
@@ -223,13 +243,13 @@ async def _get_oms_handler():
 def get_oms_metrics() -> Optional[Dict[str, Any]]:
     """
     Task 19: 获取 OMS 可观测性指标（供 MonitorService 使用）
-    
+
     Returns:
         OMS 指标字典，如果 OMS 未初始化则返回 None
     """
     if _oms_handler_instance is None:
         return None
-    if hasattr(_oms_handler_instance, 'get_dedup_stats'):
+    if hasattr(_oms_handler_instance, "get_dedup_stats"):
         return _oms_handler_instance.get_dedup_stats()
     return None
 
@@ -272,9 +292,9 @@ async def ensure_fill_handler_ready():
 def get_strategy_runner() -> StrategyRunner:
     """
     获取全局策略执行器实例。
-    
+
     返回应用级单例，确保所有策略在同一个执行器中运行。
-    
+
     注意：
     - StrategyRunner 本身是线程安全的
     - OMS 回调通过事件循环异步初始化
@@ -282,7 +302,10 @@ def get_strategy_runner() -> StrategyRunner:
     """
     global _strategy_runner_instance
     if _strategy_runner_instance is None:
-        from trader.adapters.persistence.runtime_state_repository import get_runtime_state_repository
+        from trader.adapters.persistence.runtime_state_repository import (
+            get_runtime_state_repository,
+        )
+
         runtime_state_storage = get_runtime_state_repository()
         _strategy_runner_instance = StrategyRunner(
             oms_callback=_oms_callback_dispatcher,
@@ -334,12 +357,14 @@ def _event_callback_dispatcher(deployment_id: str, event_type: str, payload: Dic
             "strategy_id",
             info.strategy_id if info is not None else deployment_id,
         )
-        storage.append_event({
-            "stream_key": f"deployment:{deployment_id}",
-            "event_type": event_type,
-            "ts_ms": int(time.time() * 1000),
-            "data": payload_data,
-        })
+        storage.append_event(
+            {
+                "stream_key": f"deployment:{deployment_id}",
+                "event_type": event_type,
+                "ts_ms": int(time.time() * 1000),
+                "data": payload_data,
+            }
+        )
     except Exception as e:
         logger.error(f"[EventCallback] Dispatcher error: {e}")
 
@@ -402,7 +427,11 @@ def _signal_to_dict(signal) -> Dict:
     """Convert Signal model to serializable dict for debug endpoint."""
     return {
         "strategy_name": signal.strategy_name,
-        "signal_type": signal.signal_type.value if hasattr(signal.signal_type, "value") else str(signal.signal_type),
+        "signal_type": (
+            signal.signal_type.value
+            if hasattr(signal.signal_type, "value")
+            else str(signal.signal_type)
+        ),
         "symbol": signal.symbol,
         "price": float(signal.price) if signal.price is not None else None,
         "quantity": float(signal.quantity) if signal.quantity is not None else None,
@@ -639,7 +668,9 @@ async def debug_strategy_code(request: StrategyCodeDebugRequest):
         if plugin is not None and hasattr(plugin, "validate"):
             try:
                 result = plugin.validate()
-                validation_status = result.status.value if hasattr(result.status, "value") else str(result.status)
+                validation_status = (
+                    result.status.value if hasattr(result.status, "value") else str(result.status)
+                )
                 warnings = list(getattr(result, "warnings", []) or [])
                 if hasattr(result, "errors") and result.errors:
                     errors.extend([getattr(e, "message", str(e)) for e in result.errors])
@@ -647,9 +678,30 @@ async def debug_strategy_code(request: StrategyCodeDebugRequest):
                 errors.append(f"validate() failed: {e}")
 
         samples = request.sample_market_data or [
-            {"symbol": "BTCUSDT", "price": 50000, "open": 49900, "high": 50100, "low": 49800, "close": 50000},
-            {"symbol": "BTCUSDT", "price": 50200, "open": 50000, "high": 50300, "low": 49950, "close": 50200},
-            {"symbol": "BTCUSDT", "price": 49800, "open": 50200, "high": 50350, "low": 49700, "close": 49800},
+            {
+                "symbol": "BTCUSDT",
+                "price": 50000,
+                "open": 49900,
+                "high": 50100,
+                "low": 49800,
+                "close": 50000,
+            },
+            {
+                "symbol": "BTCUSDT",
+                "price": 50200,
+                "open": 50000,
+                "high": 50300,
+                "low": 49950,
+                "close": 50200,
+            },
+            {
+                "symbol": "BTCUSDT",
+                "price": 49800,
+                "open": 50200,
+                "high": 50350,
+                "low": 49700,
+                "close": 49800,
+            },
         ]
         for raw in samples:
             md = _build_debug_market_data(raw)
@@ -717,7 +769,9 @@ async def list_strategy_versions(strategy_id: str = Path(..., description="Strat
     return service.list_versions(strategy_id)
 
 
-@router.post("/v1/strategies/{strategy_id}/versions", response_model=StrategyVersion, status_code=201)
+@router.post(
+    "/v1/strategies/{strategy_id}/versions", response_model=StrategyVersion, status_code=201
+)
 async def create_strategy_version(
     strategy_id: str = Path(..., description="Strategy ID"),
     request: StrategyVersionCreateRequest | None = None,
@@ -728,11 +782,7 @@ async def create_strategy_version(
     Creates a new version with code reference and parameter schema.
     """
     if request is None:
-        request = StrategyVersionCreateRequest(
-            version=1,
-            code_ref="git:initial",
-            param_schema={}
-        )
+        request = StrategyVersionCreateRequest(version=1, code_ref="git:initial", param_schema={})
     service = StrategyService()
     return service.create_version(strategy_id, request)
 
@@ -751,8 +801,7 @@ async def get_strategy_version(
     version_obj = service.get_version(strategy_id, version)
     if not version_obj:
         raise HTTPException(
-            status_code=404,
-            detail=f"Version {version} of strategy {strategy_id} not found"
+            status_code=404, detail=f"Version {version} of strategy {strategy_id} not found"
         )
     return version_obj
 
@@ -779,11 +828,7 @@ async def create_strategy_params(
     Creates a new version of strategy parameters.
     """
     if request is None:
-        request = VersionedConfigUpsertRequest(
-            scope=strategy_id,
-            config={},
-            created_by="system"
-        )
+        request = VersionedConfigUpsertRequest(scope=strategy_id, config={}, created_by="system")
     service = StrategyService()
     return service.create_params(strategy_id, request)
 
@@ -825,25 +870,30 @@ async def update_strategy_params(
         # 获取策略当前状态
         info = runner.get_status(strategy_id)
         if info is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Strategy {strategy_id} not loaded"
-            )
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not loaded")
 
         # 如果仅验证模式
         if request.validate_only:
             # 使用 runner 的公共方法验证配置
             try:
-                validation_result = await runner.validate_strategy_config(strategy_id, request.config)
+                validation_result = await runner.validate_strategy_config(
+                    strategy_id, request.config
+                )
                 return UpdateStrategyParamsResponse(
                     success=validation_result.is_valid,
                     strategy_id=strategy_id,
-                    validation_result={
-                        "status": validation_result.status.value,
-                        "errors": [{"field": e.field, "message": e.message, "code": e.code}
-                                   for e in validation_result.errors],
-                        "warnings": list(validation_result.warnings),
-                    } if validation_result else None,
+                    validation_result=(
+                        {
+                            "status": validation_result.status.value,
+                            "errors": [
+                                {"field": e.field, "message": e.message, "code": e.code}
+                                for e in validation_result.errors
+                            ],
+                            "warnings": list(validation_result.warnings),
+                        }
+                        if validation_result
+                        else None
+                    ),
                 )
             except Exception as e:
                 return UpdateStrategyParamsResponse(
@@ -876,13 +926,19 @@ async def update_strategy_params(
 class LoadStrategyRequest(BaseModel):
     """加载策略请求"""
 
-    deployment_id: Optional[str] = Field(default=None, description="运行实例 ID；为空时后端按 strategy_id/symbol/mode 自动生成")
-    module_path: Optional[str] = Field(default=None, description="策略模块路径，如 'trader.strategies.ema_cross_btc'")
+    deployment_id: Optional[str] = Field(
+        default=None, description="运行实例 ID；为空时后端按 strategy_id/symbol/mode 自动生成"
+    )
+    module_path: Optional[str] = Field(
+        default=None, description="策略模块路径，如 'trader.strategies.ema_cross_btc'"
+    )
     code: Optional[str] = Field(default=None, description="可选：直接加载代码字符串")
     code_version: Optional[int] = Field(default=None, ge=1, description="可选：加载已保存代码版本")
     version: str = Field(default="v1", description="策略版本")
     config: Dict = Field(default_factory=dict, description="策略配置参数")
-    symbols: List[str] = Field(default_factory=list, description="deployment 交易对列表；MVP 阶段至少 1 个")
+    symbols: List[str] = Field(
+        default_factory=list, description="deployment 交易对列表；MVP 阶段至少 1 个"
+    )
     account_id: str = Field(default="binance_demo", description="账户 ID")
     venue: str = Field(default="BINANCE", description="交易 venue")
     mode: Literal["paper", "demo", "live", "shadow"] = Field(default="demo", description="运行模式")
@@ -1005,12 +1061,14 @@ async def load_strategy(
 
     # 构建资源限制配置
     resource_limits = None
-    if any([
-        request.max_position_size is not None,
-        request.max_daily_loss is not None,
-        request.max_orders_per_minute is not None,
-        request.timeout_seconds is not None,
-    ]):
+    if any(
+        [
+            request.max_position_size is not None,
+            request.max_daily_loss is not None,
+            request.max_orders_per_minute is not None,
+            request.timeout_seconds is not None,
+        ]
+    ):
         resource_limits = StrategyResourceLimits(
             max_position_size=Decimal(str(request.max_position_size or 1.0)),
             max_daily_loss=Decimal(str(request.max_daily_loss or 100.0)),
@@ -1177,6 +1235,7 @@ async def start_deployment(
     # 防御式注入：如果 orchestrator._connector 为 None，尝试从 pending 或 main 实例注入
     if orchestrator._connector is None:
         from trader.api.main import _binance_connector_instance
+
         c = _pending_orchestrator_connector or _binance_connector_instance
         if c is not None:
             orchestrator.set_connector(c)
@@ -1326,9 +1385,7 @@ async def get_deployment_status(
 
     info = runner.get_status(deployment_id)
     if info is None:
-        raise HTTPException(
-            status_code=404, detail=f"Deployment {deployment_id} not loaded"
-        )
+        raise HTTPException(status_code=404, detail=f"Deployment {deployment_id} not loaded")
 
     ctx = orchestrator.get_context(deployment_id)
 
@@ -1386,9 +1443,14 @@ async def start_strategy_legacy(
     runner = get_strategy_runner()
     deployments = runner.list_deployments_for_strategy(strategy_id)
     if not deployments:
-        raise HTTPException(status_code=404, detail=f"No loaded deployment found for strategy {strategy_id}")
+        raise HTTPException(
+            status_code=404, detail=f"No loaded deployment found for strategy {strategy_id}"
+        )
     if len(deployments) > 1:
-        raise HTTPException(status_code=409, detail="Multiple deployments found; use /v1/deployments/{deployment_id}/start")
+        raise HTTPException(
+            status_code=409,
+            detail="Multiple deployments found; use /v1/deployments/{deployment_id}/start",
+        )
     return await start_deployment(deployments[0].deployment_id)
 
 
@@ -1416,6 +1478,7 @@ async def list_loaded_strategies():
 
 class StrategyEventResponse(BaseModel):
     """策略事件响应"""
+
     event_id: int
     stream_key: str
     event_type: str
@@ -1646,6 +1709,7 @@ async def get_deployment_fills(
 
 class SafetyGateStatusResponse(BaseModel):
     """安全闸门状态响应"""
+
     live_trading_enabled: bool
     killswitch_level: int
     killswitch_reason: Optional[str] = None
@@ -1653,6 +1717,7 @@ class SafetyGateStatusResponse(BaseModel):
 
 class SafetyGateEnableRequest(BaseModel):
     """启用实盘交易请求"""
+
     enabled: bool = Field(..., description="是否启用实盘交易")
     confirmed: bool = Field(False, description="确认启用（必须为 true）")
 
@@ -1698,8 +1763,7 @@ async def enable_live_trading(request: SafetyGateEnableRequest):
     """
     if request.enabled and not request.confirmed:
         raise HTTPException(
-            status_code=400,
-            detail="Must set confirmed=true to enable live trading"
+            status_code=400, detail="Must set confirmed=true to enable live trading"
         )
 
     storage = get_storage()
@@ -1708,8 +1772,7 @@ async def enable_live_trading(request: SafetyGateEnableRequest):
 
     if request.enabled and ks_level >= KillSwitchLevel.L2_CANCEL_ALL_AND_HALT:
         raise HTTPException(
-            status_code=403,
-            detail=f"Cannot enable live trading while KillSwitch is at L{ks_level}"
+            status_code=403, detail=f"Cannot enable live trading while KillSwitch is at L{ks_level}"
         )
 
     set_live_trading_enabled(request.enabled)
@@ -1723,6 +1786,7 @@ async def enable_live_trading(request: SafetyGateEnableRequest):
 
 class TradingPairInfo(BaseModel):
     """交易对信息"""
+
     symbol: str = Field(..., description="交易对名称，如 BTCUSDT")
     base_asset: str = Field(..., description="基础资产，如 BTC")
     quote_asset: str = Field(..., description="报价资产，如 USDT")
@@ -1736,6 +1800,7 @@ class TradingPairInfo(BaseModel):
 
 class TradingPairsResponse(BaseModel):
     """交易对列表响应"""
+
     pairs: List[TradingPairInfo] = Field(..., description="交易对列表")
     total: int = Field(..., description="总数")
 
@@ -1807,17 +1872,19 @@ async def get_trading_pairs(
                     elif ftype == "PRICE_FILTER":
                         tick_size = float(f.get("tickSize", 0))
 
-                pairs.append(TradingPairInfo(
-                    symbol=sym.get("symbol", ""),
-                    base_asset=base_asset,
-                    quote_asset=sym_quote,
-                    status=sym_status,
-                    min_notional=min_notional,
-                    min_qty=min_qty,
-                    max_qty=max_qty,
-                    step_size=step_size,
-                    tick_size=tick_size,
-                ))
+                pairs.append(
+                    TradingPairInfo(
+                        symbol=sym.get("symbol", ""),
+                        base_asset=base_asset,
+                        quote_asset=sym_quote,
+                        status=sym_status,
+                        min_notional=min_notional,
+                        min_qty=min_qty,
+                        max_qty=max_qty,
+                        step_size=step_size,
+                        tick_size=tick_size,
+                    )
+                )
 
             return TradingPairsResponse(pairs=pairs, total=len(pairs))
         finally:

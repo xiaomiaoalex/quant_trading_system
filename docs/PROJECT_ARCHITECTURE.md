@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-03 00:00 (北京时间)
+- 最后更新: 2026-05-04 10:16 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -26,6 +26,7 @@ flowchart TB
         Risk["Risk Engine"]
         Gate["Pre-trade Gates"]
         CryptoGate["Crypto Pre-trade Risk Plugin"]
+        CryptoSnapshot["Crypto Risk Snapshot Provider"]
         Kill["KillSwitch L0-L3"]
         Budget["Execution Budget"]
     end
@@ -43,6 +44,7 @@ flowchart TB
         PrivateWS["Private Stream"]
         RestAlign["REST Alignment"]
         Clean["Canonical DTO Mapping"]
+        CryptoSource["Binance Futures Risk Data Source"]
     end
 
     subgraph Persistence["Persistence Plane: trader/adapters/persistence/"]
@@ -55,7 +57,9 @@ flowchart TB
     Lifecycle --> Gate
     Gate --> Risk
     Risk --> CryptoGate
+    CryptoGate --> CryptoSnapshot
     CryptoGate --> CryptoRisk
+    CryptoSnapshot --> CryptoSource
     Risk --> Kill
     Gate --> OMS
     OMS --> Deterministic
@@ -69,6 +73,7 @@ flowchart TB
     PrivateWS --> Clean
     RestAlign --> Clean
     Clean --> OMS
+    CryptoSource --> Clean
     PG --> Projection
     KillAPI --> Kill
 ```
@@ -124,6 +129,7 @@ sequenceDiagram
     participant FE as Frontend/API
     participant Runner as StrategyRunner
     participant Policy as Risk/Policy Gates
+    participant Snapshot as Crypto Snapshot Provider
     participant OMS as OMS
     participant Broker as Binance Adapter
     participant Store as Event Log / PG
@@ -131,7 +137,10 @@ sequenceDiagram
     FE->>Runner: start / tick / market data
     Runner->>Runner: strategy produces Signal
     Runner->>Policy: pre-trade validation
-    Policy->>Policy: build risk snapshot / exchange rules / open-order exposure / margin check
+    Policy->>Snapshot: build account/rule/mark/open-order risk snapshot
+    Snapshot->>Broker: Adapter-mapped REST/account data
+    Snapshot-->>Policy: CryptoRiskSnapshot or fail-closed error
+    Policy->>Policy: exchange rules / open-order exposure / margin check
     Policy-->>Runner: approve / reject / reduce
     Runner->>OMS: submit order command
     OMS->>OMS: cl_ord_id idempotency + monotonic state
@@ -152,9 +161,11 @@ sequenceDiagram
 ### Crypto 独立风控补充
 
 - 策略只提交 `Signal` / trade intent；最终放行、拒绝、缩量建议和 KillSwitch 建议由 Policy Plane 决定。
-- `CryptoPreTradeRiskPlugin` 通过 `CryptoRiskSnapshot` 读取账户、规则、mark price、在途订单、持仓和风险预算；快照构建可由 Adapter/Service 注入，但 Core 计算保持无 IO。
+- `CryptoPreTradeRiskPlugin` 通过 `CryptoRiskSnapshot` 读取账户、规则、mark price、在途订单、持仓和风险预算；`DataSourceCryptoRiskSnapshotProvider` 位于 Service 层，调用 Adapter 边界清洗后的 `CryptoRiskDataSource` 构建快照，Core 计算保持无 IO。
+- `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
 - `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用和合约保证金纯计算。
 - 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
+- OMS 下单入口可注入独立 `pre_trade_risk_check` 回调；该回调拒绝或异常时必须在 broker `place_order` 之前阻断订单。
 
 ---
 
