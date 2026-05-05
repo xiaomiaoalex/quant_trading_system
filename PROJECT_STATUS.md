@@ -4,9 +4,33 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-05 22:32 (北京时间)
+2026-05-05 22:51 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Crypto Risk P3.3 Binance demo 联调自检与运行手册
+- 完成时间: 2026-05-05 22:51 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3a
+- 开发前状态:
+  - 已有 `/v1/risk/crypto/runtime`、`/v1/risk/crypto/probe` 和前端 `/crypto-risk`
+  - 缺少 demo 联调前的本地环境自检，`.env.example` 仍以 testnet 口径为主
+  - 运维流程容易把 Binance Spot Demo 执行环境和 USD-M 只读风控 source 混成一个环境
+- 开发后状态:
+  - 新增 `scripts/check_crypto_risk_demo_env.py`，在不访问网络、不打印凭证的前提下检查 demo 环境、Crypto Risk 启用、显式 USD-M source、预算和 cluster 映射
+  - 新增 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`，明确自检、启动、runtime status、只读 probe、审计确认和 fail-closed 演练步骤
+  - `.env.example` 改为 Binance demo 默认，并补充 Crypto Risk 预算和 source 配置示例
+  - `docs/PLAN.md` 将 P3.3 拆分为已完成 demo runbook/self-check 与后续 PG audit/funding/OI 任务
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m isort --check-only --profile black trader/ scripts/check_crypto_risk_demo_env.py` → passed ✅
+  - `python -m black --check --line-length 100 trader/ scripts/check_crypto_risk_demo_env.py` → passed ✅
+  - `python -m py_compile scripts\check_crypto_risk_demo_env.py` → passed ✅
+- 注意事项:
+  - 本次没有使用真实 demo 凭证访问 Binance；外部只读 probe 仍需按 runbook 在本机运行后端后手动触发
+  - `scripts/test_binance_demo_connection.py` 与 `scripts/smoke_trade_roundtrip.py` 会走订单生命周期，不属于只读风控 probe
 
 ### 本次任务：全仓 Python 格式化收敛与 CI 门禁
 - 完成时间: 2026-05-05 22:32 (北京时间)

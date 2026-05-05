@@ -4,6 +4,24 @@
 
 ---
 
+## 三十、Crypto Risk demo 联调自检经验（2026-05-05）
+
+### 30.1 踩坑记录：demo 执行环境和 USD-M 风控 source 不是同一个开关
+
+**问题描述**：
+`BINANCE_ENV=demo` 控制当前执行适配器连接 Binance Spot Demo，但 `CRYPTO_RISK_FUTURES_BASE_URL` 控制的是只读 USD-M 风控 source。若只看一个字段，容易把 demo、testnet、live 三种口径混在一起，导致 probe 使用错误凭证或错误 endpoint。
+
+**解决方案**：
+- 新增 `scripts/check_crypto_risk_demo_env.py`，在启动前显式拒绝 testnet/live USD-M source、缺失预算和 cluster 未映射。
+- `.env.example` 默认改为 demo，并把 Crypto Risk 预算配置写完整。
+- 新增 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`，把自检、runtime status、只读 probe、审计和 fail-closed 演练拆成固定步骤。
+
+**经验**：
+- 联调脚本应先做“无网络、无凭证打印”的静态自检，再触发真实 probe。
+- 交易环境标签不能承担多个维度；执行环境、风控 source、下单 smoke 必须分开说明。
+
+---
+
 ## 二十九、isort 固定与格式化范围控制经验（2026-05-05）
 
 ### 29.1 踩坑记录：工具安装完成后，全仓检查可能暴露历史格式债

@@ -142,6 +142,15 @@
 - 风险/遗留: 当前只显示最新 saved code 或完整模块源码；后续若需要历史审查，应新增版本选择、diff 和权限控制。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
 
+### 2026-05-05 22:51 - Crypto Risk P3.3 Binance demo 联调自检与运行手册
+
+- 背景: Crypto Risk 已有 runtime/probe/API/前端运维入口，但真实 demo 联调前缺少本地 preflight，`.env.example` 仍偏 testnet 口径，容易把执行环境和只读 USD-M 风控 source 混淆。
+- 决策: 先补“无网络、无凭证打印”的 demo 自检脚本和 runbook，不在本次任务中触发真实 Binance probe 或下单 smoke。
+- 改动: 新增 `scripts/check_crypto_risk_demo_env.py` 与 `trader/tests/test_crypto_risk_demo_env_check.py`；新增 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`；更新 `.env.example`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`。
+- 验证: 新增测试先失败于脚本不存在，完成实现后 demo 自检测试 4 passed；Crypto Risk runtime/API 回归 23 passed；P0 回归 99 passed；isort/black check passed；脚本 `py_compile` passed；`git diff --check` passed。
+- 风险/遗留: 尚未用真实 demo 凭证运行后端并触发 `/v1/risk/crypto/probe`；PG 级风控审计持久化和 Funding/OI 自动风险系数仍在后续 P3.3b/P4。
+- 关联文档: `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`、`.env.example`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 2026-05-05 22:32 - 全仓 Python 格式化收敛与 CI 门禁
 
 - 背景: `isort` 安装固定后，全仓检查暴露历史导入排序和 Black 格式债；用户要求先提交当前代码，再做一次纯格式化提交，并将 `black`/`isort` 加入 CI 门禁。
