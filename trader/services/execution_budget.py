@@ -15,6 +15,7 @@ ExecutionBudgetService - 下单前预算管理
   成交/取消/拒单 → release_reservation → TERMINAL + PG 删除
   超时 → expire_stale_reservations → EXPIRED + PG 删除
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,14 +28,29 @@ from typing import TYPE_CHECKING
 from trader.services.account_state import AccountStateService
 
 if TYPE_CHECKING:
-    from trader.adapters.persistence.budget_reservation_repository import BudgetReservationRepository
+    from trader.adapters.persistence.budget_reservation_repository import (
+        BudgetReservationRepository,
+    )
 
 logger = logging.getLogger(__name__)
 
 # Quote assets — 用于区分 BUY 时扣哪个 asset
 QUOTE_ASSETS: frozenset[str] = frozenset(
-    ("USDT", "FDUSD", "BUSD", "USDC", "USD", "BTC", "ETH",
-     "1000SHIB", "1000FLOKI", "1000LUNC", "1000BONK", "10000SATS", "1000000MOG")
+    (
+        "USDT",
+        "FDUSD",
+        "BUSD",
+        "USDC",
+        "USD",
+        "BTC",
+        "ETH",
+        "1000SHIB",
+        "1000FLOKI",
+        "1000LUNC",
+        "1000BONK",
+        "10000SATS",
+        "1000000MOG",
+    )
 )
 
 # 带数字前缀的 symbol（乘数单位）：symbol → (实际 asset, 乘数)
@@ -209,9 +225,7 @@ class ExecutionBudgetService:
         if res is None:
             raise KeyError(f"Reservation not found: {cl_ord_id}")
         if res.status != PENDING_SUBMIT:
-            raise ValueError(
-                f"Cannot accept reservation {cl_ord_id} in status {res.status}"
-            )
+            raise ValueError(f"Cannot accept reservation {cl_ord_id} in status {res.status}")
         res.status = ACCEPTED
         self._persist_reservation(res)
 

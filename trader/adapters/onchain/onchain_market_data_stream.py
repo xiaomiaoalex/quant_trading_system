@@ -19,6 +19,7 @@ On-Chain/Macro Market Data Adapter
 - 可配置的定时任务
 - 支持多 symbol 并行拉取
 """
+
 import asyncio
 import json
 import logging
@@ -26,13 +27,12 @@ import random
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Set, TYPE_CHECKING, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
     import aiohttp
 
 from trader.adapters.persistence.feature_store import FeatureStore, get_feature_store
-
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,7 @@ _COINGECKO_SYMBOL_TO_ID = {
 @dataclass
 class OnChainMarketDataConfig:
     """On-Chain 数据采集配置"""
+
     # Binance Futures API
     binance_base_url: str = BINANCE_FUTURES_BASE_URL
     # 爆仓采集间隔（秒），默认 1 分钟
@@ -72,6 +73,7 @@ class OnChainMarketDataConfig:
 @dataclass
 class LiquidationRecord:
     """爆仓记录"""
+
     symbol: str
     side: str  # "buy" or "sell"
     price: float
@@ -84,6 +86,7 @@ class LiquidationRecord:
 @dataclass
 class ExchangeFlowRecord:
     """交易所流量记录"""
+
     symbol: str  # "BTC" or "TOTAL" for all assets
     inflow: float
     outflow: float
@@ -95,6 +98,7 @@ class ExchangeFlowRecord:
 @dataclass
 class StablecoinSupplyRecord:
     """稳定币供应记录"""
+
     symbol: str  # "USDT", "USDC", etc.
     total_supply: float
     supply_change_24h: float
@@ -105,6 +109,7 @@ class StablecoinSupplyRecord:
 @dataclass(frozen=True)
 class RawLiquidationEvent:
     """原始爆仓事件（来自 WebSocket）"""
+
     event_time_ms: int  # 事件时间（毫秒）
     symbol: str
     side: str  # "buy" or "sell"
@@ -118,6 +123,7 @@ class RawLiquidationEvent:
 @dataclass(frozen=True)
 class LiquidationBucket:
     """1分钟爆仓聚合桶"""
+
     bucket_ts_ms: int  # 桶时间戳（1分钟对齐）
     liquidation_count: int
     liquidation_notional_usd: float
@@ -176,7 +182,9 @@ class LiquidationAggregator:
         """将时间戳对齐到桶边界"""
         return (ts_ms // self.BUCKET_SIZE_MS) * self.BUCKET_SIZE_MS
 
-    def _aggregate_bucket_unsafe(self, bucket_ts: int) -> Optional[tuple[LiquidationBucket, Dict[str, List[RawLiquidationEvent]]]]:
+    def _aggregate_bucket_unsafe(
+        self, bucket_ts: int
+    ) -> Optional[tuple[LiquidationBucket, Dict[str, List[RawLiquidationEvent]]]]:
         """
         聚合单个桶的事件（内部方法，无锁保护）
 
@@ -217,7 +225,9 @@ class LiquidationAggregator:
         )
         return (bucket, events_by_symbol)
 
-    async def _aggregate_bucket(self, bucket_ts: int) -> Optional[tuple[LiquidationBucket, Dict[str, List[RawLiquidationEvent]]]]:
+    async def _aggregate_bucket(
+        self, bucket_ts: int
+    ) -> Optional[tuple[LiquidationBucket, Dict[str, List[RawLiquidationEvent]]]]:
         """
         聚合单个桶的事件（线程安全版本）
 
@@ -272,7 +282,9 @@ class LiquidationAggregator:
             # Check retry count BEFORE attempting flush
             retry_count = self._bucket_retry_count.get(bucket_ts, 0)
             if retry_count >= self.MAX_FLUSH_RETRIES:
-                logger.error(f"[LiquidationAgg] Bucket {bucket_ts} exceeded max retries ({retry_count}), discarding")
+                logger.error(
+                    f"[LiquidationAgg] Bucket {bucket_ts} exceeded max retries ({retry_count}), discarding"
+                )
                 if bucket_ts in self._buckets:
                     del self._buckets[bucket_ts]
                 del self._bucket_retry_count[bucket_ts]
@@ -302,7 +314,9 @@ class LiquidationAggregator:
             all_succeeded = True
             for symbol, symbol_events in events_by_symbol.items():
                 symbol_long = sum(e.notional_usd for e in symbol_events if e.side.lower() == "buy")
-                symbol_short = sum(e.notional_usd for e in symbol_events if e.side.lower() == "sell")
+                symbol_short = sum(
+                    e.notional_usd for e in symbol_events if e.side.lower() == "sell"
+                )
                 symbol_notional = sum(e.notional_usd for e in symbol_events)
 
                 try:
@@ -327,13 +341,13 @@ class LiquidationAggregator:
                             f"count={len(symbol_events)}, notional={symbol_notional:.2f}"
                         )
                     elif err:
-                        logger.warning(
-                            f"[LiquidationAgg] Feature not created for {symbol}: {err}"
-                        )
+                        logger.warning(f"[LiquidationAgg] Feature not created for {symbol}: {err}")
                         all_succeeded = False
 
                 except Exception as write_err:
-                    logger.error(f"[LiquidationAgg] Failed to write feature for {symbol}: {write_err}")
+                    logger.error(
+                        f"[LiquidationAgg] Failed to write feature for {symbol}: {write_err}"
+                    )
                     all_succeeded = False
 
             return all_succeeded
@@ -494,6 +508,7 @@ class BinanceLiquidationWSConnector:
     async def connect(self, url: str) -> None:
         """连接到 WebSocket"""
         import aiohttp
+
         self._running = True
 
         while self._running:
@@ -550,6 +565,7 @@ class BinanceLiquidationWSConnector:
     async def _ensure_session(self) -> None:
         """确保 HTTP session 可用"""
         import aiohttp
+
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
             self._session = aiohttp.ClientSession(timeout=timeout)
@@ -656,10 +672,12 @@ class OnChainMarketDataAdapter:
         """确保 HTTP session 可用"""
         if self._session is None:
             import aiohttp
+
             timeout = aiohttp.ClientTimeout(total=self._config.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
         elif self._session.closed:
             import aiohttp
+
             timeout = aiohttp.ClientTimeout(total=self._config.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
 
@@ -762,7 +780,9 @@ class OnChainMarketDataAdapter:
         # 这是预期行为，不是错误
         return None
 
-    async def _fetch_stablecoin_supply(self, symbol: str = "USDT") -> Optional[StablecoinSupplyRecord]:
+    async def _fetch_stablecoin_supply(
+        self, symbol: str = "USDT"
+    ) -> Optional[StablecoinSupplyRecord]:
         """
         获取稳定币供应量数据
 
@@ -797,7 +817,9 @@ class OnChainMarketDataAdapter:
                         for coin in data:
                             coin_id = coin.get("id", "")
                             # 比较时忽略大小写和连字符
-                            if coin_id.lower().replace("-", "") != target_coingecko_id.lower().replace("-", ""):
+                            if coin_id.lower().replace(
+                                "-", ""
+                            ) != target_coingecko_id.lower().replace("-", ""):
                                 continue
 
                             supply = coin.get("total_supply", 0) or 0
@@ -819,7 +841,7 @@ class OnChainMarketDataAdapter:
 
                     elif resp.status == 429:
                         # 限流，使用指数退避
-                        wait_time = self._config.retry_delay * (2 ** attempt)
+                        wait_time = self._config.retry_delay * (2**attempt)
                         logger.warning(
                             f"[OnChain] CoinGecko rate limit hit, attempt {attempt + 1}/{self._config.max_retries}, "
                             f"waiting {wait_time}s before retry"
@@ -835,9 +857,11 @@ class OnChainMarketDataAdapter:
                         return None
 
             except asyncio.TimeoutError:
-                logger.warning(f"[OnChain] CoinGecko request timeout, attempt {attempt + 1}/{self._config.max_retries}")
+                logger.warning(
+                    f"[OnChain] CoinGecko request timeout, attempt {attempt + 1}/{self._config.max_retries}"
+                )
                 if attempt < self._config.max_retries - 1:
-                    await asyncio.sleep(self._config.retry_delay * (2 ** attempt))
+                    await asyncio.sleep(self._config.retry_delay * (2**attempt))
                     continue
                 else:
                     logger.error("[OnChain] CoinGecko request timeout, max retries exceeded")

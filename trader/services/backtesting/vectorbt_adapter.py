@@ -3,6 +3,7 @@ VectorBT Adapter - 实现 BacktestEnginePort
 ==========================================
 将 VectorBT 向量化回测引擎包装为标准接口。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ class VectorBTAdapter:
         import vectorbt as vbt
 
         from trader.services.backtesting.binance_data_provider import BinanceDataProvider
+
         data_provider = BinanceDataProvider()
 
         klines = await data_provider.get_klines(
@@ -112,14 +114,20 @@ class VectorBTAdapter:
         trades = []
         for i, trade in enumerate(pf.trades):
             if trade is not None:
-                trades.append({
-                    "trade_id": i,
-                    "entry_idx": int(trade.entry_idx),
-                    "exit_idx": int(trade.exit_idx),
-                    "pnl": float(trade.pnl),
-                    "return": float(trade.return_),
-                    "status": trade.status.value if hasattr(trade.status, "value") else str(trade.status),
-                })
+                trades.append(
+                    {
+                        "trade_id": i,
+                        "entry_idx": int(trade.entry_idx),
+                        "exit_idx": int(trade.exit_idx),
+                        "pnl": float(trade.pnl),
+                        "return": float(trade.return_),
+                        "status": (
+                            trade.status.value
+                            if hasattr(trade.status, "value")
+                            else str(trade.status)
+                        ),
+                    }
+                )
         return trades
 
     async def run_optimization(
@@ -131,7 +139,9 @@ class VectorBTAdapter:
         import itertools
 
         import numpy as np
+
         from trader.services.backtesting.binance_data_provider import BinanceDataProvider
+
         data_provider = BinanceDataProvider()
 
         klines = await data_provider.get_klines(
@@ -157,6 +167,7 @@ class VectorBTAdapter:
             exits = signals < 0
 
             import vectorbt as vbt
+
             pf = vbt.Portfolio.from_signals(
                 close=close_prices,
                 entries=entries,

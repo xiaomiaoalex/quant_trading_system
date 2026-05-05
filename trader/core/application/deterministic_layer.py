@@ -141,6 +141,7 @@ TERMINAL_STATUSES = {
 
 # ==================== TTL Set 实现 ====================
 
+
 class TTLSet:
     """
     带 TTL 的 Set 实现，用于成交去重。
@@ -186,6 +187,7 @@ class TTLSet:
 
 # ==================== 核心数据结构 ====================
 
+
 @dataclass
 class OrderVersionVector:
     """
@@ -211,6 +213,7 @@ class ShadowOrder:
     影子订单：缓存当前订单状态。
     status 使用统一领域状态字符串。
     """
+
     cl_ord_id: str
     broker_order_id: Optional[str] = None
     status: str = OrderStatus.PENDING.value
@@ -227,6 +230,7 @@ class ShadowState:
     orders_by_cl: client_order_id -> ShadowOrder
     orders_by_broker_id: broker_order_id -> client_order_id (反向索引)
     """
+
     orders_by_cl: Dict[str, ShadowOrder] = field(default_factory=dict)
     orders_by_broker_id: Dict[str, str] = field(default_factory=dict)
 
@@ -250,9 +254,11 @@ class ShadowState:
 
 # ==================== PendingBuffer ====================
 
+
 @dataclass
 class PendingItem:
     """待处理项：存储无法 resolve cl_ord_id 的事件"""
+
     kind: str  # "order" | "fill"
     payload: object
     first_seen_ts: float
@@ -321,12 +327,14 @@ class PendingBuffer:
 
 # ==================== 输入类型定义 ====================
 
+
 @dataclass
 class RawOrderUpdate:
     """
     原始订单更新：来自 WS/REST 的输入。
     status 允许传交易所原始状态或领域状态，进入 CAS 前会统一归一化。
     """
+
     cl_ord_id: Optional[str] = None
     broker_order_id: Optional[str] = None
     status: str = OrderStatus.PENDING.value
@@ -345,6 +353,7 @@ class RawFillUpdate:
     """
     原始成交更新：来自 WS/REST 的成交推送。
     """
+
     cl_ord_id: Optional[str] = None
     broker_order_id: Optional[str] = None
     exec_id: Optional[str] = None
@@ -357,12 +366,14 @@ class RawFillUpdate:
 
 # ==================== 输出类型定义 ====================
 
+
 @dataclass
 class OrderEvent:
     """
     确定的订单事件：输出到 Core 的 canonical event stream。
     status 使用统一领域状态字符串。
     """
+
     cl_ord_id: str
     broker_order_id: Optional[str]
     status: str
@@ -382,6 +393,7 @@ class ExecutionEvent:
     """
     确定的成交事件：输出到 Core 的 canonical event stream。
     """
+
     cl_ord_id: str
     broker_order_id: Optional[str]
     exec_id: str
@@ -394,6 +406,7 @@ class ExecutionEvent:
 
 
 # ==================== CAS 核心算法 ====================
+
 
 def compute_exec_key(fill: "RawFillUpdate") -> str:
     """
@@ -411,8 +424,7 @@ def compute_exec_key(fill: "RawFillUpdate") -> str:
 
 
 def resolve_cl_ord_id(
-    update: Union["RawOrderUpdate", "RawFillUpdate"],
-    shadow: ShadowState
+    update: Union["RawOrderUpdate", "RawFillUpdate"], shadow: ShadowState
 ) -> Optional[str]:
     """
     解析 client_order_id。
@@ -430,10 +442,7 @@ def resolve_cl_ord_id(
 
 
 def cas_apply_fill(
-    vv: OrderVersionVector,
-    shadow: ShadowState,
-    cl_ord_id: str,
-    fill: RawFillUpdate
+    vv: OrderVersionVector, shadow: ShadowState, cl_ord_id: str, fill: RawFillUpdate
 ) -> List[ExecutionEvent]:
     """
     Execution CAS：成交去重逻辑。
@@ -481,10 +490,7 @@ def cas_apply_fill(
 
 
 def cas_apply_order(
-    vv: OrderVersionVector,
-    shadow: ShadowState,
-    cl_ord_id: str,
-    update: RawOrderUpdate
+    vv: OrderVersionVector, shadow: ShadowState, cl_ord_id: str, update: RawOrderUpdate
 ) -> List[OrderEvent]:
     """
     Order CAS：防回滚 + 终态 override 逻辑。
@@ -537,7 +543,11 @@ def cas_apply_order(
             return []
 
     if (new_rank > old_rank) and update.source == "REST" and (not accept_override):
-        if has_exch_ts and vv.last_exchange_ts_ms and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms:
+        if (
+            has_exch_ts
+            and vv.last_exchange_ts_ms
+            and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms
+        ):
             return []
 
     if update.filled_qty is not None and update.filled_qty < order.filled_qty:
@@ -554,7 +564,9 @@ def cas_apply_order(
     if update.filled_qty is not None:
         order.filled_qty = update.filled_qty
     if update.avg_price is not None:
-        if (update.filled_qty is not None and update.filled_qty > Decimal("0")) or order.avg_price is None:
+        if (
+            update.filled_qty is not None and update.filled_qty > Decimal("0")
+        ) or order.avg_price is None:
             order.avg_price = update.avg_price
     if update.broker_order_id and not order.broker_order_id:
         order.broker_order_id = update.broker_order_id
@@ -582,6 +594,7 @@ def cas_apply_order(
 
 
 # ==================== 确定性应用器 ====================
+
 
 class DeterministicApplier:
     """

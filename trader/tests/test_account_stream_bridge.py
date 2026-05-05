@@ -1,4 +1,5 @@
 """Tests for AccountStreamBridge."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,10 +8,7 @@ from decimal import Decimal
 import pytest
 
 from trader.services.account_state import AccountStateService
-from trader.services.account_stream_bridge import (
-    AccountStreamBridge,
-    AccountStreamBridgeConfig,
-)
+from trader.services.account_stream_bridge import AccountStreamBridge, AccountStreamBridgeConfig
 
 
 def _make_state() -> AccountStateService:
@@ -35,14 +33,16 @@ class TestOnAccountUpdate:
         state = _make_state()
         bridge = _make_bridge(state, account_id="acct1", venue="binance")
 
-        bridge.on_account_update({
-            "e": "outboundAccountPosition",
-            "E": 3000,
-            "B": [
-                {"a": "USDT", "f": "500.00", "l": "50.00"},
-                {"a": "BTC", "f": "1.0", "l": "0"},
-            ],
-        })
+        bridge.on_account_update(
+            {
+                "e": "outboundAccountPosition",
+                "E": 3000,
+                "B": [
+                    {"a": "USDT", "f": "500.00", "l": "50.00"},
+                    {"a": "BTC", "f": "1.0", "l": "0"},
+                ],
+            }
+        )
 
         bal_usdt = state.get_balance("acct1", "binance", "USDT")
         assert bal_usdt is not None
@@ -57,14 +57,16 @@ class TestOnAccountUpdate:
     def test_overwrites_existing_balance(self) -> None:
         state = _make_state()
         bridge = _make_bridge(state)
-        state.apply_private_account_position("acct1", "binance", {
-            "E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]
-        })
+        state.apply_private_account_position(
+            "acct1", "binance", {"E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]}
+        )
 
-        bridge.on_account_update({
-            "E": 2000,
-            "B": [{"a": "USDT", "f": "999", "l": "0"}],
-        })
+        bridge.on_account_update(
+            {
+                "E": 2000,
+                "B": [{"a": "USDT", "f": "999", "l": "0"}],
+            }
+        )
 
         bal = state.get_balance("acct1", "binance", "USDT")
         assert bal is not None
@@ -76,16 +78,18 @@ class TestOnBalanceUpdate:
     def test_delta_positive(self) -> None:
         state = _make_state()
         bridge = _make_bridge(state)
-        state.apply_private_account_position("acct1", "binance", {
-            "E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]
-        })
+        state.apply_private_account_position(
+            "acct1", "binance", {"E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]}
+        )
 
-        bridge.on_balance_update({
-            "e": "balanceUpdate",
-            "a": "USDT",
-            "d": "50",
-            "E": 2000,
-        })
+        bridge.on_balance_update(
+            {
+                "e": "balanceUpdate",
+                "a": "USDT",
+                "d": "50",
+                "E": 2000,
+            }
+        )
 
         bal = state.get_balance("acct1", "binance", "USDT")
         assert bal is not None
@@ -94,16 +98,18 @@ class TestOnBalanceUpdate:
     def test_delta_negative(self) -> None:
         state = _make_state()
         bridge = _make_bridge(state)
-        state.apply_private_account_position("acct1", "binance", {
-            "E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]
-        })
+        state.apply_private_account_position(
+            "acct1", "binance", {"E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]}
+        )
 
-        bridge.on_balance_update({
-            "e": "balanceUpdate",
-            "a": "USDT",
-            "d": "-30",
-            "E": 2000,
-        })
+        bridge.on_balance_update(
+            {
+                "e": "balanceUpdate",
+                "a": "USDT",
+                "d": "-30",
+                "E": 2000,
+            }
+        )
 
         bal = state.get_balance("acct1", "binance", "USDT")
         assert bal is not None
@@ -113,12 +119,14 @@ class TestOnBalanceUpdate:
         state = _make_state()
         bridge = _make_bridge(state)
 
-        bridge.on_balance_update({
-            "e": "balanceUpdate",
-            "a": "ETH",
-            "d": "5",
-            "E": 3000,
-        })
+        bridge.on_balance_update(
+            {
+                "e": "balanceUpdate",
+                "a": "ETH",
+                "d": "5",
+                "E": 3000,
+            }
+        )
 
         bal = state.get_balance("acct1", "binance", "ETH")
         assert bal is not None

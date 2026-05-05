@@ -12,49 +12,6 @@
 3. 类型注解必须完整
 """
 
-from trader.core.domain.services.depth_checker import (
-    DepthChecker,
-    DepthCheckerConfig,
-    DepthCheckPreTradePlugin,
-    MarketDataPort,
-    DepthCheckResult,
-)
-from trader.core.domain.services.position_risk_constructor import (
-    PositionRiskConstructor,
-    PositionRiskConstructorConfig,
-    MarketRegime,
-    PerSymbolExposureResult,
-    TotalExposureResult,
-    CooldownResult,
-    MinThresholdResult,
-    RegimeDiscountResult,
-    PositionRiskConstruction,
-    RegimeProviderPort,
-    CooldownTrackerPort,
-)
-from trader.core.domain.services.escape_time_simulator import (
-    EscapeTimeSimulator,
-    EscapeTimeSimulatorConfig,
-    EscapeTimeResult,
-    DepthLevel,
-    KillSwitchLevel,
-    KillSwitchProviderPort,
-    CooldownProviderPort,
-)
-from trader.core.domain.services.risk_sizer import (
-    RiskSizer,
-    SizerConfig,
-    SizerInputs,
-    SizerResult,
-)
-from trader.core.domain.services.drawdown_venue_deleverage import (
-    DrawdownVenueDeleverage,
-    DeLeverageAction,
-    DeLeverageConfig,
-    DeLeverageResult,
-    DrawdownThresholds,
-    VenueHealthThresholds,
-)
 from trader.core.domain.services.alternative_data_health_gate import (
     AlternativeDataHealthGate,
     DataHealthConfig,
@@ -64,10 +21,48 @@ from trader.core.domain.services.alternative_data_health_gate import (
     DataReliabilityResult,
     DataSourceType,
 )
+from trader.core.domain.services.depth_checker import (
+    DepthChecker,
+    DepthCheckerConfig,
+    DepthCheckPreTradePlugin,
+    DepthCheckResult,
+    MarketDataPort,
+)
+from trader.core.domain.services.drawdown_venue_deleverage import (
+    DeLeverageAction,
+    DeLeverageConfig,
+    DeLeverageResult,
+    DrawdownThresholds,
+    DrawdownVenueDeleverage,
+    VenueHealthThresholds,
+)
+from trader.core.domain.services.escape_time_simulator import (
+    CooldownProviderPort,
+    DepthLevel,
+    EscapeTimeResult,
+    EscapeTimeSimulator,
+    EscapeTimeSimulatorConfig,
+    KillSwitchLevel,
+    KillSwitchProviderPort,
+)
 from trader.core.domain.services.portfolio_exposure_aggregator import (
     ClusterExposure,
     PortfolioExposureAggregator,
 )
+from trader.core.domain.services.position_risk_constructor import (
+    CooldownResult,
+    CooldownTrackerPort,
+    MarketRegime,
+    MinThresholdResult,
+    PerSymbolExposureResult,
+    PositionRiskConstruction,
+    PositionRiskConstructor,
+    PositionRiskConstructorConfig,
+    RegimeDiscountResult,
+    RegimeProviderPort,
+    TotalExposureResult,
+)
+from trader.core.domain.services.risk_sizer import RiskSizer, SizerConfig, SizerInputs, SizerResult
 
 __all__ = [
     # DepthChecker

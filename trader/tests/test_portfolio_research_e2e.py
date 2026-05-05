@@ -8,51 +8,53 @@ Test Portfolio Research E2E - 组合研究端到端集成测试
 3. API 端点
 """
 
-import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from insight.committee.portfolio_constructor import PortfolioConstructor
 from insight.committee.schemas import (
     CommitteeRun,
     CommitteeRunStatus,
     ProposalStatus,
-    SpecialistType,
     SleeveProposal,
+    SpecialistType,
 )
 from insight.committee.specialists import TrendAgent
+
 from services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,
     WorkflowResult,
 )
-from insight.committee.portfolio_constructor import PortfolioConstructor
-
 
 # ==================== 测试辅助 ====================
 
+
 class FakeCommitteeStore:
     """假委员会存储"""
-    
+
     def __init__(self):
         self._runs = {}
         self._sleeves = {}
         self._portfolios = {}
-    
+
     async def save_committee_run(self, run):
         self._runs[run.get("run_id")] = run
         return run.get("run_id")
-    
+
     async def get_committee_run(self, run_id):
         return self._runs.get(run_id)
-    
+
     async def list_committee_runs(self, status=None, limit=100, offset=0):
         runs = list(self._runs.values())
         if status:
             runs = [r for r in runs if r.get("status") == status]
-        return runs[offset:offset+limit]
+        return runs[offset : offset + limit]
 
 
 # ==================== PortfolioResearchWorkflow 测试 ====================
+
 
 class TestPortfolioResearchWorkflow:
     """PortfolioResearchWorkflow 测试"""
@@ -82,7 +84,7 @@ class TestPortfolioResearchWorkflow:
             research_request="研究 EMA 趋势策略",
             context={},
         )
-        
+
         assert result.success is True or result.success is False
         assert result.committee_run is not None
         assert result.committee_run.run_id is not None
@@ -93,7 +95,7 @@ class TestPortfolioResearchWorkflow:
         result = await workflow.run(
             research_request="研究趋势",
         )
-        
+
         assert result.committee_run is not None
         assert result.committee_run.status in [
             CommitteeRunStatus.RUNNING,
@@ -108,7 +110,7 @@ class TestPortfolioResearchWorkflow:
             research_request="研究趋势",
             total_capital=Decimal("50000"),
         )
-        
+
         assert result.committee_run is not None
 
     @pytest.mark.asyncio
@@ -117,12 +119,13 @@ class TestPortfolioResearchWorkflow:
         result = await workflow.run(
             research_request="研究 EMA 策略",
         )
-        
+
         assert result.committee_run.trace_id is not None
         assert len(result.committee_run.trace_id) > 0
 
 
 # ==================== WorkflowConfig 测试 ====================
+
 
 class TestWorkflowConfig:
     """WorkflowConfig 测试"""
@@ -147,29 +150,30 @@ class TestWorkflowConfig:
 
 # ==================== 路由器集成测试 ====================
 
+
 class TestRouterIntegration:
     """路由器集成测试"""
 
     def test_multiple_keywords_routing(self):
         """测试多关键词路由"""
         from insight.committee.router import CommitteeRouter
-        
+
         router = CommitteeRouter()
-        
+
         # 多关键词应该路由到多个 specialist
         types = router.route("研究 EMA 交叉和成交量异常")
-        
+
         assert SpecialistType.TREND in types
         assert SpecialistType.PRICE_VOLUME in types
 
     def test_all_specialists_return_valid_outputs(self):
         """测试所有 specialist 返回有效输出"""
         from insight.committee.router import CommitteeRouter
-        
+
         router = CommitteeRouter()
-        
+
         outputs = router.run_all_specialists("研究策略", {})
-        
+
         assert len(outputs) == len(SpecialistType)
         for output in outputs:
             assert output.trace_id is not None
@@ -177,6 +181,7 @@ class TestRouterIntegration:
 
 
 # ==================== Committee Schema 测试 ====================
+
 
 class TestCommitteeSchemas:
     """Committee Schema 测试"""
@@ -190,7 +195,7 @@ class TestCommitteeSchemas:
             regime="strong_trend",
             failure_modes=["横盘"],
         )
-        
+
         assert proposal.specialist_type == SpecialistType.TREND
         assert proposal.hypothesis == "测试假设"
         assert proposal.status == ProposalStatus.PENDING
@@ -207,7 +212,7 @@ class TestCommitteeSchemas:
             hypothesis="测试假设",
             required_features=["ema_fast"],
         )
-        
+
         # 相同内容应该有相同哈希
         assert proposal1.content_hash() == proposal2.content_hash()
 
@@ -216,7 +221,7 @@ class TestCommitteeSchemas:
         run = CommitteeRun(
             research_request="研究趋势策略",
         )
-        
+
         assert run.research_request == "研究趋势策略"
         assert run.status == CommitteeRunStatus.PENDING
         assert len(run.sleeve_proposals) == 0
@@ -230,16 +235,17 @@ class TestCommitteeSchemas:
             regime="",
             failure_modes=[],
         )
-        
+
         # 验证状态机行为
         assert proposal.status == ProposalStatus.PENDING
-        
+
         # 状态应该只能前进
         proposal.status = ProposalStatus.IN_REVIEW
         assert proposal.status == ProposalStatus.IN_REVIEW
 
 
 # ==================== 生命周期集成测试 ====================
+
 
 class TestLifecycleIntegration:
     """生命周期集成测试"""
@@ -251,9 +257,9 @@ class TestLifecycleIntegration:
             research_request="研究趋势",
             trace_id="trace_456",
         )
-        
+
         run_dict = run.to_dict()
-        
+
         assert run_dict["run_id"] == "run_123"
         assert run_dict["trace_id"] == "trace_456"
         assert "sleeve_proposals" in run_dict
@@ -265,9 +271,9 @@ class TestLifecycleIntegration:
             hypothesis="测试假设",
             required_features=["ema_fast"],
         )
-        
+
         proposal_dict = proposal.to_dict()
-        
+
         assert proposal_dict["specialist_type"] == "trend"
         assert proposal_dict["hypothesis"] == "测试假设"
         assert "content_hash" in proposal_dict

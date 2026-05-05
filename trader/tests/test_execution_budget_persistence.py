@@ -1,4 +1,5 @@
 """Tests for ExecutionBudgetService persistence integration."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -10,15 +11,16 @@ from trader.services.account_state import AccountStateService
 from trader.services.execution_budget import (
     ACCEPTED,
     PENDING_SUBMIT,
-    ExecutionBudgetService,
     BalanceReservation,
+    ExecutionBudgetService,
 )
 
 
 def _make_state() -> AccountStateService:
     svc = AccountStateService()
     svc.apply_rest_snapshot(
-        "acct1", "binance",
+        "acct1",
+        "binance",
         [{"asset": "USDT", "free": "10000", "locked": "0"}],
         ts_ms=1000,
     )
@@ -140,9 +142,13 @@ class TestPersistReservations:
         svc = _make_budget(repo=mock_repo)
 
         ok, _ = svc.reserve_order(
-            account_id="acct1", venue="binance", cl_ord_id="ord1",
-            symbol="BTCUSDT", side="BUY",
-            quantity=Decimal("0.1"), reference_price=Decimal("50000"),
+            account_id="acct1",
+            venue="binance",
+            cl_ord_id="ord1",
+            symbol="BTCUSDT",
+            side="BUY",
+            quantity=Decimal("0.1"),
+            reference_price=Decimal("50000"),
         )
         assert ok is True
 

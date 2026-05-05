@@ -1,6 +1,8 @@
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from trader.services.backtesting.binance_data_provider import BinanceDataProvider
 from trader.services.backtesting.ports import OHLCV
 

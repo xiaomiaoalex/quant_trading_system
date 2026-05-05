@@ -11,10 +11,17 @@ Test Chat Interface - AI策略聊天界面单元测试
 6. 审批流程
 """
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from insight.ai_strategy_generator import (
+    AIStrategyGenerator,
+    GeneratedStrategy,
+    GenerationConfig,
+    LLMBackend,
+    RegistrationResult,
+)
 from insight.chat_interface import (
     Attachment,
     ChatMessage,
@@ -28,13 +35,7 @@ from insight.chat_interface import (
     StrategyContext,
     create_chat_interface,
 )
-from insight.ai_strategy_generator import (
-    AIStrategyGenerator,
-    GeneratedStrategy,
-    GenerationConfig,
-    LLMBackend,
-    RegistrationResult,
-)
+
 from trader.core.application.strategy_protocol import (
     RiskLevel,
     StrategyResourceLimits,
@@ -42,8 +43,8 @@ from trader.core.application.strategy_protocol import (
     ValidationStatus,
 )
 
-
 # ==================== 测试辅助 ====================
+
 
 class FakeChatSessionStore(ChatSessionStorePort):
     """假会话存储"""
@@ -57,9 +58,7 @@ class FakeChatSessionStore(ChatSessionStorePort):
     async def get_session(self, session_id: str) -> ChatSession | None:
         return self._sessions.get(session_id)
 
-    async def list_sessions(
-        self, limit: int = 100, offset: int = 0
-    ) -> list[ChatSession]:
+    async def list_sessions(self, limit: int = 100, offset: int = 0) -> list[ChatSession]:
         sessions = sorted(
             self._sessions.values(),
             key=lambda s: s.updated_at,
@@ -73,26 +72,27 @@ class FakeChatSessionStore(ChatSessionStorePort):
 
 class FakeStrategyForTest:
     """用于测试的假策略类"""
+
     name = "FakeTestStrategy"
     version = "1.0.0"
     risk_level = RiskLevel.LOW
     resource_limits = StrategyResourceLimits()
-    
+
     def validate(self):
         return ValidationResult.valid()
-    
+
     async def initialize(self, config):
         pass
-    
+
     async def on_market_data(self, data):
         return None
-    
+
     async def on_fill(self, order_id, symbol, side, quantity, price):
         pass
-    
+
     async def on_cancel(self, order_id, reason):
         pass
-    
+
     async def shutdown(self):
         pass
 
@@ -128,7 +128,7 @@ class FakeGenerator(AIStrategyGenerator):
         metadata: dict = None,
     ) -> RegistrationResult:
         # 兼容多种调用方式
-        if strategy is not None and hasattr(strategy, 'name'):
+        if strategy is not None and hasattr(strategy, "name"):
             strategy_id = strategy.name
         else:
             strategy_id = "TestStrategy"
@@ -140,6 +140,7 @@ class FakeGenerator(AIStrategyGenerator):
 
 
 # ==================== 测试用例 ====================
+
 
 class TestChatMessage:
     """ChatMessage单元测试"""
@@ -263,6 +264,7 @@ class TestChatSession:
         )
         # 确保有时间差异
         import time
+
         time.sleep(0.01)
         msg = ChatMessage.user_message("Hello")
         session.add_message(msg)
@@ -499,6 +501,7 @@ class TestCreateChatInterface:
 
 # ==================== 边界测试 ====================
 
+
 class TestBoundaryConditions:
     """边界条件测试"""
 
@@ -556,6 +559,7 @@ class TestBoundaryConditions:
 
 
 # ==================== 错误路径测试 ====================
+
 
 class TestErrorPaths:
     """错误路径测试"""

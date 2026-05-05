@@ -10,23 +10,24 @@
 4. OMS 状态机
 5. RiskEngine
 """
-import pytest
-import asyncio
-from decimal import Decimal
-from datetime import datetime
 
-from trader.core.domain.models.money import Money
-from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
-from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.domain.models.position import Position, BrokerPosition
+import asyncio
+from datetime import datetime
+from decimal import Decimal
+
+import pytest
 
 from trader.adapters.broker.testing.fake_broker import FakeBroker, FakeBrokerConfig
 from trader.adapters.persistence.memory.event_store import InMemoryStorage
 from trader.core.application.oms import OMS
-from trader.core.application.risk_engine import RiskEngine, RiskConfig, RejectionReason
-
+from trader.core.application.risk_engine import RejectionReason, RiskConfig, RiskEngine
+from trader.core.domain.models.money import Money
+from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
+from trader.core.domain.models.position import BrokerPosition, Position
+from trader.core.domain.models.signal import Signal, SignalType
 
 # ==================== Domain Models Tests ====================
+
 
 class TestMoney:
     """测试Money值对象"""
@@ -78,7 +79,7 @@ class TestOrder:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.5"),
-            strategy_name="test_strategy"
+            strategy_name="test_strategy",
         )
 
         assert order.status == OrderStatus.PENDING
@@ -93,7 +94,7 @@ class TestOrder:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0")
+            quantity=Decimal("1.0"),
         )
 
         # 先提交订单才能成交
@@ -119,7 +120,7 @@ class TestOrder:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0")
+            quantity=Decimal("1.0"),
         )
 
         # PENDING 状态直接 fill 应抛出 ValueError
@@ -143,7 +144,7 @@ class TestOrder:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0")
+            quantity=Decimal("1.0"),
         )
 
         # PENDING -> SUBMITTED
@@ -164,11 +165,7 @@ class TestPosition:
 
     def test_open_position(self):
         """测试开仓"""
-        position = Position(
-            symbol="BTCUSDT",
-            quantity=Decimal("0"),
-            avg_price=Decimal("0")
-        )
+        position = Position(symbol="BTCUSDT", quantity=Decimal("0"), avg_price=Decimal("0"))
 
         position.open(Decimal("1.0"), Decimal("50000"))
         assert position.quantity == Decimal("1.0")
@@ -176,11 +173,7 @@ class TestPosition:
 
     def test_add_position(self):
         """测试加仓"""
-        position = Position(
-            symbol="BTCUSDT",
-            quantity=Decimal("1.0"),
-            avg_price=Decimal("50000")
-        )
+        position = Position(symbol="BTCUSDT", quantity=Decimal("1.0"), avg_price=Decimal("50000"))
 
         position.add(Decimal("0.5"), Decimal("51000"))
         assert position.quantity == Decimal("1.5")
@@ -189,11 +182,7 @@ class TestPosition:
 
     def test_reduce_position(self):
         """测试减仓"""
-        position = Position(
-            symbol="BTCUSDT",
-            quantity=Decimal("1.0"),
-            avg_price=Decimal("50000")
-        )
+        position = Position(symbol="BTCUSDT", quantity=Decimal("1.0"), avg_price=Decimal("50000"))
 
         realized = position.reduce(Decimal("0.3"), Decimal("52000"))
         # 成本 = 0.3 * 50000 = 15000
@@ -204,6 +193,7 @@ class TestPosition:
 
 
 # ==================== Adapter Tests ====================
+
 
 class TestFakeBroker:
     """测试FakeBroker模拟券商"""
@@ -229,7 +219,7 @@ class TestFakeBroker:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.1"),
-            client_order_id="test_001"
+            client_order_id="test_001",
         )
 
         assert order.client_order_id == "test_001"
@@ -247,7 +237,7 @@ class TestFakeBroker:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.1"),
-            client_order_id="idempotent_test"
+            client_order_id="idempotent_test",
         )
 
         order2 = await broker.place_order(
@@ -255,7 +245,7 @@ class TestFakeBroker:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.1"),
-            client_order_id="idempotent_test"
+            client_order_id="idempotent_test",
         )
 
         # 应该返回同一个订单
@@ -271,7 +261,7 @@ class TestFakeBroker:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1")
+            quantity=Decimal("0.1"),
         )
 
         success = await broker.cancel_order(order.client_order_id)
@@ -279,6 +269,7 @@ class TestFakeBroker:
 
 
 # ==================== Application Tests ====================
+
 
 class TestOMS:
     """测试OMS订单管理系统"""
@@ -300,7 +291,7 @@ class TestOMS:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.1"),
-            strategy_name="test_strategy"
+            strategy_name="test_strategy",
         )
 
         assert order.status == OrderStatus.PENDING
@@ -331,7 +322,7 @@ class TestOMS:
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
             quantity=Decimal("0.1"),
-            strategy_name="test_strategy"
+            strategy_name="test_strategy",
         )
 
         # 模拟重启：清空内存，重新加载
@@ -350,7 +341,7 @@ class TestRiskEngine:
     async def test_risk_check_pass(self):
         """测试风控通过"""
         from trader.core.domain.rules.time_window_policy import TimeWindowConfig
-        
+
         broker = FakeBroker()
         broker.set_balance(Decimal("10000"), Decimal("10000"))
         await broker.connect()
@@ -358,7 +349,7 @@ class TestRiskEngine:
         config = RiskConfig(
             max_daily_loss_percent=Decimal("5.0"),
             max_positions=3,
-            time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0)
+            time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0),
         )
         risk_engine = RiskEngine(broker, config)
 
@@ -368,7 +359,7 @@ class TestRiskEngine:
             signal_type=SignalType.BUY,
             symbol="BTCUSDT",
             price=Decimal("50000"),
-            quantity=Decimal("0.1")
+            quantity=Decimal("0.1"),
         )
 
         # 风控检查
@@ -379,14 +370,12 @@ class TestRiskEngine:
     async def test_insufficient_balance(self):
         """测试资金不足"""
         from trader.core.domain.rules.time_window_policy import TimeWindowConfig
-        
+
         broker = FakeBroker()
         broker.set_balance(Decimal("100"), Decimal("100"))  # 资金不足
         await broker.connect()
 
-        config = RiskConfig(
-            time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0)
-        )
+        config = RiskConfig(time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0))
         risk_engine = RiskEngine(broker, config)
 
         # 创建信号（需要5000USDT，但只有100）
@@ -395,7 +384,7 @@ class TestRiskEngine:
             signal_type=SignalType.BUY,
             symbol="BTCUSDT",
             price=Decimal("50000"),
-            quantity=Decimal("0.1")
+            quantity=Decimal("0.1"),
         )
 
         result = await risk_engine.check_signal(signal)

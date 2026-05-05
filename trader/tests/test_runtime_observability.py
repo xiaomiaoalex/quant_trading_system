@@ -10,13 +10,14 @@ Tests for runtime metrics and observability:
 5. Alert rules include runtime threshold rules
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import OMSCallbackHandler
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
-from trader.core.domain.models.signal import Signal, SignalType
 
 
 class TestOMSCallbackObservableMetrics:
@@ -28,9 +29,11 @@ class TestOMSCallbackObservableMetrics:
         broker = MagicMock()
         broker.place_order = AsyncMock()
         broker.get_symbol_step_size = AsyncMock(return_value=Decimal("0.00001"))
-        broker.get_exchange_info = AsyncMock(return_value={
-            "symbols": [{"filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]}]
-        })
+        broker.get_exchange_info = AsyncMock(
+            return_value={
+                "symbols": [{"filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]}]
+            }
+        )
         broker._fetch_account = AsyncMock()
         broker._account_cache = {
             "balances": [
@@ -67,7 +70,7 @@ class TestOMSCallbackObservableMetrics:
     def test_get_dedup_stats_includes_order_metrics(self, handler):
         """Test that get_dedup_stats includes Task 19 order metrics."""
         stats = handler.get_dedup_stats()
-        
+
         assert "order_submit_ok" in stats
         assert "order_submit_reject" in stats
         assert "order_submit_error" in stats
@@ -78,7 +81,7 @@ class TestOMSCallbackObservableMetrics:
     def test_initial_metrics_are_zero(self, handler):
         """Test that initial metrics are zero."""
         stats = handler.get_dedup_stats()
-        
+
         assert stats["order_submit_ok"] == 0
         assert stats["order_submit_reject"] == 0
         assert stats["order_submit_error"] == 0
@@ -138,7 +141,7 @@ class TestOMSCallbackObservableMetrics:
             price=Decimal("50000"),
             strategy_name="test_strategy",
         )
-        
+
         with pytest.raises(Exception):
             await handler.execute_signal("test_strategy", signal)
 
@@ -171,7 +174,7 @@ class TestMonitorSnapshotObservabilityFields:
         from trader.api.models.schemas import MonitorSnapshot
 
         snapshot = MonitorSnapshot()
-        
+
         # Check all Task 19 fields exist
         assert hasattr(snapshot, "tick_rate")
         assert hasattr(snapshot, "tick_lag_ms")
@@ -190,7 +193,7 @@ class TestMonitorSnapshotObservabilityFields:
         from trader.api.models.schemas import MonitorSnapshot
 
         snapshot = MonitorSnapshot()
-        
+
         assert snapshot.tick_rate is None
         assert snapshot.tick_lag_ms is None
         assert snapshot.order_submit_ok == 0
@@ -212,7 +215,7 @@ class TestMonitorServiceAlertRules:
         from trader.services.monitor_service import MonitorService
 
         rule_names = [r.rule_name for r in MonitorService.DEFAULT_ALERT_RULES]
-        
+
         # Task 19 runtime alert rules
         assert "tick_lag_high" in rule_names
         assert "order_reject_rate_high" in rule_names
@@ -224,7 +227,7 @@ class TestMonitorServiceAlertRules:
         from trader.services.monitor_service import MonitorService
 
         rule = next(r for r in MonitorService.DEFAULT_ALERT_RULES if r.rule_name == "tick_lag_high")
-        
+
         assert rule.metric_key == "tick_lag_ms"
         assert rule.threshold == 1000.0
         assert rule.comparison == "gt"
@@ -235,8 +238,10 @@ class TestMonitorServiceAlertRules:
         """Test fill_latency_high rule configuration."""
         from trader.services.monitor_service import MonitorService
 
-        rule = next(r for r in MonitorService.DEFAULT_ALERT_RULES if r.rule_name == "fill_latency_high")
-        
+        rule = next(
+            r for r in MonitorService.DEFAULT_ALERT_RULES if r.rule_name == "fill_latency_high"
+        )
+
         assert rule.metric_key == "fill_latency_ms_avg"
         assert rule.threshold == 500.0
         assert rule.comparison == "gt"
@@ -247,8 +252,10 @@ class TestMonitorServiceAlertRules:
         """Test ws_reconnect_high rule configuration."""
         from trader.services.monitor_service import MonitorService
 
-        rule = next(r for r in MonitorService.DEFAULT_ALERT_RULES if r.rule_name == "ws_reconnect_high")
-        
+        rule = next(
+            r for r in MonitorService.DEFAULT_ALERT_RULES if r.rule_name == "ws_reconnect_high"
+        )
+
         assert rule.metric_key == "ws_reconnect_count"
         assert rule.threshold == 5.0
         assert rule.comparison == "gt"

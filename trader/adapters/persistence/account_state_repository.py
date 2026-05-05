@@ -4,6 +4,7 @@ AccountStateRepository - 账户余额 PG 持久化
 
 遵循 ExecutionRepository 模式：lazy PG init，best-effort 持久化。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,7 +66,8 @@ class AccountStateRepository:
 
     async def _ensure_tables(self) -> None:
         async with self._postgres_storage.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS account_balances (
                     account_id TEXT NOT NULL,
                     venue TEXT NOT NULL,
@@ -77,11 +79,14 @@ class AccountStateRepository:
                     persisted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     PRIMARY KEY (account_id, venue, asset)
                 )
-            """)
-            await conn.execute("""
+            """
+            )
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_account_balances_account_venue
                 ON account_balances(account_id, venue)
-            """)
+            """
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -109,7 +114,8 @@ class AccountStateRepository:
                 # 删除旧数据（全量覆盖语义）
                 await conn.execute(
                     "DELETE FROM account_balances WHERE account_id = $1 AND venue = $2",
-                    account_id, venue,
+                    account_id,
+                    venue,
                 )
                 # 批量插入新数据
                 rows = [
@@ -153,7 +159,8 @@ class AccountStateRepository:
                     WHERE account_id = $1 AND venue = $2
                     ORDER BY asset
                     """,
-                    account_id, venue,
+                    account_id,
+                    venue,
                 )
             if not rows:
                 return None

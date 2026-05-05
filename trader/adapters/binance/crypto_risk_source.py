@@ -6,7 +6,7 @@ import hmac
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from trader.adapters.binance.crypto_risk_mapper import (

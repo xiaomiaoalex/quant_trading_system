@@ -9,21 +9,21 @@ Rate Budget - Token Bucket Rate Limiter
 - 429 错误自适应降速
 - Budget 紧张时自动降级到 P0
 """
+
 import asyncio
-import time
 import logging
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
 from threading import Lock, RLock  # <--- 增加 RLock
-
-
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class Priority(Enum):
     """请求优先级"""
+
     P0 = 0  # 最高优先级：openOrders, account
     P1 = 1  # 中等优先级：orders, trades
     P2 = 2  # 最低优先级：其他查询
@@ -32,17 +32,19 @@ class Priority(Enum):
 @dataclass
 class RateBudgetConfig:
     """Rate Budget 配置"""
-    initial_refill_rate: float = 10.0    # 每秒填充的 token 数量
-    initial_bucket_size: float = 20.0     # 初始桶大小
-    min_refill_rate: float = 1.0         # 最小填充率（降级后）
-    cooldown_on_429: int = 60            # 429 错误后的冷却时间（秒）
+
+    initial_refill_rate: float = 10.0  # 每秒填充的 token 数量
+    initial_bucket_size: float = 20.0  # 初始桶大小
+    min_refill_rate: float = 1.0  # 最小填充率（降级后）
+    cooldown_on_429: int = 60  # 429 错误后的冷却时间（秒）
     degrade_refill_multiplier: float = 0.5  # 降级时填充率乘数
-    p0_only_refill_rate: float = 5.0     # 仅 P0 模式下的填充率
+    p0_only_refill_rate: float = 5.0  # 仅 P0 模式下的填充率
 
 
 @dataclass
 class BudgetState:
     """Budget 当前状态"""
+
     current_tokens: float
     last_refill_ts: float
     refill_rate: float
@@ -67,7 +69,7 @@ class RestRateBudget:
             bucket_size=self._config.initial_bucket_size,
         )
         # 【关键修复】：将普通的 Lock() 改为可重入的 RLock()
-        self._lock = RLock()  
+        self._lock = RLock()
         self._429_count = 0
         self._last_429_ts = 0.0
 
@@ -117,7 +119,9 @@ class RestRateBudget:
             )
             return False
 
-    async def acquire_async(self, cost: int = 1, priority: Priority = Priority.P2, timeout: float = 30.0) -> bool:
+    async def acquire_async(
+        self, cost: int = 1, priority: Priority = Priority.P2, timeout: float = 30.0
+    ) -> bool:
         """
         异步获取 token，带超时等待
 
@@ -154,13 +158,15 @@ class RestRateBudget:
             now = time.time()
             self._last_429_ts = now
 
-            min_wait = retry_after if retry_after and retry_after > 0 else self._config.cooldown_on_429
+            min_wait = (
+                retry_after if retry_after and retry_after > 0 else self._config.cooldown_on_429
+            )
             cooldown = max(min_wait, self._config.cooldown_on_429)
 
             old_refill_rate = self._state.refill_rate
             self._state.refill_rate = max(
                 self._config.min_refill_rate,
-                self._state.refill_rate * self._config.degrade_refill_multiplier
+                self._state.refill_rate * self._config.degrade_refill_multiplier,
             )
 
             self._state.is_degraded = True

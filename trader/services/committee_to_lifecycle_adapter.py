@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class LifecycleAdapterConfig:
     """适配器配置"""
+
     auto_submit_to_hitl: bool = True
     auto_create_backtest: bool = False
     default_approval_timeout_seconds: int = 3600
@@ -194,13 +195,13 @@ class CommitteeToLifecycleAdapter:
         strategy_draft_id = f"draft_{run.run_id[:8]}"
 
         try:
-            if hasattr(self._lifecycle_manager, 'create_strategy'):
+            if hasattr(self._lifecycle_manager, "create_strategy"):
                 draft = await self._lifecycle_manager.create_strategy(
                     name=f"Committee Strategy {run.run_id[:8]}",
                     description=run.research_request,
                     code=self._generate_strategy_code(run),
                 )
-                if hasattr(draft, 'strategy_id'):
+                if hasattr(draft, "strategy_id"):
                     strategy_draft_id = draft.strategy_id
 
         except Exception as e:
@@ -225,12 +226,12 @@ class CommitteeToLifecycleAdapter:
         backtest_job_id = f"backtest_{run.run_id[:8]}"
 
         try:
-            if hasattr(self._lifecycle_manager, 'run_backtest'):
+            if hasattr(self._lifecycle_manager, "run_backtest"):
                 backtest = await self._lifecycle_manager.run_backtest(
                     strategy_id=strategy_draft_id,
                     config=self._generate_backtest_config(run),
                 )
-                if hasattr(backtest, 'job_id'):
+                if hasattr(backtest, "job_id"):
                     backtest_job_id = backtest.job_id
 
         except Exception as e:
@@ -265,7 +266,11 @@ class CommitteeToLifecycleAdapter:
         return {
             "run_id": run.run_id,
             "trace_id": run.trace_id,
-            "total_capital": str(run.portfolio_proposal.total_capital_estimate()) if run.portfolio_proposal else "10000",
+            "total_capital": (
+                str(run.portfolio_proposal.total_capital_estimate())
+                if run.portfolio_proposal
+                else "10000"
+            ),
             "sleeves": [
                 {
                     "proposal_id": s.proposal_id,
@@ -287,13 +292,15 @@ class CommitteeToLifecycleAdapter:
             状态字典或 None
         """
         try:
-            if hasattr(self._lifecycle_manager, 'get_lifecycle'):
+            if hasattr(self._lifecycle_manager, "get_lifecycle"):
                 lifecycle = self._lifecycle_manager.get_lifecycle(run_id)
                 if lifecycle:
                     return {
                         "run_id": run_id,
-                        "status": lifecycle.status.value if hasattr(lifecycle, 'status') else "unknown",
-                        "stage": lifecycle.stage if hasattr(lifecycle, 'stage') else "unknown",
+                        "status": (
+                            lifecycle.status.value if hasattr(lifecycle, "status") else "unknown"
+                        ),
+                        "stage": lifecycle.stage if hasattr(lifecycle, "stage") else "unknown",
                     }
         except Exception as e:
             logger.error(f"Failed to get status: {e}")

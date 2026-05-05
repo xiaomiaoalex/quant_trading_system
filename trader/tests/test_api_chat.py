@@ -3,9 +3,11 @@ Unit Tests - Chat API Endpoints
 ===============================
 Tests for Chat API endpoints using TestClient.
 """
-import pytest
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 from trader.api.main import app
@@ -13,18 +15,21 @@ from trader.api.main import app
 
 class MockSessionStatus:
     """Mock SessionStatus for testing"""
+
     def __init__(self, value: str = "active"):
         self.value = value
 
 
 class MockMessageRole:
     """Mock MessageRole for testing"""
+
     def __init__(self, value: str = "user"):
         self.value = value
 
 
 class MockChatSession:
     """Mock ChatSession for testing"""
+
     def __init__(
         self,
         session_id: str = "test-session-001",
@@ -47,6 +52,7 @@ class MockChatSession:
 
 class MockChatMessage:
     """Mock ChatMessage for testing"""
+
     def __init__(
         self,
         message_id: str = "msg-001",
@@ -64,6 +70,7 @@ class MockChatMessage:
 
 class MockChatResponse:
     """Mock ChatResponse for testing"""
+
     def __init__(
         self,
         response_id: str = "resp-001",
@@ -81,6 +88,7 @@ class MockChatResponse:
 
 class MockRegistrationResult:
     """Mock RegistrationResult for testing"""
+
     def __init__(
         self,
         success: bool = True,
@@ -115,13 +123,9 @@ class TestChatEndpoints:
         mock_session = MockChatSession()
         self.mock_interface.create_session.return_value = mock_session
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.post(
-                "/api/chat/sessions",
-                json={"initial_message": "Hello", "risk_level": "LOW"}
+                "/api/chat/sessions", json={"initial_message": "Hello", "risk_level": "LOW"}
             )
 
         assert response.status_code == 201
@@ -134,14 +138,8 @@ class TestChatEndpoints:
         mock_session = MockChatSession()
         self.mock_interface.create_session.return_value = mock_session
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
-            response = self.client.post(
-                "/api/chat/sessions",
-                json={"risk_level": "MEDIUM"}
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
+            response = self.client.post("/api/chat/sessions", json={"risk_level": "MEDIUM"})
 
         assert response.status_code == 201
         data = response.json()
@@ -152,13 +150,9 @@ class TestChatEndpoints:
         mock_response = MockChatResponse()
         self.mock_interface.send_message.return_value = mock_response
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.post(
-                "/api/chat/sessions/test-session-001/messages",
-                params={"message": "Hello AI"}
+                "/api/chat/sessions/test-session-001/messages", params={"message": "Hello AI"}
             )
 
         assert response.status_code == 200
@@ -170,13 +164,9 @@ class TestChatEndpoints:
         """Test sending message to non-existent session"""
         self.mock_interface.send_message.side_effect = ValueError("Session not found")
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.post(
-                "/api/chat/sessions/nonexistent/messages",
-                params={"message": "Hello"}
+                "/api/chat/sessions/nonexistent/messages", params={"message": "Hello"}
             )
 
         assert response.status_code == 404
@@ -189,10 +179,7 @@ class TestChatEndpoints:
         ]
         self.mock_interface.get_history.return_value = mock_messages
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.get("/api/chat/sessions/test-session-001/history")
 
         assert response.status_code == 200
@@ -206,13 +193,10 @@ class TestChatEndpoints:
         mock_result = MockRegistrationResult()
         self.mock_interface.approve_and_register.return_value = mock_result
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.post(
                 "/api/chat/sessions/test-session-001/approve",
-                params={"strategy_id": "strategy-001"}
+                params={"strategy_id": "strategy-001"},
             )
 
         assert response.status_code == 200
@@ -224,13 +208,8 @@ class TestChatEndpoints:
         """Test approving strategy for non-existent session"""
         self.mock_interface.approve_and_register.side_effect = ValueError("Session not found")
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
-            response = self.client.post(
-                "/api/chat/sessions/nonexistent/approve"
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
+            response = self.client.post("/api/chat/sessions/nonexistent/approve")
 
         assert response.status_code == 404
 
@@ -238,13 +217,9 @@ class TestChatEndpoints:
         """Test rejecting a strategy"""
         self.mock_interface.reject_strategy.return_value = True
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.post(
-                "/api/chat/sessions/test-session-001/reject",
-                params={"reason": "Not suitable"}
+                "/api/chat/sessions/test-session-001/reject", params={"reason": "Not suitable"}
             )
 
         assert response.status_code == 200
@@ -255,10 +230,7 @@ class TestChatEndpoints:
         """Test deleting a session"""
         self.mock_interface.delete_session.return_value = None
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.delete("/api/chat/sessions/test-session-001")
 
         assert response.status_code == 204
@@ -267,10 +239,7 @@ class TestChatEndpoints:
         """Test deleting non-existent session"""
         self.mock_interface.delete_session.side_effect = ValueError("Session not found")
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.delete("/api/chat/sessions/nonexistent")
 
         assert response.status_code == 404
@@ -283,10 +252,7 @@ class TestChatEndpoints:
         ]
         self.mock_interface.list_sessions.return_value = mock_sessions
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.get("/api/chat/sessions")
 
         assert response.status_code == 200
@@ -300,14 +266,8 @@ class TestChatEndpoints:
         mock_sessions = [MockChatSession(session_id=f"session-{i}") for i in range(5)]
         self.mock_interface.list_sessions.return_value = mock_sessions
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
-            response = self.client.get(
-                "/api/chat/sessions",
-                params={"limit": 5, "offset": 10}
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
+            response = self.client.get("/api/chat/sessions", params={"limit": 5, "offset": 10})
 
         assert response.status_code == 200
         self.mock_interface.list_sessions.assert_called_once_with(limit=5, offset=10)
@@ -317,10 +277,7 @@ class TestChatEndpoints:
         mock_session = MockChatSession(session_id="session-001")
         self.mock_interface.get_session.return_value = mock_session
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.get("/api/chat/sessions/session-001")
 
         assert response.status_code == 200
@@ -331,10 +288,7 @@ class TestChatEndpoints:
         """Test getting non-existent session"""
         self.mock_interface.get_session.return_value = None
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=self.mock_interface
-        ):
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=self.mock_interface):
             response = self.client.get("/api/chat/sessions/nonexistent")
 
         assert response.status_code == 404
@@ -353,14 +307,8 @@ class TestChatEndpointsValidation:
         mock_session = MockChatSession()
         mock_interface.create_session = AsyncMock(return_value=mock_session)
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=mock_interface
-        ):
-            response = self.client.post(
-                "/api/chat/sessions",
-                json={"risk_level": "INVALID"}
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=mock_interface):
+            response = self.client.post("/api/chat/sessions", json={"risk_level": "INVALID"})
 
         assert response.status_code == 201
 
@@ -368,13 +316,8 @@ class TestChatEndpointsValidation:
         """Test sending message without message parameter"""
         mock_interface = MagicMock()
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=mock_interface
-        ):
-            response = self.client.post(
-                "/api/chat/sessions/test-session/messages"
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=mock_interface):
+            response = self.client.post("/api/chat/sessions/test-session/messages")
 
         assert response.status_code == 422
 
@@ -382,14 +325,8 @@ class TestChatEndpointsValidation:
         """Test listing sessions with invalid limit"""
         mock_interface = MagicMock()
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=mock_interface
-        ):
-            response = self.client.get(
-                "/api/chat/sessions",
-                params={"limit": 10000}
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=mock_interface):
+            response = self.client.get("/api/chat/sessions", params={"limit": 10000})
 
         assert response.status_code == 422
 
@@ -397,13 +334,7 @@ class TestChatEndpointsValidation:
         """Test listing sessions with negative offset"""
         mock_interface = MagicMock()
 
-        with patch(
-            "trader.api.routes.chat.get_chat_interface",
-            return_value=mock_interface
-        ):
-            response = self.client.get(
-                "/api/chat/sessions",
-                params={"offset": -1}
-            )
+        with patch("trader.api.routes.chat.get_chat_interface", return_value=mock_interface):
+            response = self.client.get("/api/chat/sessions", params={"offset": -1})
 
         assert response.status_code == 422

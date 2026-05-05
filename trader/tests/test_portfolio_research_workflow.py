@@ -9,33 +9,34 @@ Test Portfolio Research Workflow - 工作流单元测试
 4. CommitteeToLifecycleAdapter - 生命周期适配
 """
 
-import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from insight.committee.schemas import (
     CommitteeRun,
     CommitteeRunStatus,
+    PortfolioProposal,
     ProposalStatus,
-    SpecialistType,
-    SleeveProposal,
     ReviewReport,
     ReviewVerdict,
-    PortfolioProposal,
     SleeveAssignment,
+    SleeveProposal,
+    SpecialistType,
+)
+
+from services.committee_to_lifecycle_adapter import (
+    CommitteeToLifecycleAdapter,
+    LifecycleAdapterConfig,
 )
 from services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,
     WorkflowResult,
 )
-from services.committee_to_lifecycle_adapter import (
-    CommitteeToLifecycleAdapter,
-    LifecycleAdapterConfig,
-)
-
 
 # ==================== WorkflowConfig 测试 ====================
+
 
 class TestWorkflowConfig:
     """WorkflowConfig 测试"""
@@ -72,6 +73,7 @@ class TestWorkflowConfig:
 
 # ==================== WorkflowResult 测试 ====================
 
+
 class TestWorkflowResult:
     """WorkflowResult 测试"""
 
@@ -102,6 +104,7 @@ class TestWorkflowResult:
 
 
 # ==================== PortfolioResearchWorkflow 测试 ====================
+
 
 class TestPortfolioResearchWorkflow:
     """PortfolioResearchWorkflow 测试"""
@@ -257,6 +260,7 @@ class TestPortfolioResearchWorkflow:
 
 # ==================== CommitteeToLifecycleAdapter 测试 ====================
 
+
 class TestCommitteeToLifecycleAdapter:
     """CommitteeToLifecycleAdapter 测试"""
 
@@ -310,9 +314,7 @@ class TestCommitteeToLifecycleAdapter:
         """测试拒绝"""
         run = CommitteeRun(run_id="test_run", research_request="研究")
 
-        result = await adapter.reject(
-            run, rejector="test_user", reason="风险过高"
-        )
+        result = await adapter.reject(run, rejector="test_user", reason="风险过高")
 
         assert result["success"] is True
         assert run.human_decision == "REJECTED"
@@ -359,6 +361,7 @@ class TestCommitteeToLifecycleAdapter:
 
 # ==================== LifecycleAdapterConfig 测试 ====================
 
+
 class TestLifecycleAdapterConfig:
     """LifecycleAdapterConfig 测试"""
 
@@ -380,6 +383,7 @@ class TestLifecycleAdapterConfig:
 
 
 # ==================== 集成测试 ====================
+
 
 class TestWorkflowIntegration:
     """工作流集成测试"""

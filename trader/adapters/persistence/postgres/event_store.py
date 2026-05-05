@@ -10,11 +10,12 @@ PostgreSQL Event Store - 通用事件溯源存储实现
 - PostgreSQL数据库
 - asyncpg包
 """
-import logging
+
 import json
-from typing import List, Optional, Dict, Any, TYPE_CHECKING
-from datetime import datetime, timezone
+import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     import asyncpg
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StreamEvent:
     """事件流中的事件"""
+
     event_id: str
     stream_key: str
     seq: int
@@ -41,9 +43,9 @@ class StreamEvent:
 class PostgresEventStore:
     """
     PostgreSQL Event Store
-    
+
     实现通用事件溯源的持久化存储，支持幂等追加。
-    
+
     表结构（由002_event_log.sql创建）：
     - event_id: 事件唯一ID
     - stream_key: 事件流键（如order-123, position-456）
@@ -89,7 +91,7 @@ class PostgresEventStore:
     ) -> str:
         """
         幂等追加事件到流
-        
+
         Args:
             stream_key: 事件流键
             seq: 流内序列号
@@ -102,27 +104,27 @@ class PostgresEventStore:
             timestamp: 时间戳（可选，默认当前时间）
             ts_ms: 毫秒时间戳（可选，自动从timestamp计算）
             schema_version: 模式版本
-            
+
         Returns:
             event_id: 事件的唯一ID
-            
+
         Note:
             如果相同的(stream_key, seq)已存在，DO NOTHING，不报错。
         """
         import uuid
-        
+
         if event_id is None:
             event_id = str(uuid.uuid4())
-        
+
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
-        
+
         if ts_ms is None:
             ts_ms = int(timestamp.timestamp() * 1000)
-        
+
         if metadata is None:
             metadata = {}
-        
+
         async with self._pool.acquire() as conn:
             try:
                 # Use INSERT with ON CONFLICT DO NOTHING and RETURNING to detect conflicts
@@ -146,9 +148,9 @@ class PostgresEventStore:
                     json.dumps(metadata),
                     schema_version,
                 )
-                
+
                 stored_event_id = row["event_id"] if row else None
-                
+
                 if stored_event_id is None:
                     # Conflict occurred - query the existing event at this seq
                     existing = await conn.fetchrow(
@@ -192,7 +194,7 @@ class PostgresEventStore:
                             "event_type": event_type,
                         },
                     )
-                    
+
             except Exception as e:
                 logger.error(
                     "EVENT_STORE_APPEND_ERROR",
@@ -203,7 +205,7 @@ class PostgresEventStore:
                     },
                 )
                 raise
-        
+
         # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
         return stored_event_id
 
@@ -215,12 +217,12 @@ class PostgresEventStore:
     ) -> List[StreamEvent]:
         """
         读取事件流
-        
+
         Args:
             stream_key: 事件流键
             from_seq: 从哪个序列号开始读取（不包含）
             limit: 最大返回数量
-            
+
         Returns:
             List[StreamEvent]: 事件列表
         """
@@ -237,7 +239,7 @@ class PostgresEventStore:
                 from_seq,
                 limit,
             )
-        
+
         return [
             StreamEvent(
                 event_id=row["event_id"],
@@ -258,10 +260,10 @@ class PostgresEventStore:
     async def get_latest_seq(self, stream_key: str) -> Optional[int]:
         """
         获取流中最新的序列号
-        
+
         Args:
             stream_key: 事件流键
-            
+
         Returns:
             int: 最新序列号，如果流为空则返回-1
         """
@@ -274,7 +276,7 @@ class PostgresEventStore:
                 """,
                 stream_key,
             )
-        
+
         if row["max_seq"] is None:
             return -1
         return row["max_seq"]
@@ -286,11 +288,11 @@ class PostgresEventStore:
     ) -> Optional[StreamEvent]:
         """
         获取指定序列号的事件（快照点）
-        
+
         Args:
             stream_key: 事件流键
             seq: 序列号
-            
+
         Returns:
             Optional[StreamEvent]: 指定序列号的事件，如果不存在则返回None
         """
@@ -304,10 +306,10 @@ class PostgresEventStore:
                 stream_key,
                 seq,
             )
-        
+
         if row is None:
             return None
-        
+
         return StreamEvent(
             event_id=row["event_id"],
             stream_key=row["stream_key"],
@@ -325,10 +327,10 @@ class PostgresEventStore:
     async def get_stream_info(self, stream_key: str) -> Dict[str, Any]:
         """
         获取流的信息
-        
+
         Args:
             stream_key: 事件流键
-            
+
         Returns:
             Dict: 流信息，包括事件数量、最新序列号等
         """
@@ -345,7 +347,7 @@ class PostgresEventStore:
                 """,
                 stream_key,
             )
-        
+
         return {
             "stream_key": stream_key,
             "event_count": row["event_count"],
@@ -362,27 +364,31 @@ class PostgresEventStore:
     ) -> str:
         """
         追加领域事件（方便方法）
-        
+
         Args:
             stream_key: 事件流键
             domain_event: DomainEvent对象
             seq: 序列号（可选，默认自动分配，使用原子操作避免竞态）
-            
+
         Returns:
             event_id
         """
         import uuid
-        
+
         event_id = domain_event.event_id or str(uuid.uuid4())
-        event_type = domain_event.event_type.value if hasattr(domain_event.event_type, 'value') else str(domain_event.event_type)
+        event_type = (
+            domain_event.event_type.value
+            if hasattr(domain_event.event_type, "value")
+            else str(domain_event.event_type)
+        )
         timestamp = domain_event.timestamp or datetime.now(timezone.utc)
         ts_ms = int(timestamp.timestamp() * 1000)
-        
+
         if domain_event.metadata is None:
             metadata = {}
         else:
             metadata = domain_event.metadata
-        
+
         if seq is not None:
             # Explicit seq provided, use regular append.
             # NOTE: Caller is responsible for ensuring seq uniqueness within the stream.
@@ -400,7 +406,7 @@ class PostgresEventStore:
                 timestamp=timestamp,
                 schema_version=1,
             )
-        
+
         # Auto-assign seq using atomic CTE with advisory lock to prevent race condition
         # Use pg_advisory_xact_lock(hashtext(stream_key)) to ensure exclusive access.
         # This locks the stream_key atomically, preventing concurrent transactions from
@@ -451,9 +457,9 @@ class PostgresEventStore:
                     json.dumps(metadata),
                     1,
                 )
-                
+
                 stored_event_id = row["event_id"] if row else None
-                
+
                 if stored_event_id == event_id:
                     logger.debug(
                         "DOMAIN_EVENT_APPENDED",
@@ -463,9 +469,13 @@ class PostgresEventStore:
                     # Conflict occurred - a different event_id was already stored at this seq
                     logger.debug(
                         "DOMAIN_EVENT_CONCURRENT_INSERT",
-                        extra={"stream_key": stream_key, "requested_event_id": event_id, "stored_event_id": stored_event_id},
+                        extra={
+                            "stream_key": stream_key,
+                            "requested_event_id": event_id,
+                            "stored_event_id": stored_event_id,
+                        },
                     )
-                    
+
             except Exception as e:
                 logger.error(
                     "EVENT_STORE_DOMAIN_EVENT_ERROR",
@@ -475,6 +485,6 @@ class PostgresEventStore:
                     },
                 )
                 raise
-        
+
         # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
         return stored_event_id

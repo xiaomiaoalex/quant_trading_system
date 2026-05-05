@@ -3,6 +3,7 @@ Broker API Routes
 =================
 Broker account and status management endpoints.
 """
+
 from fastapi import APIRouter, HTTPException, Path
 
 from trader.api.models.schemas import BrokerAccount, BrokerStatus

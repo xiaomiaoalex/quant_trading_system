@@ -20,9 +20,7 @@ from trader.core.domain.models.signal import Signal, SignalType
 from trader.core.domain.services.exchange_rule_guard import ExchangeRuleGuard
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
 from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
-from trader.core.domain.services.portfolio_exposure_aggregator import (
-    PortfolioExposureAggregator,
-)
+from trader.core.domain.services.portfolio_exposure_aggregator import PortfolioExposureAggregator
 
 if TYPE_CHECKING:
     from trader.core.application.risk_engine import RiskEngine

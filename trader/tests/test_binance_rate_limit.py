@@ -3,15 +3,13 @@ Rate Budget Unit Tests
 =======================
 测试 Token Bucket 限流器的功能。
 """
+
 import asyncio
 import time
+
 import pytest
 
-from trader.adapters.binance.rate_limit import (
-    RestRateBudget,
-    Priority,
-    RateBudgetConfig,
-)
+from trader.adapters.binance.rate_limit import Priority, RateBudgetConfig, RestRateBudget
 
 
 class TestRestRateBudget:

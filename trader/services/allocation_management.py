@@ -16,7 +16,9 @@ class AllocationManagementService:
         self._storage = storage or get_storage()
 
     def list_profiles(self) -> list[StrategyAllocationProfile]:
-        return [StrategyAllocationProfile(**item) for item in self._storage.list_allocation_profiles()]
+        return [
+            StrategyAllocationProfile(**item) for item in self._storage.list_allocation_profiles()
+        ]
 
     def upsert_profile(
         self, deployment_id: str, request: StrategyAllocationProfileUpdateRequest

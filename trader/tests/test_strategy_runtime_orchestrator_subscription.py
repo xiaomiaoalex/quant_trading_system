@@ -2,10 +2,11 @@
 Strategy Runtime Orchestrator Subscription Tests
 ================================================
 """
+
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock
 
 from trader.services.strategy_runtime_orchestrator import StrategyRuntimeOrchestrator
 

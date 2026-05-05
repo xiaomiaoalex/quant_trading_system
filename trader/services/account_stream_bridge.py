@@ -14,6 +14,7 @@ AccountStreamBridge - Private Stream → AccountStateService 桥接
   定时器    → fetch_and_apply_rest_snapshot → AccountStateService.apply_rest_snapshot
   断连     → on_private_stream_disconnect → AccountStateService.mark_stale
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -62,18 +63,16 @@ class AccountStreamBridge:
 
     def on_balance_update(self, event: dict) -> None:
         """Handler for balanceUpdate events."""
-        self._account_state.apply_balance_update(
-            self._config.account_id, self._config.venue, event
-        )
+        self._account_state.apply_balance_update(self._config.account_id, self._config.venue, event)
 
     def on_private_stream_disconnect(self, reason: str) -> None:
         """标记 stale — WS 断连后余额不再可靠。"""
-        self._account_state.mark_stale(
-            self._config.account_id, self._config.venue, reason
-        )
+        self._account_state.mark_stale(self._config.account_id, self._config.venue, reason)
         logger.warning(
             "[AccountBridge] Account state marked stale: account=%s venue=%s reason=%s",
-            self._config.account_id, self._config.venue, reason,
+            self._config.account_id,
+            self._config.venue,
+            reason,
         )
 
     # ------------------------------------------------------------------
@@ -97,13 +96,16 @@ class AccountStreamBridge:
             )
             logger.info(
                 "[AccountBridge] REST snapshot applied: account=%s venue=%s assets=%d",
-                self._config.account_id, self._config.venue, len(balances),
+                self._config.account_id,
+                self._config.venue,
+                len(balances),
             )
             return True
         except Exception as exc:
             logger.error("[AccountBridge] REST snapshot failed: %s", exc)
             self._account_state.mark_stale(
-                self._config.account_id, self._config.venue,
+                self._config.account_id,
+                self._config.venue,
                 f"rest_snapshot_failed: {exc}",
             )
             return False

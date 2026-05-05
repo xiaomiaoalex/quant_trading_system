@@ -27,22 +27,23 @@ RiskInterventionTracker - 风控干预追踪器
     # 查询记录
     records = tracker.get_records(strategy_id="strategy_A", limit=100)
 """
+
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal, Optional
-import uuid
-
 
 # ==================== 核心类型 ====================
+
 
 @dataclass(frozen=True)
 class RiskInterventionRecord:
     """
     单次风控干预记录
-    
+
     属性：
         signal_id: 信号唯一ID
         strategy_id: 策略ID
@@ -58,6 +59,7 @@ class RiskInterventionRecord:
         trace_id: 追踪ID，用于关联其他事件
         timestamp: 时间戳
     """
+
     signal_id: str
     strategy_id: str
     rule_name: str
@@ -67,28 +69,28 @@ class RiskInterventionRecord:
     market_state_ref: str = ""
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    
+
     def __post_init__(self) -> None:
         # 验证 original_size 非负
         if self.original_size < 0:
             raise ValueError(f"original_size must be non-negative, got {self.original_size}")
-        
+
         # 验证 approved_size 非负
         if self.approved_size < 0:
             raise ValueError(f"approved_size must be non-negative, got {self.approved_size}")
-    
+
     @property
     def size_change_ratio(self) -> float:
         """仓位变化比例"""
         if self.original_size == 0:
             return 0.0
         return (self.original_size - self.approved_size) / self.original_size
-    
+
     @property
     def was_intervened(self) -> bool:
         """是否被风控干预（改变了订单命运）"""
         return self.action != "PASS"
-    
+
     def to_dict(self) -> dict:
         """序列化为字典"""
         return {
@@ -108,7 +110,7 @@ class RiskInterventionRecord:
 class RiskInterventionMetrics:
     """
     风控干预量化指标
-    
+
     属性：
         total_signals: 总信号数
         passed_signals: 通过的信号数
@@ -120,6 +122,7 @@ class RiskInterventionMetrics:
         killswitch_block_rate: KillSwitch 阻止率
         intervention_rate: 总干预率 (核心指标)
     """
+
     total_signals: int
     passed_signals: int
     rejected_signals: int
@@ -129,7 +132,7 @@ class RiskInterventionMetrics:
     size_reduction_rate: float
     killswitch_block_rate: float
     intervention_rate: float
-    
+
     def to_dict(self) -> dict:
         """序列化为字典"""
         return {
@@ -147,24 +150,25 @@ class RiskInterventionMetrics:
 
 # ==================== 追踪器实现 ====================
 
+
 class RiskInterventionTracker:
     """
     风控干预追踪器
-    
+
     职责：
     1. 记录每次风控干预
     2. 计算量化指标
     3. 查询历史记录
-    
+
     设计约束：
     - Core Plane 无 IO（内存存储）
     - 完全确定性
     - 可回放
     """
-    
+
     def __init__(self) -> None:
         self._records: list[RiskInterventionRecord] = []
-    
+
     def record(
         self,
         signal_id: str,
@@ -177,7 +181,7 @@ class RiskInterventionTracker:
     ) -> RiskInterventionRecord:
         """
         记录一次风控干预
-        
+
         Args:
             signal_id: 信号ID
             strategy_id: 策略ID
@@ -186,7 +190,7 @@ class RiskInterventionTracker:
             original_size: 原始仓位
             approved_size: 批准仓位
             market_state_ref: 市场状态引用
-            
+
         Returns:
             创建的干预记录
         """
@@ -203,7 +207,7 @@ class RiskInterventionTracker:
         )
         self._records.append(record)
         return record
-    
+
     def get_metrics(
         self,
         strategy_id: str | None = None,
@@ -212,12 +216,12 @@ class RiskInterventionTracker:
     ) -> RiskInterventionMetrics:
         """
         获取风控干预指标
-        
+
         Args:
             strategy_id: 可选，按策略ID过滤
             rule_name: 可选，按规则名过滤
             lookback_hours: 可选，只看最近N小时
-            
+
         Returns:
             风控干预量化指标
         """
@@ -226,7 +230,7 @@ class RiskInterventionTracker:
             rule_name=rule_name,
             lookback_hours=lookback_hours,
         )
-        
+
         total = len(records)
         if total == 0:
             return RiskInterventionMetrics(
@@ -240,17 +244,17 @@ class RiskInterventionTracker:
                 killswitch_block_rate=0.0,
                 intervention_rate=0.0,
             )
-        
+
         passed = sum(1 for r in records if r.action == "PASS")
         rejected = sum(1 for r in records if r.action == "REJECT")
         reduced = sum(1 for r in records if r.action == "REDUCE")
         halted = sum(1 for r in records if r.action == "HALT")
-        
+
         reject_rate = rejected / total
         size_reduction_rate = reduced / total
         killswitch_block_rate = halted / total
         intervention_rate = reject_rate + size_reduction_rate + killswitch_block_rate
-        
+
         return RiskInterventionMetrics(
             total_signals=total,
             passed_signals=passed,
@@ -262,7 +266,7 @@ class RiskInterventionTracker:
             killswitch_block_rate=killswitch_block_rate,
             intervention_rate=intervention_rate,
         )
-    
+
     def get_records(
         self,
         strategy_id: str | None = None,
@@ -273,14 +277,14 @@ class RiskInterventionTracker:
     ) -> list[RiskInterventionRecord]:
         """
         查询风控干预记录
-        
+
         Args:
             strategy_id: 可选，按策略ID过滤
             rule_name: 可选，按规则名过滤
             action: 可选，按动作过滤
             limit: 返回记录数限制
             offset: 分页偏移
-            
+
         Returns:
             干预记录列表
         """
@@ -289,16 +293,16 @@ class RiskInterventionTracker:
             rule_name=rule_name,
             action=action,
         )
-        
+
         # 按时间倒序
         sorted_records = sorted(
             records,
             key=lambda r: r.timestamp,
             reverse=True,
         )
-        
-        return sorted_records[offset:offset + limit]
-    
+
+        return sorted_records[offset : offset + limit]
+
     def get_intervened_records(
         self,
         strategy_id: str | None = None,
@@ -306,11 +310,11 @@ class RiskInterventionTracker:
     ) -> list[RiskInterventionRecord]:
         """
         获取被干预的记录（不包括 PASS）
-        
+
         Args:
             strategy_id: 可选，按策略ID过滤
             limit: 返回记录数限制
-            
+
         Returns:
             被干预的记录列表
         """
@@ -318,7 +322,7 @@ class RiskInterventionTracker:
             strategy_id=strategy_id,
             limit=limit,
         )  # 后续过滤
-    
+
     def _filter_records(
         self,
         strategy_id: str | None = None,
@@ -329,32 +333,33 @@ class RiskInterventionTracker:
         """内部方法：过滤记录"""
         now = datetime.now(timezone.utc)
         records = self._records
-        
+
         if strategy_id is not None:
             records = [r for r in records if r.strategy_id == strategy_id]
-        
+
         if rule_name is not None:
             records = [r for r in records if r.rule_name == rule_name]
-        
+
         if action is not None:
             records = [r for r in records if r.action == action]
-        
+
         if lookback_hours is not None:
             cutoff = now - timedelta(hours=lookback_hours)
             records = [r for r in records if r.timestamp >= cutoff]
-        
+
         return records
-    
+
     def clear(self) -> None:
         """清空所有记录（主要用于测试）"""
         self._records.clear()
-    
+
     def __len__(self) -> int:
         """返回记录总数"""
         return len(self._records)
 
 
 # ==================== 辅助函数 ====================
+
 
 def calculate_expectancy(
     win_rate: float,
@@ -365,14 +370,14 @@ def calculate_expectancy(
 ) -> float:
     """
     计算交易期望值
-    
+
     Args:
         win_rate: 胜率 (0-1)
         avg_win: 平均盈利
         loss_rate: 败率 (0-1)
         avg_loss: 平均亏损
         avg_cost: 平均成本
-        
+
     Returns:
         期望值
     """
@@ -385,11 +390,11 @@ def calculate_sharpe_decay(
 ) -> float:
     """
     计算夏普比率衰减
-    
+
     Args:
         in_sample_sharpe: 样本内夏普
         out_of_sample_sharpe: 样本外夏普
-        
+
     Returns:
         衰减比例 (1.0 = 无衰减, 0.0 = 完全衰减)
     """

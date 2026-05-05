@@ -16,6 +16,7 @@ Position Lot Registry - 全局单例
     # PortfolioService 查询时获取：
     manager = get_lot_manager()
 """
+
 from trader.core.domain.models.position_lot_manager import PositionLedgerManager
 
 _manager: PositionLedgerManager | None = None

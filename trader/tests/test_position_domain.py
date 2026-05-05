@@ -3,19 +3,21 @@ Position Domain Model Tests - 持仓领域模型单元测试
 ==================================================
 覆盖 Position.open/add/reduce/close、PositionLot、PositionLedger 核心逻辑。
 """
-import pytest
-from decimal import Decimal
+
 from datetime import datetime, timezone
+from decimal import Decimal
+
+import pytest
 
 from trader.core.domain.models.position import (
-    Position,
-    PositionLot,
-    PositionLedger,
-    PositionStatus,
-    PositionSource,
-    CostBasisMethod,
     BrokerPosition,
+    CostBasisMethod,
+    Position,
+    PositionLedger,
+    PositionLot,
     PositionReconciliation,
+    PositionSource,
+    PositionStatus,
 )
 
 
@@ -106,7 +108,12 @@ class TestPositionUpdatePrice:
 
 class TestPositionProperties:
     def test_market_value(self):
-        pos = Position(symbol="BTCUSDT", quantity=Decimal("2"), avg_price=Decimal("100"), current_price=Decimal("150"))
+        pos = Position(
+            symbol="BTCUSDT",
+            quantity=Decimal("2"),
+            avg_price=Decimal("100"),
+            current_price=Decimal("150"),
+        )
         assert pos.market_value == Decimal("300")
 
     def test_cost_basis(self):
@@ -148,6 +155,7 @@ class TestPositionLot:
 
     def test_apply_fee_insufficient_logs_warning(self, caplog):
         import logging
+
         lot = PositionLot(
             lot_id="lot-1",
             strategy_id="strat_a",
@@ -207,12 +215,15 @@ class TestPositionLedger:
         ledger.add_lot(Decimal("1"), Decimal("200"))
 
         realized, reduced = ledger.reduce(Decimal("1.5"), Decimal("300"))
-        assert realized == (Decimal("300") - Decimal("100")) * 1 + (Decimal("300") - Decimal("200")) * Decimal("0.5")
+        assert realized == (Decimal("300") - Decimal("100")) * 1 + (
+            Decimal("300") - Decimal("200")
+        ) * Decimal("0.5")
         assert len(reduced) == 2
         assert ledger.total_qty == Decimal("0.5")
 
     def test_reduce_empty_ledger_logs_warning(self, caplog):
         import logging
+
         ledger = PositionLedger(
             position_id="strat_a:BTCUSDT",
             strategy_id="strat_a",

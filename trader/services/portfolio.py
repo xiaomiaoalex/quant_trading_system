@@ -8,20 +8,21 @@ PortfolioService - 持仓服务
 
 同时支持对账触发。
 """
+
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.api.models.schemas import (
-    PositionView,
-    PnlView,
-    StrategyPositionView,
     LotView,
+    PnlView,
     PositionBreakdown,
+    PositionView,
     ReconciliationLogEntry,
     ReconciliationResult,
+    StrategyPositionView,
 )
 from trader.core.domain.services.position_lot_registry import get_lot_manager
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 
 class PortfolioService:
@@ -82,19 +83,21 @@ class PortfolioService:
                 continue  # 跳过空仓且无历史记录的
 
             total_cost = str(ledger.total_qty * ledger.avg_cost) if ledger.total_qty > 0 else None
-            results.append(StrategyPositionView(
-                strategy_id=ledger.strategy_id,
-                symbol=ledger.symbol,
-                qty=str(ledger.total_qty),
-                avg_cost=str(ledger.avg_cost),
-                realized_pnl=str(ledger.realized_pnl),
-                unrealized_pnl=str(ledger.unrealized_pnl),
-                total_cost=total_cost,
-                status=ledger.status.value,
-                lot_count=len(ledger.lots),
-                cost_basis_method=ledger.cost_basis_method.value,
-                updated_at=ledger.updated_at.isoformat() if ledger.updated_at else None,
-            ))
+            results.append(
+                StrategyPositionView(
+                    strategy_id=ledger.strategy_id,
+                    symbol=ledger.symbol,
+                    qty=str(ledger.total_qty),
+                    avg_cost=str(ledger.avg_cost),
+                    realized_pnl=str(ledger.realized_pnl),
+                    unrealized_pnl=str(ledger.unrealized_pnl),
+                    total_cost=total_cost,
+                    status=ledger.status.value,
+                    lot_count=len(ledger.lots),
+                    cost_basis_method=ledger.cost_basis_method.value,
+                    updated_at=ledger.updated_at.isoformat() if ledger.updated_at else None,
+                )
+            )
 
         return results
 
@@ -115,9 +118,7 @@ class PortfolioService:
 
         # 策略级持仓
         strategy_positions = self.get_strategy_positions(symbol=symbol)
-        oms_total_qty = sum(
-            (Decimal(p.qty) for p in strategy_positions), Decimal("0")
-        )
+        oms_total_qty = sum((Decimal(p.qty) for p in strategy_positions), Decimal("0"))
 
         # 账户总持仓（从 Broker / in-memory storage）
         account_qty = Decimal("0")
@@ -173,32 +174,36 @@ class PortfolioService:
 
         results: List[LotView] = []
         for lot in ledger.lots:
-            results.append(LotView(
-                lot_id=lot.lot_id,
-                strategy_id=lot.strategy_id,
-                symbol=lot.symbol,
-                original_qty=str(lot.original_qty),
-                remaining_qty=str(lot.remaining_qty),
-                fill_price=str(lot.fill_price),
-                fee_qty=str(lot.fee_qty) if lot.fee_qty else None,
-                fee_asset=lot.fee_asset,
-                realized_pnl=str(lot.realized_pnl),
-                is_closed=lot.is_closed,
-                filled_at=lot.filled_at.isoformat() if lot.filled_at else "",
-            ))
+            results.append(
+                LotView(
+                    lot_id=lot.lot_id,
+                    strategy_id=lot.strategy_id,
+                    symbol=lot.symbol,
+                    original_qty=str(lot.original_qty),
+                    remaining_qty=str(lot.remaining_qty),
+                    fill_price=str(lot.fill_price),
+                    fee_qty=str(lot.fee_qty) if lot.fee_qty else None,
+                    fee_asset=lot.fee_asset,
+                    realized_pnl=str(lot.realized_pnl),
+                    is_closed=lot.is_closed,
+                    filled_at=lot.filled_at.isoformat() if lot.filled_at else "",
+                )
+            )
         for lot in ledger.closed_lots:
-            results.append(LotView(
-                lot_id=lot.lot_id,
-                strategy_id=lot.strategy_id,
-                symbol=lot.symbol,
-                original_qty=str(lot.original_qty),
-                remaining_qty=str(lot.remaining_qty),
-                fill_price=str(lot.fill_price),
-                fee_qty=str(lot.fee_qty) if lot.fee_qty else None,
-                fee_asset=lot.fee_asset,
-                realized_pnl=str(lot.realized_pnl),
-                is_closed=lot.is_closed,
-                filled_at=lot.filled_at.isoformat() if lot.filled_at else "",
-            ))
+            results.append(
+                LotView(
+                    lot_id=lot.lot_id,
+                    strategy_id=lot.strategy_id,
+                    symbol=lot.symbol,
+                    original_qty=str(lot.original_qty),
+                    remaining_qty=str(lot.remaining_qty),
+                    fill_price=str(lot.fill_price),
+                    fee_qty=str(lot.fee_qty) if lot.fee_qty else None,
+                    fee_asset=lot.fee_asset,
+                    realized_pnl=str(lot.realized_pnl),
+                    is_closed=lot.is_closed,
+                    filled_at=lot.filled_at.isoformat() if lot.filled_at else "",
+                )
+            )
 
         return results

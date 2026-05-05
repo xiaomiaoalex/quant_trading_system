@@ -18,18 +18,18 @@ On-Chain Market Data Adapter
 """
 
 from trader.adapters.onchain.onchain_market_data_stream import (
+    BINANCE_FUTURES_BASE_URL,
+    GLASSNODE_BASE_URL,
+    ExchangeFlowRecord,
+    LiquidationRecord,
     OnChainMarketDataAdapter,
     OnChainMarketDataConfig,
-    LiquidationRecord,
-    ExchangeFlowRecord,
     StablecoinSupplyRecord,
     get_onchain_adapter,
     get_onchain_adapter_async,
+    reset_onchain_adapter,
     start_onchain_service,
     stop_onchain_service,
-    reset_onchain_adapter,
-    BINANCE_FUTURES_BASE_URL,
-    GLASSNODE_BASE_URL,
 )
 
 __all__ = [

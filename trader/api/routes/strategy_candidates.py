@@ -31,7 +31,9 @@ async def list_candidates(
     status: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
 ):
-    return StrategyCandidateService().list_candidates(strategy_id=strategy_id, status=status, limit=limit)
+    return StrategyCandidateService().list_candidates(
+        strategy_id=strategy_id, status=status, limit=limit
+    )
 
 
 @router.get("/v1/strategy-candidates/{candidate_id}", response_model=StrategyCandidate)
@@ -94,7 +96,9 @@ async def debug_candidate(
         )
         rejected = service.get_candidate(candidate_id)
         if rejected is None:
-            raise HTTPException(status_code=404, detail=f"StrategyCandidate {candidate_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"StrategyCandidate {candidate_id} not found"
+            )
         return rejected
 
     code_entry = await create_strategy_code(
@@ -190,7 +194,9 @@ async def promote_candidate(
             detail="Candidate must be VALIDATION_PASSED before promote",
         )
     if request.mode == "live":
-        raise HTTPException(status_code=409, detail="First release only promotes paper/shadow deployments")
+        raise HTTPException(
+            status_code=409, detail="First release only promotes paper/shadow deployments"
+        )
 
     deployment_id = request.deployment_id or (
         f"{candidate.strategy_id}__{request.symbols[0].lower()}__"

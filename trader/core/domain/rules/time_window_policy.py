@@ -13,26 +13,28 @@ TimeWindowPolicy - 时间窗口风控策略
 - Fail-Closed 异常处理
 - 支持热更新配置
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import time
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 class TimeWindowPeriod(Enum):
     """时间窗口时段枚举"""
-    PRIME = "PRIME"           # 主力时段
-    OFF_PEAK = "OFF_PEAK"     # 低流动性时段
-    RESTRICTED = "RESTRICTED" # 禁止新开仓时段
+
+    PRIME = "PRIME"  # 主力时段
+    OFF_PEAK = "OFF_PEAK"  # 低流动性时段
+    RESTRICTED = "RESTRICTED"  # 禁止新开仓时段
 
 
 @dataclass(frozen=True)
 class TimeWindowSlot:
     """
     单个时段槽定义
-    
+
     Attributes:
         period: 时段类型
         start_hour: 开始小时 (UTC)
@@ -42,6 +44,7 @@ class TimeWindowSlot:
         position_coefficient: 仓位系数 (0.0-1.0)
         allow_new_position: 是否允许新开仓
     """
+
     period: TimeWindowPeriod
     start_hour: int
     start_minute: int
@@ -68,22 +71,22 @@ class TimeWindowSlot:
     def contains(self, hour: int, minute: int) -> bool:
         """
         检查给定时间是否在此时段内
-        
+
         边界处理：
         - 普通时段 [start, end)：开始时间 inclusive，结束时间 exclusive
         - 跨天时段 [start, 24:00) ∪ [00:00, end)：开始时间 inclusive，结束时间 exclusive
-        
+
         Args:
             hour: 小时 (UTC)
             minute: 分钟
-            
+
         Returns:
             bool: 是否在时段内
         """
         start = self.start_hour * 60 + self.start_minute
         end = self.end_hour * 60 + self.end_minute
         current = hour * 60 + minute
-        
+
         if start <= end:
             # 普通时段：例如 9:00-17:00
             return start <= current < end
@@ -109,22 +112,21 @@ class TimeWindowSlot:
 class TimeWindowConfig:
     """
     时间窗口配置
-    
+
     支持热更新，可通过 Control Plane API 动态调整。
-    
+
     Attributes:
         slots: 时段槽列表（按优先级排序，RESTRICTED 优先）
         default_coefficient: 未匹配时段的默认系数
     """
+
     slots: list[TimeWindowSlot] = field(default_factory=list)
     default_coefficient: float = 1.0
 
     def __post_init__(self) -> None:
         """验证配置"""
         if not 0.0 <= self.default_coefficient <= 1.0:
-            raise ValueError(
-                f"default_coefficient must be 0.0-1.0, got {self.default_coefficient}"
-            )
+            raise ValueError(f"default_coefficient must be 0.0-1.0, got {self.default_coefficient}")
         # 按优先级排序：RESTRICTED > OFF_PEAK > PRIME
         self._sort_slots()
 
@@ -135,15 +137,12 @@ class TimeWindowConfig:
             TimeWindowPeriod.OFF_PEAK: 1,
             TimeWindowPeriod.PRIME: 2,
         }
-        self.slots = sorted(
-            self.slots, 
-            key=lambda s: priority.get(s.period, 99)
-        )
+        self.slots = sorted(self.slots, key=lambda s: priority.get(s.period, 99))
 
     def add_slot(self, slot: TimeWindowSlot) -> None:
         """
         添加时段槽
-        
+
         Args:
             slot: 时段槽
         """
@@ -153,11 +152,11 @@ class TimeWindowConfig:
     def get_slot_at(self, hour: int, minute: int) -> Optional[TimeWindowSlot]:
         """
         获取指定时间对应的时段槽
-        
+
         Args:
             hour: 小时 (UTC)
             minute: 分钟
-            
+
         Returns:
             Optional[TimeWindowSlot]: 匹配的时段槽，未匹配返回 None
         """
@@ -169,7 +168,7 @@ class TimeWindowConfig:
     def get_default_slot(self) -> TimeWindowSlot:
         """
         获取默认时段槽（用于未匹配时段）
-        
+
         Returns:
             TimeWindowSlot: 默认时段槽
         """
@@ -187,7 +186,7 @@ class TimeWindowConfig:
     def create_default(cls) -> TimeWindowConfig:
         """
         创建默认配置（币圈 24h 交易场景）
-        
+
         Returns:
             TimeWindowConfig: 默认配置
         """
@@ -239,10 +238,10 @@ class TimeWindowConfig:
     def from_dict(cls, data: Dict[str, Any]) -> TimeWindowConfig:
         """
         从字典反序列化
-        
+
         Args:
             data: 配置字典
-            
+
         Returns:
             TimeWindowConfig: 时间窗口配置
         """
@@ -268,30 +267,27 @@ class TimeWindowConfig:
 class TimeWindowContext:
     """
     时间窗口上下文
-    
+
     由 TimeWindowPolicy.evaluate() 返回，作为 RiskEngine 的输入。
-    
+
     Attributes:
         period: 当前时段
         position_coefficient: 仓位系数
         allow_new_position: 是否允许新开仓
     """
+
     period: TimeWindowPeriod
     position_coefficient: float
     allow_new_position: bool
 
-    def adjust_position_size(
-        self, 
-        base_size: float,
-        is_new_position: bool = False
-    ) -> float:
+    def adjust_position_size(self, base_size: float, is_new_position: bool = False) -> float:
         """
         根据时间窗口调整仓位大小
-        
+
         Args:
             base_size: 基础仓位大小
             is_new_position: 是否为新开仓
-            
+
         Returns:
             float: 调整后的仓位大小
         """
@@ -311,9 +307,9 @@ class TimeWindowContext:
 class TimeWindowPolicy:
     """
     时间窗口策略评估器
-    
+
     根据当前 UTC 时间评估时段上下文。
-    
+
     约束：
     - Core Plane 禁止 IO
     - Fail-Closed：配置异常时默认拒绝新开仓
@@ -325,7 +321,7 @@ class TimeWindowPolicy:
     ) -> None:
         """
         初始化时间窗口策略
-        
+
         Args:
             config: 时间窗口配置，None 则使用默认配置
         """
@@ -339,7 +335,7 @@ class TimeWindowPolicy:
     def update_config(self, config: TimeWindowConfig) -> None:
         """
         热更新配置
-        
+
         Args:
             config: 新的时间窗口配置
         """
@@ -350,7 +346,7 @@ class TimeWindowPolicy:
     def update_config_from_dict(self, data: Dict[str, Any]) -> None:
         """
         从字典热更新配置
-        
+
         Args:
             data: 配置字典
         """
@@ -359,17 +355,17 @@ class TimeWindowPolicy:
     def evaluate(self, hour: int, minute: int) -> TimeWindowContext:
         """
         评估指定时间的时段上下文
-        
+
         Args:
             hour: 小时 (UTC)
             minute: 分钟
-            
+
         Returns:
             TimeWindowContext: 时间窗口上下文
         """
         try:
             slot = self._config.get_slot_at(hour, minute)
-            
+
             if slot is None:
                 # 未匹配到时段，使用默认
                 default_slot = self._config.get_default_slot()
@@ -378,7 +374,7 @@ class TimeWindowPolicy:
                     position_coefficient=default_slot.position_coefficient,
                     allow_new_position=True,
                 )
-            
+
             return TimeWindowContext(
                 period=slot.period,
                 position_coefficient=slot.position_coefficient,
@@ -395,10 +391,11 @@ class TimeWindowPolicy:
     def evaluate_now(self) -> TimeWindowContext:
         """
         评估当前时刻的时段上下文
-        
+
         Returns:
             TimeWindowContext: 当前时间窗口上下文
         """
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         return self.evaluate(now.hour, now.minute)

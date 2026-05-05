@@ -10,14 +10,15 @@ Tests for fill deduplication and idempotency:
 """
 
 import time
-import pytest
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from trader.core.domain.models.order import OrderStatus
+from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import OMSCallbackHandler
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
-from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.domain.models.order import OrderStatus
 
 
 class TestOMSCallbackIdempotency:
@@ -29,11 +30,11 @@ class TestOMSCallbackIdempotency:
         broker = MagicMock()
         broker.place_order = AsyncMock()
         broker.get_symbol_step_size = AsyncMock(return_value=Decimal("0.00001"))
-        broker.get_exchange_info = AsyncMock(return_value={
-            "symbols": [{
-                "filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]
-            }]
-        })
+        broker.get_exchange_info = AsyncMock(
+            return_value={
+                "symbols": [{"filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]}]
+            }
+        )
         broker._fetch_account = AsyncMock()
         broker._account_cache = {
             "balances": [
@@ -266,8 +267,9 @@ class TestTerminalStateMonotonicity:
 
     def test_order_is_terminal_for_filled(self, storage):
         """Test that FILLED is a terminal state."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -284,8 +286,9 @@ class TestTerminalStateMonotonicity:
 
     def test_order_is_terminal_for_cancelled(self, storage):
         """Test that CANCELLED is a terminal state."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -302,8 +305,9 @@ class TestTerminalStateMonotonicity:
 
     def test_order_is_terminal_for_rejected(self, storage):
         """Test that REJECTED is a terminal state."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -320,8 +324,9 @@ class TestTerminalStateMonotonicity:
 
     def test_order_is_not_terminal_for_pending(self, storage):
         """Test that PENDING is NOT a terminal state."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -338,8 +343,9 @@ class TestTerminalStateMonotonicity:
 
     def test_order_is_not_terminal_for_submitted(self, storage):
         """Test that SUBMITTED is NOT a terminal state."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -356,8 +362,9 @@ class TestTerminalStateMonotonicity:
 
     def test_fill_raises_when_order_is_terminal(self, storage):
         """Test that filling a terminal order raises ValueError."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",
@@ -376,8 +383,9 @@ class TestTerminalStateMonotonicity:
 
     def test_reject_raises_when_order_is_terminal(self, storage):
         """Test that rejecting a terminal order raises ValueError."""
-        from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
         from decimal import Decimal
+
+        from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
         order = Order(
             order_id="test_1",

@@ -21,6 +21,7 @@ Binance Announcement Crawler - Binance 公告爬虫
 - 幂等写入：基于 dedup_key 去重
 - 降级保护：采集失败不影响主交易流程
 """
+
 import asyncio
 import logging
 import re
@@ -28,14 +29,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Any, AsyncIterator, Union
+from typing import Any, AsyncIterator, Optional, Union
+
 import httpx
 
-from trader.core.domain.models.events import DomainEvent, EventType
+from trader.adapters.announcements.models import AnnouncementType
 from trader.adapters.announcements.models import (
-    AnnouncementType,
     classify_announcement as shared_classify_announcement,
 )
+from trader.core.domain.models.events import DomainEvent, EventType
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +50,10 @@ logger = logging.getLogger(__name__)
 class AnnouncementEvent:
     """
     Binance 公告事件
-    
+
     用于结构化存储和去重判断。
     """
+
     announcement_id: str
     title: str
     content: str
@@ -58,11 +61,11 @@ class AnnouncementEvent:
     timestamp: datetime
     source_url: str
     symbols: list[str] = field(default_factory=list)  # 涉及的交易对/币种
-    
+
     @property
     def event_type_str(self) -> str:
         return f"ANNOUNCEMENT_{self.type.value}"
-    
+
     @property
     def aggregate_id(self) -> str:
         return f"{self.announcement_id}_{self.type.value}"
@@ -71,24 +74,24 @@ class AnnouncementEvent:
 class BinanceAnnouncementCrawler:
     """
     Binance 公告爬虫 (Orchestration Layer)
-    
+
     持有 WS Source 和 HTML Source，优先使用 WS，失败时降级到 HTML。
-    
+
     兼容旧 API:
     - fetch_announcements(): 兼容旧版 REST 调用
     - _extract_symbols(): 返回完整交易对 (v2 调整)
     """
-    
+
     # Binance CMS API 端点 (用于 HTML fallback)
     BASE_URL = "https://www.binance.com"
     CMS_API_PATH = "/bapi/earn/v1/public/feign/cms/article/list/query"
-    
+
     # DEPRECATED: 关键词列表已移至 models.classify_announcement
     # 这些类属性保留用于向后兼容，但不再被 _classify_announcement 使用
     LISTING_KEYWORDS: list = []  # type: ignore[assignment]
     DELISTING_KEYWORDS: list = []  # type: ignore[assignment]
     MAINTENANCE_KEYWORDS: list = []  # type: ignore[assignment]
-    
+
     def __init__(
         self,
         event_store: Any,  # EventStoreWithFallback
@@ -104,7 +107,7 @@ class BinanceAnnouncementCrawler:
     ):
         """
         初始化公告爬虫
-        
+
         Args:
             event_store: EventStoreWithFallback 实例，用于写入 event_log
             http_client: httpx.AsyncClient 实例（可选，用于测试注入）
@@ -124,7 +127,7 @@ class BinanceAnnouncementCrawler:
         self._max_processed_ids = max_processed_ids
         self._processed_ids: dict[str, None] = {}  # bounded membership cache
         self._semaphore = asyncio.Semaphore(max_concurrent_requests)
-        
+
         # Orchestration Layer
         self._ws_source = ws_source
         self._html_source = html_source
@@ -137,21 +140,23 @@ class BinanceAnnouncementCrawler:
         while len(self._processed_ids) > self._max_processed_ids:
             oldest = next(iter(self._processed_ids))
             self._processed_ids.pop(oldest, None)
-    
+
     def _get_ws_source(self) -> Any:
         """获取或创建 WS Source"""
         if self._ws_source is None:
             from trader.adapters.announcements.ws_source import BinanceWsAnnouncementSource
+
             self._ws_source = BinanceWsAnnouncementSource()
         return self._ws_source
-    
+
     def _get_html_source(self) -> Any:
         """获取或创建 HTML Source"""
         if self._html_source is None:
             from trader.adapters.announcements.html_source import BinanceHtmlAnnouncementSource
+
             self._html_source = BinanceHtmlAnnouncementSource(locale=self._locale)
         return self._html_source
-    
+
     async def _get_http_client(self) -> httpx.AsyncClient:
         """获取或创建 HTTP 客户端"""
         if self._http_client is None:
@@ -164,19 +169,19 @@ class BinanceAnnouncementCrawler:
                 },
             )
         return self._http_client
-    
+
     async def fetch_announcements(self, limit: int = 20) -> list[dict[str, Any]]:
         """
         从 Binance API 获取公告列表
-        
+
         兼容旧 API。优先使用 WS，失败时降级到 HTML。
-        
+
         Args:
             limit: 获取数量
-            
+
         Returns:
             公告列表
-            
+
         Raises:
             httpx.HTTPError: 网络请求失败时降级返回空列表
         """
@@ -186,6 +191,7 @@ class BinanceAnnouncementCrawler:
             try:
                 # Suppress DeprecationWarning: WS fetch_initial is deprecated by design
                 import warnings
+
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=DeprecationWarning)
                     raw_list = await ws_source.fetch_initial(max_results=limit)
@@ -193,24 +199,23 @@ class BinanceAnnouncementCrawler:
                     return [self._raw_to_dict(ann) for ann in raw_list]
             except Exception as e:
                 logger.warning(
-                    "WS_SOURCE_FETCH_FAILED, falling back to HTML",
-                    extra={"error": str(e)}
+                    "WS_SOURCE_FETCH_FAILED, falling back to HTML", extra={"error": str(e)}
                 )
-        
+
         # HTML fallback
         html_results = await self._fetch_from_html(limit)
         if html_results:
             return html_results
-        
+
         # HTML 也失败，返回空列表
         logger.warning("ALL_SOURCES_FAILED: WS and HTML both returned no results")
         return []
-    
+
     async def _fetch_from_html(self, limit: int = 20) -> list[dict[str, Any]]:
         """从 HTML 源获取公告"""
         async with self._semaphore:
             client = await self._get_http_client()
-            
+
             try:
                 response = await client.get(
                     self.CMS_API_PATH,
@@ -222,7 +227,7 @@ class BinanceAnnouncementCrawler:
                 )
                 response.raise_for_status()
                 data = response.json()
-                
+
                 if data.get("code") == "000000" and "data" in data:
                     articles = data["data"].get("articles", [])
                     return articles
@@ -232,7 +237,7 @@ class BinanceAnnouncementCrawler:
                         extra={"code": data.get("code"), "message": data.get("message", "")},
                     )
                     return []
-                    
+
             except httpx.HTTPError as e:
                 logger.warning(
                     "BINANCE_CRAWLER_NETWORK_ERROR",
@@ -245,64 +250,66 @@ class BinanceAnnouncementCrawler:
                     extra={"error": str(e), "error_type": type(e).__name__},
                 )
                 return []
-    
+
     def _raw_to_dict(self, raw_ann: Any) -> dict:
         """将 RawAnnouncement 转换为旧版 dict 格式"""
         return {
             "id": raw_ann.announcement_id,
             "title": raw_ann.title,
             "content": raw_ann.body,
-            "timestamp": int(raw_ann.publish_time.timestamp() * 1000) if raw_ann.publish_time else 0,
+            "timestamp": (
+                int(raw_ann.publish_time.timestamp() * 1000) if raw_ann.publish_time else 0
+            ),
             "locale": raw_ann.locale,
         }
-    
+
     def _classify_announcement(self, title: str, content: str = "") -> AnnouncementType:
         """
         根据标题和内容分类公告
-        
+
         委托给 models.classify_announcement 函数以避免代码重复。
-        
+
         Args:
             title: 公告标题
             content: 公告内容（可选）
-            
+
         Returns:
             AnnouncementType 分类结果
         """
         return shared_classify_announcement(title, content)
-    
+
     def _extract_symbols(self, title: str, content: str = "") -> list[str]:
         """
         从标题和内容中提取完整交易对
-        
+
         v2 调整: 返回完整交易对 (BTCUSDT)，不返回 base asset (BTC)
-        
+
         Args:
             title: 公告标题
             content: 公告内容
-            
+
         Returns:
             完整交易对列表，如 ["BTCUSDT", "ETHUSDT"]
         """
         symbols = []
         text = title + " " + content
-        
+
         # 匹配完整交易对: BTCUSDT, ETHUSDT, BTCBTC, etc.
         # 边界：空白、非ASCII字符、字符串结束、常见标点
-        pair_pattern = r'([A-Z]{2,10})(USDT|BTC|ETH|BNB|BUSD)(?=\s|[^\x00-\x7F]|$|[.,!?;:()\[\]{}])'
+        pair_pattern = r"([A-Z]{2,10})(USDT|BTC|ETH|BNB|BUSD)(?=\s|[^\x00-\x7F]|$|[.,!?;:()\[\]{}])"
         matches = re.findall(pair_pattern, text, re.UNICODE)
         for base, quote in matches:
             symbols.append(f"{base}{quote}")
-        
+
         return list(set(symbols))
-    
+
     def _parse_announcement(self, article: dict[str, Any]) -> Optional[AnnouncementEvent]:
         """
         解析单个公告为 AnnouncementEvent
-        
+
         Args:
             article: Binance API 返回的公告数据
-            
+
         Returns:
             AnnouncementEvent 或 None（解析失败时）
         """
@@ -310,10 +317,10 @@ class BinanceAnnouncementCrawler:
             announcement_id = str(article.get("id", ""))
             title = article.get("title", "")
             content = article.get("content", "")
-            
+
             if not announcement_id or not title:
                 return None
-            
+
             # 解析时间戳
             timestamp_str = article.get("timestamp") or article.get("createTime")
             if timestamp_str:
@@ -323,13 +330,13 @@ class BinanceAnnouncementCrawler:
                     timestamp = datetime.fromisoformat(timestamp_str)
             else:
                 timestamp = datetime.now(timezone.utc)
-            
+
             # 分类
             ann_type = self._classify_announcement(title, content)
-            
+
             # 提取交易对
             symbols = self._extract_symbols(title, content)
-            
+
             return AnnouncementEvent(
                 announcement_id=announcement_id,
                 title=title,
@@ -339,14 +346,14 @@ class BinanceAnnouncementCrawler:
                 source_url=f"https://www.binance.com/zh-CN/support/announcement/detail/{announcement_id}",
                 symbols=symbols,
             )
-            
+
         except Exception as e:
             logger.warning(
                 "BINANCE_CRAWLER_PARSE_ERROR",
                 extra={"article_id": article.get("id"), "error": str(e)},
             )
             return None
-    
+
     # AnnouncementType 到 EventType 的映射
     _ANNOUNCEMENT_TO_EVENT_TYPE = {
         AnnouncementType.LISTING: EventType.SIGNAL_GENERATED,
@@ -358,10 +365,10 @@ class BinanceAnnouncementCrawler:
     def _create_domain_event(self, ann_event: AnnouncementEvent) -> DomainEvent:
         """
         将 AnnouncementEvent 转换为 DomainEvent
-        
+
         Args:
             ann_event: 公告事件
-            
+
         Returns:
             DomainEvent
         """
@@ -389,37 +396,37 @@ class BinanceAnnouncementCrawler:
                 "exchange_event_ts_ms": int(ann_event.timestamp.timestamp() * 1000),
             },
         )
-    
+
     async def _write_to_event_store(self, ann_event: AnnouncementEvent) -> bool:
         """
         写入事件到 event_store
-        
+
         幂等写入：如果已存在则跳过。
-        
+
         Args:
             ann_event: 公告事件
-            
+
         Returns:
             True 表示写入成功（或已存在），False 表示失败
         """
         try:
             if ann_event.aggregate_id in self._processed_ids:
                 return True
-            
+
             stream_key = "announcements"
             latest_seq = await self._event_store.get_latest_seq(stream_key)
             next_seq = (latest_seq + 1) if latest_seq is not None else 0
-            
+
             domain_event = self._create_domain_event(ann_event)
-            
+
             await self._event_store.append_domain_event(
                 stream_key=stream_key,
                 domain_event=domain_event,
                 seq=next_seq,
             )
-            
+
             self._mark_processed(ann_event.aggregate_id)
-            
+
             logger.info(
                 "ANNOUNCEMENT_EVENT_WRITTEN",
                 extra={
@@ -429,7 +436,7 @@ class BinanceAnnouncementCrawler:
                 },
             )
             return True
-            
+
         except Exception as e:
             logger.error(
                 "BINANCE_CRAWLER_WRITE_ERROR",
@@ -439,36 +446,36 @@ class BinanceAnnouncementCrawler:
                 },
             )
             return False
-    
+
     async def fetch_and_process(self) -> int:
         """
         抓取并处理所有新公告
-        
+
         Returns:
             处理成功的公告数量
         """
         articles = await self.fetch_announcements()
-        
+
         if not articles:
             logger.debug("BINANCE_CRAWLER_NO_ARTICLES")
             return 0
-        
+
         success_count = 0
-        
+
         for article in articles:
             ann_event = self._parse_announcement(article)
-            
+
             if ann_event is None:
                 continue
-            
+
             if ann_event.aggregate_id in self._processed_ids:
                 continue
-            
+
             if await self._write_to_event_store(ann_event):
                 success_count += 1
-        
+
         self._last_fetch_time = datetime.now(timezone.utc)
-        
+
         logger.info(
             "BINANCE_CRAWLER_FETCH_COMPLETE",
             extra={
@@ -477,36 +484,36 @@ class BinanceAnnouncementCrawler:
                 "cached": len(self._processed_ids),
             },
         )
-        
+
         return success_count
-    
+
     # ==================== Orchestration Layer Methods ====================
-    
+
     async def ws_stream(self) -> AsyncIterator[Any]:
         """WebSocket 实时公告流
-        
+
         Yields:
             RawAnnouncement 实例
         """
         ws_source = self._get_ws_source()
-        
+
         if not ws_source.is_connected:
             await ws_source.connect()
-        
+
         if not ws_source.is_subscribed:
             await ws_source.subscribe()
-        
+
         async for ann in ws_source.recv_async_iterator():
             yield ann
-    
+
     async def process_raw_announcement(self, raw_ann: Any) -> bool:
         """处理单个 RawAnnouncement
-        
+
         将 RawAnnouncement 转换为 AnnouncementEvent 并写入 event_store。
-        
+
         Args:
             raw_ann: RawAnnouncement 实例
-            
+
         Returns:
             True 表示处理成功
         """
@@ -515,16 +522,18 @@ class BinanceAnnouncementCrawler:
             "id": raw_ann.announcement_id,
             "title": raw_ann.title,
             "content": raw_ann.body,
-            "timestamp": int(raw_ann.publish_time.timestamp() * 1000) if raw_ann.publish_time else None,
+            "timestamp": (
+                int(raw_ann.publish_time.timestamp() * 1000) if raw_ann.publish_time else None
+            ),
         }
-        
+
         ann_event = self._parse_announcement(article)
-        
+
         if ann_event is None:
             return False
-        
+
         return await self._write_to_event_store(ann_event)
-    
+
     async def close(self) -> None:
         """关闭资源"""
         if self._ws_source:
@@ -532,22 +541,22 @@ class BinanceAnnouncementCrawler:
                 await self._ws_source.disconnect()
             except Exception:
                 pass
-        
+
         if self._html_source:
             try:
                 await self._html_source.close()
             except Exception:
                 pass
-        
+
         if self._http_client:
             try:
                 await self._http_client.aclose()
             except Exception:
                 pass
             self._http_client = None
-    
+
     # ==================== Legacy Methods ====================
-    
+
     async def start_background_polling(self) -> None:
         """启动后台轮询任务"""
         self._running = True
@@ -555,7 +564,7 @@ class BinanceAnnouncementCrawler:
             "BINANCE_CRAWLER_STARTED",
             extra={"poll_interval_seconds": self._poll_interval},
         )
-        
+
         while self._running:
             try:
                 await self.fetch_and_process()
@@ -564,9 +573,9 @@ class BinanceAnnouncementCrawler:
                     "BINANCE_CRAWLER_POLL_ERROR",
                     extra={"error": str(e)},
                 )
-            
+
             await asyncio.sleep(self._poll_interval)
-    
+
     def stop(self) -> None:
         """停止后台轮询"""
         self._running = False
@@ -574,6 +583,7 @@ class BinanceAnnouncementCrawler:
 
 
 # ==================== 便捷函数 ====================
+
 
 async def crawl_once(event_store: Any) -> int:
     """执行一次公告抓取（便捷函数）"""

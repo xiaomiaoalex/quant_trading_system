@@ -12,15 +12,12 @@ RiskSizer 单元测试
 6. 边缘情况
 7. 配置验证
 """
+
 import math
+
 import pytest
 
-from trader.core.domain.services.risk_sizer import (
-    RiskSizer,
-    SizerConfig,
-    SizerInputs,
-    SizerResult,
-)
+from trader.core.domain.services.risk_sizer import RiskSizer, SizerConfig, SizerInputs, SizerResult
 
 
 def _make_inputs(
@@ -145,7 +142,9 @@ class TestRiskSizerCoefficients:
 
     def test_coefficients_in_result_metadata(self) -> None:
         sizer = RiskSizer()
-        inputs = _make_inputs(time_coef=0.8, drawdown_coef=0.9, venue_health_coef=0.7, regime_coef=0.6)
+        inputs = _make_inputs(
+            time_coef=0.8, drawdown_coef=0.9, venue_health_coef=0.7, regime_coef=0.6
+        )
         result = sizer.compute(inputs)
         assert result.coefficients["time_coef"] == 0.8
         assert result.coefficients["drawdown_coef"] == 0.9
@@ -331,7 +330,9 @@ class TestRiskSizerBoundaryValues:
 
     def test_coefficient_at_one_passes(self) -> None:
         sizer = RiskSizer()
-        inputs = _make_inputs(time_coef=1.0, drawdown_coef=1.0, venue_health_coef=1.0, regime_coef=1.0)
+        inputs = _make_inputs(
+            time_coef=1.0, drawdown_coef=1.0, venue_health_coef=1.0, regime_coef=1.0
+        )
         result = sizer.compute(inputs)
         assert not result.is_rejected
 

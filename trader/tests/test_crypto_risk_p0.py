@@ -2,9 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from trader.core.application.plugins.crypto_pre_trade_risk_plugin import (
-    CryptoPreTradeRiskPlugin,
-)
+from trader.core.application.plugins.crypto_pre_trade_risk_plugin import CryptoPreTradeRiskPlugin
 from trader.core.application.risk_engine import RejectionReason, RiskMetrics
 from trader.core.domain.models.crypto_risk import (
     CryptoAccountRisk,
@@ -21,9 +19,7 @@ from trader.core.domain.models.signal import Signal, SignalType
 from trader.core.domain.services.exchange_rule_guard import ExchangeRuleGuard
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
 from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
-from trader.core.domain.services.portfolio_exposure_aggregator import (
-    PortfolioExposureAggregator,
-)
+from trader.core.domain.services.portfolio_exposure_aggregator import PortfolioExposureAggregator
 
 
 def d(value: str) -> Decimal:

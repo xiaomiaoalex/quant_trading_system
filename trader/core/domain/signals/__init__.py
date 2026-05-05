@@ -11,31 +11,29 @@ Signal Domain Layer - 信号领域层
 """
 
 from trader.core.domain.signals.capital_structure_signals import (
-    FundingRateZScore,
-    OIChangeRateDivergence,
-    LongShortRatioAnomaly,
     DivergenceDirection,
+    FundingRateZScore,
+    LongShortRatioAnomaly,
+    OIChangeRateDivergence,
 )
-
+from trader.core.domain.signals.price_volume_signals import (
+    PriceVolumeSample,
+    VolatilityCompression,
+    VolatilityCompressionResult,
+    VolumeDirection,
+    VolumeExpansion,
+    VolumeExpansionResult,
+    VolumeSample,
+)
 from trader.core.domain.signals.trend_signals import (
-    TrendDirection,
-    PriceSample,
+    BollingerBandPosition,
+    BollingerBandResult,
     EMACrossover,
     EMACrossoverResult,
     PriceMomentum,
     PriceMomentumResult,
-    BollingerBandPosition,
-    BollingerBandResult,
-)
-
-from trader.core.domain.signals.price_volume_signals import (
-    VolumeDirection,
-    VolumeSample,
-    VolumeExpansion,
-    VolumeExpansionResult,
-    PriceVolumeSample,
-    VolatilityCompression,
-    VolatilityCompressionResult,
+    PriceSample,
+    TrendDirection,
 )
 
 __all__ = [

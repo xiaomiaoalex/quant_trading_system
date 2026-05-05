@@ -13,37 +13,38 @@ Events - 领域事件模型
     OrderCreated -> OrderSubmitted -> OrderPartiallyFilled -> OrderFilled
                     -> PositionUpdated
 """
+
+import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Optional, Dict, Any, List
-import uuid
-import json
+from typing import Any, Dict, List, Optional
 
 
 class EventType(Enum):
     """领域事件类型"""
 
     # 订单事件
-    ORDER_CREATED = "ORDER_CREATED"                 # 订单创建
-    ORDER_SUBMITTED = "ORDER_SUBMITTED"             # 订单提交到券商
+    ORDER_CREATED = "ORDER_CREATED"  # 订单创建
+    ORDER_SUBMITTED = "ORDER_SUBMITTED"  # 订单提交到券商
     ORDER_PARTIALLY_FILLED = "ORDER_PARTIALLY_FILLED"  # 部分成交
-    ORDER_FILLED = "ORDER_FILLED"                 # 完全成交
-    ORDER_CANCELLED = "ORDER_CANCELLED"           # 订单撤销
-    ORDER_REJECTED = "ORDER_REJECTED"             # 订单拒绝
+    ORDER_FILLED = "ORDER_FILLED"  # 完全成交
+    ORDER_CANCELLED = "ORDER_CANCELLED"  # 订单撤销
+    ORDER_REJECTED = "ORDER_REJECTED"  # 订单拒绝
 
-# 持仓事件
-    POSITION_OPENED = "POSITION_OPENED"           # 开仓
-    POSITION_INCREASED = "POSITION_INCREASED"     # 加仓
-    POSITION_DECREASED = "POSITION_DECREASED"     # 减仓
-    POSITION_CLOSED = "POSITION_CLOSED"           # 平仓
-    POSITION_UPDATED = "POSITION_UPDATED"         # 持仓更新
+    # 持仓事件
+    POSITION_OPENED = "POSITION_OPENED"  # 开仓
+    POSITION_INCREASED = "POSITION_INCREASED"  # 加仓
+    POSITION_DECREASED = "POSITION_DECREASED"  # 减仓
+    POSITION_CLOSED = "POSITION_CLOSED"  # 平仓
+    POSITION_UPDATED = "POSITION_UPDATED"  # 持仓更新
 
     # Lot 级事件（Batch 1 新增）
-    POSITION_LOT_OPENED = "POSITION_LOT_OPENED"   # 新批次开仓
+    POSITION_LOT_OPENED = "POSITION_LOT_OPENED"  # 新批次开仓
     POSITION_LOT_REDUCED = "POSITION_LOT_REDUCED"  # 批次被部分平仓
-    POSITION_LOT_CLOSED = "POSITION_LOT_CLOSED"   # 批次完全平仓
+    POSITION_LOT_CLOSED = "POSITION_LOT_CLOSED"  # 批次完全平仓
 
     # 策略持仓汇总事件（Batch 1 新增）
     STRATEGY_POSITION_UPDATED = "STRATEGY_POSITION_UPDATED"  # 策略持仓变更
@@ -60,15 +61,15 @@ class EventType(Enum):
     RECONCILIATION_DISCREPANCY = "RECONCILIATION_DISCREPANCY"  # 对账发现
 
     # 风控事件
-    RISK_CHECK_PASSED = "RISK_CHECK_PASSED"      # 风控通过
-    RISK_CHECK_FAILED = "RISK_CHECK_FAILED"        # 风控拒绝
+    RISK_CHECK_PASSED = "RISK_CHECK_PASSED"  # 风控通过
+    RISK_CHECK_FAILED = "RISK_CHECK_FAILED"  # 风控拒绝
 
     # 信号事件
-    SIGNAL_GENERATED = "SIGNAL_GENERATED"         # 信号生成
-    SIGNAL_PROCESSED = "SIGNAL_PROCESSED"         # 信号处理完成
+    SIGNAL_GENERATED = "SIGNAL_GENERATED"  # 信号生成
+    SIGNAL_PROCESSED = "SIGNAL_PROCESSED"  # 信号处理完成
 
     # 账户事件
-    ACCOUNT_UPDATED = "ACCOUNT_UPDATED"           # 账户更新
+    ACCOUNT_UPDATED = "ACCOUNT_UPDATED"  # 账户更新
 
     # 系统事件
     SYSTEM_STARTED = "SYSTEM_STARTED"
@@ -86,13 +87,14 @@ class DomainEvent:
     2. 审计追溯
     3. 调试分析
     """
-    event_id: str = ""                    # 事件唯一ID
+
+    event_id: str = ""  # 事件唯一ID
     event_type: EventType = EventType.ORDER_CREATED  # 事件类型
 
     # 聚合根信息
-    aggregate_id: str = ""               # 聚合根ID（如订单ID）
-    aggregate_type: str = ""              # 聚合根类型（如Order）
-    aggregate_version: int = 1            # 聚合根版本（乐观锁）
+    aggregate_id: str = ""  # 聚合根ID（如订单ID）
+    aggregate_type: str = ""  # 聚合根类型（如Order）
+    aggregate_version: int = 1  # 聚合根版本（乐观锁）
 
     # 时间
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -105,20 +107,24 @@ class DomainEvent:
 
     def __post_init__(self):
         if not self.event_id:
-            object.__setattr__(self, 'event_id', str(uuid.uuid4()))
+            object.__setattr__(self, "event_id", str(uuid.uuid4()))
 
     def to_json(self) -> str:
         """序列化为JSON（用于持久化）"""
-        return json.dumps({
-            "event_id": self.event_id,
-            "event_type": self.event_type.value,
-            "aggregate_id": self.aggregate_id,
-            "aggregate_type": self.aggregate_type,
-            "aggregate_version": self.aggregate_version,
-            "timestamp": self.timestamp.isoformat(),
-            "data": self._serialize_data(),
-            "metadata": self.metadata,
-        }, ensure_ascii=False, default=str)
+        return json.dumps(
+            {
+                "event_id": self.event_id,
+                "event_type": self.event_type.value,
+                "aggregate_id": self.aggregate_id,
+                "aggregate_type": self.aggregate_type,
+                "aggregate_version": self.aggregate_version,
+                "timestamp": self.timestamp.isoformat(),
+                "data": self._serialize_data(),
+                "metadata": self.metadata,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
     def _serialize_data(self) -> Dict[str, Any]:
         """序列化事件数据（处理Decimal等特殊类型）"""
@@ -151,15 +157,26 @@ class DomainEvent:
         )
 
     _DECIMAL_KEY_SUFFIXES = (
-        "_qty", "_price", "_pnl", "_cost", "_value", "_amount",
-        "quantity", "fee", "avg_price", "fill_price", "notional",
+        "_qty",
+        "_price",
+        "_pnl",
+        "_cost",
+        "_value",
+        "_amount",
+        "quantity",
+        "fee",
+        "avg_price",
+        "fill_price",
+        "notional",
     )
 
     @classmethod
     def _deserialize_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         result = {}
         for key, value in data.items():
-            if isinstance(value, str) and any(key.endswith(s) or key == s for s in cls._DECIMAL_KEY_SUFFIXES):
+            if isinstance(value, str) and any(
+                key.endswith(s) or key == s for s in cls._DECIMAL_KEY_SUFFIXES
+            ):
                 try:
                     result[key] = Decimal(value)
                 except Exception:
@@ -169,10 +186,13 @@ class DomainEvent:
         return result
 
     def __repr__(self) -> str:
-        return f"DomainEvent({self.event_type.value}, {self.aggregate_id}, v{self.aggregate_version})"
+        return (
+            f"DomainEvent({self.event_type.value}, {self.aggregate_id}, v{self.aggregate_version})"
+        )
 
 
 # ==================== 便捷构造函数 ====================
+
 
 def create_order_created_event(order) -> DomainEvent:
     """创建订单创建事件"""
@@ -188,7 +208,7 @@ def create_order_created_event(order) -> DomainEvent:
             "quantity": order.quantity,
             "price": order.price,
             "strategy_name": order.strategy_name,
-        }
+        },
     )
 
 
@@ -204,7 +224,7 @@ def create_order_filled_event(order) -> DomainEvent:
             "side": order.side.value,
             "filled_quantity": order.filled_quantity,
             "average_price": order.average_price,
-        }
+        },
     )
 
 
@@ -221,11 +241,12 @@ def create_position_updated_event(position, realized_pnl: Decimal | None = None)
             "current_price": position.current_price,
             "unrealized_pnl": position.unrealized_pnl,
             "realized_pnl": realized_pnl,
-        }
+        },
     )
 
 
 # ==================== Lot 级事件构造函数（Batch 1 新增） ====================
+
 
 def create_lot_opened_event(
     lot_id: str,
@@ -248,7 +269,7 @@ def create_lot_opened_event(
             "remaining_qty": quantity,
             "fill_price": fill_price,
             "fee_qty": fee_qty,
-        }
+        },
     )
 
 
@@ -274,7 +295,7 @@ def create_lot_reduced_event(
             "reduce_price": reduce_price,
             "remaining_qty": remaining_qty,
             "realized_pnl": realized_pnl,
-        }
+        },
     )
 
 
@@ -296,7 +317,7 @@ def create_lot_closed_event(
             "symbol": symbol,
             "close_price": close_price,
             "total_realized_pnl": total_realized_pnl,
-        }
+        },
     )
 
 
@@ -320,7 +341,7 @@ def create_strategy_position_updated_event(
             "avg_cost": avg_cost,
             "realized_pnl": realized_pnl,
             "unrealized_pnl": unrealized_pnl,
-        }
+        },
     )
 
 
@@ -340,7 +361,7 @@ def create_historical_position_discovered_event(
             "quantity": quantity,
             "broker_avg_price": broker_avg_price,
             "source": source,
-        }
+        },
     )
 
 
@@ -364,5 +385,5 @@ def create_reconciliation_discrepancy_event(
             "difference": difference,
             "status": status,
             "tolerance": tolerance,
-        }
+        },
     )

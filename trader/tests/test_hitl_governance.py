@@ -8,27 +8,29 @@ HITL Governance 单元测试
 3. 错误路径（不存在建议、无效决策）
 4. 核心功能（建议生成、审批队列、审计日志）
 """
-import pytest
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from trader.core.application.hitl_governance import (
-    HITLGovernance,
-    HITLDecision,
+    HITL_TIMEOUT_SECONDS,
     AISuggestion,
     HITLApprovalRecord,
+    HITLDecision,
+    HITLGovernance,
     HITLProviderPort,
-    HITL_TIMEOUT_SECONDS,
-    SuggestionNotFoundError,
     InvalidDecisionError,
     SuggestionExpiredError,
+    SuggestionNotFoundError,
 )
-from trader.core.application.risk_engine import RiskCheckResult, RiskLevel, RejectionReason
+from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
 from trader.core.domain.models.signal import Signal, SignalType
 
-
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def governance():
@@ -119,6 +121,7 @@ def risk_result_critical():
 
 # ==================== 建议生成测试 ====================
 
+
 class TestSuggestionGeneration:
     """测试建议生成"""
 
@@ -152,7 +155,9 @@ class TestSuggestionGeneration:
         assert suggestion.requires_human_review is True
         assert suggestion.risk_check_result.risk_level == RiskLevel.CRITICAL
 
-    def test_generate_suggestion_large_trade(self, governance, sample_signal_large_trade, risk_result_passed):
+    def test_generate_suggestion_large_trade(
+        self, governance, sample_signal_large_trade, risk_result_passed
+    ):
         """测试大额交易需要审核"""
         suggestion = governance.generate_suggestion(sample_signal_large_trade, risk_result_passed)
 
@@ -184,6 +189,7 @@ class TestSuggestionGeneration:
 
 
 # ==================== 审批队列测试 ====================
+
 
 class TestApprovalQueue:
     """测试审批队列管理"""
@@ -228,6 +234,7 @@ class TestApprovalQueue:
 
 # ==================== 审批决策测试 ====================
 
+
 class TestApprovalDecisions:
     """测试审批决策"""
 
@@ -236,7 +243,9 @@ class TestApprovalDecisions:
         suggestion = governance.generate_suggestion(sample_signal, risk_result_critical)
         governance.submit_for_approval(suggestion)
 
-        record = governance.approve(suggestion.suggestion_id, "trader@example.com", "Manual approve")
+        record = governance.approve(
+            suggestion.suggestion_id, "trader@example.com", "Manual approve"
+        )
 
         assert record.decision == HITLDecision.APPROVED
         assert record.approver == "trader@example.com"
@@ -249,9 +258,7 @@ class TestApprovalDecisions:
         suggestion = governance.generate_suggestion(sample_signal, risk_result_critical)
         governance.submit_for_approval(suggestion)
 
-        record = governance.reject(
-            suggestion.suggestion_id, "trader@example.com", "Risk too high"
-        )
+        record = governance.reject(suggestion.suggestion_id, "trader@example.com", "Risk too high")
 
         assert record.decision == HITLDecision.REJECTED
         assert record.approver == "trader@example.com"
@@ -310,6 +317,7 @@ class TestApprovalDecisions:
 
 
 # ==================== 审计日志测试 ====================
+
 
 class TestAuditLog:
     """测试审计日志"""
@@ -373,6 +381,7 @@ class TestAuditLog:
 
 # ==================== 边界情况测试 ====================
 
+
 class TestBoundaryCases:
     """测试边界情况"""
 
@@ -383,11 +392,15 @@ class TestBoundaryCases:
 
         # 当前时间未超时
         current_time = datetime.now(timezone.utc)
-        assert not governance._approval_records[list(governance._approval_records.keys())[0]].is_expired(current_time)
+        assert not governance._approval_records[
+            list(governance._approval_records.keys())[0]
+        ].is_expired(current_time)
 
         # 未来时间已超时
         future_time = current_time + timedelta(seconds=HITL_TIMEOUT_SECONDS + 1)
-        assert governance._approval_records[list(governance._approval_records.keys())[0]].is_expired(future_time)
+        assert governance._approval_records[
+            list(governance._approval_records.keys())[0]
+        ].is_expired(future_time)
 
     def test_cleanup_expired(self, governance, sample_signal, risk_result_critical):
         """测试清理超时建议"""
@@ -474,6 +487,7 @@ class TestBoundaryCases:
 
 # ==================== 辅助方法测试 ====================
 
+
 class TestHelperMethods:
     """测试辅助方法"""
 
@@ -513,6 +527,7 @@ class TestHelperMethods:
 
 
 # ==================== 集成场景测试 ====================
+
 
 class TestIntegrationScenarios:
     """测试集成场景"""
@@ -586,6 +601,7 @@ class TestIntegrationScenarios:
 
 # ==================== 端口协议测试 ====================
 
+
 class TestHITLProviderPort:
     """测试HITLProviderPort接口"""
 
@@ -596,6 +612,7 @@ class TestHITLProviderPort:
 
     def test_port_methods_are_abstract(self):
         """测试端口方法是抽象的"""
+
         class ConcreteProvider(HITLProviderPort):
             async def save_approval_record(self, record):
                 pass

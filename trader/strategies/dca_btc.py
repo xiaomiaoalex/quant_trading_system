@@ -59,9 +59,7 @@ class DcaBtcStrategy:
         if config:
             result = await self.update_config(config)
             if not result.is_valid:
-                raise ValueError(
-                    f"DCA 初始化参数无效: {[e.message for e in result.errors]}"
-                )
+                raise ValueError(f"DCA 初始化参数无效: {[e.message for e in result.errors]}")
 
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         if self.max_total_buys > 0 and self._buy_count >= self.max_total_buys:

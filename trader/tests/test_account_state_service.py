@@ -1,4 +1,5 @@
 """Tests for AccountStateService."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -113,9 +114,7 @@ class TestApplyBalanceUpdate:
 
     def test_balance_update_creates_new_asset(self) -> None:
         svc = AccountStateService()
-        svc.apply_balance_update(
-            "acct1", "binance", {"a": "DOGE", "d": "1000", "E": 1000}
-        )
+        svc.apply_balance_update("acct1", "binance", {"a": "DOGE", "d": "1000", "E": 1000})
         bal = svc.get_balance("acct1", "binance", "DOGE")
         assert bal is not None
         assert bal.free == Decimal("1000")
@@ -185,7 +184,8 @@ class TestStale:
         svc = AccountStateService()
         svc.mark_stale("acct1", "binance", "ws disconnect")
         svc.apply_private_account_position(
-            "acct1", "binance",
+            "acct1",
+            "binance",
             {"E": 1000, "B": [{"a": "USDT", "f": "100", "l": "0"}]},
         )
         assert svc.is_stale("acct1", "binance") is True

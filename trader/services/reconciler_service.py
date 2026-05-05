@@ -1,17 +1,17 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Callable, Awaitable, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from trader.core.application.reconciler import (
+    DriftType,
+    ExchangeOrderSnapshot,
+    LocalOrderSnapshot,
+    OrderDrift,
     Reconciler,
     ReconcileReport,
-    OrderDrift,
-    DriftType,
-    LocalOrderSnapshot,
-    ExchangeOrderSnapshot,
 )
-from trader.storage.in_memory import get_storage, InMemoryStorage
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +76,18 @@ class ReconcilerService:
         # Task 9.11: Broadcast SSE update for real-time frontend updates
         try:
             from trader.api.routes.sse import broadcast_reconciliation_update
-            asyncio.create_task(broadcast_reconciliation_update({
-                "type": "reconciliation_complete",
-                "ghost_count": report.ghost_count,
-                "phantom_count": report.phantom_count,
-                "diverged_count": report.diverged_count,
-                "drift_count": len(report.drifts),
-            }))
+
+            asyncio.create_task(
+                broadcast_reconciliation_update(
+                    {
+                        "type": "reconciliation_complete",
+                        "ghost_count": report.ghost_count,
+                        "phantom_count": report.phantom_count,
+                        "diverged_count": report.diverged_count,
+                        "drift_count": len(report.drifts),
+                    }
+                )
+            )
         except Exception:
             pass  # SSE broadcast is non-critical
 
@@ -185,11 +190,17 @@ class ReconcilerService:
             try:
                 await asyncio.sleep(self._interval_sec)
                 if self._local_orders_getter is None or self._exchange_orders_getter is None:
-                    logger.warning("[Reconciler] 周期性对账未配置local_orders_getter和exchange_orders_getter，跳过本次执行")
+                    logger.warning(
+                        "[Reconciler] 周期性对账未配置local_orders_getter和exchange_orders_getter，跳过本次执行"
+                    )
                     continue
-                
-                external_ids = self._external_order_ids_getter() if self._external_order_ids_getter else None
-                await self.trigger_reconcile(self._local_orders_getter, self._exchange_orders_getter, external_ids)
+
+                external_ids = (
+                    self._external_order_ids_getter() if self._external_order_ids_getter else None
+                )
+                await self.trigger_reconcile(
+                    self._local_orders_getter, self._exchange_orders_getter, external_ids
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:

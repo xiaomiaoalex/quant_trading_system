@@ -1,6 +1,8 @@
 """Simple test for OrderBook"""
-import pytest
+
 from decimal import Decimal
+
+import pytest
 
 from trader.core.domain.models.orderbook import OrderBook, OrderBookLevel
 
@@ -16,7 +18,7 @@ def test_orderbook_with_levels():
     ob = OrderBook(
         symbol="BTCUSDT",
         bids=[OrderBookLevel(price=Decimal("100.0"), quantity=Decimal("10"))],
-        asks=[OrderBookLevel(price=Decimal("100.1"), quantity=Decimal("10"))]
+        asks=[OrderBookLevel(price=Decimal("100.1"), quantity=Decimal("10"))],
     )
     assert ob.symbol == "BTCUSDT"
     assert len(ob.bids) == 1

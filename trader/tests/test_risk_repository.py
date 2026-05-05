@@ -45,7 +45,4 @@ async def test_reset_risk_event_repository_async_context_clears_immediately():
     assert risk_repository._repository_instance is None
     assert repo._postgres_storage is None
     assert repo._use_postgres is False
-    assert not [
-        warning for warning in caught
-        if "was never awaited" in str(warning.message)
-    ]
+    assert not [warning for warning in caught if "was never awaited" in str(warning.message)]

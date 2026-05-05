@@ -14,48 +14,50 @@ Test Structure:
 - Execution Simulator Tests: slippage, next-bar execution, SL/TP triggers
 - Result Converter Tests: statistics, equity curve, metrics calculation
 """
-import pytest
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
-from trader.core.domain.models.signal import Signal, SignalType
+import pytest
+
 from trader.core.domain.models.order import OrderSide, OrderType
-from trader.services.backtesting.ports import OHLCV, BacktestConfig, BacktestResult
-from trader.services.backtesting.strategy_adapter import (
-    SignalConverter,
-    IndicatorMapper,
-    QuantConnectStrategyAdapter,
-    StrategyAdapterConfig,
-    IndicatorConfig,
-    OrderSignal,
-    IndicatorType,
-    OrderModel,
-    LeanInsight,
-)
+from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.backtesting.execution_simulator import (
-    ExecutionSimulator,
     DirectionAwareSlippage,
+    ExecutionResult,
+    ExecutionSimulator,
+    ExitReason,
     NextBarOpenExecutor,
-    StopLossTakeProfitExecutor,
     OrderExecutionConfig,
     PendingOrder,
-    ExecutionResult,
     PositionState,
     SlippageModel,
-    ExitReason,
+    StopLossTakeProfitExecutor,
 )
+from trader.services.backtesting.ports import OHLCV, BacktestConfig, BacktestResult
 from trader.services.backtesting.result_converter import (
     BacktestResultConverter,
+    ConversionResult,
+    EquityPoint,
     QuantConnectStatistics,
     QuantConnectTrade,
-    EquityPoint,
-    ConversionResult,
+)
+from trader.services.backtesting.strategy_adapter import (
+    IndicatorConfig,
+    IndicatorMapper,
+    IndicatorType,
+    LeanInsight,
+    OrderModel,
+    OrderSignal,
+    QuantConnectStrategyAdapter,
+    SignalConverter,
+    StrategyAdapterConfig,
 )
 
-
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def sample_ohlcv():
@@ -77,6 +79,7 @@ def sample_ohlcv():
 @pytest.fixture
 def ohlcv_factory():
     """Factory for creating OHLCV with customizable values"""
+
     def _create(
         timestamp=None,
         open_price=Decimal("50000"),
@@ -93,6 +96,7 @@ def ohlcv_factory():
             close=close,
             volume=volume,
         )
+
     return _create
 
 
@@ -114,6 +118,7 @@ def execution_config():
 @pytest.fixture
 def signal_factory():
     """Factory for creating test signals"""
+
     def _create(
         signal_type=SignalType.BUY,
         symbol="BTCUSDT",
@@ -131,6 +136,7 @@ def signal_factory():
             take_profit=take_profit,
             reason="test_signal",
         )
+
     return _create
 
 
@@ -1014,6 +1020,7 @@ class TestExecutionSimulator:
 
 # ==================== Result Converter Tests ====================
 
+
 class TestBacktestResultConverter:
     """Tests for BacktestResultConverter"""
 
@@ -1144,10 +1151,12 @@ class TestEquityPoint:
 
     def test_from_dict(self):
         """Test creating EquityPoint from dictionary"""
-        point = EquityPoint.from_dict({
-            "timestamp": "2024-01-01T00:00:00+00:00",
-            "equity": 100000,
-        })
+        point = EquityPoint.from_dict(
+            {
+                "timestamp": "2024-01-01T00:00:00+00:00",
+                "equity": 100000,
+            }
+        )
 
         assert point.equity == Decimal("100000")
 
@@ -1164,6 +1173,7 @@ class TestEquityPoint:
 
 
 # ==================== Critical Integration Tests ====================
+
 
 class TestSlippageDirectionCritical:
     """Critical tests for slippage direction - MUST PASS"""
@@ -1263,8 +1273,9 @@ class TestStopLossTriggerCritical:
         results = executor.execute_pending(bar_n1, bar_index=1)
 
         assert len(results) == 1
-        assert results[0].exit_reason == ExitReason.STOP_LOSS, \
-            f"Expected STOP_LOSS, got {results[0].exit_reason}"
+        assert (
+            results[0].exit_reason == ExitReason.STOP_LOSS
+        ), f"Expected STOP_LOSS, got {results[0].exit_reason}"
 
     def test_take_profit_triggers_when_price_rises(self, execution_config, ohlcv_factory):
         """CRITICAL: TP must trigger when price rises to TP level"""
@@ -1291,8 +1302,9 @@ class TestStopLossTriggerCritical:
         results = executor.execute_pending(bar_n1, bar_index=1)
 
         assert len(results) == 1
-        assert results[0].exit_reason == ExitReason.TAKE_PROFIT, \
-            f"Expected TAKE_PROFIT, got {results[0].exit_reason}"
+        assert (
+            results[0].exit_reason == ExitReason.TAKE_PROFIT
+        ), f"Expected TAKE_PROFIT, got {results[0].exit_reason}"
 
     def test_within_bar_high_low_used_for_trigger(self, execution_config, ohlcv_factory):
         """CRITICAL: Within-bar high/low must be checked for SL/TP"""

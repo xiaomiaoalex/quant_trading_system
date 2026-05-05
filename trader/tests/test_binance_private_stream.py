@@ -3,16 +3,18 @@ Private Stream Manager Unit Tests
 ==================================
 测试私有流状态机的功能。
 """
-import pytest
+
 import asyncio
 import time
 
+import pytest
+
 from trader.adapters.binance.private_stream import (
-    PrivateStreamManager,
-    PrivateStreamConfig,
     BinanceCredentials,
-    RawOrderUpdate,
+    PrivateStreamConfig,
+    PrivateStreamManager,
     RawFillUpdate,
+    RawOrderUpdate,
 )
 from trader.adapters.binance.stream_base import StreamState
 
@@ -23,9 +25,7 @@ class TestBinanceCredentials:
     def test_credentials_creation(self):
         """测试凭证创建"""
         creds = BinanceCredentials(
-            api_key="test_api_key",
-            secret_key="test_secret_key",
-            testnet=True
+            api_key="test_api_key", secret_key="test_secret_key", testnet=True
         )
 
         assert creds.api_key == "test_api_key"

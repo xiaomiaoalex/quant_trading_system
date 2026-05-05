@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class WorkflowConfig:
     """工作流配置"""
+
     feature_version: str = "v1.0.0"
     prompt_version: str = "v1.0.0"
     context_package_version: str = "v1.0.0"
@@ -62,6 +63,7 @@ class WorkflowConfig:
 @dataclass(slots=True)
 class WorkflowResult:
     """工作流执行结果"""
+
     success: bool
     committee_run: CommitteeRun
     execution_time_seconds: float
@@ -122,9 +124,7 @@ class PortfolioResearchWorkflow:
                 f"request={research_request[:50]}..., trace_id={trace_id}"
             )
 
-            specialist_outputs = self._run_specialists(
-                research_request, context
-            )
+            specialist_outputs = self._run_specialists(research_request, context)
 
             proposals = self._extract_proposals(specialist_outputs)
 
@@ -143,7 +143,7 @@ class PortfolioResearchWorkflow:
                     scores={
                         "risk_score": r.risk_score or 0.0,
                         "cost_score": r.cost_score or 0.0,
-                        "orthogonality_score": getattr(r, 'orthogonality_score', None) or 0.0,
+                        "orthogonality_score": getattr(r, "orthogonality_score", None) or 0.0,
                     },
                 )
                 for r in review_reports
@@ -179,7 +179,9 @@ class PortfolioResearchWorkflow:
             )
 
         except Exception as e:
-            logger.error(f"Portfolio research workflow failed: run_id={run_id}, error={e}", exc_info=True)
+            logger.error(
+                f"Portfolio research workflow failed: run_id={run_id}, error={e}", exc_info=True
+            )
 
             committee_run.status = CommitteeRunStatus.FAILED
             committee_run.final_status = ProposalStatus.REJECTED
@@ -202,9 +204,7 @@ class PortfolioResearchWorkflow:
 
         matched_types = self._router.route(research_request)
 
-        logger.info(
-            f"Routing to specialists: {[t.value for t in matched_types]}"
-        )
+        logger.info(f"Routing to specialists: {[t.value for t in matched_types]}")
 
         outputs = []
         for specialist_type in matched_types:
@@ -222,8 +222,10 @@ class PortfolioResearchWorkflow:
         proposals = []
 
         for output in outputs:
-            if not hasattr(output, 'validation_result') or not output.validation_result.is_valid:
-                logger.warning(f"Skipping invalid output: {output.trace_id if hasattr(output, 'trace_id') else 'unknown'}")
+            if not hasattr(output, "validation_result") or not output.validation_result.is_valid:
+                logger.warning(
+                    f"Skipping invalid output: {output.trace_id if hasattr(output, 'trace_id') else 'unknown'}"
+                )
                 continue
 
             if not output.content:
@@ -235,7 +237,9 @@ class PortfolioResearchWorkflow:
                 if isinstance(proposal_data, dict):
                     proposal = SleeveProposal(
                         proposal_id=proposal_data.get("proposal_id", str(uuid.uuid4())),
-                        specialist_type=SpecialistType(proposal_data.get("specialist_type", "trend")),
+                        specialist_type=SpecialistType(
+                            proposal_data.get("specialist_type", "trend")
+                        ),
                         hypothesis=proposal_data.get("hypothesis", ""),
                         required_features=proposal_data.get("required_features", []),
                         regime=proposal_data.get("regime", ""),
@@ -328,12 +332,15 @@ class PortfolioResearchWorkflow:
 
             sleeves = []
             for sleeve_data in run_data.get("sleeve_proposals", []):
-                sleeve_data["specialist_type"] = SpecialistType(sleeve_data.get("specialist_type", "trend"))
+                sleeve_data["specialist_type"] = SpecialistType(
+                    sleeve_data.get("specialist_type", "trend")
+                )
                 sleeves.append(SleeveProposal(**sleeve_data))
 
             portfolio = None
             if run_data.get("portfolio_proposal"):
                 from insight.committee.schemas import PortfolioProposal
+
                 portfolio = PortfolioProposal(**run_data["portfolio_proposal"])
 
             reviews = []

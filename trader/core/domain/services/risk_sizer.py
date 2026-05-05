@@ -19,6 +19,7 @@ RiskSizer - 统一仓位大小计算器
 - Fail-Closed：任何不一致必须拒绝
 - 确定性：相同输入始终产生相同输出
 """
+
 from __future__ import annotations
 
 import math
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class SizerInputs:
     """Sizer 的所有输入"""
+
     size_by_stop: float
     strategy_cap: float
     symbol_exposure_cap: float
@@ -42,6 +44,7 @@ class SizerInputs:
 @dataclass(slots=True)
 class SizerResult:
     """Sizer 的输出结果"""
+
     approved_size: float
     limiting_factor: str
     coefficients: dict[str, float]
@@ -52,6 +55,7 @@ class SizerResult:
 @dataclass(slots=True)
 class SizerConfig:
     """Sizer 配置"""
+
     min_size: float = 0.0
     fail_closed: bool = True
 
@@ -165,7 +169,13 @@ class RiskSizer:
                 rejection_reason=f"Zero coefficient(s): {', '.join(zero_coefs)}",
             )
 
-        final = base * inputs.time_coef * inputs.drawdown_coef * inputs.venue_health_coef * inputs.regime_coef
+        final = (
+            base
+            * inputs.time_coef
+            * inputs.drawdown_coef
+            * inputs.venue_health_coef
+            * inputs.regime_coef
+        )
 
         if base > 0.0 and final < self._config.min_size:
             return SizerResult(

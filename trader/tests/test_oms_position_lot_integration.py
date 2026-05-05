@@ -8,11 +8,13 @@ test_oms_position_lot_integration - OMS + PositionLedgerManager 集成测试（B
 - realized_pnl 正确计算
 - 多策略同币种隔离
 """
+
 from decimal import Decimal
+
 import pytest
 
-from trader.core.domain.models.position_lot_manager import PositionLedgerManager
 from trader.core.domain.models.events import EventType
+from trader.core.domain.models.position_lot_manager import PositionLedgerManager
 
 
 class TestPositionLedgerManagerIntegration:
@@ -22,8 +24,11 @@ class TestPositionLedgerManagerIntegration:
 
         # BUY 1 BTC @ 65000
         buy_events = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("1.0"), Decimal("65000"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("65000"),
         )
         assert len(buy_events) == 2
         assert buy_events[0].event_type == EventType.POSITION_LOT_OPENED
@@ -31,8 +36,11 @@ class TestPositionLedgerManagerIntegration:
 
         # SELL 1 BTC @ 67000
         sell_events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("1.0"), Decimal("67000"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("1.0"),
+            Decimal("67000"),
         )
         assert len(sell_events) == 2
         assert sell_events[0].event_type == EventType.POSITION_LOT_CLOSED
@@ -49,19 +57,28 @@ class TestPositionLedgerManagerIntegration:
 
         # BUY 10 @ 100
         events1 = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("10"), Decimal("100"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("10"),
+            Decimal("100"),
         )
         # BUY 10 @ 110
         events2 = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("10"), Decimal("110"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("10"),
+            Decimal("110"),
         )
 
         # SELL 10 @ 120（按 FIFO，应该扣减 10@100 的批次）
         sell_events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("10"), Decimal("120"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("10"),
+            Decimal("120"),
         )
 
         ledger = manager.get("strat_a", "BTCUSDT")
@@ -77,8 +94,11 @@ class TestPositionLedgerManagerIntegration:
 
         # SELL 15（先扣 10@100，再扣 5@110）
         sell_events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("15"), Decimal("120"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("15"),
+            Decimal("120"),
         )
 
         ledger = manager.get("strat_a", "BTCUSDT")
@@ -120,7 +140,9 @@ class TestPositionLedgerManagerIntegration:
 
         ledger = manager.get("strat_a", "BTCUSDT")
         # (2*65000 + 1*67000) / 3 = 65666.67
-        expected = (Decimal("2") * Decimal("65000") + Decimal("1") * Decimal("67000")) / Decimal("3")
+        expected = (Decimal("2") * Decimal("65000") + Decimal("1") * Decimal("67000")) / Decimal(
+            "3"
+        )
         assert ledger.avg_cost == expected
 
     def test_sell_exceeds_position(self):
@@ -129,8 +151,11 @@ class TestPositionLedgerManagerIntegration:
         manager.on_fill("strat_a", "BTCUSDT", "BUY", Decimal("1.0"), Decimal("65000"))
 
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("5.0"), Decimal("67000"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("5.0"),
+            Decimal("67000"),
         )
 
         ledger = manager.get("strat_a", "BTCUSDT")
@@ -142,8 +167,11 @@ class TestPositionLedgerManagerIntegration:
         """手续费从 remaining_qty 扣除"""
         manager = PositionLedgerManager()
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("1.0"), Decimal("65000"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("65000"),
             fee_qty=Decimal("0.0005"),
             fee_asset="BTC",
         )
@@ -169,8 +197,11 @@ class TestPositionLedgerManagerIntegration:
         """空仓卖出仍发出 STRATEGY_POSITION_UPDATED 事件（用于可观测性）"""
         manager = PositionLedgerManager()
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("1.0"), Decimal("67000"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("1.0"),
+            Decimal("67000"),
         )
         # 无可平仓的 lot，但 STRATEGY_POSITION_UPDATED 仍发出（状态未变）
         assert len(events) == 1

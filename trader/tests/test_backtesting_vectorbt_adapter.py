@@ -1,11 +1,12 @@
-import pytest
-import numpy as np
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
+import numpy as np
+import pytest
+
 from trader.services.backtesting.ports import BacktestConfig, FrameworkType
+from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
 
 
 @pytest.fixture

@@ -12,9 +12,10 @@ Core Plane 的"先缩再停"个人生存风险控制模块。
 
 本模块完全无 IO，属于 Core Plane 的确定性计算逻辑。
 """
-from enum import Enum
-from dataclasses import dataclass
+
 import math
+from dataclasses import dataclass
+from enum import Enum
 
 from trader.adapters.binance.degraded_cascade import CascadeState
 from trader.core.application.risk_engine import KillSwitchLevel
@@ -235,7 +236,11 @@ class DrawdownVenueDeleverage:
         action: DeLeverageAction,
         venue_health_coef: float,
     ) -> bool:
-        if action in (DeLeverageAction.CLOSE_ONLY, DeLeverageAction.REDUCE_TO_QUARTER, DeLeverageAction.HARD_HALT):
+        if action in (
+            DeLeverageAction.CLOSE_ONLY,
+            DeLeverageAction.REDUCE_TO_QUARTER,
+            DeLeverageAction.HARD_HALT,
+        ):
             return True
         if venue_health_coef == 0.0:
             return True

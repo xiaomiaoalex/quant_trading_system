@@ -16,35 +16,29 @@ OMS Callback Handler - OMS下单回调处理
 """
 
 import asyncio
+import inspect
 import logging
 import time
 import uuid
-import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, Dict, Any, Callable, Union, Awaitable
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
-from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
-from trader.core.application.risk_engine import (
-    RejectionReason,
-    RiskCheckResult,
-)
-from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
-from trader.core.domain.models.signal import Signal
-from trader.core.domain.services.position_lot_registry import (
-    get_lot_manager,
-    set_lot_manager,
-)
 from trader.adapters.persistence.execution_repository import (
     ExecutionRepository,
     get_execution_repository,
 )
 from trader.adapters.persistence.postgres import is_postgres_available
-from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
-from trader.services.execution_budget import ExecutionBudgetService
+from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
+from trader.core.application.risk_engine import RejectionReason, RiskCheckResult
+from trader.core.domain.models.order import OrderSide, OrderStatus, OrderType
+from trader.core.domain.models.signal import Signal
+from trader.core.domain.services.position_lot_registry import get_lot_manager, set_lot_manager
 from trader.services.account_state import AccountStateService
+from trader.services.execution_budget import ExecutionBudgetService
+from trader.storage.in_memory import ControlPlaneInMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 

@@ -1,11 +1,15 @@
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.api.models.schemas import (
-    Strategy, StrategyRegisterRequest, StrategyVersion, StrategyVersionCreateRequest,
-    VersionedConfig, VersionedConfigUpsertRequest,
+    Strategy,
+    StrategyRegisterRequest,
+    StrategyVersion,
+    StrategyVersionCreateRequest,
+    VersionedConfig,
+    VersionedConfigUpsertRequest,
 )
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 
 class StrategyService:
@@ -32,7 +36,9 @@ class StrategyService:
         strategies = self._storage.list_strategies()
         return [Strategy(**s) for s in strategies]
 
-    def create_version(self, strategy_id: str, request: StrategyVersionCreateRequest) -> StrategyVersion:
+    def create_version(
+        self, strategy_id: str, request: StrategyVersionCreateRequest
+    ) -> StrategyVersion:
         """Create a new strategy version"""
         version_data = request.model_dump()
         version = self._storage.create_strategy_version(strategy_id, version_data)
@@ -57,7 +63,9 @@ class StrategyService:
             return VersionedConfig(**params)
         return None
 
-    def create_params(self, strategy_id: str, request: VersionedConfigUpsertRequest) -> VersionedConfig:
+    def create_params(
+        self, strategy_id: str, request: VersionedConfigUpsertRequest
+    ) -> VersionedConfig:
         """Create new strategy params version"""
         params_data = request.model_dump()
         params = self._storage.create_strategy_params(strategy_id, params_data)

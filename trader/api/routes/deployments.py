@@ -3,12 +3,12 @@ Deployment API Routes
 ====================
 Deployment (run instance) management endpoints.
 """
+
 from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from trader.api.models.schemas import (
-    Deployment, DeploymentCreateRequest, ActionResult
-)
+from trader.api.models.schemas import ActionResult, Deployment, DeploymentCreateRequest
 from trader.services import DeploymentService
 
 router = APIRouter(tags=["Deployments"])

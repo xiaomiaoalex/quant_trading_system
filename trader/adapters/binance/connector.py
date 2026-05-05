@@ -14,34 +14,43 @@ Binance Connector - Unified Coordinator
 - 共享限流器和退避器
 - 统一的健康状态监控
 """
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable, Awaitable
 from enum import Enum
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from trader.adapters.binance.rate_limit import RestRateBudget, Priority, RateBudgetConfig
-from trader.adapters.binance.backoff import BackoffController, BackoffConfig
-from trader.adapters.binance.stream_base import StreamState
-from trader.adapters.binance.public_stream import (
-    PublicStreamManager, PublicStreamConfig, MarketEvent
-)
+from trader.adapters.binance.backoff import BackoffConfig, BackoffController
 from trader.adapters.binance.private_stream import (
-    PrivateStreamManager, PrivateStreamConfig,
-    BinanceCredentials, RawOrderUpdate, RawFillUpdate, ListenKeyEndpointGoneError
+    BinanceCredentials,
+    ListenKeyEndpointGoneError,
+    PrivateStreamConfig,
+    PrivateStreamManager,
+    RawFillUpdate,
+    RawOrderUpdate,
 )
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
-from trader.adapters.binance.rest_alignment import (
-    RESTAlignmentCoordinator, AlignmentConfig, RestAlignmentSnapshot
+from trader.adapters.binance.public_stream import (
+    MarketEvent,
+    PublicStreamConfig,
+    PublicStreamManager,
 )
-
+from trader.adapters.binance.rate_limit import Priority, RateBudgetConfig, RestRateBudget
+from trader.adapters.binance.rest_alignment import (
+    AlignmentConfig,
+    RESTAlignmentCoordinator,
+    RestAlignmentSnapshot,
+)
+from trader.adapters.binance.stream_base import StreamState
 
 logger = logging.getLogger(__name__)
 
 
 class AdapterHealth(Enum):
     """适配器健康状态"""
+
     HEALTHY = "HEALTHY"
     DEGRADED = "DEGRADED"
     UNHEALTHY = "UNHEALTHY"
@@ -51,6 +60,7 @@ class AdapterHealth(Enum):
 @dataclass
 class AdapterHealthReport:
     """适配器健康报告"""
+
     public_stream_state: StreamState
     private_stream_state: StreamState
     public_stream_healthy: bool
@@ -66,6 +76,7 @@ class AdapterHealthReport:
 @dataclass
 class BinanceConnectorConfig:
     """连接器配置"""
+
     testnet: bool = True
 
     public_stream_config: Optional[PublicStreamConfig] = None
@@ -115,16 +126,14 @@ class BinanceConnector:
         api_key: str,
         secret_key: str,
         streams: Optional[List[str]] = None,
-        config: Optional[BinanceConnectorConfig] = None
+        config: Optional[BinanceConnectorConfig] = None,
     ):
         self._api_key = api_key
         self._secret_key = secret_key
         self._config = config or BinanceConnectorConfig()
 
         self._credentials = BinanceCredentials(
-            api_key=api_key,
-            secret_key=secret_key,
-            testnet=self._config.testnet
+            api_key=api_key, secret_key=secret_key, testnet=self._config.testnet
         )
 
         self._rate_budget = RestRateBudget(self._config.rate_budget_config)
@@ -151,19 +160,22 @@ class BinanceConnector:
                     rest_url="https://api.binance.com/api",
                 )
         self._private_manager = PrivateStreamManager(
-            credentials=self._credentials,
-            config=private_config
+            credentials=self._credentials, config=private_config
         )
 
         alignment_config = self._config.alignment_config or AlignmentConfig(
-            base_url="https://testnet.binance.vision/api" if self._config.testnet else "https://api.binance.com/api"
+            base_url=(
+                "https://testnet.binance.vision/api"
+                if self._config.testnet
+                else "https://api.binance.com/api"
+            )
         )
         self._rest_coordinator = RESTAlignmentCoordinator(
             api_key=api_key,
             secret_key=secret_key,
             rate_budget=self._rate_budget,
             backoff=self._backoff,
-            config=alignment_config
+            config=alignment_config,
         )
 
         self._running = False
@@ -428,7 +440,7 @@ class BinanceConnector:
                 "rest": rest_metrics,
                 "proxy_failover": self._proxy_failover.get_state(),
                 "private_stream_disabled_reason": self._private_stream_disabled_reason,
-            }
+            },
         )
 
     @property

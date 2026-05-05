@@ -7,22 +7,22 @@ test_reconciliation_engine - ReconciliationEngine 单元测试（Batch 2.4）
 - tolerance 边界
 - 批量对账
 """
+
 from decimal import Decimal
+
 import pytest
 
-from trader.core.domain.models.position import (
-    PositionLedger,
-    PositionStatus,
-)
+from trader.core.domain.models.position import PositionLedger, PositionStatus
 from trader.core.domain.services.reconciliation_engine import (
-    ReconciliationEngine,
     ReconciliationConfig,
+    ReconciliationEngine,
     ReconciliationOutcome,
 )
 
 
 class _FakeLedgerManager:
     """模拟 PositionLedgerManager"""
+
     def __init__(self, ledgers: dict = None):
         self._ledgers: dict = ledgers or {}
 
@@ -201,9 +201,7 @@ class TestReconciliationEngine:
             get_broker_positions=fake_broker,
             get_ledger_manager=lambda: ledger_mgr,
         )
-        outcome = engine.discover_historical_position(
-            "BTCUSDT", Decimal("0.5"), source="manual"
-        )
+        outcome = engine.discover_historical_position("BTCUSDT", Decimal("0.5"), source="manual")
         assert engine._historical_positions["BTCUSDT"] == Decimal("0.5")
         assert outcome.status in ("CONSISTENT", "HISTORICAL_GAP")
 
@@ -214,7 +212,7 @@ class TestReconciliationEngine:
 
         broker_positions = {
             "BTCUSDT": Decimal("2.0"),  # broker 有 2.0, OMS 有 1.0 → 历史 1.0
-            "ETHUSDT": Decimal("0"),    # broker 空仓
+            "ETHUSDT": Decimal("0"),  # broker 空仓
         }
         engine = ReconciliationEngine(
             get_broker_positions=lambda: broker_positions,

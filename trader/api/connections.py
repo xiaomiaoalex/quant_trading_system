@@ -15,6 +15,7 @@ Connection Manager - 前端连接状态管理
 - 轻量级: 无需持久化连接状态
 - 前端兼容: 不依赖 WebSocket 协议
 """
+
 import asyncio
 import logging
 import time
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ClientSession:
     """客户端会话"""
+
     client_id: str
     last_seen_ts_ms: int
     is_healthy: bool = True
@@ -35,6 +37,7 @@ class ClientSession:
 @dataclass
 class FrontendConnectionStatus:
     """前端连接状态"""
+
     active_sessions: int
     last_seen_ts_ms: Optional[int]
     status: str
@@ -56,6 +59,7 @@ class ConnectionManager:
     追踪前端 HTTP 轮询客户端的活跃状态。
     前端定期调用 `/health/heartbeat` 端点来表明存活。
     """
+
     _healthy_timeout_seconds: float = 30.0
 
     def __init__(self) -> None:
@@ -96,9 +100,7 @@ class ConnectionManager:
         now_ms = int(time.time() * 1000)
         async with self._lock:
             self._clients[client_id] = ClientSession(
-                client_id=client_id,
-                last_seen_ts_ms=now_ms,
-                is_healthy=True
+                client_id=client_id, last_seen_ts_ms=now_ms, is_healthy=True
             )
 
     async def get_status(self) -> FrontendConnectionStatus:
@@ -129,7 +131,7 @@ class ConnectionManager:
                 active_sessions=len(active_clients),
                 last_seen_ts_ms=last_seen,
                 status=status,
-                clients=active_clients
+                clients=active_clients,
             )
 
     async def _cleanup_loop(self) -> None:
@@ -150,7 +152,8 @@ class ConnectionManager:
             threshold_ms = int(self._healthy_timeout_seconds * 1000 * 3)
 
             stale = [
-                client_id for client_id, session in self._clients.items()
+                client_id
+                for client_id, session in self._clients.items()
                 if now_ms - session.last_seen_ts_ms > threshold_ms
             ]
 

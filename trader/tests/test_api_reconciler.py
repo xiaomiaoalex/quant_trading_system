@@ -3,15 +3,17 @@ Unit Tests - Reconciler API Endpoints
 ====================================
 Tests for FastAPI Reconciler endpoints using TestClient.
 """
+
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
-from datetime import datetime, timezone, timedelta
 
 from trader.api.main import app
 from trader.api.routes import reconciler
 from trader.core.domain.services.order_ownership_registry import (
-    OrderOwnershipRegistry,
     OrderOwnership,
+    OrderOwnershipRegistry,
     reset_order_ownership_registry,
 )
 
@@ -454,7 +456,7 @@ class TestOrderOwnershipClassification:
         response = self.client.post("/v1/reconciler/trigger", json=request_body)
         assert response.status_code == 200
         data = response.json()
-        
+
         # Without explicit ownership config, external orders still trigger PHANTOM (legacy behavior)
         assert data["phantom_count"] == 1
 
@@ -477,7 +479,7 @@ class TestOrderOwnershipClassification:
         response = self.client.post("/v1/reconciler/trigger", json=request_body)
         assert response.status_code == 200
         data = response.json()
-        
+
         # Owned order SHOULD trigger PHANTOM (our system didn't track it)
         assert data["phantom_count"] == 1
 
@@ -500,7 +502,7 @@ class TestOrderOwnershipClassification:
         response = self.client.post("/v1/reconciler/trigger", json=request_body)
         assert response.status_code == 200
         data = response.json()
-        
+
         assert len(data["drifts"]) == 1
         drift = data["drifts"][0]
         assert drift["drift_type"] == "PHANTOM"
@@ -522,16 +524,16 @@ class TestOrderOwnershipClassification:
                 }
             ],
         }
-        
+
         response1 = self.client.post("/v1/reconciler/trigger", json=request_body)
         assert response1.status_code == 200
         data1 = response1.json()
-        
+
         # Both triggers should show same phantom count (legacy behavior)
         response2 = self.client.post("/v1/reconciler/trigger", json=request_body)
         assert response2.status_code == 200
         data2 = response2.json()
-        
+
         # Should get consistent results
         assert data1["phantom_count"] == data2["phantom_count"]
 
@@ -542,7 +544,7 @@ class TestOrderOwnershipRegistry:
     def test_classify_order_owned_by_prefix(self):
         """Test orders are classified OWNED by namespace prefix."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         assert registry.classify_order("QTS1_order123") == OrderOwnership.OWNED
         assert registry.classify_order("QTS1_fire_test_order") == OrderOwnership.OWNED
 
@@ -552,14 +554,14 @@ class TestOrderOwnershipRegistry:
             namespace_prefix="QTS1_",
             external_prefixes=["legacy_", "oldbot_"],
         )
-        
+
         assert registry.classify_order("legacy_order123") == OrderOwnership.EXTERNAL
         assert registry.classify_order("oldbot_order456") == OrderOwnership.EXTERNAL
 
     def test_classify_order_unknown(self):
         """Test unknown orders are classified as UNKNOWN."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         # Random order without known prefix
         assert registry.classify_order("random_order_xyz") == OrderOwnership.UNKNOWN
         assert registry.classify_order(None) == OrderOwnership.UNKNOWN
@@ -567,44 +569,56 @@ class TestOrderOwnershipRegistry:
     def test_record_order_origin_and_classify(self):
         """Test recording order origin affects classification."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         # Record an external order origin
         registry.record_order_origin(
             client_order_id="unknown_order_123",
             strategy_id=None,  # External / historical
             source="manual",
         )
-        
+
         # Now it should be classified as EXTERNAL
         assert registry.classify_order("unknown_order_123") == OrderOwnership.EXTERNAL
 
     def test_record_order_origin_with_strategy(self):
         """Test recording order origin with strategy_id marks as OWNED."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         # Record a system order origin
         registry.record_order_origin(
             client_order_id="fire_test_signal_001",
             strategy_id="fire_test",
             source="live_order",
         )
-        
+
         # Now it should be classified as OWNED
         assert registry.classify_order("fire_test_signal_001") == OrderOwnership.OWNED
 
     def test_bootstrap_from_local_orders(self):
         """Test bootstrapping from local order list."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         orders = [
-            {"cl_ord_id": "order1", "strategy_id": "fire_test", "created_at": "2026-04-17T10:00:00Z"},
-            {"cl_ord_id": "order2", "strategy_id": "ema_cross_btc", "created_at": "2026-04-17T10:05:00Z"},
-            {"cl_ord_id": "order3", "strategy_id": None, "created_at": "2026-04-17T10:10:00Z"},  # historical
+            {
+                "cl_ord_id": "order1",
+                "strategy_id": "fire_test",
+                "created_at": "2026-04-17T10:00:00Z",
+            },
+            {
+                "cl_ord_id": "order2",
+                "strategy_id": "ema_cross_btc",
+                "created_at": "2026-04-17T10:05:00Z",
+            },
+            {
+                "cl_ord_id": "order3",
+                "strategy_id": None,
+                "created_at": "2026-04-17T10:10:00Z",
+            },  # historical
         ]
-        
+
         count = registry.bootstrap_from_local_orders(orders)
         assert count == 3
-        
+
         # order1 and order2 should be OWNED
         assert registry.classify_order("order1") == OrderOwnership.OWNED
         assert registry.classify_order("order2") == OrderOwnership.OWNED
@@ -614,12 +628,12 @@ class TestOrderOwnershipRegistry:
     def test_get_statistics(self):
         """Test getting registry statistics."""
         registry = OrderOwnershipRegistry(namespace_prefix="QTS1_")
-        
+
         registry.record_order_origin("order1", "fire_test", "live")
         registry.record_order_origin("order2", "ema", "live")
         registry.record_order_origin("order3", None, "historical")  # external
         registry.record_order_origin("order4", None, "historical")  # external
-        
+
         stats = registry.get_statistics()
         assert stats["total_registered"] == 4
         assert stats["owned"] == 2

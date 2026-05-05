@@ -1,6 +1,7 @@
 """
 API tests for strategy runner runtime endpoints.
 """
+
 from __future__ import annotations
 
 import asyncio

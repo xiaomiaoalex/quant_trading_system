@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from trader.core.domain.models.crypto_risk import CryptoPositionRisk, OpenOrderRisk
 
-
 _ACTIVE_ORDER_STATUSES = {
     "OPEN",
     "NEW",

@@ -2,18 +2,20 @@
 Test DrawdownVenueDeleverage - Drawdown / Venue Health 联动去杠杆测试
 =====================================================================
 """
+
 import math
+
 import pytest
 
 from trader.adapters.binance.degraded_cascade import CascadeState
 from trader.core.application.risk_engine import KillSwitchLevel
 from trader.core.domain.services.drawdown_venue_deleverage import (
-    DrawdownVenueDeleverage,
     DeLeverageAction,
     DeLeverageConfig,
-    DrawdownThresholds,
-    VenueHealthThresholds,
     DeLeverageResult,
+    DrawdownThresholds,
+    DrawdownVenueDeleverage,
+    VenueHealthThresholds,
 )
 
 
@@ -325,7 +327,9 @@ class TestDrawdownVenueDeleverage:
             killswitch_level=KillSwitchLevel.L0_NORMAL,
         )
         assert result.venue_health_coef == 1.0
-        assert result.action == DeLeverageAction.HALF_POSITION  # Not HARD_HALT since venue linkage disabled
+        assert (
+            result.action == DeLeverageAction.HALF_POSITION
+        )  # Not HARD_HALT since venue linkage disabled
 
     def test_is_blocked_for_close_only(self):
         """CLOSE_ONLY action -> is_blocked = True"""

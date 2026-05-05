@@ -3,15 +3,17 @@ Environmental Risk Events Unit Tests
 ===================================
 测试环境风险事件模型的功能。
 """
+
 import time
+
 import pytest
 
 from trader.adapters.binance.environmental_risk import (
     EnvironmentalRiskEvent,
     LocalEventLog,
-    RiskSeverity,
-    RiskScope,
     RecommendedLevel,
+    RiskScope,
+    RiskSeverity,
 )
 
 
@@ -24,14 +26,14 @@ class TestEnvironmentalRiskEvent:
             reason="test_reason",
             window_start_ms=1609459200000,
             account_id="acc123",
-            venue="binance"
+            venue="binance",
         )
 
         key2 = EnvironmentalRiskEvent.generate_dedup_key(
             reason="test_reason",
             window_start_ms=1609459200000,
             account_id="acc123",
-            venue="binance"
+            venue="binance",
         )
 
         assert key1 == key2
@@ -40,13 +42,11 @@ class TestEnvironmentalRiskEvent:
     def test_dedup_key_unique_per_params(self):
         """测试不同参数生成不同的去重键"""
         key1 = EnvironmentalRiskEvent.generate_dedup_key(
-            reason="test_reason",
-            window_start_ms=1609459200000
+            reason="test_reason", window_start_ms=1609459200000
         )
 
         key2 = EnvironmentalRiskEvent.generate_dedup_key(
-            reason="test_reason",
-            window_start_ms=1609459200001
+            reason="test_reason", window_start_ms=1609459200001
         )
 
         assert key1 != key2
@@ -60,13 +60,11 @@ class TestEnvironmentalRiskEvent:
             "backoff_state": {},
             "account_id": "acc123",
             "venue": "binance",
-            "metrics": {"private": {"consecutive_failures": 5}}
+            "metrics": {"private": {"consecutive_failures": 5}},
         }
 
         event = EnvironmentalRiskEvent.create_from_adapter_health(
-            adapter_name="binance_adapter",
-            health_data=health_data,
-            scope=RiskScope.GLOBAL
+            adapter_name="binance_adapter", health_data=health_data, scope=RiskScope.GLOBAL
         )
 
         assert event.adapter_name == "binance_adapter"
@@ -144,10 +142,7 @@ class TestLocalEventLog:
         """测试添加事件"""
         log = LocalEventLog()
 
-        event = EnvironmentalRiskEvent(
-            dedup_key="key1",
-            reason="test_reason"
-        )
+        event = EnvironmentalRiskEvent(dedup_key="key1", reason="test_reason")
 
         log.add(event)
 

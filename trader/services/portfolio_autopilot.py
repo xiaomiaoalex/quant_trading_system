@@ -22,7 +22,9 @@ class PortfolioRuntimeController:
     def __init__(self, storage: ControlPlaneInMemoryStorage | None = None):
         self._storage = storage or get_storage()
 
-    def snapshot(self, request: PortfolioAutopilotTickRequest | None = None) -> PortfolioAutopilotSnapshot:
+    def snapshot(
+        self, request: PortfolioAutopilotTickRequest | None = None
+    ) -> PortfolioAutopilotSnapshot:
         req = request or PortfolioAutopilotTickRequest()
         return PortfolioAutopilotSnapshot(
             ts_ms=_utc_now_ms(),

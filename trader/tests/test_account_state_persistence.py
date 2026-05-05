@@ -1,4 +1,5 @@
 """Tests for AccountStateService persistence integration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,8 +22,20 @@ class TestLoadFromPg:
     async def test_load_from_pg_restore_balances(self) -> None:
         mock_repo = AsyncMock()
         mock_repo.load_balances.return_value = [
-            {"asset": "USDT", "free": "1000", "locked": "50", "updated_at_ms": 5000, "source": "rest_snapshot"},
-            {"asset": "BTC", "free": "2", "locked": "0", "updated_at_ms": 5000, "source": "rest_snapshot"},
+            {
+                "asset": "USDT",
+                "free": "1000",
+                "locked": "50",
+                "updated_at_ms": 5000,
+                "source": "rest_snapshot",
+            },
+            {
+                "asset": "BTC",
+                "free": "2",
+                "locked": "0",
+                "updated_at_ms": 5000,
+                "source": "rest_snapshot",
+            },
         ]
 
         svc = AccountStateService(repository=mock_repo)
@@ -67,7 +80,8 @@ class TestPersistOnSnapshot:
 
         # _persist_balances tries to get running loop — without one, silently skips
         svc.apply_rest_snapshot(
-            "acct1", "binance",
+            "acct1",
+            "binance",
             [{"asset": "USDT", "free": "100", "locked": "0"}],
             ts_ms=1000,
         )
@@ -83,7 +97,13 @@ class TestLoadFromPgClearsStale:
     async def test_load_from_pg_clears_stale(self) -> None:
         mock_repo = AsyncMock()
         mock_repo.load_balances.return_value = [
-            {"asset": "USDT", "free": "500", "locked": "0", "updated_at_ms": 3000, "source": "rest_snapshot"},
+            {
+                "asset": "USDT",
+                "free": "500",
+                "locked": "0",
+                "updated_at_ms": 3000,
+                "source": "rest_snapshot",
+            },
         ]
 
         svc = AccountStateService(repository=mock_repo)

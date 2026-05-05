@@ -13,6 +13,7 @@ ReconciliationEngine - 持仓对账引擎
 - KillSwitch 升级不可逆，触发前必须充分记录日志
 - 幂等：重复对账同一 symbol 不重复写日志
 """
+
 import asyncio
 import logging
 from dataclasses import dataclass, field
@@ -25,9 +26,11 @@ logger = logging.getLogger(__name__)
 
 # ==================== 配置 ====================
 
+
 @dataclass
 class ReconciliationConfig:
     """对账配置"""
+
     tolerance: Decimal = field(default_factory=lambda: Decimal("0.001"))
     alert_threshold: Decimal = field(default_factory=lambda: Decimal("0.01"))
     interval_seconds: float = 60.0  # 定时对账间隔
@@ -36,9 +39,11 @@ class ReconciliationConfig:
 
 # ==================== 结果 ====================
 
+
 @dataclass
 class ReconciliationOutcome:
     """单标的对账结果"""
+
     symbol: str
     broker_qty: Decimal
     oms_qty: Decimal

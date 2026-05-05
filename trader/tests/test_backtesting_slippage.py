@@ -1,10 +1,12 @@
 # trader/tests/test_backtesting_slippage.py
-import pytest
 from decimal import Decimal
+
+import pytest
+
 from trader.services.backtesting.slippage import (
-    calculate_slippage,
     BinanceSlippageConfig,
     SlippageModel,
+    calculate_slippage,
 )
 
 
@@ -25,7 +27,9 @@ class TestDirectionAwareSlippage:
         assert slippage == Decimal("0")
 
     def test_volume_based_slippage_scales_with_volume_ratio(self):
-        config = BinanceSlippageConfig(model=SlippageModel.VOLUME_BASED, volume_profile_enabled=True)
+        config = BinanceSlippageConfig(
+            model=SlippageModel.VOLUME_BASED, volume_profile_enabled=True
+        )
         # Small order relative to volume: low slippage
         small = calculate_slippage("BUY", Decimal("100"), Decimal("0.1"), Decimal("100"), config)
         # Large order relative to volume: high slippage

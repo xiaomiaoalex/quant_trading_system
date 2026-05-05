@@ -5,6 +5,7 @@ WebSockets Compatibility Layer
 Provide a runtime monkey patch for websocket implementations where
 `connection_lost()` may be called before `recv_messages` is initialized.
 """
+
 from __future__ import annotations
 
 import logging

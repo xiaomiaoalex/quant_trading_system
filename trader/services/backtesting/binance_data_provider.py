@@ -3,27 +3,37 @@ Binance Data Provider - 实现 DataProviderPort
 ============================================
 从 Binance Spot Demo REST API 获取 K 线数据。
 """
+
 from __future__ import annotations
 
-import aiohttp
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from trader.services.backtesting.ports import DataProviderPort, OHLCV
+import aiohttp
 
+from trader.services.backtesting.ports import OHLCV, DataProviderPort
 
 DEFAULT_SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "ADAUSDT", "DOGEUSDT", "DOTUSDT", "MATICUSDT", "LTCUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "DOTUSDT",
+    "MATICUSDT",
+    "LTCUSDT",
 ]
 
 
 @dataclass
 class BinanceDataConfig:
     """Binance 数据源配置"""
+
     base_url: str = "https://demo.binance.com"
     timeout: float = 30.0
     max_retries: int = 3
@@ -102,7 +112,7 @@ class BinanceDataProvider:
                         raise RuntimeError(f"Binance API error: {resp.status}")
             except aiohttp.ClientError:
                 retries += 1
-                await asyncio.sleep(2 ** retries)
+                await asyncio.sleep(2**retries)
 
         raise RuntimeError(f"Failed to fetch klines after {self._config.max_retries} retries")
 

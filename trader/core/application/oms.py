@@ -20,34 +20,41 @@ OMS - 订单管理系统
 - Core Plane禁止IO（网络/DB/文件IO）
 - 重试逻辑由Adapter层处理
 """
+
 import asyncio
 import logging
-from typing import List, Optional, Dict, Any, Callable
 from datetime import datetime
 from decimal import Decimal
+from typing import Any, Callable, Dict, List, Optional
 
-from trader.core.application.ports import BrokerPort, StoragePort, EventBusPort, BrokerNetworkError, BrokerBusinessError
-from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
-from trader.core.domain.models.events import (
-    DomainEvent, EventType,
-    create_order_created_event
+from trader.core.application.ports import (
+    BrokerBusinessError,
+    BrokerNetworkError,
+    BrokerPort,
+    EventBusPort,
+    StoragePort,
 )
+from trader.core.domain.models.events import DomainEvent, EventType, create_order_created_event
+from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
 logger = logging.getLogger(__name__)
 
 
 class OMSError(Exception):
     """OMS异常基类"""
+
     pass
 
 
 class OrderNotFoundError(OMSError):
     """订单未找到"""
+
     pass
 
 
 class InvalidStateTransitionError(OMSError):
     """无效状态转换"""
+
     pass
 
 
@@ -99,7 +106,7 @@ class OMS:
         price: Optional[Decimal] = None,
         strategy_name: str = "",
         metadata: Optional[Dict] = None,
-        client_order_id: Optional[str] = None
+        client_order_id: Optional[str] = None,
     ) -> Order:
         """
         创建订单
@@ -118,7 +125,7 @@ class OMS:
             price=price,
             strategy_name=strategy_name,
             metadata=metadata or {},
-            status=OrderStatus.PENDING
+            status=OrderStatus.PENDING,
         )
 
         # 保存到缓存和存储
@@ -159,7 +166,7 @@ class OMS:
                 order_type=order.order_type,
                 quantity=order.quantity,
                 price=order.price,
-                client_order_id=order.client_order_id
+                client_order_id=order.client_order_id,
             )
 
             order.submit()
@@ -223,8 +230,7 @@ class OMS:
 
         try:
             success = await self._broker.cancel_order(
-                client_order_id=client_order_id,
-                broker_order_id=order.broker_order_id
+                client_order_id=client_order_id, broker_order_id=order.broker_order_id
             )
 
             if success:
@@ -258,8 +264,7 @@ class OMS:
 
         # 查询券商
         broker_order = await self._broker.get_order(
-            client_order_id=client_order_id,
-            broker_order_id=order.broker_order_id
+            client_order_id=client_order_id, broker_order_id=order.broker_order_id
         )
 
         if not broker_order:
@@ -281,7 +286,9 @@ class OMS:
 
             # 如果状态变化，发布事件
             if old_status != order.status:
-                event_type = EventType.ORDER_FILLED if broker_order.status == OrderStatus.FILLED else None
+                event_type = (
+                    EventType.ORDER_FILLED if broker_order.status == OrderStatus.FILLED else None
+                )
                 if event_type:
                     await self._publish_order_event(order, event_type)
 
@@ -311,7 +318,11 @@ class OMS:
 
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Order]:
         """获取未结订单"""
-        orders = [o for o in self._orders.values() if o.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]]
+        orders = [
+            o
+            for o in self._orders.values()
+            if o.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED]
+        ]
         if symbol:
             orders = [o for o in orders if o.symbol == symbol]
         return orders
@@ -349,9 +360,14 @@ class OMS:
                 self._stats["orders_filled"] += 1
                 await self._trigger_handler("on_order_filled", order)
 
-                logger.info(f"[OMS] 订单成交: {client_order_id}, 数量: {filled_qty}, 价格: {avg_price}")
+                logger.info(
+                    f"[OMS] 订单成交: {client_order_id}, 数量: {filled_qty}, 价格: {avg_price}"
+                )
 
-            elif status == "PARTIALLY_FILLED" and order.status in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED):
+            elif status == "PARTIALLY_FILLED" and order.status in (
+                OrderStatus.SUBMITTED,
+                OrderStatus.PARTIALLY_FILLED,
+            ):
                 order.fill(filled_qty, avg_price)
                 await self._storage.save_order(order)
                 await self._publish_order_event(order, EventType.ORDER_PARTIALLY_FILLED)
@@ -392,7 +408,7 @@ class OMS:
                 "filled_quantity": order.filled_quantity,
                 "average_price": order.average_price,
                 "status": order.status.value,
-            }
+            },
         )
 
         # 保存到存储
@@ -421,9 +437,7 @@ class OMS:
         Returns:
             清理的订单数量
         """
-        terminal_ids = [
-            oid for oid, order in self._orders.items() if order.is_terminal()
-        ]
+        terminal_ids = [oid for oid, order in self._orders.items() if order.is_terminal()]
         for oid in terminal_ids:
             del self._orders[oid]
 

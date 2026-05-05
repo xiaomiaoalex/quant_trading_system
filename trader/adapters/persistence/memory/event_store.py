@@ -8,11 +8,12 @@ InMemoryEventStore - 内存事件存储
 - 支持事件回放
 - 可用于验证事件溯源逻辑
 """
+
 import asyncio
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from trader.core.application.ports import StoragePort
 
@@ -20,6 +21,7 @@ from trader.core.application.ports import StoragePort
 @dataclass
 class StoredEvent:
     """存储的事件"""
+
     event_id: str
     event_type: str
     aggregate_id: str
@@ -45,7 +47,11 @@ class InMemoryEventStore:
         """追加事件"""
         stored = StoredEvent(
             event_id=event.event_id,
-            event_type=event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type),
+            event_type=(
+                event.event_type.value
+                if hasattr(event.event_type, "value")
+                else str(event.event_type)
+            ),
             aggregate_id=event.aggregate_id,
             aggregate_type=event.aggregate_type,
             timestamp=event.timestamp,
@@ -63,7 +69,7 @@ class InMemoryEventStore:
         aggregate_id: Optional[str] = None,
         event_type: Optional[str] = None,
         since: Optional[datetime] = None,
-        limit: int = 1000
+        limit: int = 1000,
     ) -> List[StoredEvent]:
         """查询事件"""
         results = self._events
@@ -101,17 +107,17 @@ class CoreInMemoryStorage(StoragePort):
     """
     Core In-Memory Storage - 核心内存存储 (Event Sourcing Domain)
     ==============================================================
-    
+
     职责边界：
     - 用于事件溯源（Event Sourcing）架构
     - 存储领域事件（Domain Events）、订单（Orders）、持仓（Positions）
     - 实现 StoragePort 接口
-    
+
     禁止跨用规则：
     - 禁止用于控制面（Control Plane）数据存储
     - 禁止存储策略（Strategy）、部署（Deployment）、风控规则等控制面实体
     - 控制面数据应使用 ControlPlaneInMemoryStorage
-    
+
     用途：
     - 核心交易引擎的内存存储
     - 开发和测试环境
@@ -139,12 +145,10 @@ class CoreInMemoryStorage(StoragePort):
         self,
         aggregate_id: Optional[str] = None,
         event_type: Optional[str] = None,
-        limit: int = 1000
+        limit: int = 1000,
     ) -> List:
         return await self._event_store.get_events(
-            aggregate_id=aggregate_id,
-            event_type=event_type,
-            limit=limit
+            aggregate_id=aggregate_id, event_type=event_type, limit=limit
         )
 
     # ==================== 订单 ====================
@@ -156,10 +160,7 @@ class CoreInMemoryStorage(StoragePort):
         return self._orders.get(order_id)
 
     async def get_orders(
-        self,
-        symbol: Optional[str] = None,
-        status: Optional[Any] = None,
-        limit: int = 100
+        self, symbol: Optional[str] = None, status: Optional[Any] = None, limit: int = 100
     ) -> List:
         results = list(self._orders.values())
 

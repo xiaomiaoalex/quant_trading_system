@@ -39,12 +39,27 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Literal,
     List,
+    Literal,
     Optional,
     Protocol,
     Sequence,
     runtime_checkable,
+)
+
+from insight.ai_strategy_generator import (
+    AIStrategyGenerator,
+    GeneratedStrategy,
+    GenerationConfig,
+    LLMBackend,
+)
+from insight.chat_interface import (
+    ChatResponse,
+    ChatSession,
+    ChatSessionStorePort,
+    InMemoryChatSessionStore,
+    SessionStatus,
+    StrategyChatInterface,
 )
 
 from trader.core.application.risk_engine import KillSwitchLevel, RiskLevel
@@ -69,25 +84,11 @@ from trader.services.strategy_evaluator import (
     StrategyMetrics,
 )
 from trader.services.strategy_hotswap import (
-    SwapResult,
-    SwapState,
     StrategyHotSwapper,
     StrategyLoader,
+    SwapResult,
+    SwapState,
     VersionManager,
-)
-from insight.ai_strategy_generator import (
-    AIStrategyGenerator,
-    GeneratedStrategy,
-    GenerationConfig,
-    LLMBackend,
-)
-from insight.chat_interface import (
-    ChatSession,
-    ChatSessionStorePort,
-    ChatResponse,
-    InMemoryChatSessionStore,
-    SessionStatus,
-    StrategyChatInterface,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ class LifecycleEvent:
 
     def __post_init__(self):
         if not self.event_id:
-            object.__setattr__(self, 'event_id', str(uuid.uuid4()))
+            object.__setattr__(self, "event_id", str(uuid.uuid4()))
 
 
 # ============================================================================
@@ -309,9 +310,9 @@ class StrategyLifecycle:
 
     def __post_init__(self):
         if isinstance(self.created_at, datetime) and self.created_at.tzinfo is None:
-            object.__setattr__(self, 'created_at', self.created_at.replace(tzinfo=timezone.utc))
+            object.__setattr__(self, "created_at", self.created_at.replace(tzinfo=timezone.utc))
         if isinstance(self.updated_at, datetime) and self.updated_at.tzinfo is None:
-            object.__setattr__(self, 'updated_at', self.updated_at.replace(tzinfo=timezone.utc))
+            object.__setattr__(self, "updated_at", self.updated_at.replace(tzinfo=timezone.utc))
 
     def _add_event(
         self,
@@ -334,7 +335,9 @@ class StrategyLifecycle:
         self.history.append(event)
         self.updated_at = datetime.now(timezone.utc)
 
-    def _transition_to(self, new_status: LifecycleStatus, event_type: LifecycleEventType, **kwargs) -> None:
+    def _transition_to(
+        self, new_status: LifecycleStatus, event_type: LifecycleEventType, **kwargs
+    ) -> None:
         """状态转换"""
         self._add_event(event_type, self.status, new_status, **kwargs)
         self.status = new_status
@@ -385,7 +388,9 @@ class LifecyclePort(Protocol):
         """保存策略生命周期"""
         ...
 
-    async def list_lifecycles(self, status: Optional[LifecycleStatus] = None) -> List[StrategyLifecycle]:
+    async def list_lifecycles(
+        self, status: Optional[LifecycleStatus] = None
+    ) -> List[StrategyLifecycle]:
         """列出策略生命周期"""
         ...
 
@@ -606,9 +611,7 @@ class StrategyLifecycleManager:
                 )
             else:
                 # 使用简单的代码执行加载
-                plugin = await self._load_strategy_from_code(
-                    code, strategy_id, version, risk_level
-                )
+                plugin = await self._load_strategy_from_code(code, strategy_id, version, risk_level)
 
             # 创建生命周期
             lifecycle = StrategyLifecycle(
@@ -617,7 +620,7 @@ class StrategyLifecycleManager:
                 status=LifecycleStatus.DRAFT,
                 version=version,
                 metadata={
-                    "name": name or getattr(plugin, 'name', strategy_id),
+                    "name": name or getattr(plugin, "name", strategy_id),
                     "risk_level": risk_level.value,
                     "code": code,
                     "config": config or {},
@@ -648,34 +651,42 @@ class StrategyLifecycleManager:
     ) -> StrategyPlugin:
         """从代码加载策略（简单实现）"""
         namespace: Dict[str, Any] = {
-            '__name__': f'strategy_{strategy_id}',
-            '__builtins__': __builtins__,
-            'RiskLevel': RiskLevel,
-            'StrategyResourceLimits': StrategyResourceLimits,
-            'Decimal': Decimal,
-            'datetime': datetime,
-            'Signal': Signal,
-            'SignalType': getattr(__import__('trader.core.domain.models.signal', fromlist=['SignalType']), 'SignalType'),
-            'MarketData': MarketData,
-            'MarketDataType': getattr(__import__('trader.core.application.strategy_protocol', fromlist=['MarketDataType']), 'MarketDataType'),
-            'ValidationResult': ValidationResult,
-            'ValidationStatus': ValidationStatus,
-            'ValidationError': ValidationError,
+            "__name__": f"strategy_{strategy_id}",
+            "__builtins__": __builtins__,
+            "RiskLevel": RiskLevel,
+            "StrategyResourceLimits": StrategyResourceLimits,
+            "Decimal": Decimal,
+            "datetime": datetime,
+            "Signal": Signal,
+            "SignalType": getattr(
+                __import__("trader.core.domain.models.signal", fromlist=["SignalType"]),
+                "SignalType",
+            ),
+            "MarketData": MarketData,
+            "MarketDataType": getattr(
+                __import__(
+                    "trader.core.application.strategy_protocol", fromlist=["MarketDataType"]
+                ),
+                "MarketDataType",
+            ),
+            "ValidationResult": ValidationResult,
+            "ValidationStatus": ValidationStatus,
+            "ValidationError": ValidationError,
         }
 
         try:
-            compiled = compile(code, '<string>', 'exec')
+            compiled = compile(code, "<string>", "exec")
             exec(compiled, namespace)
 
-            if 'get_plugin' not in namespace:
+            if "get_plugin" not in namespace:
                 raise ValueError(f"代码缺少 get_plugin() 函数")
 
-            plugin = namespace['get_plugin']()
+            plugin = namespace["get_plugin"]()
 
             # 设置属性
-            if hasattr(plugin, 'strategy_id'):
+            if hasattr(plugin, "strategy_id"):
                 plugin.strategy_id = strategy_id
-            if hasattr(plugin, 'version'):
+            if hasattr(plugin, "version"):
                 plugin.version = version
 
             return plugin
@@ -712,7 +723,7 @@ class StrategyLifecycleManager:
             # 调用策略的validate方法
             validation_result = None
             try:
-                if hasattr(lifecycle.strategy, 'validate'):
+                if hasattr(lifecycle.strategy, "validate"):
                     validation_result = lifecycle.strategy.validate()
                 else:
                     validation_result = ValidationResult.valid()
@@ -804,6 +815,7 @@ class StrategyLifecycleManager:
 
                 # 运行回测
                 from datetime import datetime as _dt
+
                 backtest_start: _dt
                 if start_time is None:
                     backtest_start = _timedelta(days=30)
@@ -896,9 +908,9 @@ class StrategyLifecycleManager:
             if auto_approve and lifecycle.backtest_report:
                 metrics = lifecycle.backtest_report.metrics
                 should_auto_approve = (
-                    metrics.sharpe_ratio >= 1.0 and
-                    metrics.win_rate >= 0.4 and
-                    metrics.max_drawdown < initial_capital * Decimal("0.2")
+                    metrics.sharpe_ratio >= 1.0
+                    and metrics.win_rate >= 0.4
+                    and metrics.max_drawdown < initial_capital * Decimal("0.2")
                 )
 
             if should_auto_approve:
@@ -1005,7 +1017,9 @@ class StrategyLifecycleManager:
                     await self._runner.load_strategy(
                         strategy_id=lifecycle.strategy_id,
                         version=lifecycle.version,
-                        module_path=lifecycle.metadata.get("module_path") or lifecycle.metadata.get("entrypoint") or "dynamic:manual",
+                        module_path=lifecycle.metadata.get("module_path")
+                        or lifecycle.metadata.get("entrypoint")
+                        or "dynamic:manual",
                         config=config,
                         deployment_id=deployment.deployment_id,
                         symbols=list(deployment.symbols),
@@ -1197,13 +1211,13 @@ class StrategyLifecycleManager:
 
                 # 调用策略的 update_config 方法
                 validation_result: ValidationResult | None = None
-                if hasattr(lifecycle.strategy, 'update_config'):
-                    update_method = getattr(lifecycle.strategy, 'update_config')
+                if hasattr(lifecycle.strategy, "update_config"):
+                    update_method = getattr(lifecycle.strategy, "update_config")
                     if asyncio.iscoroutinefunction(update_method):
                         validation_result = await update_method(new_config)
                     else:
                         validation_result = update_method(new_config)
-                elif hasattr(lifecycle.strategy, 'initialize'):
+                elif hasattr(lifecycle.strategy, "initialize"):
                     # 后备：调用 initialize 重新初始化
                     await lifecycle.strategy.initialize(merged_config)
                     validation_result = ValidationResult.valid()
@@ -1298,8 +1312,9 @@ class StrategyLifecycleManager:
                     # TODO: 需要从 new_code 构建 StrategyPlugin
                     # 目前使用模拟策略进行热插拔测试
                     from trader.tests.fakes.fake_strategy import FakeStrategyPlugin
+
                     mock_strategy = FakeStrategyPlugin()
-                    
+
                     swap_result = await self._hotswapper.swap(
                         new_strategy=mock_strategy,
                         force=True,
@@ -1436,6 +1451,7 @@ class StrategyLifecycleManager:
 def _timedelta(days: int = 0, hours: int = 0, minutes: int = 0, seconds: int = 0) -> datetime:
     """创建过去的时间点（简单的datetime辅助函数）"""
     from datetime import timedelta as td
+
     return datetime.now(timezone.utc) - td(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 

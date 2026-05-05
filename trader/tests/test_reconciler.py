@@ -1,19 +1,23 @@
 """
 Unit tests for Reconciler
 """
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from trader.core.application.reconciler import (
-    Reconciler,
     DriftType,
-    LocalOrderSnapshot,
     ExchangeOrderSnapshot,
+    LocalOrderSnapshot,
+    Reconciler,
     ReconcileReport,
 )
 
 
-def make_local(cl_ord_id: str, status: str, created_at: datetime = None, filled_quantity: str = "0.0", **kwargs) -> LocalOrderSnapshot:
+def make_local(
+    cl_ord_id: str, status: str, created_at: datetime = None, filled_quantity: str = "0.0", **kwargs
+) -> LocalOrderSnapshot:
     if created_at is None:
         created_at = datetime.now(timezone.utc) - timedelta(seconds=120)
     return LocalOrderSnapshot(
@@ -28,7 +32,9 @@ def make_local(cl_ord_id: str, status: str, created_at: datetime = None, filled_
     )
 
 
-def make_exchange(cl_ord_id: str, status: str, filled_quantity: str = "0.0", **kwargs) -> ExchangeOrderSnapshot:
+def make_exchange(
+    cl_ord_id: str, status: str, filled_quantity: str = "0.0", **kwargs
+) -> ExchangeOrderSnapshot:
     return ExchangeOrderSnapshot(
         cl_ord_id=cl_ord_id,
         status=status,
@@ -68,7 +74,13 @@ class TestReconcilerNoDrift:
 class TestReconcilerGhost:
     def test_ghost_order_detected(self):
         r = Reconciler(grace_period_sec=10.0)
-        local = [make_local("order-1", "SUBMITTED", created_at=datetime.now(timezone.utc) - timedelta(seconds=20))]
+        local = [
+            make_local(
+                "order-1",
+                "SUBMITTED",
+                created_at=datetime.now(timezone.utc) - timedelta(seconds=20),
+            )
+        ]
         report = r.reconcile(local, [])
         assert report.ghost_count == 1
         assert len(report.drifts) == 1
@@ -77,7 +89,13 @@ class TestReconcilerGhost:
 
     def test_ghost_within_grace_period(self):
         r = Reconciler(grace_period_sec=60.0)
-        local = [make_local("order-1", "SUBMITTED", created_at=datetime.now(timezone.utc) - timedelta(seconds=30))]
+        local = [
+            make_local(
+                "order-1",
+                "SUBMITTED",
+                created_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+            )
+        ]
         report = r.reconcile(local, [])
         assert report.ghost_count == 1
         assert report.drifts[0].grace_period_remaining_sec is not None
@@ -98,7 +116,13 @@ class TestReconcilerPhantom:
 class TestReconcilerDiverged:
     def test_diverged_status(self):
         r = Reconciler(grace_period_sec=10.0)
-        local = [make_local("order-1", "SUBMITTED", created_at=datetime.now(timezone.utc) - timedelta(seconds=20))]
+        local = [
+            make_local(
+                "order-1",
+                "SUBMITTED",
+                created_at=datetime.now(timezone.utc) - timedelta(seconds=20),
+            )
+        ]
         exchange = [make_exchange("order-1", "FILLED")]
         report = r.reconcile(local, exchange)
         assert report.diverged_count == 1
@@ -106,11 +130,14 @@ class TestReconcilerDiverged:
 
     def test_diverged_filled_quantity(self):
         r = Reconciler(grace_period_sec=10.0)
-        local = [make_local(
-            "order-1", "SUBMITTED",
-            created_at=datetime.now(timezone.utc) - timedelta(seconds=20),
-            filled_quantity="0.5"
-        )]
+        local = [
+            make_local(
+                "order-1",
+                "SUBMITTED",
+                created_at=datetime.now(timezone.utc) - timedelta(seconds=20),
+                filled_quantity="0.5",
+            )
+        ]
         exchange = [make_exchange("order-1", "SUBMITTED", filled_quantity="1.0")]
         report = r.reconcile(local, exchange)
         assert report.diverged_count == 1
@@ -119,7 +146,13 @@ class TestReconcilerDiverged:
 
     def test_diverged_within_grace_period(self):
         r = Reconciler(grace_period_sec=60.0)
-        local = [make_local("order-1", "SUBMITTED", created_at=datetime.now(timezone.utc) - timedelta(seconds=30))]
+        local = [
+            make_local(
+                "order-1",
+                "SUBMITTED",
+                created_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+            )
+        ]
         exchange = [make_exchange("order-1", "FILLED")]
         report = r.reconcile(local, exchange)
         assert report.diverged_count == 1
@@ -133,7 +166,9 @@ class TestReconcilerMixed:
         now = datetime.now(timezone.utc)
         local = [
             make_local("order-1", "SUBMITTED", created_at=now - timedelta(seconds=20)),
-            make_local("order-2", "FILLED", created_at=now - timedelta(seconds=20), filled_quantity="1.0"),
+            make_local(
+                "order-2", "FILLED", created_at=now - timedelta(seconds=20), filled_quantity="1.0"
+            ),
         ]
         exchange = [
             make_exchange("order-2", "SUBMITTED"),

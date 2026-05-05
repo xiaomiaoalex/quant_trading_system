@@ -14,8 +14,9 @@ Money - 金额值对象
     >>> quantity = Money(Decimal("0.5"), "BTC")
     >>> total = price * quantity  # 自动计算
 """
+
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional, Union
 
 
@@ -27,13 +28,14 @@ class Money:
     使用frozen=True确保实例不可变，这对于哈希和并发安全很重要。
     例如：可以作为dict的key使用
     """
+
     amount: Decimal
     currency: str = "USDT"
 
     def __post_init__(self):
         """确保amount是Decimal类型"""
         if isinstance(self.amount, (int, float, str)):
-            object.__setattr__(self, 'amount', Decimal(str(self.amount)))
+            object.__setattr__(self, "amount", Decimal(str(self.amount)))
 
     # ==================== 工厂方法 ====================
 

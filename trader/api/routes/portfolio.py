@@ -3,12 +3,17 @@ Portfolio API Routes
 ===================
 Position and PnL query endpoints.
 """
+
 from typing import Optional
-from fastapi import APIRouter, Query, Path
+
+from fastapi import APIRouter, Path, Query
 
 from trader.api.models.schemas import (
-    PositionView, PnlView,
-    StrategyPositionView, LotView, PositionBreakdown,
+    LotView,
+    PnlView,
+    PositionBreakdown,
+    PositionView,
+    StrategyPositionView,
 )
 from trader.services import PortfolioService
 
@@ -46,6 +51,7 @@ async def get_pnl(
 
 
 # ==================== 策略级持仓（Batch 3 新增） ====================
+
 
 @router.get("/v1/portfolio/strategy-positions", response_model=list[StrategyPositionView])
 async def get_strategy_positions(

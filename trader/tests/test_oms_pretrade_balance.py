@@ -17,9 +17,9 @@ def _broker_with_balances(balances: list[dict[str, str]]) -> MagicMock:
     broker = MagicMock()
     broker.broker_name = "binance_spot_demo"
     broker.get_symbol_step_size = AsyncMock(return_value=Decimal("0.00001"))
-    broker.get_exchange_info = AsyncMock(return_value={
-        "symbols": [{"filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]}]
-    })
+    broker.get_exchange_info = AsyncMock(
+        return_value={"symbols": [{"filters": [{"filterType": "NOTIONAL", "minNotional": "10"}]}]}
+    )
     broker.get_ticker_prices = AsyncMock(return_value={"BTCUSDT": Decimal("50000")})
     broker._fetch_account = AsyncMock()
     broker._account_cache = {"balances": balances}
@@ -53,10 +53,12 @@ def _signal(
 
 @pytest.mark.asyncio
 async def test_market_buy_uses_reference_price_for_balance_precheck() -> None:
-    broker = _broker_with_balances([
-        {"asset": "USDT", "free": "100", "locked": "0"},
-        {"asset": "BTC", "free": "0", "locked": "0"},
-    ])
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "100", "locked": "0"},
+            {"asset": "BTC", "free": "0", "locked": "0"},
+        ]
+    )
     handler = OMSCallbackHandler(
         broker=broker,
         storage=ControlPlaneInMemoryStorage(),
@@ -77,9 +79,11 @@ async def test_market_buy_uses_reference_price_for_balance_precheck() -> None:
 
 @pytest.mark.asyncio
 async def test_account_fetch_failure_is_fail_closed() -> None:
-    broker = _broker_with_balances([
-        {"asset": "USDT", "free": "10000", "locked": "0"},
-    ])
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+        ]
+    )
     broker._fetch_account = AsyncMock(side_effect=RuntimeError("account unavailable"))
     handler = OMSCallbackHandler(
         broker=broker,
@@ -96,10 +100,12 @@ async def test_account_fetch_failure_is_fail_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_sell_insufficient_base_balance_rejected_before_place_order() -> None:
-    broker = _broker_with_balances([
-        {"asset": "USDT", "free": "10000", "locked": "0"},
-        {"asset": "BTC", "free": "0.001", "locked": "0"},
-    ])
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+            {"asset": "BTC", "free": "0.001", "locked": "0"},
+        ]
+    )
     handler = OMSCallbackHandler(
         broker=broker,
         storage=ControlPlaneInMemoryStorage(),
@@ -118,10 +124,12 @@ async def test_sell_insufficient_base_balance_rejected_before_place_order() -> N
 
 @pytest.mark.asyncio
 async def test_local_reservation_prevents_sequential_overcommit() -> None:
-    broker = _broker_with_balances([
-        {"asset": "USDT", "free": "100", "locked": "0"},
-        {"asset": "BTC", "free": "0", "locked": "0"},
-    ])
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "100", "locked": "0"},
+            {"asset": "BTC", "free": "0", "locked": "0"},
+        ]
+    )
     broker.place_order.return_value = _submitted_order()
     handler = OMSCallbackHandler(
         broker=broker,

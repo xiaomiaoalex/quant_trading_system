@@ -1,4 +1,5 @@
 """PG-first runtime state repository."""
+
 import asyncio
 import json
 import logging
@@ -93,8 +94,12 @@ class RuntimeStateRepository:
                 )
                 """
             )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_states_strategy_id ON strategy_runtime_states(strategy_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_states_status ON strategy_runtime_states(status)")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runtime_states_strategy_id ON strategy_runtime_states(strategy_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_runtime_states_status ON strategy_runtime_states(status)"
+            )
 
     async def save_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         deployment_id = state.get("deployment_id") or state.get("strategy_id")
@@ -159,7 +164,9 @@ class RuntimeStateRepository:
                 if row:
                     return self._row_to_state(row)
             except Exception as exc:
-                logger.warning("PostgreSQL get runtime state failed, falling back to memory: %s", exc)
+                logger.warning(
+                    "PostgreSQL get runtime state failed, falling back to memory: %s", exc
+                )
         return self._memory_storage.strategy_runtime_states.get(deployment_id)
 
     async def get_strategy_runtime_state(self, deployment_id: str) -> Optional[Dict[str, Any]]:
@@ -196,7 +203,9 @@ class RuntimeStateRepository:
                     )
                 return [self._row_to_state(row) for row in rows]
             except Exception as exc:
-                logger.warning("PostgreSQL list running states failed, falling back to memory: %s", exc)
+                logger.warning(
+                    "PostgreSQL list running states failed, falling back to memory: %s", exc
+                )
         return self._memory_storage.list_running_strategy_states()
 
     async def list_running_strategy_states(self) -> List[Dict[str, Any]]:

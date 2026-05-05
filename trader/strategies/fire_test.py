@@ -69,9 +69,7 @@ class FireTestStrategy:
         if config:
             result = await self.update_config(config)
             if not result.is_valid:
-                raise ValueError(
-                    f"Fire Test 初始化参数无效: {[e.message for e in result.errors]}"
-                )
+                raise ValueError(f"Fire Test 初始化参数无效: {[e.message for e in result.errors]}")
 
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         if self.max_signals > 0 and self._emit_count >= self.max_signals:
@@ -262,4 +260,3 @@ def create_plugin(**_kwargs) -> FireTestStrategy:
 def get_plugin() -> StrategyPlugin:
     """兼容旧 runner 的入口。必须返回新对象，不能返回单例。"""
     return create_plugin()
-

@@ -3,17 +3,19 @@ Extended Coverage Tests for REST Alignment
 ==========================================
 增加 rest_alignment 模块的测试覆盖率
 """
-import pytest
+
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from trader.adapters.binance.rate_limit import Priority
 from trader.adapters.binance.rest_alignment import (
-    RESTAlignmentCoordinator,
     AlignmentConfig,
     AlignmentMetrics,
+    RESTAlignmentCoordinator,
 )
-from trader.adapters.binance.rate_limit import Priority
 
 
 class TestRESTAlignmentExtended:
@@ -33,7 +35,7 @@ class TestRESTAlignmentExtended:
         config = AlignmentConfig(
             base_url="https://api.binance.com/api",
             p0_interval_seconds=30.0,
-            min_alignment_interval=15.0
+            min_alignment_interval=15.0,
         )
 
         assert config.base_url == "https://api.binance.com/api"
@@ -51,10 +53,7 @@ class TestRESTAlignmentExtended:
     @pytest.mark.asyncio
     async def test_coordinator_initialization(self):
         """测试协调器初始化"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_key",
-            secret_key="test_secret"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_key", secret_key="test_secret")
 
         assert coordinator._running is False
         assert coordinator._api_key == "test_key"
@@ -63,10 +62,7 @@ class TestRESTAlignmentExtended:
     @pytest.mark.asyncio
     async def test_start(self):
         """测试启动"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_key",
-            secret_key="test_secret"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_key", secret_key="test_secret")
 
         await coordinator.start()
 
@@ -76,10 +72,7 @@ class TestRESTAlignmentExtended:
     @pytest.mark.asyncio
     async def test_stop_not_running(self):
         """测试停止 - 未运行"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_key",
-            secret_key="test_secret"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_key", secret_key="test_secret")
 
         coordinator._running = False
 

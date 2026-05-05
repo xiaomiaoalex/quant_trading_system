@@ -35,7 +35,9 @@ class _FakeSession:
         self._responses = responses
         self.calls: list[dict[str, Any]] = []
 
-    def request(self, method: str, url: str, headers: dict[str, str] | None = None, proxy: str | None = None):
+    def request(
+        self, method: str, url: str, headers: dict[str, str] | None = None, proxy: str | None = None
+    ):
         self.calls.append({"method": method, "url": url, "headers": headers, "proxy": proxy})
         if not self._responses:
             raise AssertionError("No queued fake response for request")

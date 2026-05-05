@@ -13,32 +13,35 @@ Feature Store - 版本化特征持久化仓库
 - Fail-Closed：异常路径不得 silent pass
 - 写路径必须幂等，状态语义必须可验证
 """
+
 import asyncio
-import logging
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.adapters.persistence.postgres import (
     PostgreSQLStorage,
-    is_postgres_available,
     check_postgres_connection,
+    is_postgres_available,
 )
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
 
 class FeatureVersionConflictError(Exception):
     """Raised when the same feature key has different values"""
+
     pass
 
 
 @dataclass
 class FeatureRecord:
     """Feature record representation"""
+
     symbol: str
     feature_name: str
     version: str
@@ -51,9 +54,10 @@ class FeatureRecord:
 class FeaturePoint:
     """
     时间序列特征点
-    
+
     用于范围查询返回的时间序列表征
     """
+
     symbol: str
     feature_name: str
     version: str
@@ -64,7 +68,7 @@ class FeaturePoint:
 class FeatureStore:
     """
     Feature Store - 版本化特征持久化仓库
-    
+
     职责：
     - 管理特征的持久化
     - 提供版本化特征读写
@@ -107,7 +111,7 @@ class FeatureStore:
         async with self._init_lock:
             if self._use_postgres and self._postgres_storage is not None:
                 return True
-            
+
             is_available, msg = await check_postgres_connection(timeout=2.0)
             if is_available:
                 try:
@@ -117,10 +121,12 @@ class FeatureStore:
                     logger.info("PostgreSQL connected successfully for feature store")
                     return True
                 except Exception as e:
-                    logger.warning(f"Failed to connect to PostgreSQL: {e}, falling back to in-memory storage")
+                    logger.warning(
+                        f"Failed to connect to PostgreSQL: {e}, falling back to in-memory storage"
+                    )
                     self._use_postgres = False
                     self._postgres_storage = None
-            
+
             logger.debug(f"PostgreSQL not available: {msg}")
             return False
 
@@ -147,13 +153,13 @@ class FeatureStore:
     ) -> Tuple[bool, bool]:
         """
         Check and store in memory storage.
-        
+
         Returns:
             Tuple of (created: bool, is_duplicate: bool)
         """
         key = self._make_key(symbol, feature_name, version, ts_ms)
         value_hash = self._make_value_hash(value)
-        
+
         existing = self._memory_storage.feature_values_by_key.get(key)
         if existing is not None:
             existing_hash = existing.get("value_hash")
@@ -163,7 +169,7 @@ class FeatureStore:
                 raise FeatureVersionConflictError(
                     f"Feature version conflict for {key}: existing value hash {existing_hash} != new value hash {value_hash}"
                 )
-        
+
         now = datetime.now(timezone.utc).isoformat() + "Z"
         feature = {
             "symbol": symbol,
@@ -189,9 +195,9 @@ class FeatureStore:
     ) -> Tuple[bool, bool]:
         """
         Write a feature value with version control.
-        
+
         语义：同 key 同 value 幂等成功；同 key 不同 value 抛 FeatureVersionConflictError
-        
+
         Args:
             symbol: Trading symbol (e.g., "BTCUSDT")
             feature_name: Feature name (e.g., "ema_20", "volume_ratio")
@@ -199,17 +205,17 @@ class FeatureStore:
             ts_ms: Timestamp in milliseconds
             value: Feature value (any JSON-serializable type)
             meta: Optional metadata dictionary
-            
+
         Returns:
             Tuple of (created: bool, is_duplicate: bool)
             - created=True, is_duplicate=False: 新写入
             - created=False, is_duplicate=True: 幂等重复（相同 key 相同 value）
-            
+
         Raises:
             FeatureVersionConflictError: 同 key 不同 value
         """
         meta = meta or {}
-        
+
         if await self._ensure_postgres():
             try:
                 return await self._postgres_write_feature(
@@ -217,7 +223,7 @@ class FeatureStore:
                 )
             except Exception as e:
                 logger.warning(f"PostgreSQL write_feature failed: {e}, falling back to in-memory")
-        
+
         return self._check_and_store_memory(symbol, feature_name, version, ts_ms, value, meta)
 
     async def _postgres_write_feature(
@@ -232,16 +238,19 @@ class FeatureStore:
         """Write feature to PostgreSQL"""
         key = self._make_key(symbol, feature_name, version, ts_ms)
         value_hash = self._make_value_hash(value)
-        
+
         async with self._postgres_storage._pool.acquire() as conn:
             existing = await conn.fetchrow(
                 """
                 SELECT value_hash FROM feature_values 
                 WHERE symbol = $1 AND feature_name = $2 AND version = $3 AND ts_ms = $4
                 """,
-                symbol, feature_name, version, ts_ms,
+                symbol,
+                feature_name,
+                version,
+                ts_ms,
             )
-            
+
             if existing is not None:
                 if existing["value_hash"] == value_hash:
                     return False, True
@@ -250,16 +259,21 @@ class FeatureStore:
                         f"Feature version conflict for {key}: "
                         f"existing value hash {existing['value_hash']} != new value hash {value_hash}"
                     )
-            
+
             await conn.execute(
                 """
                 INSERT INTO feature_values (symbol, feature_name, version, ts_ms, value, meta, value_hash)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
-                symbol, feature_name, version, ts_ms,
-                json.dumps(value), json.dumps(meta), value_hash,
+                symbol,
+                feature_name,
+                version,
+                ts_ms,
+                json.dumps(value),
+                json.dumps(meta),
+                value_hash,
             )
-        
+
         return True, False
 
     async def read_feature(
@@ -271,13 +285,13 @@ class FeatureStore:
     ) -> Optional[Dict[str, Any]]:
         """
         Read a feature value at specific timestamp.
-        
+
         Args:
             symbol: Trading symbol
             feature_name: Feature name
             version: Feature version
             ts_ms: Timestamp in milliseconds
-            
+
         Returns:
             Feature record or None if not found
         """
@@ -286,12 +300,12 @@ class FeatureStore:
                 return await self._postgres_read_feature(symbol, feature_name, version, ts_ms)
             except Exception as e:
                 logger.warning(f"PostgreSQL read_feature failed: {e}, falling back to in-memory")
-        
+
         key = self._make_key(symbol, feature_name, version, ts_ms)
         feature = self._memory_storage.feature_values_by_key.get(key)
         if feature is None:
             return None
-        
+
         return {
             "symbol": feature["symbol"],
             "feature_name": feature["feature_name"],
@@ -316,18 +330,23 @@ class FeatureStore:
                 FROM feature_values 
                 WHERE symbol = $1 AND feature_name = $2 AND version = $3 AND ts_ms = $4
                 """,
-                symbol, feature_name, version, ts_ms,
+                symbol,
+                feature_name,
+                version,
+                ts_ms,
             )
-            
+
             if row is None:
                 return None
-            
+
             return {
                 "symbol": row["symbol"],
                 "feature_name": row["feature_name"],
                 "version": row["version"],
                 "ts_ms": row["ts_ms"],
-                "value": json.loads(row["value"]) if isinstance(row["value"], str) else row["value"],
+                "value": (
+                    json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                ),
                 "meta": json.loads(row["meta"]) if isinstance(row["meta"], str) else row["meta"],
             }
 
@@ -341,14 +360,14 @@ class FeatureStore:
     ) -> List[FeaturePoint]:
         """
         Read feature values within a time range.
-        
+
         Args:
             symbol: Trading symbol
             feature_name: Feature name
             start_time: Start timestamp in milliseconds (inclusive)
             end_time: End timestamp in milliseconds (inclusive)
             version: Optional version filter (if None, returns all versions)
-            
+
         Returns:
             List of FeaturePoint ordered by ts_ms ascending
         """
@@ -358,8 +377,10 @@ class FeatureStore:
                     symbol, feature_name, start_time, end_time, version
                 )
             except Exception as e:
-                logger.warning(f"PostgreSQL read_feature_range failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL read_feature_range failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_read_feature_range(symbol, feature_name, start_time, end_time, version)
 
     def _memory_read_feature_range(
@@ -372,36 +393,38 @@ class FeatureStore:
     ) -> List[FeaturePoint]:
         """
         Read feature range from memory storage.
-        
+
         Memory storage scan with prefix filter.
         Note: O(n) scan over all features. For large datasets, consider adding
         a secondary index mapping (symbol, feature_name) -> [keys] for O(log n) lookup.
         """
         results: List[FeaturePoint] = []
         prefix = f"{symbol}:{feature_name}:"
-        
+
         # Iterate keys first, then access values (avoids unnecessary value access for non-matching keys)
         storage = self._memory_storage.feature_values_by_key
         for key in storage.keys():
             if not key.startswith(prefix):
                 continue
             feature = storage[key]
-            
+
             ts_ms = feature["ts_ms"]
             if ts_ms < start_time or ts_ms > end_time:
                 continue
-            
+
             if version is not None and feature["version"] != version:
                 continue
-            
-            results.append(FeaturePoint(
-                symbol=feature["symbol"],
-                feature_name=feature["feature_name"],
-                version=feature["version"],
-                ts_ms=ts_ms,
-                value=feature["value"],
-            ))
-        
+
+            results.append(
+                FeaturePoint(
+                    symbol=feature["symbol"],
+                    feature_name=feature["feature_name"],
+                    version=feature["version"],
+                    ts_ms=ts_ms,
+                    value=feature["value"],
+                )
+            )
+
         results.sort(key=lambda x: x.ts_ms)
         return results
 
@@ -415,7 +438,7 @@ class FeatureStore:
     ) -> List[FeaturePoint]:
         """
         Read feature range from PostgreSQL.
-        
+
         Uses indexed ts_ms column for efficient range query.
         """
         async with self._postgres_storage.acquire() as conn:
@@ -428,7 +451,11 @@ class FeatureStore:
                     AND ts_ms >= $4 AND ts_ms <= $5
                     ORDER BY ts_ms ASC
                     """,
-                    symbol, feature_name, version, start_time, end_time,
+                    symbol,
+                    feature_name,
+                    version,
+                    start_time,
+                    end_time,
                 )
             else:
                 rows = await conn.fetch(
@@ -439,16 +466,21 @@ class FeatureStore:
                     AND ts_ms >= $3 AND ts_ms <= $4
                     ORDER BY ts_ms ASC
                     """,
-                    symbol, feature_name, start_time, end_time,
+                    symbol,
+                    feature_name,
+                    start_time,
+                    end_time,
                 )
-            
+
             return [
                 FeaturePoint(
                     symbol=row["symbol"],
                     feature_name=row["feature_name"],
                     version=row["version"],
                     ts_ms=row["ts_ms"],
-                    value=json.loads(row["value"]) if isinstance(row["value"], str) else row["value"],
+                    value=(
+                        json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                    ),
                 )
                 for row in rows
             ]
@@ -460,11 +492,11 @@ class FeatureStore:
     ) -> List[Dict[str, str]]:
         """
         List all available versions for a feature.
-        
+
         Args:
             symbol: Trading symbol
             feature_name: Feature name
-            
+
         Returns:
             List of version info dictionaries with 'version' and 'latest_ts_ms' keys
         """
@@ -473,17 +505,17 @@ class FeatureStore:
                 return await self._postgres_list_versions(symbol, feature_name)
             except Exception as e:
                 logger.warning(f"PostgreSQL list_versions failed: {e}, falling back to in-memory")
-        
+
         memory_versions: Dict[str, int] = {}
         prefix = f"{symbol}:{feature_name}:"
-        
+
         for key, feature in self._memory_storage.feature_values_by_key.items():
             if key.startswith(prefix):
                 version = feature["version"]
                 ts_ms = feature["ts_ms"]
                 if version not in memory_versions or ts_ms > memory_versions[version]:
                     memory_versions[version] = ts_ms
-        
+
         return [
             {"version": version, "latest_ts_ms": ts_ms}
             for version, ts_ms in sorted(memory_versions.items())
@@ -504,12 +536,12 @@ class FeatureStore:
                 GROUP BY version
                 ORDER BY version
                 """,
-                symbol, feature_name,
+                symbol,
+                feature_name,
             )
-            
+
             return [
-                {"version": row["version"], "latest_ts_ms": row["latest_ts_ms"]}
-                for row in rows
+                {"version": row["version"], "latest_ts_ms": row["latest_ts_ms"]} for row in rows
             ]
 
 

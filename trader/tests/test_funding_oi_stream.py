@@ -3,6 +3,7 @@ Unit Tests for Funding/OI Stream Adapter
 =========================================
 测试 Funding Rate 和 Open Interest 适配器功能。
 """
+
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,12 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from trader.adapters.binance.funding_oi_stream import (
+    BINANCE_FUTURES_BASE_URL,
     FundingOIAdapter,
     FundingOIConfig,
     FundingRecord,
-    OIRecord,
     LongShortRatioRecord,
-    BINANCE_FUTURES_BASE_URL,
+    OIRecord,
 )
 from trader.adapters.persistence.feature_store import FeatureStore
 
@@ -36,14 +37,16 @@ class MockFeatureStore:
         value: any,
         meta: dict = None,
     ):
-        self._write_feature_calls.append({
-            "symbol": symbol,
-            "feature_name": feature_name,
-            "version": version,
-            "ts_ms": ts_ms,
-            "value": value,
-            "meta": meta,
-        })
+        self._write_feature_calls.append(
+            {
+                "symbol": symbol,
+                "feature_name": feature_name,
+                "version": version,
+                "ts_ms": ts_ms,
+                "value": value,
+                "meta": meta,
+            }
+        )
         key = f"{symbol}:{feature_name}:{version}:{ts_ms}"
         self._features[key] = {
             "symbol": symbol,
@@ -65,6 +68,7 @@ class MockFeatureStore:
 
 class AsyncCtxManager:
     """异步上下文管理器，用于 mock aiohttp response"""
+
     def __init__(self, response):
         self._response = response
 
@@ -217,12 +221,16 @@ class TestFundingOIAdapter:
         """测试成功拉取 Funding Rate"""
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value=[{
-            "symbol": "BTCUSDT",
-            "fundingRate": "0.00010000",
-            "fundingTime": 1700000000000,
-            "nextFundingTime": 1700020000000,
-        }])
+        mock_response.json = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRate": "0.00010000",
+                    "fundingTime": 1700000000000,
+                    "nextFundingTime": 1700020000000,
+                }
+            ]
+        )
 
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
@@ -274,11 +282,13 @@ class TestFundingOIAdapter:
         """测试成功拉取 Open Interest"""
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "symbol": "BTCUSDT",
-            "openInterest": "123456.789",
-            "updateTime": 1700000000000,
-        })
+        mock_response.json = AsyncMock(
+            return_value={
+                "symbol": "BTCUSDT",
+                "openInterest": "123456.789",
+                "updateTime": 1700000000000,
+            }
+        )
 
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
@@ -356,13 +366,17 @@ class TestFundingOIAdapter:
         """测试成功拉取多空比"""
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value=[{
-            "symbol": "BTCUSDT",
-            "longShortRatio": "1.25",
-            "longPositionRatio": "0.55",
-            "shortPositionRatio": "0.45",
-            "updateTime": 1700000000000,
-        }])
+        mock_response.json = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BTCUSDT",
+                    "longShortRatio": "1.25",
+                    "longPositionRatio": "0.55",
+                    "shortPositionRatio": "0.45",
+                    "updateTime": 1700000000000,
+                }
+            ]
+        )
 
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
@@ -401,13 +415,17 @@ class TestFundingOIAdapter:
         """测试 longShortRatio 为 0 时的除零保护"""
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value=[{
-            "symbol": "BTCUSDT",
-            "longShortRatio": "0",  # 实际为0值
-            "longPositionRatio": "0.5",
-            "shortPositionRatio": "0.5",
-            "updateTime": 1700000000000,
-        }])
+        mock_response.json = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BTCUSDT",
+                    "longShortRatio": "0",  # 实际为0值
+                    "longPositionRatio": "0.5",
+                    "shortPositionRatio": "0.5",
+                    "updateTime": 1700000000000,
+                }
+            ]
+        )
 
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=AsyncCtxManager(mock_response))
@@ -528,27 +546,34 @@ class TestFundingOIAdapter:
         # 模拟响应
         btc_response = AsyncMock()
         btc_response.status = 200
-        btc_response.json = AsyncMock(return_value=[{
-            "symbol": "BTCUSDT",
-            "fundingRate": "0.00010000",
-            "fundingTime": 1700000000000,
-            "nextFundingTime": 1700020000000,
-        }])
+        btc_response.json = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRate": "0.00010000",
+                    "fundingTime": 1700000000000,
+                    "nextFundingTime": 1700020000000,
+                }
+            ]
+        )
 
         eth_response = AsyncMock()
         eth_response.status = 200
-        eth_response.json = AsyncMock(return_value=[{
-            "symbol": "ETHUSDT",
-            "fundingRate": "0.00020000",
-            "fundingTime": 1700000000000,
-            "nextFundingTime": 1700020000000,
-        }])
+        eth_response.json = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "ETHUSDT",
+                    "fundingRate": "0.00020000",
+                    "fundingTime": 1700000000000,
+                    "nextFundingTime": 1700020000000,
+                }
+            ]
+        )
 
         mock_session = MagicMock()
-        mock_session.get = MagicMock(side_effect=[
-            AsyncCtxManager(btc_response),
-            AsyncCtxManager(eth_response)
-        ])
+        mock_session.get = MagicMock(
+            side_effect=[AsyncCtxManager(btc_response), AsyncCtxManager(eth_response)]
+        )
         mock_session.closed = False
         adapter._session = mock_session
 
@@ -560,10 +585,10 @@ class TestFundingOIAdapter:
     @pytest.mark.asyncio
     async def test_start_and_stop(self, adapter):
         """测试启动和停止"""
-        with patch.object(adapter, '_ensure_session', new_callable=AsyncMock):
-            with patch.object(adapter, '_fetch_all_funding_rates', new_callable=AsyncMock):
-                with patch.object(adapter, '_fetch_all_open_interests', new_callable=AsyncMock):
-                    with patch.object(adapter, '_close_session', new_callable=AsyncMock):
+        with patch.object(adapter, "_ensure_session", new_callable=AsyncMock):
+            with patch.object(adapter, "_fetch_all_funding_rates", new_callable=AsyncMock):
+                with patch.object(adapter, "_fetch_all_open_interests", new_callable=AsyncMock):
+                    with patch.object(adapter, "_close_session", new_callable=AsyncMock):
                         adapter.add_symbol("BTCUSDT")
                         await adapter.start()
 
@@ -576,7 +601,7 @@ class TestFundingOIAdapter:
     @pytest.mark.asyncio
     async def test_stop_without_start(self, adapter):
         """测试未启动时停止"""
-        with patch.object(adapter, '_close_session', new_callable=AsyncMock):
+        with patch.object(adapter, "_close_session", new_callable=AsyncMock):
             await adapter.stop()
             # 不应抛出异常
             assert adapter.is_running() is False

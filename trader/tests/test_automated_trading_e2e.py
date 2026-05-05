@@ -13,23 +13,25 @@ These tests verify:
 
 Note: These tests use mocks and fakes to avoid real network calls.
 """
-import asyncio
-import pytest
-from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
 
+import asyncio
+from decimal import Decimal
+from typing import Any, Dict
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from trader.core.application.ports import BrokerAccount
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.application.ports import BrokerAccount
+from trader.services.oms_callback import OMSCallbackHandler, create_oms_callback
 from trader.services.strategy_runner import StrategyRunner, StrategyStatus
 from trader.services.strategy_runtime_orchestrator import StrategyRuntimeOrchestrator
-from trader.services.oms_callback import OMSCallbackHandler, create_oms_callback
-
 
 # ============================================================================
 # Test Strategy Plugin (Fake)
 # ============================================================================
+
 
 class FakeStrategyPlugin:
     """Fake strategy plugin for testing"""
@@ -79,7 +81,9 @@ class FakeStrategyPlugin:
             )
         return None
 
-    async def on_fill(self, order_id: str, symbol: str, side: str, quantity: float, price: float) -> None:
+    async def on_fill(
+        self, order_id: str, symbol: str, side: str, quantity: float, price: float
+    ) -> None:
         pass
 
     async def on_cancel(self, order_id: str, reason: str) -> None:
@@ -87,16 +91,19 @@ class FakeStrategyPlugin:
 
     async def update_config(self, config: Dict[str, Any]):
         from trader.core.application.strategy_protocol import ValidationResult, ValidationStatus
+
         return ValidationResult(status=ValidationStatus.VALID)
 
     def validate(self):
         from trader.core.application.strategy_protocol import ValidationResult, ValidationStatus
+
         return ValidationResult(status=ValidationStatus.VALID)
 
 
 # ============================================================================
 # Fake Broker
 # ============================================================================
+
 
 class FakeBroker:
     """Fake broker for testing"""
@@ -123,22 +130,25 @@ class FakeBroker:
         client_order_id=None,
     ):
         from trader.core.domain.models.order import OrderStatus
+
         self.place_order_calls += 1
         order = MagicMock()
         order.broker_order_id = f"BO{self.place_order_calls}"
         # Check order_type.value to handle both str and OrderType enum
-        ot_value = order_type.value if hasattr(order_type, 'value') else str(order_type)
+        ot_value = order_type.value if hasattr(order_type, "value") else str(order_type)
         order.filled_quantity = quantity if ot_value == "MARKET" else Decimal("0")
         order.average_price = price or Decimal("50000")
         order.status = OrderStatus.FILLED if ot_value == "MARKET" else OrderStatus.SUBMITTED
         order.created_at = None
-        self.placed_orders.append({
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "price": price,
-            "client_order_id": client_order_id,
-        })
+        self.placed_orders.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "client_order_id": client_order_id,
+            }
+        )
         return order
 
     async def get_symbol_step_size(self, symbol: str) -> Decimal:
@@ -146,10 +156,12 @@ class FakeBroker:
 
     async def get_exchange_info(self, symbol: str):
         return {
-            "symbols": [{
-                "symbol": symbol,
-                "filters": [{"filterType": "NOTIONAL", "minNotional": "10"}],
-            }]
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "filters": [{"filterType": "NOTIONAL", "minNotional": "10"}],
+                }
+            ]
         }
 
     async def get_ticker_prices(self, symbols):
@@ -169,6 +181,7 @@ class FakeBroker:
 # ============================================================================
 # Tests
 # ============================================================================
+
 
 class TestStrategyRunnerTick:
     """Test StrategyRunner.tick() with OMS callback"""
@@ -195,6 +208,7 @@ class TestStrategyRunnerTick:
         plugin = FakeStrategyPlugin()
         runner._plugins["test_strategy"] = plugin
         from trader.core.application.strategy_protocol import StrategyResourceLimits
+
         runner._infos["test_strategy"] = MagicMock(
             status=StrategyStatus.RUNNING,
             tick_count=0,
@@ -233,16 +247,19 @@ class TestStrategyRunnerTick:
         runner = StrategyRunner()
 
         # Create OMS callback
-        oms_callback = AsyncMock(return_value={
-            "order_id": "test_order_1",
-            "status": "FILLED",
-        })
+        oms_callback = AsyncMock(
+            return_value={
+                "order_id": "test_order_1",
+                "status": "FILLED",
+            }
+        )
         runner._oms_callback = oms_callback
 
         # Load fake strategy
         plugin = FakeStrategyPlugin()
         runner._plugins["test_strategy"] = plugin
         from trader.core.application.strategy_protocol import StrategyResourceLimits
+
         runner._infos["test_strategy"] = MagicMock(
             status=StrategyStatus.RUNNING,
             tick_count=0,
@@ -361,10 +378,12 @@ class TestStrategyRuntimeOrchestrator:
     @pytest.fixture
     def mock_runner(self):
         runner = MagicMock(spec=StrategyRunner)
-        runner.get_status = MagicMock(return_value=MagicMock(
-            strategy_id="test",
-            status=StrategyStatus.LOADED,
-        ))
+        runner.get_status = MagicMock(
+            return_value=MagicMock(
+                strategy_id="test",
+                status=StrategyStatus.LOADED,
+            )
+        )
         runner.tick = AsyncMock(return_value=None)
         return runner
 
@@ -425,6 +444,7 @@ class TestKillSwitchIntegration:
         plugin = FakeStrategyPlugin()
         runner._plugins["test_strategy"] = plugin
         from trader.core.application.strategy_protocol import StrategyResourceLimits
+
         runner._infos["test_strategy"] = MagicMock(
             status=StrategyStatus.RUNNING,
             tick_count=0,
@@ -465,6 +485,7 @@ class TestKillSwitchIntegration:
         plugin = FakeStrategyPlugin()
         runner._plugins["test_strategy"] = plugin
         from trader.core.application.strategy_protocol import StrategyResourceLimits
+
         info = MagicMock(
             status=StrategyStatus.RUNNING,
             tick_count=0,
@@ -578,14 +599,16 @@ class TestOrderIdempotency:
         fill_calls = []
 
         async def fill_callback(strategy_id, order_id, symbol, side, qty, price):
-            fill_calls.append({
-                "strategy_id": strategy_id,
-                "order_id": order_id,
-                "symbol": symbol,
-                "side": side,
-                "qty": qty,
-                "price": price,
-            })
+            fill_calls.append(
+                {
+                    "strategy_id": strategy_id,
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": qty,
+                    "price": price,
+                }
+            )
 
         handler = OMSCallbackHandler(
             broker=fake_broker,
@@ -689,10 +712,14 @@ class TestStreamKeyFormat:
         from trader.storage.in_memory import reset_storage
 
         storage = reset_storage()
-        _event_callback_dispatcher("deploy_001", "strategy.signal", {
-            "strategy_id": "template_alpha",
-            "symbol": "BTCUSDT",
-        })
+        _event_callback_dispatcher(
+            "deploy_001",
+            "strategy.signal",
+            {
+                "strategy_id": "template_alpha",
+                "symbol": "BTCUSDT",
+            },
+        )
 
         events = storage.list_events(stream_key="deployment:deploy_001")
         assert len(events) == 1
@@ -707,26 +734,30 @@ class TestStreamKeyFormat:
         from trader.storage.in_memory import reset_storage
 
         storage = reset_storage()
-        storage.append_event({
-            "stream_key": "deployment:deploy_btc",
-            "event_type": "strategy.signal",
-            "ts_ms": 1000,
-            "data": {
-                "deployment_id": "deploy_btc",
-                "strategy_id": "template_alpha",
-                "symbol": "BTCUSDT",
-            },
-        })
-        storage.append_event({
-            "stream_key": "deployment:deploy_eth",
-            "event_type": "strategy.signal",
-            "ts_ms": 1001,
-            "data": {
-                "deployment_id": "deploy_eth",
-                "strategy_id": "template_alpha",
-                "symbol": "ETHUSDT",
-            },
-        })
+        storage.append_event(
+            {
+                "stream_key": "deployment:deploy_btc",
+                "event_type": "strategy.signal",
+                "ts_ms": 1000,
+                "data": {
+                    "deployment_id": "deploy_btc",
+                    "strategy_id": "template_alpha",
+                    "symbol": "BTCUSDT",
+                },
+            }
+        )
+        storage.append_event(
+            {
+                "stream_key": "deployment:deploy_eth",
+                "event_type": "strategy.signal",
+                "ts_ms": 1001,
+                "data": {
+                    "deployment_id": "deploy_eth",
+                    "strategy_id": "template_alpha",
+                    "symbol": "ETHUSDT",
+                },
+            }
+        )
 
         deployment_events = await get_deployment_signals("deploy_btc", limit=10)
         assert [event.payload["symbol"] for event in deployment_events] == ["BTCUSDT"]
@@ -799,15 +830,19 @@ class TestMinNotionalDynamic:
     @pytest.fixture
     def fake_broker_with_exchange_info(self):
         broker = FakeBroker()
-        broker.get_exchange_info = AsyncMock(return_value={
-            "symbols": [{
-                "symbol": "BTCUSDT",
-                "filters": [
-                    {"filterType": "NOTIONAL", "minNotional": "5"},
-                    {"filterType": "LOT_SIZE", "stepSize": "0.00001"},
+        broker.get_exchange_info = AsyncMock(
+            return_value={
+                "symbols": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "filters": [
+                            {"filterType": "NOTIONAL", "minNotional": "5"},
+                            {"filterType": "LOT_SIZE", "stepSize": "0.00001"},
+                        ],
+                    }
                 ],
-            }],
-        })
+            }
+        )
         return broker
 
     @pytest.fixture
@@ -861,7 +896,9 @@ class TestMinNotionalDynamic:
         assert min_notional == Decimal("10")
 
     @pytest.mark.asyncio
-    async def test_min_notional_rejects_small_order(self, fake_broker_with_exchange_info, fake_storage):
+    async def test_min_notional_rejects_small_order(
+        self, fake_broker_with_exchange_info, fake_storage
+    ):
         """Orders below minNotional should be rejected"""
         handler = OMSCallbackHandler(
             broker=fake_broker_with_exchange_info,
@@ -879,7 +916,10 @@ class TestMinNotionalDynamic:
 
         with pytest.raises(Exception) as exc_info:
             await handler.execute_signal("test_strategy", signal)
-        assert "minNotional" in str(exc_info.value).lower() or "notional" in str(exc_info.value).lower()
+        assert (
+            "minNotional" in str(exc_info.value).lower()
+            or "notional" in str(exc_info.value).lower()
+        )
 
 
 class TestBrokerEnvSelection:
@@ -888,6 +928,7 @@ class TestBrokerEnvSelection:
     def test_demo_env_creates_demo_config(self, monkeypatch):
         """BINANCE_ENV=demo should create demo config"""
         import os
+
         from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
 
         monkeypatch.setenv("BINANCE_ENV", "demo")
@@ -903,6 +944,7 @@ class TestBrokerEnvSelection:
     def test_testnet_env_creates_testnet_config(self, monkeypatch):
         """BINANCE_ENV=testnet should create testnet config"""
         import os
+
         from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
 
         monkeypatch.setenv("BINANCE_ENV", "testnet")

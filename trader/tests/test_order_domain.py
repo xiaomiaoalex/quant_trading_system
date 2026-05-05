@@ -3,11 +3,13 @@ Order Domain Model Tests - 订单领域模型单元测试
 ================================================
 覆盖 Order 状态机、fill() 均价计算、状态转换等核心逻辑。
 """
-import pytest
-from decimal import Decimal
-from datetime import datetime, timezone
 
-from trader.core.domain.models.order import Order, OrderStatus, OrderSide, OrderType
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import pytest
+
+from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
 
 
 class TestOrderFillAveragePrice:
@@ -202,9 +204,21 @@ class TestOrderStateMachine:
         assert order.status == OrderStatus.CANCELLED
 
     def test_is_terminal(self):
-        assert OrderStatus.FILLED in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]
-        assert OrderStatus.CANCELLED in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]
-        assert OrderStatus.SUBMITTED not in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]
+        assert OrderStatus.FILLED in [
+            OrderStatus.FILLED,
+            OrderStatus.CANCELLED,
+            OrderStatus.REJECTED,
+        ]
+        assert OrderStatus.CANCELLED in [
+            OrderStatus.FILLED,
+            OrderStatus.CANCELLED,
+            OrderStatus.REJECTED,
+        ]
+        assert OrderStatus.SUBMITTED not in [
+            OrderStatus.FILLED,
+            OrderStatus.CANCELLED,
+            OrderStatus.REJECTED,
+        ]
 
     def test_reject(self):
         order = Order(

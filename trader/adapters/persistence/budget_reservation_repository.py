@@ -4,6 +4,7 @@ BudgetReservationRepository - 预算 reservation PG 持久化
 
 遵循 ExecutionRepository 模式：lazy PG init，best-effort 持久化。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -68,7 +69,8 @@ class BudgetReservationRepository:
 
     async def _ensure_tables(self) -> None:
         async with self._postgres_storage.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS budget_reservations (
                     reservation_id TEXT PRIMARY KEY,
                     account_id TEXT NOT NULL,
@@ -80,12 +82,15 @@ class BudgetReservationRepository:
                     expires_at_ms BIGINT NOT NULL,
                     persisted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
-            """)
-            await conn.execute("""
+            """
+            )
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_budget_reservations_active
                 ON budget_reservations(account_id, venue, asset)
                 WHERE status IN ('PENDING_SUBMIT', 'ACCEPTED')
-            """)
+            """
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,7 +159,8 @@ class BudgetReservationRepository:
                     FROM budget_reservations
                     WHERE status IN ($1, $2)
                     """,
-                    "PENDING_SUBMIT", "ACCEPTED",
+                    "PENDING_SUBMIT",
+                    "ACCEPTED",
                 )
             return [dict(r) for r in rows]
         except Exception as exc:

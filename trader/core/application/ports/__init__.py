@@ -14,39 +14,45 @@ Ports - 端口接口定义
 - StoragePort: 存储接口（事件、订单持久化）
 - ClockPort: 时间接口（用于测试）
 """
+
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 from trader.core.domain.models.order import Order, OrderSide, OrderType
-from trader.core.domain.models.position import Position, BrokerPosition
 from trader.core.domain.models.orderbook import OrderBook
-
+from trader.core.domain.models.position import BrokerPosition, Position
 
 # ==================== Broker Exceptions ====================
 
+
 class BrokerError(Exception):
     """Broker 异常基类"""
+
     pass
 
 
 class BrokerNetworkError(BrokerError):
     """网络错误，可重试"""
+
     pass
 
 
 class BrokerBusinessError(BrokerError):
     """业务错误，不应重试"""
+
     pass
 
 
 # ==================== Broker Port ====================
 
+
 @dataclass
 class BrokerOrder:
     """券商订单响应"""
+
     broker_order_id: str
     client_order_id: str
     symbol: str
@@ -62,6 +68,7 @@ class BrokerOrder:
 @dataclass
 class BrokerAccount:
     """券商账户信息"""
+
     total_equity: Decimal
     available_cash: Decimal
     currency: str = "USDT"
@@ -110,7 +117,7 @@ class BrokerPort(ABC):
         order_type: OrderType,
         quantity: Decimal,
         price: Optional[Decimal] = None,
-        client_order_id: Optional[str] = None
+        client_order_id: Optional[str] = None,
     ) -> BrokerOrder:
         """
         下单
@@ -130,18 +137,14 @@ class BrokerPort(ABC):
 
     @abstractmethod
     async def cancel_order(
-        self,
-        client_order_id: str,
-        broker_order_id: Optional[str] = None
+        self, client_order_id: str, broker_order_id: Optional[str] = None
     ) -> bool:
         """撤单"""
         pass
 
     @abstractmethod
     async def get_order(
-        self,
-        client_order_id: str,
-        broker_order_id: Optional[str] = None
+        self, client_order_id: str, broker_order_id: Optional[str] = None
     ) -> Optional[BrokerOrder]:
         """查询订单状态"""
         pass
@@ -164,9 +167,11 @@ class BrokerPort(ABC):
 
 # ==================== Market Data Port ====================
 
+
 @dataclass
 class MarketKline:
     """K线数据"""
+
     symbol: str
     interval: str
     open_time: datetime
@@ -181,6 +186,7 @@ class MarketKline:
 @dataclass
 class MarketTicker:
     """实时行情"""
+
     symbol: str
     last: Decimal
     bid: Decimal
@@ -216,12 +222,7 @@ class MarketDataPort(ABC):
         pass
 
     @abstractmethod
-    async def get_klines(
-        self,
-        symbol: str,
-        interval: str,
-        limit: int = 500
-    ) -> List[MarketKline]:
+    async def get_klines(self, symbol: str, interval: str, limit: int = 500) -> List[MarketKline]:
         """
         获取K线数据
 
@@ -256,6 +257,7 @@ class MarketDataPort(ABC):
 
 # ==================== Storage Port ====================
 
+
 class StoragePort(ABC):
     """
     存储端口
@@ -286,7 +288,7 @@ class StoragePort(ABC):
         self,
         aggregate_id: Optional[str] = None,
         event_type: Optional[str] = None,
-        limit: int = 1000
+        limit: int = 1000,
     ) -> List:
         """查询事件"""
         pass
@@ -305,10 +307,7 @@ class StoragePort(ABC):
 
     @abstractmethod
     async def get_orders(
-        self,
-        symbol: Optional[str] = None,
-        status: Optional[Any] = None,
-        limit: int = 100
+        self, symbol: Optional[str] = None, status: Optional[Any] = None, limit: int = 100
     ) -> List[Order]:
         """查询订单"""
         pass
@@ -333,6 +332,7 @@ class StoragePort(ABC):
 
 # ==================== Clock Port ====================
 
+
 class ClockPort(ABC):
     """
     时间端口
@@ -353,6 +353,7 @@ class ClockPort(ABC):
 
 
 # ==================== Event Bus Port ====================
+
 
 class EventBusPort(ABC):
     """

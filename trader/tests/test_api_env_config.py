@@ -43,9 +43,14 @@ def test_get_system_order_namespace_prefix_default() -> None:
 
 
 def test_get_system_order_namespace_prefix_uses_custom_value() -> None:
-    assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "CUSTOM_"}) == "CUSTOM_"
+    assert (
+        get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "CUSTOM_"})
+        == "CUSTOM_"
+    )
 
 
 def test_get_system_order_namespace_prefix_ignores_empty() -> None:
     assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": ""}) == "QTS1_"
-    assert get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "   "}) == "QTS1_"
+    assert (
+        get_system_order_namespace_prefix(env={"SYSTEM_ORDER_NAMESPACE_PREFIX": "   "}) == "QTS1_"
+    )

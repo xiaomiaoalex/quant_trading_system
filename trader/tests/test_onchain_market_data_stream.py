@@ -8,17 +8,19 @@ Tests for OnChainMarketDataAdapter including:
 - Graceful degradation on errors
 - Start/stop lifecycle
 """
+
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from trader.adapters.onchain.onchain_market_data_stream import (
+    ExchangeFlowRecord,
+    LiquidationRecord,
     OnChainMarketDataAdapter,
     OnChainMarketDataConfig,
-    LiquidationRecord,
-    ExchangeFlowRecord,
     StablecoinSupplyRecord,
     get_onchain_adapter,
     get_onchain_adapter_async,
@@ -75,7 +77,9 @@ class TestOnChainMarketDataAdapterLifecycle:
     def _create_mock_session(self):
         """Create a mock aiohttp session that returns empty responses."""
         mock_session = AsyncMock()
-        mock_session.closed = False  # Must be False to prevent _ensure_session from creating real session
+        mock_session.closed = (
+            False  # Must be False to prevent _ensure_session from creating real session
+        )
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value=[])
@@ -208,34 +212,36 @@ class TestOnChainMarketDataAdapterFetch:
     async def test_fetch_stablecoin_supply_success(self):
         """Test fetching stablecoin supply successfully using mocked session."""
         import aiohttp
-        
+
         # Create mock response that works as async context manager
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value=[
-            {
-                "id": "tether",
-                "symbol": "usdt",
-                "total_supply": 83000000000,
-                "market_cap_change_percentage_24h": 0.05,
-            }
-        ])
-        
+        mock_response.json = AsyncMock(
+            return_value=[
+                {
+                    "id": "tether",
+                    "symbol": "usdt",
+                    "total_supply": 83000000000,
+                    "market_cap_change_percentage_24h": 0.05,
+                }
+            ]
+        )
+
         # mock_response should return itself when used as async context manager
         mock_response.__aenter__.return_value = mock_response
         mock_response.__aexit__.return_value = None
-        
+
         # Create mock session - get() should return the mock_response directly
         mock_session = MagicMock()
         mock_session.get.return_value = mock_response
         mock_session.closed = False
         mock_session.__aenter__.return_value = AsyncMock()
         mock_session.__aexit__.return_value = AsyncMock()
-        
+
         # Create new adapter with mocked session
         adapter = OnChainMarketDataAdapter()
         adapter._session = mock_session
-        
+
         # Call the fetch method
         record = await adapter._fetch_stablecoin_supply("USDT")
 
@@ -458,16 +464,20 @@ class TestOnChainMarketDataAdapterIntegration:
         # Mock Binance ticker response
         binance_response = AsyncMock()
         binance_response.status = 200
-        binance_response.json = AsyncMock(return_value=[
-            {"symbol": "BTCUSDT", "lastPrice": "50000.0"},
-        ])
+        binance_response.json = AsyncMock(
+            return_value=[
+                {"symbol": "BTCUSDT", "lastPrice": "50000.0"},
+            ]
+        )
 
         # Mock CoinGecko response
         coingecko_response = AsyncMock()
         coingecko_response.status = 200
-        coingecko_response.json = AsyncMock(return_value=[
-            {"id": "tether", "symbol": "usdt", "total_supply": 83000000000},
-        ])
+        coingecko_response.json = AsyncMock(
+            return_value=[
+                {"id": "tether", "symbol": "usdt", "total_supply": 83000000000},
+            ]
+        )
 
         responses = [binance_response, coingecko_response]
 
@@ -497,13 +507,12 @@ class TestGlobalAdapterInstance:
     def setup_method(self):
         """Reset global adapter."""
         import trader.adapters.onchain.onchain_market_data_stream as module
+
         # Reset to None before test - ensure cleanup from any previous failed test
         if module._global_adapter is not None:
             if module._global_adapter._running:
                 try:
-                    asyncio.get_event_loop().run_until_complete(
-                        module._global_adapter.stop()
-                    )
+                    asyncio.get_event_loop().run_until_complete(module._global_adapter.stop())
                 except RuntimeError:
                     pass  # Loop may already be closed
             module._global_adapter = None
@@ -512,13 +521,12 @@ class TestGlobalAdapterInstance:
     def teardown_method(self):
         """Cleanup global adapter after each test."""
         import trader.adapters.onchain.onchain_market_data_stream as module
+
         # Properly stop and reset the global adapter to prevent resource leaks
         try:
             if module._global_adapter is not None:
                 if module._global_adapter._running:
-                    asyncio.get_event_loop().run_until_complete(
-                        module._global_adapter.stop()
-                    )
+                    asyncio.get_event_loop().run_until_complete(module._global_adapter.stop())
                 module._global_adapter = None
         except RuntimeError:
             # Event loop may be closed - clear state anyway
@@ -617,7 +625,7 @@ class TestRawLiquidationEventParsing:
 
         connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
 
-        #trade message
+        # trade message
         message = '{"e":"trade","E":1568014460943,"s":"BTCUSDT","p":"11000.00"}'
         event = connector._parse_message(message)
 
@@ -650,7 +658,10 @@ class TestLiquidationAggregator:
     @pytest.mark.asyncio
     async def test_add_event_to_bucket(self):
         """Test adding events to bucket."""
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
@@ -672,7 +683,10 @@ class TestLiquidationAggregator:
     @pytest.mark.asyncio
     async def test_aggregate_single_event_bucket(self):
         """Test aggregating a bucket with single event."""
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
@@ -701,7 +715,10 @@ class TestLiquidationAggregator:
     @pytest.mark.asyncio
     async def test_aggregate_multi_event_bucket(self):
         """Test aggregating a bucket with multiple events."""
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
@@ -743,7 +760,11 @@ class TestLiquidationAggregator:
     async def test_flush_bucket_success(self):
         """Test _flush_bucket returns True on successful flush."""
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(return_value=(True, None))
@@ -752,7 +773,9 @@ class TestLiquidationAggregator:
 
         # Add an event to a bucket
         base_ts = 1568014440000
-        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event)
 
         # Flush the bucket
@@ -785,7 +808,11 @@ class TestLiquidationAggregator:
         - Con: I/O failure means data is lost (can't retry)
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(side_effect=Exception("Connection error"))
@@ -794,7 +821,9 @@ class TestLiquidationAggregator:
 
         # Add an event to a bucket
         base_ts = 1568014440000
-        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event)
 
         # Flush the bucket - should return False on failure
@@ -815,7 +844,11 @@ class TestLiquidationAggregator:
         The bucket is still deleted (data loss for failed symbols).
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         # Track write results
         write_results = []
@@ -887,7 +920,11 @@ class TestLiquidationAggregator:
     async def test_flush_bucket_cutoff_calculation_recent(self):
         """Test flush cutoff calculation excludes recent buckets."""
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(return_value=(True, None))
@@ -897,7 +934,9 @@ class TestLiquidationAggregator:
         # Use a fixed reference time to avoid flakiness near minute boundaries
         reference_ms = 1568014400000
         recent_bucket_ts = (reference_ms // 60000) * 60000  # Align to minute
-        event = RawLiquidationEvent(recent_bucket_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event = RawLiquidationEvent(
+            recent_bucket_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event)
 
         # Calculate cutoff using same formula as _flush_loop
@@ -926,7 +965,11 @@ class TestLiquidationAggregator:
         behavior in _flush_loop (that would require an integrated flush loop test).
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(return_value=(True, None))
@@ -935,7 +978,9 @@ class TestLiquidationAggregator:
 
         # Add an event to an old bucket
         old_ts = 1568014440000
-        event = RawLiquidationEvent(old_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event = RawLiquidationEvent(
+            old_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event)
 
         assert old_ts in agg._buckets
@@ -963,7 +1008,11 @@ class TestLiquidationAggregator:
         before the read are included in the flush.
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         flushed_features = []
 
@@ -979,14 +1028,18 @@ class TestLiquidationAggregator:
 
         # Add first event
         base_ts = 1568014440000
-        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event1 = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event1)
 
         assert base_ts in agg._buckets
         assert len(agg._buckets[base_ts]) == 1
 
         # Add second event to the same bucket (simulating concurrent add_event)
-        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT")
+        event2 = RawLiquidationEvent(
+            base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT"
+        )
         await agg.add_event(event2)
 
         assert len(agg._buckets[base_ts]) == 2
@@ -1025,7 +1078,11 @@ class TestLiquidationAggregator:
         This prevents data loss from the original race condition.
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         flush_count = [0]
 
@@ -1042,7 +1099,9 @@ class TestLiquidationAggregator:
 
         # Add initial event
         base_ts = 1568014440000
-        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event1 = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event1)
 
         # Start flush in background
@@ -1051,14 +1110,16 @@ class TestLiquidationAggregator:
         # While flush is in progress (lock held during I/O), add another event
         # Wait a bit to ensure flush has started
         await asyncio.sleep(0.005)
-        event2 = RawLiquidationEvent(base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT")
+        event2 = RawLiquidationEvent(
+            base_ts + 2000, "ETHUSDT", "buy", 5000.0, 2.0, 10000.0, "LIMIT"
+        )
         await agg.add_event(event2)
 
         # Wait for flush to complete
         await flush_task
 
         # Verify: event1 was flushed, event2 went to a NEW bucket (not lost!)
-        # With our fix, the bucket is deleted before I/O completes, 
+        # With our fix, the bucket is deleted before I/O completes,
         # so event2 (added after flush_task got lock but before I/O) creates a new bucket
         assert flush_count[0] == 1  # Only event1's bucket was flushed
 
@@ -1087,7 +1148,10 @@ class TestLiquidationAggregatorDraining:
     @pytest.mark.asyncio
     async def test_add_event_rejects_when_draining(self):
         """Test that add_event rejects new events when _draining is True."""
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
         agg._draining = True  # Simulate shutdown state
@@ -1109,7 +1173,10 @@ class TestLiquidationAggregatorDraining:
     @pytest.mark.asyncio
     async def test_add_event_rejects_after_lock_acquisition_when_draining(self):
         """Test double-check draining flag after acquiring lock."""
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
@@ -1146,7 +1213,11 @@ class TestLiquidationAggregatorDraining:
     async def test_stop_flushes_pending_buckets(self):
         """Test stop() flushes all pending buckets before exit."""
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(return_value=(True, None))
@@ -1155,7 +1226,9 @@ class TestLiquidationAggregatorDraining:
 
         # Add events
         base_ts = 1568014440000
-        event = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event)
 
         assert base_ts in agg._buckets
@@ -1209,7 +1282,11 @@ class TestLiquidationAggregatorDraining:
         This test uses a very short sleep interval and proper task cleanup.
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         mock_store = MagicMock()
         mock_store.write_feature = AsyncMock(return_value=(True, None))
@@ -1221,7 +1298,9 @@ class TestLiquidationAggregatorDraining:
         base_ts = 1568014440000
         events = [
             RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"),
-            RawLiquidationEvent(base_ts + 60000 + 1000, "ETHUSDT", "buy", 2000.0, 1.0, 2000.0, "LIMIT"),
+            RawLiquidationEvent(
+                base_ts + 60000 + 1000, "ETHUSDT", "buy", 2000.0, 1.0, 2000.0, "LIMIT"
+            ),
         ]
         for e in events:
             await agg.add_event(e)
@@ -1260,13 +1339,19 @@ class TestLiquidationAggregatorDraining:
         - Second check: after acquiring lock (ensures no race)
         """
         from unittest.mock import AsyncMock, MagicMock
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
         # Add initial event
         base_ts = 1568014440000
-        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event1 = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event1)
 
         assert len(agg._buckets) == 1
@@ -1295,13 +1380,18 @@ class TestLiquidationAggregatorDraining:
         Thread B: sets draining = True
         Thread A: acquires lock -> checks draining again -> rejects
         """
-        from trader.adapters.onchain.onchain_market_data_stream import LiquidationAggregator, RawLiquidationEvent
+        from trader.adapters.onchain.onchain_market_data_stream import (
+            LiquidationAggregator,
+            RawLiquidationEvent,
+        )
 
         agg = LiquidationAggregator()
 
         # Add initial event
         base_ts = 1568014440000
-        event1 = RawLiquidationEvent(base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT")
+        event1 = RawLiquidationEvent(
+            base_ts + 1000, "BTCUSDT", "sell", 11000.0, 1.0, 11000.0, "LIMIT"
+        )
         await agg.add_event(event1)
 
         # Acquire the lock ourselves to simulate add_event holding the lock
@@ -1391,7 +1481,9 @@ class TestBinanceLiquidationWSConnector:
 
         connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
 
-        data = '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSD","S":"SELL","p":"11000.00","q":"1.0"}'
+        data = (
+            '{"e":"ForceOrder","E":1568014460943,"s":"BTCUSD","S":"SELL","p":"11000.00","q":"1.0"}'
+        )
         event = connector._parse_message(data)
         assert event is None
 
@@ -1443,8 +1535,9 @@ class TestBinanceLiquidationWSConnector:
     @pytest.mark.asyncio
     async def test_disconnect_clears_ws_reference(self):
         """Test disconnect clears WebSocket reference."""
-        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
         from unittest.mock import AsyncMock, MagicMock
+
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
 
         connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
         connector._ws = MagicMock()
@@ -1471,8 +1564,9 @@ class TestBinanceLiquidationWSConnector:
     @pytest.mark.asyncio
     async def test_ensure_session_creates_new_session(self):
         """Test _ensure_session creates a new session when None."""
-        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
         import aiohttp
+
+        from trader.adapters.onchain.onchain_market_data_stream import BinanceLiquidationWSConnector
 
         connector = BinanceLiquidationWSConnector(on_event=lambda e: None)
         assert connector._session is None

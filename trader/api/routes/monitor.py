@@ -3,26 +3,27 @@ Monitor API Routes
 =================
 System monitoring and alerting endpoints.
 """
+
 import asyncio
 import logging
 import os
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, Query
 
 logger = logging.getLogger(__name__)
 
 from trader.api.models.schemas import (
-    MonitorSnapshot,
     Alert,
     AlertRule,
-    PositionView,
-    PositionDetail,
     MonitorAlertsResponse,
+    MonitorSnapshot,
+    PositionDetail,
+    PositionView,
 )
-from trader.services import MonitorService, PortfolioService, OrderService, KillSwitchService
-
+from trader.services import KillSwitchService, MonitorService, OrderService, PortfolioService
 
 router = APIRouter(tags=["Monitor"])
 
@@ -33,10 +34,12 @@ _portfolio_service: PortfolioService | None = None
 _init_lock: asyncio.Lock = asyncio.Lock()  # Single lock for initialization
 
 
-async def _fetch_account_balances_with_prices_from_broker() -> tuple[List[Dict[str, Any]], Dict[str, Decimal]]:
+async def _fetch_account_balances_with_prices_from_broker() -> (
+    tuple[List[Dict[str, Any]], Dict[str, Decimal]]
+):
     """
     从 Broker 获取真实账户余额和实时价格。
-    
+
     Returns:
         tuple: (balances, prices)
             - balances: List of dicts with keys: symbol, asset, quantity, free, locked
@@ -47,11 +50,11 @@ async def _fetch_account_balances_with_prices_from_broker() -> tuple[List[Dict[s
             BinanceSpotDemoBroker,
             BinanceSpotDemoBrokerConfig,
         )
-        
+
         api_key = os.environ.get("BINANCE_API_KEY", "test_key")
         secret_key = os.environ.get("BINANCE_SECRET_KEY", "test_secret")
         binance_env = os.environ.get("BINANCE_ENV", "demo").strip().lower()
-        
+
         if binance_env in ("testnet", "test"):
             config = BinanceSpotDemoBrokerConfig.for_testnet(
                 api_key=api_key,
@@ -62,49 +65,51 @@ async def _fetch_account_balances_with_prices_from_broker() -> tuple[List[Dict[s
                 api_key=api_key,
                 secret_key=secret_key,
             )
-        
+
         broker = BinanceSpotDemoBroker(config)
         await broker.connect()
-        
+
         try:
             # Fetch account info which includes balances
             account = await broker._fetch_account()
             balances = []
             symbols_to_fetch = []
-            
+
             for bal in account.get("balances", []):
                 asset = str(bal.get("asset", ""))
                 free = Decimal(str(bal.get("free", "0")))
                 locked = Decimal(str(bal.get("locked", "0")))
                 total = free + locked
-                
+
                 if total <= 0:
                     continue
-                
+
                 # Skip quote assets (USDT, USDC, etc.) - they show as "balances" but not positions
                 # Only include actual trading assets (BTC, ETH, etc.)
                 if asset in {"USDT", "USDC", "BUSD", "FDUSD", "USD", "TUSD", "PAX", "EUR", "GBP"}:
                     continue
-                
+
                 symbol = f"{asset}USDT"
-                balances.append({
-                    "symbol": symbol,
-                    "asset": asset,
-                    "quantity": str(total),
-                    "free": str(free),
-                    "locked": str(locked),
-                })
+                balances.append(
+                    {
+                        "symbol": symbol,
+                        "asset": asset,
+                        "quantity": str(total),
+                        "free": str(free),
+                        "locked": str(locked),
+                    }
+                )
                 symbols_to_fetch.append(symbol)
-            
+
             # Fetch current prices for all symbols
             prices = {}
             if symbols_to_fetch:
                 prices = await broker.get_ticker_prices(symbols_to_fetch)
-            
+
             return balances, prices
         finally:
             await broker.disconnect()
-            
+
     except Exception as e:
         logger.warning(f"Failed to fetch account balances with prices: {e}")
         return [], {}
@@ -114,9 +119,10 @@ async def _fetch_account_balances_with_prices_from_broker() -> tuple[List[Dict[s
 class PositionForExposure:
     """
     持仓数据用于计算敞口。
-    
+
     统一接口：quantity（数量）和 current_price（当前价格）
     """
+
     quantity: float
     current_price: float
 
@@ -124,41 +130,41 @@ class PositionForExposure:
 async def get_monitor_service() -> MonitorService:
     """
     获取或创建 MonitorService 单例（async-safe）
-    
+
     FastAPI routes are all async, so we only need one async-safe initialization.
     The asyncio.Lock ensures only one coroutine initializes the singleton.
     """
     global _monitor_service
-    
+
     if _monitor_service is not None:
         return _monitor_service
-    
+
     async with _init_lock:
         # Double-check after acquiring lock
         if _monitor_service is None:
             _monitor_service = MonitorService()
-    
+
     return _monitor_service
 
 
 async def get_portfolio_service() -> PortfolioService:
     """
     获取或创建 PortfolioService 单例（async-safe）
-    
+
     使用与 MonitorService 相同的锁机制保证线程安全。
     虽然 PortfolioService 初始化本身不需要 async 操作，但为了保证
     singleton 的线程安全，需要使用 async 锁来与其他 async 路由协调。
     """
     global _portfolio_service
-    
+
     if _portfolio_service is not None:
         return _portfolio_service
-    
+
     async with _init_lock:
         # Double-check after acquiring lock
         if _portfolio_service is None:
             _portfolio_service = PortfolioService()
-    
+
     return _portfolio_service
 
 
@@ -175,7 +181,7 @@ async def get_monitor_snapshot(
 ) -> MonitorSnapshot:
     """
     获取系统监控快照（真聚合版本 - Task 9.2）。
-    
+
     后端内部聚合 orders/pnl/killswitch/adapters 数据，无需前端传入。
     返回完整的系统状态快照，包括：
     - 持仓信息（从 PortfolioService 获取）
@@ -184,27 +190,27 @@ async def get_monitor_snapshot(
     - KillSwitch 状态（从 KillSwitchService 获取）
     - 适配器健康状态
     - 活跃告警列表
-    
+
     注意：query 参数仅用于测试覆盖，生产环境应省略参数以获取真实数据。
     """
     from datetime import datetime, timezone
-    
+
     service = await get_monitor_service()
     portfolio_svc = await get_portfolio_service()
     order_svc = OrderService()
     killswitch_svc = KillSwitchService()
-    
+
     # 从 Broker 获取真实账户余额和实时价格用于 Position Details
     # 这显示的是交易所账户中实际持有的资产
     positions_for_exposure: List[PositionForExposure] = []
     positions_detail: List[PositionDetail] = []
-    
+
     # 策略：
     # 1. 首先尝试从 Broker 获取真实账户余额（有当前价格，但无 avg_cost）
     # 2. 同时获取 OMS 跟踪的持仓数据（有 avg_cost 和历史 unrealized_pnl）
     # 3. 合并两者：用 Broker 余额更新 OMS 持仓的当前价格，计算实时 unrealized_pnl
     # 4. 如果 Broker 获取失败，回退到 OMS 持仓
-    
+
     oms_positions: Dict[str, Dict[str, Any]] = {}
     try:
         raw_oms_positions: List[PositionView] = portfolio_svc.list_positions()
@@ -214,10 +220,10 @@ async def get_monitor_snapshot(
             has_avg_cost = p.avg_cost and p.avg_cost.strip()
             has_mark_price = p.mark_price and p.mark_price.strip()
             has_unrealized = p.unrealized_pnl and p.unrealized_pnl.strip()
-            
+
             qty_dec = Decimal(p.qty.strip()) if has_qty else Decimal("0")
             avg_cost_dec = Decimal(p.avg_cost.strip()) if has_avg_cost else None
-            
+
             oms_positions[symbol.upper()] = {
                 "symbol": symbol,
                 "qty": qty_dec,
@@ -226,7 +232,7 @@ async def get_monitor_snapshot(
             }
     except Exception as e:
         logger.warning(f"Failed to fetch OMS positions: {e}")
-    
+
     # 从 Broker 获取真实账户余额和实时价格
     try:
         account_balances, prices = await _fetch_account_balances_with_prices_from_broker()
@@ -236,36 +242,40 @@ async def get_monitor_snapshot(
             symbol_upper = symbol.upper()
             qty_dec = Decimal(bal.get("quantity", "0"))
             current_price = prices.get(symbol_upper, Decimal("0"))
-            
+
             if qty_dec <= 0:
                 continue
-            
+
             # 检查 OMS 是否有该交易对的持仓数据（用于获取 avg_cost）
             oms_data = oms_positions.get(symbol_upper, {})
             has_oms_data = oms_data.get("has_oms_data", False)
             avg_cost = oms_data.get("avg_cost") if has_oms_data else None
-            
+
             # 计算 unrealized_pnl
             unrealized_pnl = None
             if avg_cost is not None and current_price > 0:
                 unrealized_pnl = qty_dec * (current_price - avg_cost)
-            
+
             # 计算 exposure
             exposure_val = str(qty_dec * current_price) if current_price > 0 else None
-            
-            positions_for_exposure.append(PositionForExposure(
-                quantity=float(qty_dec),
-                current_price=float(current_price),
-            ))
-            positions_detail.append(PositionDetail(
-                symbol=symbol,
-                quantity=bal.get("quantity", "0"),
-                avg_cost=str(avg_cost) if avg_cost is not None else None,
-                current_price=str(current_price) if current_price > 0 else None,
-                unrealized_pnl=str(unrealized_pnl) if unrealized_pnl is not None else None,
-                exposure=exposure_val,
-            ))
-        
+
+            positions_for_exposure.append(
+                PositionForExposure(
+                    quantity=float(qty_dec),
+                    current_price=float(current_price),
+                )
+            )
+            positions_detail.append(
+                PositionDetail(
+                    symbol=symbol,
+                    quantity=bal.get("quantity", "0"),
+                    avg_cost=str(avg_cost) if avg_cost is not None else None,
+                    current_price=str(current_price) if current_price > 0 else None,
+                    unrealized_pnl=str(unrealized_pnl) if unrealized_pnl is not None else None,
+                    exposure=exposure_val,
+                )
+            )
+
         # 如果 Broker 没有返回余额但 OMS 有持仓数据，使用 OMS 数据
         if not account_balances and oms_positions:
             for symbol_upper, oms_data in oms_positions.items():
@@ -274,32 +284,36 @@ async def get_monitor_snapshot(
                 qty_dec = oms_data.get("qty", Decimal("0"))
                 if qty_dec <= 0:
                     continue
-                    
+
                 # 获取当前价格
                 current_price = prices.get(symbol_upper, Decimal("0"))
                 avg_cost = oms_data.get("avg_cost")
-                
+
                 unrealized_pnl = None
                 if avg_cost is not None and current_price > 0:
                     unrealized_pnl = qty_dec * (current_price - avg_cost)
-                
+
                 exposure_val = str(qty_dec * current_price) if current_price > 0 else None
-                
-                positions_for_exposure.append(PositionForExposure(
-                    quantity=float(qty_dec),
-                    current_price=float(current_price),
-                ))
-                positions_detail.append(PositionDetail(
-                    symbol=oms_data.get("symbol", symbol_upper),
-                    quantity=str(qty_dec),
-                    avg_cost=str(avg_cost) if avg_cost is not None else None,
-                    current_price=str(current_price) if current_price > 0 else None,
-                    unrealized_pnl=str(unrealized_pnl) if unrealized_pnl is not None else None,
-                    exposure=exposure_val,
-                ))
+
+                positions_for_exposure.append(
+                    PositionForExposure(
+                        quantity=float(qty_dec),
+                        current_price=float(current_price),
+                    )
+                )
+                positions_detail.append(
+                    PositionDetail(
+                        symbol=oms_data.get("symbol", symbol_upper),
+                        quantity=str(qty_dec),
+                        avg_cost=str(avg_cost) if avg_cost is not None else None,
+                        current_price=str(current_price) if current_price > 0 else None,
+                        unrealized_pnl=str(unrealized_pnl) if unrealized_pnl is not None else None,
+                        exposure=exposure_val,
+                    )
+                )
     except Exception as e:
         logger.warning(f"Failed to fetch account balances: {e}")
-        
+
         # 回退到纯 OMS 持仓数据
         if not positions_detail and oms_positions:
             for symbol_upper, oms_data in oms_positions.items():
@@ -309,20 +323,24 @@ async def get_monitor_snapshot(
                 avg_cost = oms_data.get("avg_cost")
                 if qty_dec <= 0:
                     continue
-                    
-                positions_for_exposure.append(PositionForExposure(
-                    quantity=float(qty_dec),
-                    current_price=0.0,
-                ))
-                positions_detail.append(PositionDetail(
-                    symbol=oms_data.get("symbol", symbol_upper),
-                    quantity=str(qty_dec),
-                    avg_cost=str(avg_cost) if avg_cost is not None else None,
-                    current_price=None,
-                    unrealized_pnl=None,
-                    exposure=None,
-                ))
-    
+
+                positions_for_exposure.append(
+                    PositionForExposure(
+                        quantity=float(qty_dec),
+                        current_price=0.0,
+                    )
+                )
+                positions_detail.append(
+                    PositionDetail(
+                        symbol=oms_data.get("symbol", symbol_upper),
+                        quantity=str(qty_dec),
+                        avg_cost=str(avg_cost) if avg_cost is not None else None,
+                        current_price=None,
+                        unrealized_pnl=None,
+                        exposure=None,
+                    )
+                )
+
     # 如果测试传入了参数，使用测试参数；否则从服务聚合真实数据
     if open_orders_count is None or pending_orders_count is None:
         # 从 OrderService 聚合订单统计
@@ -334,19 +352,15 @@ async def get_monitor_snapshot(
             # SUBMITTED = 已提交
             # PARTIALLY_FILLED = 部分成交
             open_orders_count = sum(
-                1 for o in all_orders 
-                if o.status in ("NEW", "SUBMITTED", "PARTIALLY_FILLED")
+                1 for o in all_orders if o.status in ("NEW", "SUBMITTED", "PARTIALLY_FILLED")
             )
-            pending_orders_count = sum(
-                1 for o in all_orders 
-                if o.status in ("PENDING", "CREATED")
-            )
+            pending_orders_count = sum(1 for o in all_orders if o.status in ("PENDING", "CREATED"))
         except Exception as e:
             logger.error(
                 "Failed to aggregate order counts for monitor snapshot",
-                extra={"error": str(e), "error_type": type(e).__name__}
+                extra={"error": str(e), "error_type": type(e).__name__},
             )
-    
+
     # 如果测试传入了 PnL 参数，使用测试参数；否则从服务获取真实数据
     if daily_pnl is None or unrealized_pnl is None:
         daily_pnl = "0"
@@ -359,7 +373,7 @@ async def get_monitor_snapshot(
             unrealized_pnl = pnl.unrealized_pnl
             total_pnl = float(pnl.total_pnl) if pnl.total_pnl else 0.0
             daily_pnl = pnl.total_pnl
-            
+
             # 计算百分比：PnL / 总敞口 * 100
             if positions_for_exposure and len(positions_for_exposure) > 0:
                 total_exposure_val = sum(
@@ -374,9 +388,9 @@ async def get_monitor_snapshot(
         except Exception as e:
             logger.error(
                 "Failed to fetch PnL for monitor snapshot",
-                extra={"error": str(e), "error_type": type(e).__name__}
+                extra={"error": str(e), "error_type": type(e).__name__},
             )
-    
+
     # 如果测试传入了 killswitch 参数，使用测试参数；否则从服务获取真实状态
     if killswitch_level is None or killswitch_scope is None:
         killswitch_level = 0
@@ -388,12 +402,13 @@ async def get_monitor_snapshot(
         except Exception as e:
             logger.error(
                 "Failed to fetch killswitch state for monitor snapshot",
-                extra={"error": str(e), "error_type": type(e).__name__}
+                extra={"error": str(e), "error_type": type(e).__name__},
             )
-    
+
     # 从 BrokerService 获取适配器健康状态
     try:
         from trader.services.broker import BrokerService
+
         broker_service = BrokerService()
         brokers = broker_service.list_brokers()
         for broker in brokers:
@@ -412,7 +427,7 @@ async def get_monitor_snapshot(
                 # 单个 broker 状态获取失败不影响其他 broker
                 logger.warning(
                     f"Failed to get status for broker {broker.account_id}",
-                    extra={"error": str(broker_err)}
+                    extra={"error": str(broker_err)},
                 )
                 service.update_adapter_health(
                     adapter_name=f"broker:{broker.account_id}",
@@ -425,12 +440,13 @@ async def get_monitor_snapshot(
         # 降低日志级别：无 broker 注册是正常情况
         logger.warning(
             "No brokers registered or failed to fetch adapter health for monitor snapshot",
-            extra={"error": str(e), "error_type": type(e).__name__}
+            extra={"error": str(e), "error_type": type(e).__name__},
         )
-    
+
     # Task 19: 从 OMSCallbackHandler 获取可观测性指标
     try:
         from trader.api.routes.strategies import get_oms_metrics
+
         oms_metrics = get_oms_metrics()
         if oms_metrics:
             snapshot = service.get_snapshot(
@@ -468,7 +484,7 @@ async def get_monitor_snapshot(
     except Exception as e:
         logger.error(
             "Failed to fetch OMS metrics for monitor snapshot",
-            extra={"error": str(e), "error_type": type(e).__name__}
+            extra={"error": str(e), "error_type": type(e).__name__},
         )
         snapshot = service.get_snapshot(
             positions=positions_for_exposure,
@@ -481,7 +497,7 @@ async def get_monitor_snapshot(
             killswitch_level=killswitch_level or 0,
             killswitch_scope=killswitch_scope or "GLOBAL",
         )
-    
+
     # 添加元信息 — timestamp 与 freshness 同步，前端 stale 检查依赖 timestamp
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     snapshot.timestamp = now_iso
@@ -510,7 +526,7 @@ async def get_active_alerts() -> MonitorAlertsResponse:
 async def add_alert_rule(rule: AlertRule) -> AlertRule:
     """
     添加或更新告警规则。
-    
+
     如果规则名已存在，则更新现有规则。
     """
     service = await get_monitor_service()

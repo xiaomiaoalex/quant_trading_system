@@ -1,4 +1,5 @@
 """Tests for PG-first repositories."""
+
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -15,7 +16,6 @@ from trader.adapters.persistence.runtime_state_repository import RuntimeStateRep
 from trader.api.models.schemas import KillSwitchSetRequest
 from trader.services.killswitch import KillSwitchService
 from trader.storage.in_memory import ControlPlaneInMemoryStorage, reset_storage
-
 
 skip_if_no_postgres = pytest.mark.skipif(
     not is_postgres_available(),
@@ -78,12 +78,14 @@ async def test_killswitch_service_durable_propagates_failure():
     mock_repo.save_state = AsyncMock(side_effect=RuntimeError("PG down"))
     service = KillSwitchService(reset_storage(), repository=mock_repo, require_durable_writes=True)
     with pytest.raises(RuntimeError, match="PG down"):
-        await service.set_state_durable(KillSwitchSetRequest(
-            scope="GLOBAL",
-            level=1,
-            reason="test",
-            updated_by="tester",
-        ))
+        await service.set_state_durable(
+            KillSwitchSetRequest(
+                scope="GLOBAL",
+                level=1,
+                reason="test",
+                updated_by="tester",
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -132,7 +134,9 @@ async def test_execution_repository_persists_and_deduplicates():
         assert second_id == first_id
         assert stored["strategy_id"] == "pg_strategy"
     finally:
-        await _execute_pg_cleanup(repo, [("DELETE FROM executions WHERE cl_ord_id = $1", (cl_ord_id,))])
+        await _execute_pg_cleanup(
+            repo, [("DELETE FROM executions WHERE cl_ord_id = $1", (cl_ord_id,))]
+        )
 
 
 @skip_if_no_postgres
@@ -156,17 +160,21 @@ async def test_runtime_state_repository_recovers_from_pg():
     writer = RuntimeStateRepository()
     reader = RuntimeStateRepository(ControlPlaneInMemoryStorage())
     try:
-        await writer.save_state({
-            "deployment_id": deployment_id,
-            "strategy_id": "strategy_pg",
-            "status": "RUNNING",
-            "config": {"lookback": 20},
-            "symbols": ["BTCUSDT"],
-            "env": "test",
-        })
+        await writer.save_state(
+            {
+                "deployment_id": deployment_id,
+                "strategy_id": "strategy_pg",
+                "status": "RUNNING",
+                "config": {"lookback": 20},
+                "symbols": ["BTCUSDT"],
+                "env": "test",
+            }
+        )
         recovered = await reader.get_state(deployment_id)
         assert recovered["config"] == {"lookback": 20}
-        assert any(item["deployment_id"] == deployment_id for item in await reader.list_running_states())
+        assert any(
+            item["deployment_id"] == deployment_id for item in await reader.list_running_states()
+        )
     finally:
         await writer.delete_state(deployment_id)
 
@@ -181,30 +189,43 @@ async def test_position_repository_persists_lot_projection_and_reconciliation():
     position_id = f"{strategy_id}:{symbol}"
     lot_id = f"lot-{suffix}"
     try:
-        assert await repo.save_lot({
-            "lot_id": lot_id,
-            "position_id": position_id,
-            "strategy_id": strategy_id,
-            "symbol": symbol,
-            "original_qty": "2",
-            "remaining_qty": "2",
-            "fill_price": "50000",
-            "filled_at": datetime.now(timezone.utc),
-        }) is True
+        assert (
+            await repo.save_lot(
+                {
+                    "lot_id": lot_id,
+                    "position_id": position_id,
+                    "strategy_id": strategy_id,
+                    "symbol": symbol,
+                    "original_qty": "2",
+                    "remaining_qty": "2",
+                    "fill_price": "50000",
+                    "filled_at": datetime.now(timezone.utc),
+                }
+            )
+            is True
+        )
         assert len(await repo.list_lots(strategy_id, symbol)) == 1
         assert await repo.update_lot_on_reduce(lot_id, Decimal("1.25"), Decimal("125")) is True
-        assert await repo.save_position_projection(position_id, {"strategy_id": strategy_id, "symbol": symbol}) is True
+        assert (
+            await repo.save_position_projection(
+                position_id, {"strategy_id": strategy_id, "symbol": symbol}
+            )
+            is True
+        )
         projection = await repo.get_position_projection(position_id)
         assert projection["state"]["strategy_id"] == strategy_id
-        assert await repo.save_reconciliation(
-            symbol=symbol,
-            broker_qty=Decimal("1.25"),
-            oms_total_qty=Decimal("1.25"),
-            difference=Decimal("0"),
-            tolerance=Decimal("0.001"),
-            status="CONSISTENT",
-            details={"strategy_id": strategy_id},
-        ) is True
+        assert (
+            await repo.save_reconciliation(
+                symbol=symbol,
+                broker_qty=Decimal("1.25"),
+                oms_total_qty=Decimal("1.25"),
+                difference=Decimal("0"),
+                tolerance=Decimal("0.001"),
+                status="CONSISTENT",
+                details={"strategy_id": strategy_id},
+            )
+            is True
+        )
         recs = await repo.list_reconciliations(symbol=symbol, status="CONSISTENT", limit=20)
         assert any(item["details"].get("strategy_id") == strategy_id for item in recs)
     finally:
@@ -213,6 +234,9 @@ async def test_position_repository_persists_lot_projection_and_reconciliation():
             [
                 ("DELETE FROM position_lots WHERE lot_id = $1", (lot_id,)),
                 ("DELETE FROM strategy_positions_proj WHERE aggregate_id = $1", (position_id,)),
-                ("DELETE FROM reconciliation_log WHERE details->>'strategy_id' = $1", (strategy_id,)),
+                (
+                    "DELETE FROM reconciliation_log WHERE details->>'strategy_id' = $1",
+                    (strategy_id,),
+                ),
             ],
         )

@@ -3,6 +3,7 @@ Unit Tests - API Endpoints
 =========================
 Tests for FastAPI endpoints using TestClient.
 """
+
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
@@ -10,10 +11,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from trader.api.main import app
-from trader.adapters.persistence.postgres import PostgreSQLStorage, close_pool, is_postgres_available
 from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
+from trader.adapters.persistence.postgres import (
+    PostgreSQLStorage,
+    close_pool,
+    is_postgres_available,
+)
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
+from trader.api.main import app
 from trader.storage.in_memory import get_storage, reset_storage
 
 
@@ -36,6 +41,7 @@ async def _clear_postgres_risk_state() -> None:
 
 async def _seed_audit_entries() -> list[str]:
     from insight.chat_interface import create_chat_interface
+
     from trader.api.routes.audit import clear_audit_entries
     from trader.api.routes.chat import set_chat_interface
 
@@ -130,14 +136,14 @@ class TestHealthEndpoint:
         response = self.client.get("/health/dependency")
         assert response.status_code == 200
         data = response.json()
-        
+
         assert "postgresql" in data["dependencies"]
         assert "storage" in data["dependencies"]
-        
+
         postgresql = data["dependencies"]["postgresql"]
         assert "status" in postgresql
         assert "message" in postgresql
-        
+
         storage = data["dependencies"]["storage"]
         assert "status" in storage
         assert "message" in storage
@@ -147,13 +153,13 @@ class TestHealthEndpoint:
         response = self.client.get("/health/dependency")
         assert response.status_code == 200
         data = response.json()
-        
+
         assert "postgresql" in data["checks"]
         pg_status = data["checks"]["postgresql"]["status"]
         # PostgreSQL health check only returns: healthy, not_configured, unhealthy
         # (degraded is not returned by _check_postgresql_health)
         assert pg_status in ["healthy", "not_configured", "unhealthy"]
-        
+
         overall_status = data["status"]
         if pg_status == "healthy":
             assert overall_status == "ok"
@@ -163,23 +169,21 @@ class TestHealthEndpoint:
     def test_readiness_check_storage_failure(self):
         """Test readiness check when storage throws exception"""
         from trader.api.routes import health as health_module
-        
+
         original_check = health_module._check_storage_health
-        
+
         def failing_check():
             from trader.api.models.schemas import ComponentHealth
-            return ComponentHealth(
-                status="unhealthy",
-                message="Simulated storage failure"
-            )
-        
+
+            return ComponentHealth(status="unhealthy", message="Simulated storage failure")
+
         health_module._check_storage_health = failing_check
-        
+
         try:
             response = self.client.get("/health/ready")
             assert response.status_code == 200
             data = response.json()
-            
+
             assert data["status"] == "degraded"
             assert "storage" in data["checks"]
             assert data["checks"]["storage"]["status"] == "unhealthy"
@@ -191,13 +195,13 @@ class TestHealthEndpoint:
         response = self.client.get("/health/live")
         assert response.status_code == 200
         data = response.json()
-        
+
         assert "time" in data
         time_str = data["time"]
-        
+
         if "+00:00" in time_str:
             assert False, f"Time should use 'Z' instead of '+00:00': {time_str}"
-        
+
         assert time_str.endswith("Z"), f"Time should end with Z: {time_str}"
 
 
@@ -222,7 +226,7 @@ class TestStrategyEndpoints:
             "strategy_id": "strat_001",
             "name": "Mean Reversion",
             "description": "Test strategy",
-            "entrypoint": "strategies.mean_reversion:Strategy"
+            "entrypoint": "strategies.mean_reversion:Strategy",
         }
         response = self.client.post("/v1/strategies/registry", json=payload)
         assert response.status_code == 201
@@ -233,11 +237,7 @@ class TestStrategyEndpoints:
     def test_get_strategy(self):
         """Test getting a strategy"""
         # First create a strategy
-        payload = {
-            "strategy_id": "strat_001",
-            "name": "Test",
-            "entrypoint": "test:Strategy"
-        }
+        payload = {"strategy_id": "strat_001", "name": "Test", "entrypoint": "test:Strategy"}
         self.client.post("/v1/strategies/registry", json=payload)
 
         # Now get it
@@ -388,7 +388,7 @@ class TestDeploymentEndpoints:
             "account_id": "acc_001",
             "venue": "BINANCE",
             "symbols": ["BTCUSDT"],
-            "created_by": "system"
+            "created_by": "system",
         }
         response = self.client.post("/v1/deployments", json=payload)
         assert response.status_code == 201
@@ -406,7 +406,7 @@ class TestDeploymentEndpoints:
             "account_id": "acc_001",
             "venue": "BINANCE",
             "symbols": ["BTCUSDT"],
-            "created_by": "system"
+            "created_by": "system",
         }
         self.client.post("/v1/deployments", json=payload)
 
@@ -426,7 +426,7 @@ class TestDeploymentEndpoints:
             "account_id": "acc_001",
             "venue": "BINANCE",
             "symbols": ["BTCUSDT"],
-            "created_by": "system"
+            "created_by": "system",
         }
         self.client.post("/v1/deployments", json=payload)
         self.client.post("/v1/deployments/deploy_001/start")
@@ -463,7 +463,7 @@ class TestBacktestEndpoints:
             "start_ts_ms": 1700000000000,
             "end_ts_ms": 1700100000000,
             "venue": "BINANCE",
-            "requested_by": "user001"
+            "requested_by": "user001",
         }
         response = self.client.post("/v1/backtests", json=payload)
         assert response.status_code == 202
@@ -661,11 +661,7 @@ class TestRiskEndpoints:
 
     def test_set_risk_limits(self):
         """Test setting risk limits"""
-        payload = {
-            "scope": "GLOBAL",
-            "config": {"max_daily_loss": 5000},
-            "created_by": "admin"
-        }
+        payload = {"scope": "GLOBAL", "config": {"max_daily_loss": 5000}, "created_by": "admin"}
         response = self.client.post("/v1/risk/limits", json=payload)
         assert response.status_code == 200
         data = response.json()
@@ -748,17 +744,17 @@ class TestRiskEndpoints:
             "ts_ms": 1700000000000,
             "adapter_name": "test_adapter",
         }
-        
+
         first = self.client.post("/v1/risk/events", json=payload)
         assert first.status_code == 201
-        
+
         killswitch_response = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_response.status_code == 200
         assert killswitch_response.json()["level"] == 2
-        
+
         second = self.client.post("/v1/risk/events", json=payload)
         assert second.status_code == 409
-        
+
         killswitch_after = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after.json()["level"] == 2
 
@@ -775,13 +771,13 @@ class TestRiskEndpoints:
             "ts_ms": 1700000000000,
             "adapter_name": "test_adapter",
         }
-        
+
         response = self.client.post("/v1/risk/events", json=high_payload)
         assert response.status_code == 201
-        
+
         killswitch_after_high = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after_high.json()["level"] == 3
-        
+
         low_payload = {
             "dedup_key": "low-level-key",
             "severity": "LOW",
@@ -792,10 +788,10 @@ class TestRiskEndpoints:
             "ts_ms": 1700000001000,
             "adapter_name": "test_adapter",
         }
-        
+
         response = self.client.post("/v1/risk/events", json=low_payload)
         assert response.status_code == 201
-        
+
         killswitch_after_low = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert killswitch_after_low.json()["level"] == 3
 
@@ -803,26 +799,29 @@ class TestRiskEndpoints:
         """Test recovery endpoint replays PENDING effects with correct scope/level"""
         _require_pg_for_durable_killswitch()
         import asyncio
+
         from trader.services.risk import RiskService
         from trader.storage.in_memory import reset_storage
-        
+
         reset_storage()
         reset_risk_event_repository()
         service = RiskService()
-        
+
         upgrade_key = "test_recovery_key"
-        asyncio.run(service.try_record_upgrade_with_effect(
-            upgrade_key, "GLOBAL", 2, "Test recovery", "dedup_recovery"
-        ))
-        
+        asyncio.run(
+            service.try_record_upgrade_with_effect(
+                upgrade_key, "GLOBAL", 2, "Test recovery", "dedup_recovery"
+            )
+        )
+
         state_before = self.client.get("/v1/killswitch?scope=GLOBAL")
         level_before = state_before.json()["level"]
-        
+
         recover_response = self.client.post("/v1/risk/recover")
         assert recover_response.status_code == 200
         result = recover_response.json()
         assert result["ok"] is True
-        
+
         state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert state_after.json()["level"] == 2
 
@@ -831,22 +830,24 @@ class TestRiskEndpoints:
         _require_pg_for_durable_killswitch()
         from trader.services.risk import RiskService
         from trader.storage.in_memory import reset_storage
-        
+
         reset_storage()
         reset_risk_event_repository()
         service = RiskService()
-        
+
         upgrade_key = "test_failed_recovery_key"
-        asyncio.run(service.try_record_upgrade_with_effect(
-            upgrade_key, "GLOBAL", 3, "Test failed recovery", "dedup_failed"
-        ))
+        asyncio.run(
+            service.try_record_upgrade_with_effect(
+                upgrade_key, "GLOBAL", 3, "Test failed recovery", "dedup_failed"
+            )
+        )
         asyncio.run(service.mark_effect_failed(upgrade_key, "Simulated failure"))
-        
+
         recover_response = self.client.post("/v1/risk/recover")
         assert recover_response.status_code == 200
         result = recover_response.json()
         assert result["ok"] is True
-        
+
         state_after = self.client.get("/v1/killswitch?scope=GLOBAL")
         assert state_after.json()["level"] == 3
 
@@ -895,12 +896,16 @@ class TestRiskEndpoints:
         killswitch = KillSwitchService()
 
         upgrade_key = "test_recover_idempotent_key"
-        asyncio.run(service.try_record_upgrade_with_effect(
-            upgrade_key, "GLOBAL", 2, "Test idempotent recovery", "dedup_recover_idempotent"
-        ))
-        killswitch.set_state(KillSwitchSetRequest(
-            scope="GLOBAL", level=2, reason="already_applied", updated_by="test"
-        ))
+        asyncio.run(
+            service.try_record_upgrade_with_effect(
+                upgrade_key, "GLOBAL", 2, "Test idempotent recovery", "dedup_recover_idempotent"
+            )
+        )
+        killswitch.set_state(
+            KillSwitchSetRequest(
+                scope="GLOBAL", level=2, reason="already_applied", updated_by="test"
+            )
+        )
 
         recover_response = self.client.post("/v1/risk/recover")
         assert recover_response.status_code == 200
@@ -919,12 +924,14 @@ class TestTimeWindowConfigEndpoints:
         """Setup for each test"""
         self.client = TestClient(app)
         from trader.api.routes import risk
+
         # Reset the time window policy singleton to avoid state pollution
         risk._time_window_policy = None
 
     def teardown_method(self):
         """Cleanup after each test"""
         from trader.api.routes import risk
+
         risk._time_window_policy = None
 
     def test_get_time_window_config_default(self):
@@ -1072,7 +1079,9 @@ class TestTimeWindowConfigEndpoints:
         assert response.status_code == 200
 
         # Test PRIME time (10:30) via public API
-        resp_prime = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 30})
+        resp_prime = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 30}
+        )
         assert resp_prime.status_code == 200
         data_prime = resp_prime.json()
         assert data_prime["period"] == "PRIME"
@@ -1080,7 +1089,9 @@ class TestTimeWindowConfigEndpoints:
         assert data_prime["allow_new_position"] is True
 
         # Test OFF_PEAK time (18:00) via public API
-        resp_offpeak = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 18, "minute": 0})
+        resp_offpeak = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 18, "minute": 0}
+        )
         assert resp_offpeak.status_code == 200
         data_offpeak = resp_offpeak.json()
         assert data_offpeak["period"] == "OFF_PEAK"
@@ -1088,7 +1099,9 @@ class TestTimeWindowConfigEndpoints:
         assert data_offpeak["allow_new_position"] is True
 
         # Test RESTRICTED time (23:00 - within overnight window) via public API
-        resp_restricted = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 23, "minute": 0})
+        resp_restricted = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 23, "minute": 0}
+        )
         assert resp_restricted.status_code == 200
         data_restricted = resp_restricted.json()
         assert data_restricted["period"] == "RESTRICTED"
@@ -1096,7 +1109,9 @@ class TestTimeWindowConfigEndpoints:
         assert data_restricted["allow_new_position"] is False
 
         # Test RESTRICTED time (03:00 - also within overnight window 22:00-08:00) via public API
-        resp_restricted2 = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 3, "minute": 0})
+        resp_restricted2 = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 3, "minute": 0}
+        )
         assert resp_restricted2.status_code == 200
         assert resp_restricted2.json()["period"] == "RESTRICTED"
 
@@ -1112,21 +1127,29 @@ class TestTimeWindowConfigEndpoints:
     def test_evaluate_time_window_invalid_hour(self):
         """Test that invalid hour values return 422"""
         # Test hour=25 (out of range)
-        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 25, "minute": 0})
+        response = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 25, "minute": 0}
+        )
         assert response.status_code == 422
-        
+
         # Test hour=-1 (negative)
-        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": -1, "minute": 0})
+        response = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": -1, "minute": 0}
+        )
         assert response.status_code == 422
 
     def test_evaluate_time_window_invalid_minute(self):
         """Test that invalid minute values return 422"""
         # Test minute=60 (out of range)
-        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 60})
+        response = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 10, "minute": 60}
+        )
         assert response.status_code == 422
-        
+
         # Test minute=-1 (negative)
-        response = self.client.get("/v1/risk/time-window/evaluate", params={"hour": 10, "minute": -1})
+        response = self.client.get(
+            "/v1/risk/time-window/evaluate", params={"hour": 10, "minute": -1}
+        )
         assert response.status_code == 422
 
 
@@ -1226,10 +1249,7 @@ class TestEventEndpoints:
     def test_trigger_replay(self):
         """Test triggering replay (Task 9.7 - returns ReplayJob)"""
         self._seed_replay_events()
-        payload = {
-            "stream_key": "orders",
-            "requested_by": "admin"
-        }
+        payload = {"stream_key": "orders", "requested_by": "admin"}
         response = self.client.post("/v1/replay", json=payload)
         assert response.status_code == 200
         data = response.json()
@@ -1267,7 +1287,9 @@ class TestEventEndpoints:
         payload = {"stream_key": "orders", "requested_by": "admin"}
         first = self.client.post("/v1/replay", json=payload)
         assert first.status_code == 200
-        second = self.client.post("/v1/replay", json={"stream_key": "orders", "requested_by": "alice"})
+        second = self.client.post(
+            "/v1/replay", json={"stream_key": "orders", "requested_by": "alice"}
+        )
         assert second.status_code == 200
 
         list_all = self.client.get("/v1/replay")
@@ -1300,12 +1322,7 @@ class TestKillSwitchEndpoints:
 
     def test_set_kill_switch(self):
         """Test setting kill switch with fail-closed durable persistence."""
-        payload = {
-            "scope": "GLOBAL",
-            "level": 2,
-            "reason": "Emergency",
-            "updated_by": "admin"
-        }
+        payload = {"scope": "GLOBAL", "level": 2, "reason": "Emergency", "updated_by": "admin"}
         response = self.client.post("/v1/killswitch", json=payload)
         if is_postgres_available():
             assert response.status_code == 200

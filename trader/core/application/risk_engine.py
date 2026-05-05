@@ -17,20 +17,20 @@ RiskEngine - 风险引擎
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Optional, Any, Protocol
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from dataclasses import dataclass, field
 from enum import Enum, IntEnum
+from typing import Any, Dict, List, Optional, Protocol
 
 from trader.core.application.ports import BrokerPort
-from trader.core.domain.models.signal import Signal
 from trader.core.domain.models.order import OrderSide
+from trader.core.domain.models.signal import Signal
 from trader.core.domain.rules.time_window_policy import (
-    TimeWindowPolicy,
     TimeWindowConfig,
     TimeWindowContext,
     TimeWindowPeriod,
+    TimeWindowPolicy,
 )
 
 logger = logging.getLogger(__name__)

@@ -10,19 +10,18 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from trader.api.main import app
-from trader.api.models.schemas import KillSwitchSetRequest
-from trader.api.routes import risk as risk_route_module
 from trader.adapters.persistence.postgres import (
     PostgreSQLStorage,
     close_pool,
     is_postgres_available,
 )
 from trader.adapters.persistence.risk_repository import reset_risk_event_repository
+from trader.api.main import app
+from trader.api.models.schemas import KillSwitchSetRequest
+from trader.api.routes import risk as risk_route_module
 from trader.services.killswitch import KillSwitchService
 from trader.services.risk import RiskService
 from trader.storage.in_memory import reset_storage
-
 
 skip_if_no_postgres = pytest.mark.skipif(
     not is_postgres_available(),
@@ -121,7 +120,9 @@ class TestRiskIdempotencyPersistence:
 
     def test_step6_pending_effect_is_recovered_after_restart(self) -> None:
         payload = _risk_payload("contract-step6-001")
-        upgrade_key = f"upgrade:{payload['scope']}:{payload['recommended_level']}:{payload['dedup_key']}"
+        upgrade_key = (
+            f"upgrade:{payload['scope']}:{payload['recommended_level']}:{payload['dedup_key']}"
+        )
 
         event_id, created, is_first_upgrade, is_first_effect = asyncio.run(
             RiskService().ingest_event_with_upgrade(

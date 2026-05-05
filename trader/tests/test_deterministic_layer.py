@@ -13,28 +13,31 @@ Unit Tests - Deterministic Layer
 7. Finality Override：REST 终态可以 override
 8. 无 cl_ord_id 映射处理
 """
-import pytest
+
 import asyncio
 from decimal import Decimal
+
+import pytest
+
 from trader.core.application.deterministic_layer import (
-    DeterministicApplier,
-    RawOrderUpdate,
-    RawFillUpdate,
-    OrderVersionVector,
-    ShadowState,
-    ShadowOrder,
-    TTLSet,
     STATUS_RANK,
     TERMINAL_MIN_RANK,
-    cas_apply_order,
+    DeterministicApplier,
+    OrderStatus,
+    OrderVersionVector,
+    RawFillUpdate,
+    RawOrderUpdate,
+    ShadowOrder,
+    ShadowState,
+    TTLSet,
     cas_apply_fill,
+    cas_apply_order,
     compute_exec_key,
     resolve_cl_ord_id,
-    OrderStatus,
 )
 
-
 # ==================== TTLSet Tests ====================
+
 
 class TestTTLSet:
     """TTLSet 的单元测试"""
@@ -48,6 +51,7 @@ class TestTTLSet:
     def test_expired_key(self):
         """测试过期键被清理"""
         import time
+
         ttl_set = TTLSet(ttl_s=0)  # 使用0秒TTL，立即过期
         ttl_set.add("key1")
         # 手动触发清理
@@ -71,6 +75,7 @@ class TestTTLSet:
 
 
 # ==================== Data Structure Tests ====================
+
 
 class TestOrderVersionVector:
     """OrderVersionVector 的单元测试"""
@@ -172,6 +177,7 @@ class TestHelperFunctions:
 
 
 # ==================== CAS Algorithm Tests ====================
+
 
 class TestCASApplyOrder:
     """cas_apply_order 的单元测试"""
@@ -500,6 +506,7 @@ class TestCASApplyFill:
 
 # ==================== DeterministicApplier Tests ====================
 
+
 class TestDeterministicApplier:
     """DeterministicApplier 的单元测试"""
 
@@ -612,6 +619,7 @@ class TestDeterministicApplier:
 
 # ==================== Concurrency Tests ====================
 
+
 class TestConcurrency:
     """并发测试"""
 
@@ -695,6 +703,7 @@ class TestConcurrency:
 
 
 # ==================== Edge Cases Tests ====================
+
 
 class TestEdgeCases:
     """边界情况测试"""

@@ -1,12 +1,11 @@
+import importlib
 import logging
 import os
-import importlib
 import sys
 from collections.abc import Iterator
 
 import pytest
 from dotenv import load_dotenv
-
 
 if os.path.exists(".env.postgres"):
     load_dotenv(".env.postgres")
@@ -35,8 +34,7 @@ _TRACKED_ENV_KEYS = (
     "POSTGRES_PASSWORD",
 )
 _BASE_ENV = {
-    key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key)
-    for key in _TRACKED_ENV_KEYS
+    key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key) for key in _TRACKED_ENV_KEYS
 }
 try:
     _REAL_ASYNCPG = importlib.import_module("asyncpg")
@@ -73,9 +71,7 @@ def _reset_global_test_state() -> None:
     from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
     from trader.api.routes import monitor
     from trader.api.routes.strategies import reset_strategy_route_state_for_tests
-    from trader.core.domain.services.order_ownership_registry import (
-        reset_order_ownership_registry,
-    )
+    from trader.core.domain.services.order_ownership_registry import reset_order_ownership_registry
     from trader.core.domain.services.position_lot_registry import reset_lot_manager
     from trader.services.strategy_event_service import reset_strategy_event_service
     from trader.storage.in_memory import reset_storage

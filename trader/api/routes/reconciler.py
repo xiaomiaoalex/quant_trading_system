@@ -3,35 +3,37 @@ Reconciler API Routes
 =====================
 Order reconciliation endpoints.
 """
+
 import logging
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Query, HTTPException, Depends
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from trader.core.application.reconciler import (
-    Reconciler,
-    ReconcileReport,
-    OrderDrift,
-    DriftType,
-    LocalOrderSnapshot,
-    ExchangeOrderSnapshot,
-)
-from trader.services.reconciler_service import ReconcilerService
-from trader.services.order import OrderService
-from trader.api.models.schemas import OrderView
 from trader.api.env_config import (
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
 )
+from trader.api.models.schemas import OrderView
+from trader.core.application.reconciler import (
+    DriftType,
+    ExchangeOrderSnapshot,
+    LocalOrderSnapshot,
+    OrderDrift,
+    Reconciler,
+    ReconcileReport,
+)
 from trader.core.domain.services.order_ownership_registry import (
-    OrderOwnershipRegistry,
     OrderOwnership,
+    OrderOwnershipRegistry,
     get_order_ownership_registry,
 )
+from trader.services.order import OrderService
+from trader.services.reconciler_service import ReconcilerService
 
 router = APIRouter(tags=["Reconciler"])
 
@@ -50,6 +52,7 @@ def get_reconciler() -> Reconciler:
 
 class TriggerReconcileRequest(BaseModel):
     """对账请求（可选 - 不传则后端自动拉取）"""
+
     local_orders: Optional[List[Dict[str, Any]]] = None
     exchange_orders: Optional[List[Dict[str, Any]]] = None
 
@@ -119,27 +122,30 @@ def _matches_client_order_id_prefix(client_order_id: Optional[str], prefixes: Li
 async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
     """
     从交易所 adapter 获取当前交易所订单快照。
-    
+
     使用 BinanceSpotDemoBroker 从真实交易所获取未结订单。
     配置从环境变量读取: BINANCE_API_KEY, BINANCE_SECRET_KEY
     """
     try:
         import os
+
         from trader.adapters.broker.binance_spot_demo_broker import (
             BinanceSpotDemoBroker,
             BinanceSpotDemoBrokerConfig,
         )
-        
+
         api_key = os.environ.get("BINANCE_API_KEY")
         secret_key = os.environ.get("BINANCE_SECRET_KEY")
-        
+
         if not api_key or not secret_key:
             logger.warning(
                 "EXCHANGE_ORDERS_CONFIG_MISSING",
-                extra={"message": "BINANCE_API_KEY or BINANCE_SECRET_KEY not set, returning empty list"}
+                extra={
+                    "message": "BINANCE_API_KEY or BINANCE_SECRET_KEY not set, returning empty list"
+                },
             )
             return []
-        
+
         # 创建真实的 Binance broker
         config = BinanceSpotDemoBrokerConfig.for_demo(
             api_key,
@@ -147,7 +153,7 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
             recv_window=get_binance_recv_window(),
         )
         broker = BinanceSpotDemoBroker(config)
-        
+
         # 连接并获取开放订单
         await broker.connect()
         try:
@@ -168,7 +174,7 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
                         "after_count": len(broker_orders),
                     },
                 )
-            
+
             exchange_orders: List[ExchangeOrderSnapshot] = [
                 ExchangeOrderSnapshot(
                     cl_ord_id=order.client_order_id,
@@ -180,21 +186,19 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
                 )
                 for order in broker_orders
             ]
-            
+
             logger.info(
-                "EXCHANGE_ORDERS_FETCHED",
-                extra={"exchange_orders_count": len(exchange_orders)}
+                "EXCHANGE_ORDERS_FETCHED", extra={"exchange_orders_count": len(exchange_orders)}
             )
-            
+
             return exchange_orders
         finally:
             await broker.disconnect()
-        
+
     except Exception as e:
         # Fail-closed: 获取失败时记录日志并返回空列表
         logger.error(
-            "EXCHANGE_ORDERS_FETCH_FAILED",
-            extra={"error": str(e), "error_type": type(e).__name__}
+            "EXCHANGE_ORDERS_FETCH_FAILED", extra={"error": str(e), "error_type": type(e).__name__}
         )
         return []
 
@@ -222,11 +226,11 @@ async def trigger_reconciliation(
 ):
     """
     Trigger a reconciliation check (Task 9.3 - 无参触发模式)。
-    
+
     支持两种模式：
     1. 无参模式（request=None）：后端自动拉取本地与交易所订单快照
     2. 带参模式：前端提交 local_orders + exchange_orders（用于测试）
-    
+
     订单归属分类：
     - OWNED: 本系统订单，参与对账
     - EXTERNAL: 外部订单，只统计不触发 PHANTOM 告警
@@ -234,11 +238,11 @@ async def trigger_reconciliation(
     """
     # 获取订单归属注册表
     ownership_registry = get_order_ownership_registry()
-    
+
     # 无参触发模式：后端自动聚合数据
     if request is None or (request.local_orders is None and request.exchange_orders is None):
         order_svc = OrderService()
-        
+
         # 从 OrderService 拉取本地订单（OMS 订单）
         local_orders_raw: List[OrderView] = order_svc.list_orders(limit=10000)
         local_orders = [
@@ -248,30 +252,45 @@ async def trigger_reconciliation(
                 symbol=o.instrument,
                 quantity=o.qty,
                 filled_quantity=o.filled_qty,
-                created_at=datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc) if o.created_ts_ms else datetime.now(timezone.utc),
-                updated_at=datetime.fromtimestamp(o.updated_ts_ms / 1000, tz=timezone.utc) if o.updated_ts_ms else datetime.now(timezone.utc),
+                created_at=(
+                    datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc)
+                    if o.created_ts_ms
+                    else datetime.now(timezone.utc)
+                ),
+                updated_at=(
+                    datetime.fromtimestamp(o.updated_ts_ms / 1000, tz=timezone.utc)
+                    if o.updated_ts_ms
+                    else datetime.now(timezone.utc)
+                ),
             )
             for o in local_orders_raw
         ]
-        
+
         # 回填本地订单到归属注册表
         if local_orders_raw:
             order_dicts = [
                 {
                     "cl_ord_id": o.cl_ord_id,
-                    "strategy_id": getattr(o, 'strategy_id', None),
-                    "created_at": datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc).isoformat() if o.created_ts_ms else None,
+                    "strategy_id": getattr(o, "strategy_id", None),
+                    "created_at": (
+                        datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc).isoformat()
+                        if o.created_ts_ms
+                        else None
+                    ),
                 }
                 for o in local_orders_raw
             ]
             ownership_registry.bootstrap_from_local_orders(order_dicts)
-        
+
         # 从交易所 adapter 拉取订单（真实交易所状态）
         exchange_orders: List[ExchangeOrderSnapshot] = await _fetch_exchange_orders()
-        
+
         logger.info(
             "RECONCILER_AUTO_TRIGGER",
-            extra={"local_orders_count": len(local_orders), "exchange_orders_count": len(exchange_orders)}
+            extra={
+                "local_orders_count": len(local_orders),
+                "exchange_orders_count": len(exchange_orders),
+            },
         )
     else:
         # 带参模式：使用前端提交的数据
@@ -302,11 +321,8 @@ async def trigger_reconciliation(
 
     # Only apply ownership filtering when explicitly configured (backward compatibility)
     # If no external prefixes configured and no registered origins, use legacy behavior
-    has_explicit_config = bool(
-        ownership_registry._external_prefixes or
-        ownership_registry._origins
-    )
-    
+    has_explicit_config = bool(ownership_registry._external_prefixes or ownership_registry._origins)
+
     # 识别外部/unknown订单 ID 集合（不触发 PHANTOM 告警）
     # 只有当明确配置了归属分类时才启用过滤
     skipped_order_ids: set[str] | None = None
@@ -320,7 +336,7 @@ async def trigger_reconciliation(
             ex_order._ownership = ownership.value
 
     report = reconciler.reconcile(local_orders, exchange_orders, skipped_order_ids)
-    
+
     # 在返回前为每个 drift 设置 ownership 属性
     for drift in report.drifts:
         if drift.drift_type == DriftType.PHANTOM:
@@ -328,7 +344,7 @@ async def trigger_reconciliation(
                 drift.ownership = OrderOwnership.UNKNOWN.value
             else:
                 drift.ownership = OrderOwnership.OWNED.value
-    
+
     service.set_last_report(report)
     return _report_to_response(report)
 

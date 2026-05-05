@@ -14,31 +14,27 @@ StrategyRunner 单元测试
 
 注意：项目配置了 asyncio_mode = "auto"，不需要 @pytest.mark.asyncio 装饰器
 """
+
 import asyncio
-import pytest
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
-from trader.core.application.risk_engine import KillSwitchLevel
-from trader.core.application.strategy_protocol import StrategyResourceLimits
-from trader.core.domain.models.signal import Signal, SignalType
-from trader.services.strategy_runner import (
-    StrategyRunner,
-    StrategyRuntimeInfo,
-    StrategyStatus,
-)
+import pytest
+
+from trader.core.application.risk_engine import KillSwitchLevel, RiskLevel
 from trader.core.application.strategy_protocol import (
     MarketData,
     MarketDataType,
     StrategyPlugin,
     StrategyResourceLimits,
-    ValidationResult,
     ValidationError,
+    ValidationResult,
 )
-from trader.core.application.risk_engine import RiskLevel
+from trader.core.domain.models.signal import Signal, SignalType
+from trader.services.strategy_runner import StrategyRunner, StrategyRuntimeInfo, StrategyStatus
 
 # 全局超时设置（秒）
 TEST_TIMEOUT = 10
@@ -102,7 +98,7 @@ class MockStrategyPlugin:
 
     async def update_config(self, config: Dict[str, Any]) -> ValidationResult:
         """实现 update_config 协议方法"""
-        self.config = {**self.config, **config} if hasattr(self, 'config') else config
+        self.config = {**self.config, **config} if hasattr(self, "config") else config
         return ValidationResult.valid()
 
 
@@ -167,7 +163,9 @@ class TestStrategyLoadUnload:
     """测试策略加载和卸载"""
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_load_strategy_success(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_load_strategy_success(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试成功加载策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -186,7 +184,9 @@ class TestStrategyLoadUnload:
         assert mock_plugin.initialized is True
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_load_strategy_already_loaded(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_load_strategy_already_loaded(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试重复加载策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -205,7 +205,9 @@ class TestStrategyLoadUnload:
                 )
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_unload_strategy_success(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_unload_strategy_success(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试成功卸载策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -228,7 +230,9 @@ class TestStrategyLoadUnload:
             await runner.unload_strategy("nonexistent")
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_unload_running_strategy_fails(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_unload_running_strategy_fails(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试卸载运行中的策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -270,7 +274,9 @@ class TestLifecycleControl:
         assert info.started_at is not None
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_start_already_running(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_start_already_running(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试重复启动策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -338,7 +344,9 @@ class TestLifecycleControl:
         assert info.status == StrategyStatus.RUNNING
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_pause_not_running_fails(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_pause_not_running_fails(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试暂停未运行的策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -353,7 +361,9 @@ class TestLifecycleControl:
                 await runner.pause("test_strategy")
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_resume_not_paused_fails(self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin):
+    async def test_resume_not_paused_fails(
+        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin
+    ):
         """测试恢复未暂停的策略"""
         mock_module = _create_mock_module(mock_plugin)
 
@@ -379,7 +389,10 @@ class TestTickDriving:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_generates_signal(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试 Tick 生成信号"""
         mock_plugin.return_signal = True
@@ -402,7 +415,10 @@ class TestTickDriving:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_no_signal(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试 Tick 不生成信号"""
         mock_plugin.return_signal = False
@@ -423,7 +439,10 @@ class TestTickDriving:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_paused_returns_none(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试暂停状态 Tick 返回 None"""
         mock_plugin.return_signal = True
@@ -453,7 +472,10 @@ class TestTickDriving:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_not_running_fails(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试未运行策略的 Tick"""
         mock_module = _create_mock_module(mock_plugin)
@@ -479,7 +501,10 @@ class TestErrorIsolation:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_error_isolated(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试 Tick 异常被隔离"""
         mock_plugin.raise_on_tick = True
@@ -503,7 +528,10 @@ class TestErrorIsolation:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_multiple_errors_mark_as_error(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试多次错误后标记为 ERROR 状态"""
         mock_plugin.raise_on_tick = True
@@ -1013,7 +1041,10 @@ class TestTimeoutControl:
 
     @pytest.mark.timeout(TEST_TIMEOUT)
     async def test_tick_timeout_returns_none(
-        self, runner: StrategyRunner, mock_plugin: MockStrategyPlugin, sample_market_data: MarketData
+        self,
+        runner: StrategyRunner,
+        mock_plugin: MockStrategyPlugin,
+        sample_market_data: MarketData,
     ):
         """测试策略执行超时返回 None"""
         limits = StrategyResourceLimits(timeout_seconds=0.1)
@@ -1070,16 +1101,18 @@ class MockStrategyPluginWithUpdateConfig(MockStrategyPlugin):
         """支持 update_config 方法"""
         self.update_config_calls.append(config)
         self._config = {**self._config, **config}
-        
+
         # 验证参数
         if "invalid_param" in config:
-            return ValidationResult.invalid([
-                ValidationError(
-                    field="invalid_param",
-                    message="Invalid parameter value",
-                    code="INVALID_PARAM"
-                )
-            ])
+            return ValidationResult.invalid(
+                [
+                    ValidationError(
+                        field="invalid_param",
+                        message="Invalid parameter value",
+                        code="INVALID_PARAM",
+                    )
+                ]
+            )
         return ValidationResult.valid()
 
     async def initialize(self, config: Dict[str, Any]) -> None:
@@ -1134,10 +1167,10 @@ class TestStrategyConfigUpdate:
 
             # 尝试更新为无效配置
             new_config = {"invalid_param": True}
-            
+
             with pytest.raises(ValueError) as exc_info:
                 await runner.update_strategy_config("test_strategy", new_config)
-            
+
             assert "参数验证失败" in str(exc_info.value)
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -1145,11 +1178,13 @@ class TestStrategyConfigUpdate:
         """测试更新未加载的策略"""
         with pytest.raises(ValueError) as exc_info:
             await runner.update_strategy_config("nonexistent", {"fast_period": 15})
-        
+
         assert "策略未加载" in str(exc_info.value)
 
     @pytest.mark.timeout(TEST_TIMEOUT)
-    async def test_update_config_without_update_method_uses_initialize(self, runner: StrategyRunner):
+    async def test_update_config_without_update_method_uses_initialize(
+        self, runner: StrategyRunner
+    ):
         """测试插件不支持 update_config 时使用 initialize"""
         plugin = MockStrategyPlugin()  # 使用不支持 update_config 的插件
         mock_module = _create_mock_module(plugin)

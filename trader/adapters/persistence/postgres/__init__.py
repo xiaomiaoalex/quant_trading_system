@@ -23,20 +23,22 @@ Usage:
     )
     await storage.connect()
 """
-import os
+
 import asyncio
-import logging
-import uuid
-from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
-from datetime import datetime, timezone
-from dataclasses import dataclass
 import json
+import logging
+import os
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     import asyncpg
 
 try:
     import asyncpg
+
     ASYNCPG_AVAILABLE = True
 except ImportError:
     ASYNCPG_AVAILABLE = False
@@ -48,6 +50,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StoredEvent:
     """Stored event representation"""
+
     event_id: str
     event_type: str
     aggregate_id: str
@@ -60,6 +63,7 @@ class StoredEvent:
 @dataclass
 class StoredSnapshot:
     """Stored snapshot representation"""
+
     snapshot_id: str
     stream_key: str
     aggregate_id: str
@@ -71,6 +75,7 @@ class StoredSnapshot:
 @dataclass
 class StoredRiskEvent:
     """Stored risk event representation"""
+
     event_id: str
     dedup_key: str
     scope: str
@@ -83,6 +88,7 @@ class StoredRiskEvent:
 @dataclass
 class StoredUpgradeRecord:
     """Stored upgrade record representation"""
+
     upgrade_key: str
     scope: str
     level: int
@@ -95,16 +101,16 @@ class PostgreSQLStorage:
     """
     PostgreSQL Storage for Event Sourcing
     ======================================
-    
+
     Responsibilities:
     - Store domain events in event_log table
     - Store aggregate snapshots in snapshots table
     - Support event replay and snapshot recovery
-    
+
     Database Schema:
     - event_log: event_id, event_type, aggregate_id, aggregate_type, timestamp, data, metadata
     - snapshots: snapshot_id, stream_key, aggregate_id, aggregate_type, timestamp, state
-    
+
     Note:
     - This is a synchronous wrapper around asyncpg
     - For async usage, use PostgreSQLStorageAsync
@@ -125,7 +131,7 @@ class PostgreSQLStorage:
         self._user = user or os.getenv("POSTGRES_USER", "trader")
         self._password = password or os.getenv("POSTGRES_PASSWORD", "")
         self._connection_string = connection_string or os.getenv("POSTGRES_CONNECTION_STRING")
-        
+
         self._pool: Optional[asyncpg.Pool] = None
         self._connected = False
 
@@ -169,7 +175,7 @@ class PostgreSQLStorage:
     def acquire(self):
         """
         Acquire a connection from the pool.
-        
+
         Returns:
             asyncpg Pool acquire context manager
         """
@@ -178,7 +184,8 @@ class PostgreSQLStorage:
     async def _initialize_schema(self) -> None:
         """Initialize database schema"""
         async with self._pool.acquire() as conn:
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS event_log (
                     event_id VARCHAR(255) PRIMARY KEY,
                     event_type VARCHAR(255) NOT NULL,
@@ -188,9 +195,11 @@ class PostgreSQLStorage:
                     data JSONB NOT NULL,
                     metadata JSONB DEFAULT '{}'
                 )
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id VARCHAR(255) PRIMARY KEY,
                     stream_key VARCHAR(255) NOT NULL,
@@ -200,24 +209,32 @@ class PostgreSQLStorage:
                     state JSONB NOT NULL,
                     UNIQUE(stream_key, aggregate_id)
                 )
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_event_log_aggregate_id 
                 ON event_log(aggregate_id)
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_event_log_timestamp 
                 ON event_log(timestamp)
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_snapshots_stream_key 
                 ON snapshots(stream_key)
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS risk_events (
                     event_id VARCHAR(255) PRIMARY KEY,
                     dedup_key VARCHAR(512) NOT NULL UNIQUE,
@@ -227,14 +244,18 @@ class PostgreSQLStorage:
                     ingested_at TIMESTAMP WITH TIME ZONE NOT NULL,
                     data JSONB NOT NULL DEFAULT '{}'
                 )
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_risk_events_dedup_key 
                 ON risk_events(dedup_key)
-            """)
-            
-            await conn.execute("""
+            """
+            )
+
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS risk_upgrades (
                     upgrade_key VARCHAR(512) PRIMARY KEY,
                     scope VARCHAR(255) NOT NULL,
@@ -243,9 +264,11 @@ class PostgreSQLStorage:
                     dedup_key VARCHAR(512) NOT NULL,
                     recorded_at TIMESTAMP WITH TIME ZONE NOT NULL
                 )
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS risk_upgrade_effects (
                     upgrade_key VARCHAR(512) PRIMARY KEY,
                     scope VARCHAR(255) NOT NULL,
@@ -255,19 +278,25 @@ class PostgreSQLStorage:
                     last_error TEXT,
                     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
                 )
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_risk_upgrade_effects_status 
                 ON risk_upgrade_effects(status)
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_risk_upgrade_effects_updated_at
                 ON risk_upgrade_effects(updated_at DESC)
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS feature_values (
                     symbol VARCHAR(50) NOT NULL,
                     feature_name VARCHAR(255) NOT NULL,
@@ -279,20 +308,26 @@ class PostgreSQLStorage:
                     ingested_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_feature_values_key UNIQUE (symbol, feature_name, version, ts_ms)
                 )
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_feature_values_symbol_feature_version 
                 ON feature_values(symbol, feature_name, version)
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_feature_values_ts_ms 
                 ON feature_values(ts_ms DESC)
-            """)
+            """
+            )
 
             # Task 17: Executions table with cl_ord_id + exec_id unique constraint
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS executions (
                     execution_id TEXT PRIMARY KEY,
                     cl_ord_id TEXT NOT NULL,
@@ -309,34 +344,39 @@ class PostgreSQLStorage:
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
                     UNIQUE(cl_ord_id, exec_id)
                 )
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_executions_cl_ord_id 
                 ON executions(cl_ord_id)
-            """)
+            """
+            )
 
-            await conn.execute("""
+            await conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_executions_strategy_id 
                 ON executions(strategy_id)
-            """)
+            """
+            )
 
     async def save_event(self, event) -> str:
         """
         Save an event to the event log.
-        
+
         This method provides idempotent event append using stream_key and seq.
         Uses atomic SQL to avoid TOCTOU race condition.
-        
+
         Args:
-            event: Event object with event_id, event_type, aggregate_id, 
+            event: Event object with event_id, event_type, aggregate_id,
                    aggregate_type, timestamp, data, metadata attributes
-                   
+
         Returns:
             event_id of the stored event (the same event_id is returned for duplicates)
         """
         import uuid
-        
+
         # Derive stream_key from aggregate_type and aggregate_id
         # If aggregate_id is empty, generate a unique stream_key using event_id to prevent collisions
         if not event.aggregate_id:
@@ -348,19 +388,21 @@ class PostgreSQLStorage:
                 "EVENT_STORE_MISSING_AGGREGATE_ID",
                 extra={
                     "event_id": event.event_id,
-                    "event_type": getattr(event, 'event_type', 'unknown'),
+                    "event_type": getattr(event, "event_type", "unknown"),
                     "generated_stream_key": stream_key,
                 },
             )
         else:
             stream_key = f"{event.aggregate_type}-{event.aggregate_id}"
-        
+
         # Prepare event data
         event_id = event.event_id or str(uuid.uuid4())
-        event_type = event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type)
+        event_type = (
+            event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type)
+        )
         timestamp = event.timestamp or datetime.now(timezone.utc)
         ts_ms = int(timestamp.timestamp() * 1000)
-        
+
         async with self._pool.acquire() as conn:
             try:
                 # Use atomic CTE with advisory lock to prevent race condition
@@ -406,9 +448,9 @@ class PostgreSQLStorage:
                     json.dumps(event.metadata or {}),
                     1,
                 )
-                
+
                 stored_event_id = row["event_id"] if row else None
-                
+
                 if stored_event_id == event_id:
                     logger.debug(
                         "EVENT_SAVED",
@@ -418,9 +460,13 @@ class PostgreSQLStorage:
                     # Conflict occurred - a different event_id was already stored at this seq
                     logger.debug(
                         "EVENT_DUPLICATE_IGNORED",
-                        extra={"stream_key": stream_key, "requested_event_id": event_id, "stored_event_id": stored_event_id},
+                        extra={
+                            "stream_key": stream_key,
+                            "requested_event_id": event_id,
+                            "stored_event_id": stored_event_id,
+                        },
                     )
-                    
+
             except Exception as e:
                 logger.error(
                     "PG_SAVE_EVENT_ERROR",
@@ -430,30 +476,30 @@ class PostgreSQLStorage:
                     },
                 )
                 raise
-        
+
         # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
         return stored_event_id
 
     async def append_event(self, event) -> str:
         """
         Append an event to the event log (legacy method)
-        
+
         .. deprecated::
             This method uses the original schema without stream_key/seq.
             For new implementations, use save_event() instead.
-        
+
         Note:
             This method creates a unique stream_key per event (legacy behavior).
             Prefer save_event() which supports stream-based ordering with seq.
-        
+
         Idempotency:
             Uses ON CONFLICT (event_id) DO NOTHING to ensure duplicate events
             (same event_id) are ignored without error.
-        
+
         Args:
-            event: Event object with event_id, event_type, aggregate_id, 
+            event: Event object with event_id, event_type, aggregate_id,
                    aggregate_type, timestamp, data, metadata attributes
-                   
+
         Returns:
             event_id of the stored event
         """
@@ -465,7 +511,11 @@ class PostgreSQLStorage:
                 ON CONFLICT (event_id) DO NOTHING
                 """,
                 event.event_id,
-                event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type),
+                (
+                    event.event_type.value
+                    if hasattr(event.event_type, "value")
+                    else str(event.event_type)
+                ),
                 event.aggregate_id,
                 event.aggregate_type,
                 event.timestamp,
@@ -483,41 +533,41 @@ class PostgreSQLStorage:
     ) -> List[StoredEvent]:
         """
         Query events from the event log
-        
+
         Args:
             aggregate_id: Filter by aggregate ID
             event_type: Filter by event type
             since: Filter events after this timestamp
             limit: Maximum number of events to return
-            
+
         Returns:
             List of stored events
         """
         query = "SELECT event_id, event_type, aggregate_id, aggregate_type, timestamp, data, metadata FROM event_log WHERE 1=1"
         params = []
         param_count = 0
-        
+
         if aggregate_id:
             param_count += 1
             query += f" AND aggregate_id = ${param_count}"
             params.append(aggregate_id)
-            
+
         if event_type:
             param_count += 1
             query += f" AND event_type = ${param_count}"
             params.append(event_type)
-            
+
         if since:
             param_count += 1
             query += f" AND timestamp >= ${param_count}"
             params.append(since)
-            
+
         query += f" ORDER BY timestamp ASC LIMIT ${param_count + 1}"
         params.append(limit)
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
-            
+
         return [
             StoredEvent(
                 event_id=row["event_id"],
@@ -534,7 +584,7 @@ class PostgreSQLStorage:
     async def save_snapshot(self, snapshot_data: Dict[str, Any]) -> str:
         """
         Save a snapshot
-        
+
         Args:
             snapshot_data: Dictionary containing snapshot information
                 - snapshot_id: Unique identifier
@@ -543,7 +593,7 @@ class PostgreSQLStorage:
                 - aggregate_type: Aggregate type
                 - timestamp: Snapshot timestamp
                 - state: Current state
-                
+
         Returns:
             snapshot_id of the stored snapshot
         """
@@ -571,10 +621,10 @@ class PostgreSQLStorage:
     async def get_latest_snapshot(self, stream_key: str) -> Optional[StoredSnapshot]:
         """
         Get the latest snapshot for a stream
-        
+
         Args:
             stream_key: Stream identifier
-            
+
         Returns:
             Latest snapshot or None if not found
         """
@@ -589,7 +639,7 @@ class PostgreSQLStorage:
                 """,
                 stream_key,
             )
-            
+
         if row:
             return StoredSnapshot(
                 snapshot_id=row["snapshot_id"],
@@ -608,35 +658,34 @@ class PostgreSQLStorage:
     ) -> Optional[Dict[str, Any]]:
         """
         Reconstruct aggregate state from snapshot + events.
-        
+
         This implements the core event sourcing pattern:
         1. Get latest snapshot by stream_key
         2. Get all events after snapshot timestamp using snapshot's aggregate_id
         3. Apply projection to rebuild state
-        
+
         Args:
             stream_key: The stream key to locate the snapshot
             projection_fn: Optional function to apply events to state.
                           If not provided, returns snapshot state + events for external reconstruction.
-        
+
         Returns:
             Reconstructed state dictionary, or None if no snapshot exists
         """
         snapshot = await self.get_latest_snapshot(stream_key)
-        
+
         if snapshot is None:
             return None
-        
+
         events_after_snapshot = await self.get_events(
             aggregate_id=snapshot.aggregate_id,
             since=snapshot.timestamp,
         )
-        
+
         events_after_snapshot = [
-            e for e in events_after_snapshot
-            if e.timestamp > snapshot.timestamp
+            e for e in events_after_snapshot if e.timestamp > snapshot.timestamp
         ]
-        
+
         if projection_fn is None:
             return {
                 "snapshot": {
@@ -656,22 +705,22 @@ class PostgreSQLStorage:
                 ],
                 "event_count": len(events_after_snapshot),
             }
-        
+
         current_state = snapshot.state.copy()
         for event in events_after_snapshot:
             current_state = projection_fn(current_state, event)
-        
+
         return current_state
 
     async def save_risk_event(self, event_data: Dict[str, Any]) -> tuple[str, bool]:
         """
         Save a risk event with deduplication.
-        
+
         Uses dedup_key unique constraint to ensure idempotency.
-        
+
         Args:
             event_data: Dictionary containing full event data (from model_dump)
-                
+
         Returns:
             Tuple of (event_id, created) where created is True if new, False if duplicate
         """
@@ -682,7 +731,7 @@ class PostgreSQLStorage:
         recommended_level = event_data.get("recommended_level", 0)
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
         data = json.dumps(event_data)
-        
+
         try:
             async with self._pool.acquire() as conn:
                 await conn.execute(
@@ -690,7 +739,13 @@ class PostgreSQLStorage:
                     INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
-                    event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                    event_id,
+                    dedup_key,
+                    scope,
+                    reason,
+                    recommended_level,
+                    ingested_at,
+                    data,
                 )
             return event_id, True
         except asyncpg.UniqueViolationError:
@@ -699,18 +754,19 @@ class PostgreSQLStorage:
                 return existing.event_id, False
             return event_id, False
 
-    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
-                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+    async def ingest_event_with_upgrade(
+        self, event_data: Dict[str, Any], upgrade_key: str, upgrade_level: int
+    ) -> Tuple[Optional[str], bool, bool, bool]:
         """
         Atomically ingest risk event and record upgrade with effect in a single transaction.
-        
+
         This implements: BEGIN -> dedup -> upgrade record -> side-effect intent -> COMMIT
-        
+
         Args:
             event_data: Dictionary containing full event data
             upgrade_key: The upgrade key
             upgrade_level: Target level for upgrade
-            
+
         Returns:
             Tuple of (event_id, created, is_first_upgrade, is_first_effect)
             - event_id: The event ID (None if duplicate)
@@ -725,9 +781,10 @@ class PostgreSQLStorage:
         recommended_level = event_data.get("recommended_level", 0)
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
         data = json.dumps(event_data)
-        
+
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+
                 async def _execute_step(step_name: str, operation, **context: Any):
                     try:
                         return await operation()
@@ -749,7 +806,13 @@ class PostgreSQLStorage:
                         ON CONFLICT (dedup_key) DO NOTHING
                         RETURNING event_id
                         """,
-                        event_id, dedup_key, scope, reason, recommended_level, ingested_at, data,
+                        event_id,
+                        dedup_key,
+                        scope,
+                        reason,
+                        recommended_level,
+                        ingested_at,
+                        data,
                     ),
                     event_id=event_id,
                     dedup_key=dedup_key,
@@ -764,7 +827,7 @@ class PostgreSQLStorage:
                     )
                     if existing:
                         event_id = existing["event_id"]
-                
+
                 upgrade_marker = await _execute_step(
                     "Upgrade record insert",
                     lambda: conn.fetchval(
@@ -774,7 +837,11 @@ class PostgreSQLStorage:
                         ON CONFLICT (upgrade_key) DO NOTHING
                         RETURNING 1
                         """,
-                        upgrade_key, scope, upgrade_level, reason, dedup_key,
+                        upgrade_key,
+                        scope,
+                        upgrade_level,
+                        reason,
+                        dedup_key,
                     ),
                     upgrade_key=upgrade_key,
                     dedup_key=dedup_key,
@@ -782,7 +849,7 @@ class PostgreSQLStorage:
                     upgrade_level=upgrade_level,
                 )
                 is_first_upgrade = upgrade_marker is not None
-                
+
                 effect_marker = await _execute_step(
                     "Effect record insert",
                     lambda: conn.fetchval(
@@ -792,23 +859,25 @@ class PostgreSQLStorage:
                         ON CONFLICT (upgrade_key) DO NOTHING
                         RETURNING 1
                         """,
-                        upgrade_key, scope, upgrade_level,
+                        upgrade_key,
+                        scope,
+                        upgrade_level,
                     ),
                     upgrade_key=upgrade_key,
                     scope=scope,
                     upgrade_level=upgrade_level,
                 )
                 is_first_effect = effect_marker is not None
-                
+
                 return event_id, created, is_first_upgrade, is_first_effect
 
     async def get_risk_event(self, dedup_key: str) -> Optional[StoredRiskEvent]:
         """
         Get a risk event by dedup_key.
-        
+
         Args:
             dedup_key: The deduplication key
-            
+
         Returns:
             StoredRiskEvent or None if not found
         """
@@ -821,7 +890,7 @@ class PostgreSQLStorage:
                 """,
                 dedup_key,
             )
-            
+
         if row:
             return StoredRiskEvent(
                 event_id=row["event_id"],
@@ -837,10 +906,10 @@ class PostgreSQLStorage:
     async def save_upgrade_record(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
         """
         Save an upgrade record for idempotency.
-        
+
         Note: This method is kept for backward compatibility but uses DO NOTHING
         to maintain the "first write only" idempotency principle.
-        
+
         Args:
             upgrade_key: Unique upgrade key
             upgrade_data: Dictionary containing:
@@ -855,7 +924,7 @@ class PostgreSQLStorage:
         reason = upgrade_data.get("reason", "")
         dedup_key = upgrade_data.get("dedup_key", "")
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
-        
+
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
@@ -863,16 +932,21 @@ class PostgreSQLStorage:
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (upgrade_key) DO NOTHING
                 """,
-                upgrade_key, scope, level, reason, dedup_key, recorded_at,
+                upgrade_key,
+                scope,
+                level,
+                reason,
+                dedup_key,
+                recorded_at,
             )
 
     async def get_upgrade_record(self, upgrade_key: str) -> Optional[StoredUpgradeRecord]:
         """
         Get an upgrade record by upgrade_key.
-        
+
         Args:
             upgrade_key: The upgrade key
-            
+
         Returns:
             StoredUpgradeRecord or None if not found
         """
@@ -885,7 +959,7 @@ class PostgreSQLStorage:
                 """,
                 upgrade_key,
             )
-            
+
         if row:
             return StoredUpgradeRecord(
                 upgrade_key=row["upgrade_key"],
@@ -900,7 +974,7 @@ class PostgreSQLStorage:
     async def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
         """
         Try to record an upgrade action. Returns True if first write, False if already exists.
-        
+
         Args:
             upgrade_key: Unique upgrade key
             upgrade_data: Dictionary containing:
@@ -908,7 +982,7 @@ class PostgreSQLStorage:
                 - level: Target level
                 - reason: Upgrade reason
                 - dedup_key: Related dedup key
-                
+
         Returns:
             True if this is the first time recording this upgrade_key, False if already exists
         """
@@ -917,7 +991,7 @@ class PostgreSQLStorage:
         reason = upgrade_data.get("reason", "")
         dedup_key = upgrade_data.get("dedup_key", "")
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
-        
+
         async with self._pool.acquire() as conn:
             marker = await conn.fetchval(
                 """
@@ -926,7 +1000,12 @@ class PostgreSQLStorage:
                 ON CONFLICT (upgrade_key) DO NOTHING
                 RETURNING 1
                 """,
-                upgrade_key, scope, level, reason, dedup_key, recorded_at,
+                upgrade_key,
+                scope,
+                level,
+                reason,
+                dedup_key,
+                recorded_at,
             )
             return marker is not None
 
@@ -939,11 +1018,12 @@ class PostgreSQLStorage:
             await conn.execute("DELETE FROM risk_upgrades")
             await conn.execute("DELETE FROM risk_upgrade_effects")
 
-    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int, 
-                                            reason: str, dedup_key: str) -> Tuple[bool, bool]:
+    async def try_record_upgrade_with_effect(
+        self, upgrade_key: str, scope: str, level: int, reason: str, dedup_key: str
+    ) -> Tuple[bool, bool]:
         """
         Atomically record upgrade and side-effect intent in a single transaction.
-        
+
         Returns:
             Tuple of (is_first_upgrade, is_first_effect)
             - is_first_upgrade: True if this is the first time recording this upgrade_key
@@ -958,10 +1038,14 @@ class PostgreSQLStorage:
                     ON CONFLICT (upgrade_key) DO NOTHING
                     RETURNING 1
                     """,
-                    upgrade_key, scope, level, reason, dedup_key,
+                    upgrade_key,
+                    scope,
+                    level,
+                    reason,
+                    dedup_key,
                 )
                 is_first_upgrade = upgrade_marker is not None
-                
+
                 effect_marker = await conn.fetchval(
                     """
                     INSERT INTO risk_upgrade_effects (upgrade_key, scope, level, status, attempts, updated_at)
@@ -969,10 +1053,12 @@ class PostgreSQLStorage:
                     ON CONFLICT (upgrade_key) DO NOTHING
                     RETURNING 1
                     """,
-                    upgrade_key, scope, level,
+                    upgrade_key,
+                    scope,
+                    level,
                 )
                 is_first_effect = effect_marker is not None
-                
+
                 return is_first_upgrade, is_first_effect
 
     async def mark_effect_applied(self, upgrade_key: str) -> None:
@@ -996,7 +1082,8 @@ class PostgreSQLStorage:
                 SET status = 'FAILED', last_error = $2, attempts = attempts + 1, updated_at = NOW()
                 WHERE upgrade_key = $1
                 """,
-                upgrade_key, error,
+                upgrade_key,
+                error,
             )
 
     async def get_pending_effects(self) -> List[Dict[str, Any]]:
@@ -1059,7 +1146,18 @@ class PostgreSQLStorage:
                     (execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, fee, fee_currency, ts_ms, strategy_id, venue)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     """,
-                    execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, fee, fee_currency, ts_ms, strategy_id, venue,
+                    execution_id,
+                    cl_ord_id,
+                    exec_id,
+                    symbol,
+                    side,
+                    quantity,
+                    price,
+                    fee,
+                    fee_currency,
+                    ts_ms,
+                    strategy_id,
+                    venue,
                 )
             return execution_id, True
         except asyncpg.UniqueViolationError:
@@ -1088,7 +1186,8 @@ class PostgreSQLStorage:
                 FROM executions
                 WHERE cl_ord_id = $1 AND exec_id = $2
                 """,
-                cl_ord_id, exec_id,
+                cl_ord_id,
+                exec_id,
             )
 
         if row:
@@ -1150,21 +1249,19 @@ class PostgreSQLStorage:
 def is_postgres_available() -> bool:
     """
     Check if PostgreSQL is available
-    
+
     Returns True if:
     - asyncpg package is installed, AND
     - (POSTGRES_CONNECTION_STRING is set OR all required environment variables are set)
     """
     if not ASYNCPG_AVAILABLE:
         return False
-    
+
     if os.getenv("POSTGRES_CONNECTION_STRING"):
         return True
-    
+
     return bool(
-        os.getenv("POSTGRES_HOST") 
-        and os.getenv("POSTGRES_DB") 
-        and os.getenv("POSTGRES_USER")
+        os.getenv("POSTGRES_HOST") and os.getenv("POSTGRES_DB") and os.getenv("POSTGRES_USER")
     )
 
 
@@ -1185,23 +1282,23 @@ def _get_pool_config_hash() -> str:
 async def _get_pool(timeout: float = 2.0) -> Optional["asyncpg.Pool"]:
     """Get or create a cached connection pool"""
     global _pool_cache, _pool_config_hash
-    
+
     current_hash = _get_pool_config_hash()
-    
+
     if _pool_cache is not None and _pool_config_hash == current_hash:
         try:
             await _pool_cache.fetchval("SELECT 1")
             return _pool_cache
         except Exception:
             _pool_cache = None
-    
+
     connection_string = os.getenv("POSTGRES_CONNECTION_STRING")
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
     database = os.getenv("POSTGRES_DB", "trading")
     user = os.getenv("POSTGRES_USER", "trader")
     password = os.getenv("POSTGRES_PASSWORD", "")
-    
+
     conn_args = {"min_size": 1, "max_size": 2}
     if connection_string:
         conn_args["dsn"] = connection_string
@@ -1212,7 +1309,7 @@ async def _get_pool(timeout: float = 2.0) -> Optional["asyncpg.Pool"]:
         conn_args["user"] = user
         if password:
             conn_args["password"] = password
-    
+
     try:
         _pool_cache = await asyncpg.create_pool(**conn_args)
         _pool_config_hash = current_hash
@@ -1242,27 +1339,27 @@ async def close_pool() -> None:
 async def check_postgres_connection(timeout: float = 2.0) -> tuple[bool, str]:
     """
     Check if PostgreSQL is actually reachable.
-    
+
     Performs an actual connection test with a short timeout.
     Uses a cached connection pool for efficiency.
-    
+
     Args:
         timeout: Connection timeout in seconds (default 2.0)
-        
+
     Returns:
         Tuple of (is_reachable, message)
     """
     if not ASYNCPG_AVAILABLE:
         return False, "asyncpg not installed"
-    
+
     if not is_postgres_available():
         return False, "PostgreSQL not configured"
-    
+
     try:
         pool = await _get_pool(timeout)
         if pool is None:
             return False, "Failed to create connection pool"
-        
+
         async with pool.acquire(timeout=timeout) as conn:
             result = await conn.fetchval("SELECT 1")
             if result == 1:

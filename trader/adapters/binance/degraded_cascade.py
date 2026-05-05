@@ -10,32 +10,33 @@ Degraded Cascade Controller - 级联保护控制器
 - 幂等性保证
 - 本地自保机制
 """
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Optional, Any, Callable, Awaitable, Set
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Set
 
 if TYPE_CHECKING:
     import aiohttp
 
+from trader.adapters.binance.backoff import BackoffConfig, BackoffController
+from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport
 from trader.adapters.binance.environmental_risk import (
     EnvironmentalRiskEvent,
     LocalEventLog,
-    RiskSeverity,
-    RiskScope,
     RecommendedLevel,
+    RiskScope,
+    RiskSeverity,
 )
-from trader.adapters.binance.backoff import BackoffController, BackoffConfig
-from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport
-
 
 logger = logging.getLogger(__name__)
 
 
 class CascadeState(Enum):
     """级联状态"""
+
     NORMAL = "NORMAL"
     DEGRADED = "DEGRADED"
     SELF_PROTECTION = "SELF_PROTECTION"
@@ -45,6 +46,7 @@ class CascadeState(Enum):
 @dataclass
 class CascadeConfig:
     """级联配置"""
+
     control_plane_base_url: str = "http://localhost:8080"
     dedup_window_ms: int = 60000
     min_report_interval_ms: int = 5000
@@ -57,6 +59,7 @@ class CascadeConfig:
 @dataclass
 class CascadeMetrics:
     """级联指标"""
+
     degraded_enter_count: int = 0
     degraded_exit_count: int = 0
     risk_events_reported: int = 0
@@ -93,15 +96,17 @@ class DegradedCascadeController:
         http_client: "Optional[aiohttp.ClientSession]" = None,
         backoff: Optional[BackoffController] = None,
         config: Optional[CascadeConfig] = None,
-        adapter_name: str = "binance_adapter"
+        adapter_name: str = "binance_adapter",
     ):
         self._config = config or CascadeConfig(control_plane_base_url=control_plane_base_url)
         self._http_client = http_client
-        self._backoff = backoff or BackoffController(BackoffConfig(
-            initial_delay=1.0,
-            max_delay=30.0,
-            multiplier=2.0,
-        ))
+        self._backoff = backoff or BackoffController(
+            BackoffConfig(
+                initial_delay=1.0,
+                max_delay=30.0,
+                multiplier=2.0,
+            )
+        )
         self._adapter_name = adapter_name
 
         self._state = CascadeState.NORMAL
@@ -150,9 +155,7 @@ class DegradedCascadeController:
         """注册自保回调"""
         self._on_self_protection_callbacks.append(callback)
 
-    def register_recovery_callback(
-        self, callback: Callable[[], Awaitable[None]]
-    ) -> None:
+    def register_recovery_callback(self, callback: Callable[[], Awaitable[None]]) -> None:
         """注册恢复回调"""
         self._on_recovery_callbacks.append(callback)
 
@@ -183,6 +186,7 @@ class DegradedCascadeController:
     async def _ensure_http_client(self) -> "aiohttp.ClientSession":
         """确保 HTTP 客户端存在"""
         import aiohttp
+
         if self._http_client is None or self._http_client.closed:
             self._http_client = aiohttp.ClientSession()
         return self._http_client
@@ -193,10 +197,7 @@ class DegradedCascadeController:
 
         while not self._stop_event.is_set():
             try:
-                envelope = await asyncio.wait_for(
-                    self._q.get(),
-                    timeout=1.0
-                )
+                envelope = await asyncio.wait_for(self._q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
 
@@ -212,7 +213,7 @@ class DegradedCascadeController:
                     "backoff_state": health.backoff_state,
                     "metrics": health.metrics,
                 },
-                scope=RiskScope.GLOBAL
+                scope=RiskScope.GLOBAL,
             )
 
             now_ms = int(time.time() * 1000)
@@ -252,13 +253,21 @@ class DegradedCascadeController:
                 event.report_attempts += 1
 
                 delay = self._backoff.next_delay("risk_event")
-                logger.warning(f"[Cascade] Report failed, retry {attempt + 1}/{MAX_RETRIES} in {delay}s")
+                logger.warning(
+                    f"[Cascade] Report failed, retry {attempt + 1}/{MAX_RETRIES} in {delay}s"
+                )
 
                 await asyncio.sleep(delay)
 
                 now_ms = int(time.time() * 1000)
-                if self._unreachable_since_ms and (now_ms - self._unreachable_since_ms) >= self._config.self_protection_trigger_ms:
-                    await self._trigger_self_protection(Exception("Control plane unreachable > threshold"))
+                if (
+                    self._unreachable_since_ms
+                    and (now_ms - self._unreachable_since_ms)
+                    >= self._config.self_protection_trigger_ms
+                ):
+                    await self._trigger_self_protection(
+                        Exception("Control plane unreachable > threshold")
+                    )
                     self._local_killswitch_active = True
                     break
 
@@ -267,9 +276,7 @@ class DegradedCascadeController:
                     self._unreachable_since_ms = int(time.time() * 1000)
 
     async def on_adapter_health_changed(
-        self,
-        health: AdapterHealthReport,
-        reason: str = ""
+        self, health: AdapterHealthReport, reason: str = ""
     ) -> None:
         """
         处理适配器健康状态变化（非阻塞，只 enqueue）
@@ -289,21 +296,13 @@ class DegradedCascadeController:
 
     def _enqueue_report(self, health: AdapterHealthReport, reason: str) -> None:
         """将上报任务加入队列（非阻塞）"""
-        envelope = {
-            "health": health,
-            "reason": reason,
-            "enqueued_at": time.time()
-        }
+        envelope = {"health": health, "reason": reason, "enqueued_at": time.time()}
         try:
             self._q.put_nowait(envelope)
         except asyncio.QueueFull:
             logger.warning("[Cascade] Queue full, dropping report")
 
-    async def _on_degraded_enter(
-        self,
-        health: AdapterHealthReport,
-        reason: str
-    ) -> None:
+    async def _on_degraded_enter(self, health: AdapterHealthReport, reason: str) -> None:
         """处理进入 DEGRADED 模式（使用队列上报）"""
         if self._state == CascadeState.DEGRADED:
             logger.debug(f"[Cascade] Already in DEGRADED state, skipping")
@@ -319,11 +318,7 @@ class DegradedCascadeController:
 
         self._enqueue_report(health, reason)
 
-    async def _on_degraded_exit(
-        self,
-        health: AdapterHealthReport,
-        reason: str
-    ) -> None:
+    async def _on_degraded_exit(self, health: AdapterHealthReport, reason: str) -> None:
         """处理退出 DEGRADED 模式（Anti-Flap：进入 RECOVERING 状态）"""
         if self._state == CascadeState.NORMAL:
             return
@@ -333,7 +328,9 @@ class DegradedCascadeController:
         self._metrics.degraded_exit_count += 1
 
         now_ms = int(time.time() * 1000)
-        expired_keys = [k for k, ts in self._reported_dedup_keys.items() if now_ms - ts >= self._dedup_ttl_ms]
+        expired_keys = [
+            k for k, ts in self._reported_dedup_keys.items() if now_ms - ts >= self._dedup_ttl_ms
+        ]
         for k in expired_keys:
             del self._reported_dedup_keys[k]
 
@@ -344,11 +341,7 @@ class DegradedCascadeController:
         # Reset consecutive healthy counter for downgrade tracking
         self._consecutive_healthy_checks = 0
 
-    async def _on_healthy_in_recovering(
-        self,
-        health: AdapterHealthReport,
-        reason: str
-    ) -> None:
+    async def _on_healthy_in_recovering(self, health: AdapterHealthReport, reason: str) -> None:
         """
         处理 RECOVERING 状态下的 HEALTHY 健康报告。
 
@@ -413,7 +406,9 @@ class DegradedCascadeController:
                     except Exception as e:
                         logger.error(f"[Cascade] Recovery callback error: {e}")
             else:
-                logger.warning("[KillSwitch] [Cascade] Auto-downgrade failed, will retry next check")
+                logger.warning(
+                    "[KillSwitch] [Cascade] Auto-downgrade failed, will retry next check"
+                )
                 self._metrics.downgrade_failed += 1
                 self._consecutive_healthy_checks = 0
 
@@ -427,29 +422,27 @@ class DegradedCascadeController:
         POST /v1/killswitch 请求降级到 L0。
         """
         import aiohttp
+
         url = f"{self._config.control_plane_base_url}/v1/killswitch"
 
         payload = {
             "scope": "GLOBAL",
             "level": 0,
             "reason": f"Adapter auto-recovery: {self._consecutive_healthy_checks} consecutive healthy checks",
-            "updated_by": f"adapter:{self._adapter_name}:auto-downgrade"
+            "updated_by": f"adapter:{self._adapter_name}:auto-downgrade",
         }
 
         try:
             client = await self._ensure_http_client()
             async with client.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
             ) as resp:
-                resp_body = await resp.json() if resp.content_type == 'application/json' else None
+                resp_body = await resp.json() if resp.content_type == "application/json" else None
 
                 if resp.status in (200, 201, 409):
                     new_level = resp_body.get("level", 0) if resp_body else 0
                     logger.info(
-                        "[KillSwitch] [Cascade] <<< Auto-downgrade response: "
-                        "level=%s status=%s",
+                        "[KillSwitch] [Cascade] <<< Auto-downgrade response: " "level=%s status=%s",
                         new_level,
                         resp.status,
                     )
@@ -459,13 +452,12 @@ class DegradedCascadeController:
                     self._backoff.next_delay("killswitch_downgrade", int(retry_after))
                     logger.warning(
                         "[KillSwitch] [Cascade] Auto-downgrade rate limited: retry_after=%s",
-                        retry_after
+                        retry_after,
                     )
                     return False
                 else:
                     logger.error(
-                        "[KillSwitch] [Cascade] Auto-downgrade failed: status=%s",
-                        resp.status
+                        "[KillSwitch] [Cascade] Auto-downgrade failed: status=%s", resp.status
                     )
                     return False
 
@@ -478,11 +470,7 @@ class DegradedCascadeController:
             self._backoff.next_delay("killswitch_downgrade")
             return False
 
-    async def _report_to_control_plane(
-        self,
-        health: AdapterHealthReport,
-        reason: str
-    ) -> None:
+    async def _report_to_control_plane(self, health: AdapterHealthReport, reason: str) -> None:
         """向 Control Plane 上报"""
         event = EnvironmentalRiskEvent.create_from_adapter_health(
             adapter_name=self._adapter_name,
@@ -493,7 +481,7 @@ class DegradedCascadeController:
                 "backoff_state": health.backoff_state,
                 "metrics": health.metrics,
             },
-            scope=RiskScope.GLOBAL
+            scope=RiskScope.GLOBAL,
         )
 
         if not self._should_report(event):
@@ -537,6 +525,7 @@ class DegradedCascadeController:
         POST /v1/risk/events
         """
         import aiohttp
+
         url = f"{self._config.control_plane_base_url}/v1/risk/events"
         payload = event.to_dict()
 
@@ -545,9 +534,7 @@ class DegradedCascadeController:
         try:
             client = await self._ensure_http_client()
             async with client.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
             ) as resp:
                 if resp.status in (200, 201, 409):
                     logger.info(f"[Cascade] Risk event accepted: {resp.status}")
@@ -578,16 +565,21 @@ class DegradedCascadeController:
         与控制面的 Fail-Closed 行为保持一致。
         """
         import aiohttp
+
         url = f"{self._config.control_plane_base_url}/v1/killswitch"
 
-        recommended_lvl = event.recommended_level.value if isinstance(event.recommended_level, RecommendedLevel) else int(event.recommended_level)
+        recommended_lvl = (
+            event.recommended_level.value
+            if isinstance(event.recommended_level, RecommendedLevel)
+            else int(event.recommended_level)
+        )
         level_names = {0: "NORMAL", 1: "NO_NEW_POSITIONS", 2: "CLOSE_ONLY", 3: "FULL_STOP"}
 
         payload = {
             "scope": "GLOBAL",
             "level": recommended_lvl,
             "reason": event.reason,
-            "updated_by": f"adapter:{self._adapter_name}"
+            "updated_by": f"adapter:{self._adapter_name}",
         }
 
         # [KillSwitch] 日志入口：来自适配器的 KillSwitch 请求
@@ -603,21 +595,21 @@ class DegradedCascadeController:
         )
         logger.info(
             "[KillSwitch] [Cascade] Risk metrics: severity=%s scope=%s",
-            event.severity.value if hasattr(event.severity, 'value') else event.severity,
-            event.scope.value if hasattr(event.scope, 'value') else event.scope,
+            event.severity.value if hasattr(event.severity, "value") else event.severity,
+            event.scope.value if hasattr(event.scope, "value") else event.scope,
         )
 
         try:
             client = await self._ensure_http_client()
             async with client.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=self._config.request_timeout)
             ) as resp:
-                resp_body = await resp.json() if resp.content_type == 'application/json' else None
+                resp_body = await resp.json() if resp.content_type == "application/json" else None
 
                 if resp.status in (200, 201, 409):
-                    new_level = resp_body.get("level", recommended_lvl) if resp_body else recommended_lvl
+                    new_level = (
+                        resp_body.get("level", recommended_lvl) if resp_body else recommended_lvl
+                    )
                     new_reason = resp_body.get("reason") if resp_body else None
                     logger.info(
                         "[KillSwitch] [Cascade] <<< KillSwitch accepted: "
@@ -634,14 +626,14 @@ class DegradedCascadeController:
                     self._backoff.next_delay("killswitch", int(retry_after))
                     logger.warning(
                         "[KillSwitch] [Cascade] KillSwitch rate limited: retry_after=%s",
-                        retry_after
+                        retry_after,
                     )
                     return False
                 else:
                     logger.error(
                         "[KillSwitch] [Cascade] KillSwitch failed: level=%s status=%s",
                         recommended_lvl,
-                        resp.status
+                        resp.status,
                     )
                     return False
 
@@ -649,7 +641,7 @@ class DegradedCascadeController:
             logger.error(
                 "[KillSwitch] [Cascade] KillSwitch timeout: level=%s (%s)",
                 recommended_lvl,
-                level_names.get(recommended_lvl, f"LEVEL_{recommended_lvl}")
+                level_names.get(recommended_lvl, f"LEVEL_{recommended_lvl}"),
             )
             self._backoff.next_delay("killswitch")
             return False
@@ -658,7 +650,7 @@ class DegradedCascadeController:
                 "[KillSwitch] [Cascade] KillSwitch client error: level=%s (%s) error=%s",
                 recommended_lvl,
                 level_names.get(recommended_lvl, f"LEVEL_{recommended_lvl}"),
-                e
+                e,
             )
             self._backoff.next_delay("killswitch")
             return False
@@ -722,7 +714,8 @@ class DegradedCascadeController:
             "self_protection_active": self._self_protection_active,
             "self_protection_duration_s": (
                 time.time() - self._self_protection_triggered_at
-                if self._self_protection_triggered_at else 0
+                if self._self_protection_triggered_at
+                else 0
             ),
             "metrics": {
                 "degraded_enter_count": self._metrics.degraded_enter_count,

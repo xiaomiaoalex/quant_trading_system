@@ -55,9 +55,7 @@ class RsiGridStrategy:
         if config:
             result = await self.update_config(config)
             if not result.is_valid:
-                raise ValueError(
-                    f"RSI Grid 初始化参数无效: {[e.message for e in result.errors]}"
-                )
+                raise ValueError(f"RSI Grid 初始化参数无效: {[e.message for e in result.errors]}")
 
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         price = market_data.price
@@ -79,11 +77,15 @@ class RsiGridStrategy:
 
         if rsi <= self.oversold:
             signal_type = SignalType.BUY
-            confidence = min(Decimal("0.95"), Decimal("0.65") + (self.oversold - rsi) / Decimal("100"))
+            confidence = min(
+                Decimal("0.95"), Decimal("0.65") + (self.oversold - rsi) / Decimal("100")
+            )
             reason = f"RSI oversold ({rsi:.2f}) <= {self.oversold}"
         elif rsi >= self.overbought:
             signal_type = SignalType.SELL
-            confidence = min(Decimal("0.95"), Decimal("0.65") + (rsi - self.overbought) / Decimal("100"))
+            confidence = min(
+                Decimal("0.95"), Decimal("0.65") + (rsi - self.overbought) / Decimal("100")
+            )
             reason = f"RSI overbought ({rsi:.2f}) >= {self.overbought}"
 
         if signal_type is None:

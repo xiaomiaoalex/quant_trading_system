@@ -3,21 +3,22 @@ Base FSM - Finite State Machine Framework
 ==========================================
 基础状态机框架，为 Public/Private Stream Manager 提供通用状态机能力。
 """
+
 import asyncio
 import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, Optional, Any, List
 from threading import Lock
-
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class StreamState(Enum):
     """流状态"""
+
     IDLE = "IDLE"
     CONNECTING = "CONNECTING"
     CONNECTED = "CONNECTED"
@@ -31,6 +32,7 @@ class StreamState(Enum):
 
 class StreamEvent(Enum):
     """流事件"""
+
     START = "START"
     CONNECTED = "CONNECTED"
     DISCONNECTED = "DISCONNECTED"
@@ -44,6 +46,7 @@ class StreamEvent(Enum):
 @dataclass
 class StreamConfig:
     """流配置"""
+
     reconnect_max_attempts: int = 10
     reconnect_base_delay: float = 1.0
     stale_timeout_seconds: float = 30.0
@@ -55,6 +58,7 @@ class StreamConfig:
 @dataclass
 class StreamMetrics:
     """流指标"""
+
     state: StreamState = StreamState.IDLE
     connect_count: int = 0
     disconnect_count: int = 0
@@ -202,5 +206,5 @@ class BaseStreamFSM(ABC):
                 "reconnect_count": self._metrics.reconnect_count,
                 "stale_count": self._metrics.stale_count,
                 "last_error": self._metrics.last_error,
-            }
+            },
         }

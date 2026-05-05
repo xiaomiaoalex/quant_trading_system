@@ -86,7 +86,9 @@ class StrategyCandidateService:
         candidate = self._require_candidate(candidate_id)
         status = str(candidate.get("status", "DRAFT"))
         if status in self._delete_protected_statuses:
-            raise ValueError(f"Cannot delete StrategyCandidate in {status}; stop or detach runtime first")
+            raise ValueError(
+                f"Cannot delete StrategyCandidate in {status}; stop or detach runtime first"
+            )
 
         deployment_id = candidate.get("deployment_id")
         if deployment_id:
@@ -166,7 +168,12 @@ class StrategyCandidateService:
                 )
                 if quality_score is not None and float(quality_score) < 0.8:
                     failed_rules.append("data_quality_below_threshold")
-                if float(metrics.get("cost_stress_return", metrics.get("total_return", 0.0)) or 0.0) <= 0:
+                if (
+                    float(
+                        metrics.get("cost_stress_return", metrics.get("total_return", 0.0)) or 0.0
+                    )
+                    <= 0
+                ):
                     failed_rules.append("cost_stress_non_positive")
 
         validation = BacktestGateResult(
@@ -175,7 +182,9 @@ class StrategyCandidateService:
             metrics=metrics,
             evidence_refs=evidence_refs,
         )
-        target_status: StrategyCandidateStatus = "VALIDATION_PASSED" if validation.passed else "REJECTED"
+        target_status: StrategyCandidateStatus = (
+            "VALIDATION_PASSED" if validation.passed else "REJECTED"
+        )
         return self._transition(
             candidate,
             target_status,

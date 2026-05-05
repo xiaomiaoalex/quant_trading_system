@@ -13,6 +13,7 @@ AccountStateService - 账户资产状态管理
   Private WS   → apply_private_account_position (增量更新)
   Balance WS   → apply_balance_update (delta 更新)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -96,9 +97,7 @@ class AccountStateService:
         # Best-effort PG persistence
         self._persist_balances(account_id, venue, balances, ts_ms, "rest_snapshot")
 
-    def apply_private_account_position(
-        self, account_id: str, venue: str, event: dict
-    ) -> None:
+    def apply_private_account_position(self, account_id: str, venue: str, event: dict) -> None:
         """Incremental update from private stream (accountPosition event).
 
         Note: intentionally does NOT clear stale state — private stream is an
@@ -242,7 +241,9 @@ class AccountStateService:
             self.apply_rest_snapshot(account_id, venue, rows, int(time.time() * 1000))
             logger.info(
                 "[AccountState] Loaded %d balances from PG: account=%s venue=%s",
-                len(rows), account_id, venue,
+                len(rows),
+                account_id,
+                venue,
             )
             return True
         except Exception as exc:

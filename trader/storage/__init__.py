@@ -9,6 +9,7 @@ Entry Points:
 - get_storage(): Get global control plane storage instance
 - reset_storage(): Reset global control plane storage instance
 """
+
 from trader.storage.in_memory import (
     ControlPlaneInMemoryStorage,
     InMemoryStorage,

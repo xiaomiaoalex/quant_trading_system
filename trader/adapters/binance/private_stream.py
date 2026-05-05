@@ -14,6 +14,7 @@ Private Stream Manager - Binance Private WebSocket Stream
 - 无共享状态
 - 可独立运行和故障
 """
+
 import asyncio
 import hashlib
 import hmac
@@ -24,7 +25,7 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     import aiohttp
@@ -32,13 +33,15 @@ if TYPE_CHECKING:
 import websockets
 import websockets.client as ws_client
 
-from trader.adapters.binance.stream_base import (
-    BaseStreamFSM, StreamConfig, StreamState, StreamEvent
-)
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
+from trader.adapters.binance.stream_base import (
+    BaseStreamFSM,
+    StreamConfig,
+    StreamEvent,
+    StreamState,
+)
 from trader.adapters.binance.websockets_compat import install_connection_lost_guard
-
 
 logger = logging.getLogger(__name__)
 install_connection_lost_guard(logger)
@@ -51,6 +54,7 @@ class ListenKeyEndpointGoneError(Exception):
 @dataclass
 class BinanceCredentials:
     """Binance API 凭证"""
+
     api_key: str
     secret_key: str
     testnet: bool = True
@@ -59,6 +63,7 @@ class BinanceCredentials:
 @dataclass
 class RawOrderUpdate:
     """原始订单更新（来自 WS）"""
+
     cl_ord_id: Optional[str]
     broker_order_id: Optional[str]
     status: str
@@ -72,6 +77,7 @@ class RawOrderUpdate:
 @dataclass
 class RawFillUpdate:
     """原始成交更新（来自 WS）"""
+
     cl_ord_id: Optional[str]
     trade_id: int
     exec_type: str
@@ -90,6 +96,7 @@ class RawFillUpdate:
 @dataclass
 class PrivateStreamConfig:
     """私有流配置"""
+
     mode: str = "auto"  # auto | ws_api_signature | legacy_listen_key
     base_url: str = "wss://stream.binance.com:9443/ws"
     rest_url: str = "https://testnet.binance.vision/api"
@@ -104,7 +111,7 @@ class PrivateStreamConfig:
     ws_api_connect_max_delay: float = 20.0
     time_sync_max_attempts: int = 3
     time_sync_base_delay: float = 0.5
-    listen_key_ttl: int = 3600            # listenKey 有效期（秒）
+    listen_key_ttl: int = 3600  # listenKey 有效期（秒）
     listen_key_refresh_interval: int = 1800  # 刷新间隔（秒）
     listen_key_create_max_attempts: int = 5
     listen_key_create_base_delay: float = 1.5
@@ -113,9 +120,9 @@ class PrivateStreamConfig:
     reconnect_jitter_ratio: float = 0.2
     reconnect_jitter_max_seconds: float = 3.0
     ping_interval: float = 30.0
-    pong_timeout: int = 10                # Pong 超时次数
-    stale_timeout: int = 30                # 无数据超时（秒）
-    pong_timeout_count: int = 2            # 连续 Pong 超时次数阈值
+    pong_timeout: int = 10  # Pong 超时次数
+    stale_timeout: int = 30  # 无数据超时（秒）
+    pong_timeout_count: int = 2  # 连续 Pong 超时次数阈值
 
 
 class PrivateStreamManager(BaseStreamFSM):
@@ -130,7 +137,7 @@ class PrivateStreamManager(BaseStreamFSM):
         self,
         credentials: BinanceCredentials,
         config: Optional[PrivateStreamConfig] = None,
-        stream_config: Optional[StreamConfig] = None
+        stream_config: Optional[StreamConfig] = None,
     ):
         private_stream_config = stream_config or StreamConfig(
             stale_timeout_seconds=30.0,
@@ -212,6 +219,7 @@ class PrivateStreamManager(BaseStreamFSM):
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
         import aiohttp
+
         self._session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=self._private_config.request_timeout),
             trust_env=True,
@@ -385,9 +393,7 @@ class PrivateStreamManager(BaseStreamFSM):
                         raise RuntimeError("missing serverTime")
                     local_ms = int(time.time() * 1000)
                     self._timestamp_offset_ms = server_ms - local_ms
-                    logger.info(
-                        f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms"
-                    )
+                    logger.info(f"[{self._name}] Time offset synced: {self._timestamp_offset_ms}ms")
                     self._proxy_failover.report_success(proxy)
                     return
             except Exception as e:
@@ -584,7 +590,9 @@ class PrivateStreamManager(BaseStreamFSM):
                     self._listen_key_expiry_ts = time.time() + self._private_config.listen_key_ttl
                     logger.info(f"[{self._name}] ListenKey refreshed")
                 else:
-                    logger.warning(f"[{self._name}] ListenKey refresh failed: {resp.status}, triggering reconnect")
+                    logger.warning(
+                        f"[{self._name}] ListenKey refresh failed: {resp.status}, triggering reconnect"
+                    )
                     await self.reconnect()
 
         except Exception as e:
@@ -729,8 +737,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 try:
                     sleep_delay = self._apply_jitter(delay)
                     logger.info(
-                        f"[{self._name}] Reconnecting in {sleep_delay:.2f}s "
-                        f"(base={delay:.2f}s)"
+                        f"[{self._name}] Reconnecting in {sleep_delay:.2f}s " f"(base={delay:.2f}s)"
                     )
                     await asyncio.sleep(sleep_delay)
 
@@ -861,7 +868,7 @@ class PrivateStreamManager(BaseStreamFSM):
             avg_price=avg_price,
             exchange_ts_ms=exchange_ts,
             local_receive_ts_ms=int(time.time() * 1000),
-            source="WS"
+            source="WS",
         )
 
     @staticmethod
@@ -933,7 +940,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 broker_order_id=broker_order_id,
                 symbol=data.get("s"),
                 exec_id=exec_id,
-                source="WS"
+                source="WS",
             )
         except (ValueError, TypeError, KeyError) as e:
             logger.warning(f"[{self._name}] Failed to parse fill update: {e}")
@@ -975,8 +982,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 )
                 if time_since_pong > max_pong_lag:
                     logger.warning(
-                        f"[{self._name}] Pong timeout: "
-                        f"{time_since_pong:.1f}s since last pong"
+                        f"[{self._name}] Pong timeout: " f"{time_since_pong:.1f}s since last pong"
                     )
                     self._set_state(StreamState.STALE_DATA)
                     self._metrics.stale_count += 1
@@ -987,8 +993,7 @@ class PrivateStreamManager(BaseStreamFSM):
 
                 # 仅在真正观察到 executionReport 后才做 data stale 判定，避免空闲账户误判重连。
                 should_check_data_stale = (
-                    self._selected_mode != "ws_api_signature"
-                    and self._has_seen_execution_report
+                    self._selected_mode != "ws_api_signature" and self._has_seen_execution_report
                 )
                 if should_check_data_stale and time_since_data > self._private_config.stale_timeout:
                     logger.warning(
@@ -1001,10 +1006,11 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.reconnect()
 
                 should_check_user_event_stale = (
-                    self._selected_mode != "ws_api_signature"
-                    and self._has_seen_user_event
+                    self._selected_mode != "ws_api_signature" and self._has_seen_user_event
                 )
-                if should_check_user_event_stale and time_since_user_event > (self._private_config.stale_timeout * 2):
+                if should_check_user_event_stale and time_since_user_event > (
+                    self._private_config.stale_timeout * 2
+                ):
                     logger.warning(
                         f"[{self._name}] User event timeout: {time_since_user_event:.1f}s"
                     )

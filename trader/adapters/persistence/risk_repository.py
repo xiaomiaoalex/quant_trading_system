@@ -11,18 +11,19 @@ Risk Events Repository - 风险事件持久化仓库
 Note:
 - 日志记录待 Sprint 2 补齐（当前仅保证功能回退）
 """
+
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Any, Dict, List, Optional, Tuple
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
 from trader.adapters.persistence.postgres import (
     PostgreSQLStorage,
-    is_postgres_available,
     _get_pool,
     check_postgres_connection,
+    is_postgres_available,
 )
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 class RiskEventRepository:
     """
     Risk Events Repository - 风险事件持久化仓库
-    
+
     职责：
     - 管理 risk_events 的持久化
     - 管理 risk_upgrades 的持久化
@@ -57,7 +58,9 @@ class RiskEventRepository:
                     try:
                         pool.terminate()
                     except Exception as terminate_error:
-                        logger.debug(f"Failed to terminate PostgreSQL pool during reset: {terminate_error}")
+                        logger.debug(
+                            f"Failed to terminate PostgreSQL pool during reset: {terminate_error}"
+                        )
         self._clear_postgres_state()
 
     def _terminate_postgres_connection(self) -> None:
@@ -98,7 +101,7 @@ class RiskEventRepository:
         async with self._init_lock:
             if self._use_postgres and self._postgres_storage is not None:
                 return True
-            
+
             is_available, msg = await check_postgres_connection(timeout=2.0)
             if is_available:
                 try:
@@ -108,20 +111,22 @@ class RiskEventRepository:
                     logger.info("PostgreSQL connected successfully for risk events")
                     return True
                 except Exception as e:
-                    logger.warning(f"Failed to connect to PostgreSQL: {e}, falling back to in-memory storage")
+                    logger.warning(
+                        f"Failed to connect to PostgreSQL: {e}, falling back to in-memory storage"
+                    )
                     self._use_postgres = False
                     self._postgres_storage = None
-            
+
             logger.debug(f"PostgreSQL not available: {msg}")
             return False
 
     async def save_risk_event(self, event_data: Dict[str, Any]) -> Tuple[str, bool]:
         """
         保存风险事件（带幂等性保证）
-        
+
         Args:
             event_data: 事件数据字典
-            
+
         Returns:
             Tuple of (event_id, created) - created 为 True 表示新建，False 表示重复
         """
@@ -130,7 +135,7 @@ class RiskEventRepository:
                 return await self._postgres_storage.save_risk_event(event_data)
             except Exception as e:
                 logger.warning(f"PostgreSQL save_risk_event failed: {e}, falling back to in-memory")
-        
+
         dedup_key = event_data["dedup_key"]
         existing = self._memory_storage.risk_events_by_key.get(dedup_key)
         if existing is not None:
@@ -147,10 +152,10 @@ class RiskEventRepository:
     async def get_risk_event(self, dedup_key: str) -> Optional[Dict[str, Any]]:
         """
         获取风险事件
-        
+
         Args:
             dedup_key: 去重键
-            
+
         Returns:
             事件数据字典，如果不存在则返回 None
         """
@@ -170,13 +175,13 @@ class RiskEventRepository:
                     }
             except Exception as e:
                 logger.warning(f"PostgreSQL get_risk_event failed: {e}, falling back to in-memory")
-        
+
         return self._memory_storage.risk_events_by_key.get(dedup_key)
 
     async def save_upgrade_record(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> None:
         """
         保存升级记录（带幂等性保证）
-        
+
         Args:
             upgrade_key: 升级键
             upgrade_data: 升级数据
@@ -186,8 +191,10 @@ class RiskEventRepository:
                 await self._postgres_storage.save_upgrade_record(upgrade_key, upgrade_data)
                 return
             except Exception as e:
-                logger.warning(f"PostgreSQL save_upgrade_record failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL save_upgrade_record failed: {e}, falling back to in-memory"
+                )
+
         now = datetime.now(timezone.utc).isoformat() + "Z"
         self._memory_storage.risk_upgrades[upgrade_key] = {
             **upgrade_data,
@@ -197,10 +204,10 @@ class RiskEventRepository:
     async def get_upgrade_record(self, upgrade_key: str) -> Optional[Dict[str, Any]]:
         """
         获取升级记录
-        
+
         Args:
             upgrade_key: 升级键
-            
+
         Returns:
             升级记录数据，如果不存在则返回 None
         """
@@ -217,14 +224,16 @@ class RiskEventRepository:
                         "recorded_at": stored.recorded_at.isoformat() + "Z",
                     }
             except Exception as e:
-                logger.warning(f"PostgreSQL get_upgrade_record failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL get_upgrade_record failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_storage.risk_upgrades.get(upgrade_key)
 
     async def try_record_upgrade(self, upgrade_key: str, upgrade_data: Dict[str, Any]) -> bool:
         """
         Try to record an upgrade action. Returns True if first write, False if already exists.
-        
+
         Args:
             upgrade_key: Unique upgrade key
             upgrade_data: Dictionary containing:
@@ -232,7 +241,7 @@ class RiskEventRepository:
                 - level: Target level
                 - reason: Upgrade reason
                 - dedup_key: Related dedup key
-                
+
         Returns:
             True if this is the first time recording this upgrade_key, False if already exists
         """
@@ -241,15 +250,18 @@ class RiskEventRepository:
                 result = await self._postgres_storage.try_record_upgrade(upgrade_key, upgrade_data)
                 return result
             except Exception as e:
-                logger.warning(f"PostgreSQL try_record_upgrade failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL try_record_upgrade failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_storage.try_record_upgrade(upgrade_key, upgrade_data)
 
-    async def try_record_upgrade_with_effect(self, upgrade_key: str, scope: str, level: int,
-                                            reason: str, dedup_key: str) -> Tuple[bool, bool]:
+    async def try_record_upgrade_with_effect(
+        self, upgrade_key: str, scope: str, level: int, reason: str, dedup_key: str
+    ) -> Tuple[bool, bool]:
         """
         Atomically record upgrade and side-effect intent in a single transaction.
-        
+
         Returns:
             Tuple of (is_first_upgrade, is_first_effect)
         """
@@ -259,8 +271,10 @@ class RiskEventRepository:
                     upgrade_key, scope, level, reason, dedup_key
                 )
             except Exception as e:
-                logger.warning(f"PostgreSQL try_record_upgrade_with_effect failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL try_record_upgrade_with_effect failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_storage.try_record_upgrade_with_effect(
             upgrade_key, scope, level, reason, dedup_key
         )
@@ -272,8 +286,10 @@ class RiskEventRepository:
                 await self._postgres_storage.mark_effect_applied(upgrade_key)
                 return
             except Exception as e:
-                logger.warning(f"PostgreSQL mark_effect_applied failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL mark_effect_applied failed: {e}, falling back to in-memory"
+                )
+
         self._memory_storage.mark_effect_applied(upgrade_key)
 
     async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
@@ -283,8 +299,10 @@ class RiskEventRepository:
                 await self._postgres_storage.mark_effect_failed(upgrade_key, error)
                 return
             except Exception as e:
-                logger.warning(f"PostgreSQL mark_effect_failed failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL mark_effect_failed failed: {e}, falling back to in-memory"
+                )
+
         self._memory_storage.mark_effect_failed(upgrade_key, error)
 
     async def get_pending_effects(self) -> List[Dict[str, Any]]:
@@ -293,15 +311,18 @@ class RiskEventRepository:
             try:
                 return await self._postgres_storage.get_pending_effects()
             except Exception as e:
-                logger.warning(f"PostgreSQL get_pending_effects failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL get_pending_effects failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_storage.get_pending_effects()
 
-    async def ingest_event_with_upgrade(self, event_data: Dict[str, Any], 
-                                       upgrade_key: str, upgrade_level: int) -> Tuple[Optional[str], bool, bool, bool]:
+    async def ingest_event_with_upgrade(
+        self, event_data: Dict[str, Any], upgrade_key: str, upgrade_level: int
+    ) -> Tuple[Optional[str], bool, bool, bool]:
         """
         Atomically ingest risk event and record upgrade with effect.
-        
+
         Returns:
             Tuple of (event_id, created, is_first_upgrade, is_first_effect)
         """
@@ -311,8 +332,10 @@ class RiskEventRepository:
                     event_data, upgrade_key, upgrade_level
                 )
             except Exception as e:
-                logger.warning(f"PostgreSQL ingest_event_with_upgrade failed: {e}, falling back to in-memory")
-        
+                logger.warning(
+                    f"PostgreSQL ingest_event_with_upgrade failed: {e}, falling back to in-memory"
+                )
+
         return self._memory_storage.ingest_event_with_upgrade(
             event_data, upgrade_key, upgrade_level
         )
@@ -331,23 +354,23 @@ def get_risk_event_repository() -> RiskEventRepository:
 
 def reset_risk_event_repository() -> None:
     """重置全局 RiskEventRepository 实例
-    
+
     支持在 async 和 sync 上下文中安全调用。
     确保返回时清理已完成。
     """
     global _repository_instance
     if _repository_instance is None:
         return
-    
+
     repo = _repository_instance
-    
+
     if repo._postgres_storage is not None:
         try:
             asyncio.get_running_loop()
             in_async_context = True
         except RuntimeError:
             in_async_context = False
-        
+
         if in_async_context:
             try:
                 loop = asyncio.get_event_loop()
@@ -362,5 +385,5 @@ def reset_risk_event_repository() -> None:
                 asyncio.run(repo._reset_postgres_connection())
             except RuntimeError:
                 repo._terminate_postgres_connection()
-    
+
     _repository_instance = None

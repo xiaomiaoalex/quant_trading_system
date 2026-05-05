@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 # 自动加载项目根目录的 .env 文件
 _env_file = Path(__file__).parent.parent.parent / ".env"
@@ -23,46 +23,46 @@ if _env_file.exists():
 
 from fastapi import FastAPI
 
-from trader.api.routes import (
-    health,
-    strategies,
-    deployments,
-    backtests,
-    risk,
-    orders,
-    portfolio,
-    events,
-    killswitch,
-    brokers,
-    reconciler,
-    monitor,
-    chat,
-    portfolio_research,
-    strategy_candidates,
-    allocations,
-    portfolio_autopilot,
-    data_catalog,
-    audit,
-    sse,
-)
-from trader.services.reconciler_service import ReconcilerService
-from trader.services.strategy import StrategyService
-from trader.services.order import OrderService
-from trader.services.heartbeat import ProcessHeartbeatService
+from trader.adapters.binance.connector import BinanceConnector
 from trader.api.connections import ConnectionManager
-from trader.api.models.schemas import StrategyRegisterRequest
 from trader.api.env_config import (
+    get_binance_env,
+    get_binance_env_config,
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
     get_system_order_namespace_prefix,
-    get_binance_env,
-    get_binance_env_config,
+)
+from trader.api.models.schemas import StrategyRegisterRequest
+from trader.api.routes import (
+    allocations,
+    audit,
+    backtests,
+    brokers,
+    chat,
+    data_catalog,
+    deployments,
+    events,
+    health,
+    killswitch,
+    monitor,
+    orders,
+    portfolio,
+    portfolio_autopilot,
+    portfolio_research,
+    reconciler,
+    risk,
+    sse,
+    strategies,
+    strategy_candidates,
 )
 from trader.core.domain.services.order_ownership_registry import (
-    get_order_ownership_registry,
     OrderOwnership,
+    get_order_ownership_registry,
 )
-from trader.adapters.binance.connector import BinanceConnector
+from trader.services.heartbeat import ProcessHeartbeatService
+from trader.services.order import OrderService
+from trader.services.reconciler_service import ReconcilerService
+from trader.services.strategy import StrategyService
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +258,8 @@ async def lifespan(app: FastAPI):
     crypto_risk_manager = None
     try:
         from trader.api.crypto_risk_runtime import (
-            get_crypto_risk_runtime_manager,
             get_crypto_risk_runtime_config,
+            get_crypto_risk_runtime_manager,
         )
         from trader.api.routes.strategies import set_pre_trade_risk_check
 
@@ -294,11 +294,9 @@ async def lifespan(app: FastAPI):
 
     if api_key and secret_key:
         try:
-            from trader.adapters.binance.connector import (
-                BinanceConnectorConfig,
-            )
-            from trader.adapters.binance.public_stream import PublicStreamConfig
+            from trader.adapters.binance.connector import BinanceConnectorConfig
             from trader.adapters.binance.private_stream import PrivateStreamConfig
+            from trader.adapters.binance.public_stream import PublicStreamConfig
             from trader.adapters.binance.rest_alignment import AlignmentConfig
 
             # 使用统一的 env config
@@ -368,11 +366,11 @@ async def lifespan(app: FastAPI):
             # AccountStateService + ExecutionBudgetService + Bridge
             # ============================================================
             from trader.services.account_state import AccountStateService
-            from trader.services.execution_budget import ExecutionBudgetService
             from trader.services.account_stream_bridge import (
                 AccountStreamBridge,
                 AccountStreamBridgeConfig,
             )
+            from trader.services.execution_budget import ExecutionBudgetService
 
             account_state = AccountStateService()
             execution_budget = ExecutionBudgetService(account_state)
@@ -388,7 +386,7 @@ async def lifespan(app: FastAPI):
             connector.register_balance_update_handler(bridge.on_balance_update)
 
             # 注入到 strategies 模块，供 OMS 使用
-            from trader.api.routes.strategies import set_execution_budget, set_account_state
+            from trader.api.routes.strategies import set_account_state, set_execution_budget
 
             set_execution_budget(execution_budget)
             set_account_state(account_state)
@@ -430,10 +428,10 @@ async def lifespan(app: FastAPI):
             # Task 9.11: DegradedCascadeController 初始化和注册
             # ============================================================
             from trader.adapters.binance.degraded_cascade import (
-                DegradedCascadeController,
-                CascadeConfig,
-                BackoffController,
                 BackoffConfig,
+                BackoffController,
+                CascadeConfig,
+                DegradedCascadeController,
             )
             from trader.api.routes.strategies import get_oms_metrics
 
@@ -629,8 +627,8 @@ async def lifespan(app: FastAPI):
                 )
 
                 from trader.api.routes.strategies import (
-                    get_strategy_runner,
                     get_strategy_orchestrator,
+                    get_strategy_runner,
                 )
 
                 runner = get_strategy_runner()

@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from trader.adapters.binance.proxy_failover import (
-    ProxyFailoverConfig,
-    ProxyFailoverController,
-)
+from trader.adapters.binance.proxy_failover import ProxyFailoverConfig, ProxyFailoverController
 
 
 def _set_primary_backup(monkeypatch: pytest.MonkeyPatch) -> None:

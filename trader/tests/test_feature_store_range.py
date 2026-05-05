@@ -11,13 +11,12 @@
 - 空结果
 - 无数据情况
 """
-import pytest
+
 from unittest.mock import AsyncMock, patch
 
-from trader.adapters.persistence.feature_store import (
-    FeatureStore,
-    FeaturePoint,
-)
+import pytest
+
+from trader.adapters.persistence.feature_store import FeaturePoint, FeatureStore
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
 
 
