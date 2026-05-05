@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from dataclasses import replace
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from trader.adapters.binance.crypto_risk_source import (
     BinanceFuturesRiskDataSource,
     BinanceFuturesRiskDataSourceConfig,
 )
-from trader.api.env_config import get_binance_recv_window
+from trader.api.env_config import get_binance_env, get_binance_recv_window
 from trader.core.application.ports import BrokerPort
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
 from trader.core.domain.models.crypto_risk import CryptoRiskBudget
@@ -44,6 +45,7 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 @dataclass(frozen=True, slots=True)
 class CryptoRiskRuntimeConfig:
     enabled: bool = False
+    execution_env: str = "demo"
     futures_base_url: str = BINANCE_USD_M_FUTURES_BASE_URL
     base_symbols: tuple[str, ...] = ()
     risk_budget: CryptoRiskBudget = field(default_factory=CryptoRiskBudget)
@@ -65,12 +67,36 @@ class CryptoRiskRuntimeStatusData:
     enabled: bool = False
     wired: bool = False
     fail_closed: bool = False
+    execution_env: str = "demo"
     futures_base_url: str | None = None
     base_symbols: tuple[str, ...] = ()
     risk_budget: CryptoRiskBudget = field(default_factory=CryptoRiskBudget)
     last_error: str | None = None
     updated_at: str | None = None
     updated_by: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CryptoRiskProbeCheck:
+    status: str
+    latency_ms: float
+    message: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class CryptoRiskProbeResult:
+    ok: bool
+    read_only: bool
+    mode: str
+    execution_env: str
+    futures_base_url: str | None
+    symbols: tuple[str, ...]
+    requested_by: str
+    started_at: str
+    finished_at: str
+    duration_ms: float
+    checks: dict[str, CryptoRiskProbeCheck]
 
 
 ComponentBuilder = Callable[..., CryptoRiskRuntimeComponents | None]
@@ -215,6 +241,71 @@ class CryptoRiskRuntimeManager:
             )
             return self._status
 
+    async def probe(
+        self,
+        *,
+        symbols: tuple[str, ...] | None = None,
+        requested_by: str,
+    ) -> CryptoRiskProbeResult:
+        async with self._lock:
+            if not self._config.enabled or self._components is None:
+                raise RuntimeError("crypto risk runtime is not wired")
+            source = self._components.source
+            config = self._config
+
+        requested_symbols = _normalize_symbol_tuple(symbols or config.base_symbols)
+        if not requested_symbols:
+            requested_symbols = ("BTCUSDT",)
+        symbol_set = set(requested_symbols)
+
+        started = datetime.now(timezone.utc)
+        started_perf = time.perf_counter()
+        checks: dict[str, CryptoRiskProbeCheck] = {}
+
+        checks["venue_health"] = await _probe_check(
+            "venue health",
+            lambda: _probe_venue_health(source),
+        )
+        checks["mark_prices"] = await _probe_check(
+            "mark prices",
+            lambda: _probe_mark_prices(source, symbol_set),
+        )
+        checks["instrument_specs"] = await _probe_check(
+            "instrument specs",
+            lambda: _probe_instrument_specs(source, symbol_set),
+        )
+        checks["leverage_brackets"] = await _probe_check(
+            "leverage brackets",
+            lambda: _probe_leverage_brackets(source, symbol_set),
+        )
+        checks["account"] = await _probe_check(
+            "account risk",
+            lambda: _probe_account(source),
+        )
+        checks["positions"] = await _probe_check(
+            "positions",
+            lambda: _probe_positions(source),
+        )
+        checks["open_orders"] = await _probe_check(
+            "open orders",
+            lambda: _probe_open_orders(source),
+        )
+
+        finished = datetime.now(timezone.utc)
+        return CryptoRiskProbeResult(
+            ok=all(check.status == "passed" for check in checks.values()),
+            read_only=True,
+            mode=_crypto_risk_mode(config.futures_base_url),
+            execution_env=config.execution_env,
+            futures_base_url=config.futures_base_url,
+            symbols=requested_symbols,
+            requested_by=requested_by,
+            started_at=started.isoformat(),
+            finished_at=finished.isoformat(),
+            duration_ms=round((time.perf_counter() - started_perf) * 1000, 3),
+            checks=checks,
+        )
+
     async def close(self) -> None:
         async with self._lock:
             components = self._components
@@ -243,6 +334,10 @@ class CryptoRiskRuntimeManager:
         self,
         *,
         risk_budget: CryptoRiskBudget,
+        source: Any | None = None,
+        base_symbols: tuple[str, ...] = (),
+        futures_base_url: str = BINANCE_USD_M_FUTURES_BASE_URL,
+        execution_env: str = "demo",
         pre_trade_setter: PreTradeSetter | None = None,
     ) -> None:
         class _NoopSource:
@@ -254,12 +349,18 @@ class CryptoRiskRuntimeManager:
 
         if pre_trade_setter is not None:
             self._pre_trade_setter = pre_trade_setter
-        source = _NoopSource()
-        self._config = CryptoRiskRuntimeConfig(enabled=True, risk_budget=risk_budget)
+        runtime_source = source or _NoopSource()
+        self._config = CryptoRiskRuntimeConfig(
+            enabled=True,
+            execution_env=execution_env,
+            futures_base_url=futures_base_url,
+            base_symbols=base_symbols,
+            risk_budget=risk_budget,
+        )
         self._broker = object()  # type: ignore[assignment]
         self._components = CryptoRiskRuntimeComponents(
-            source=source,  # type: ignore[arg-type]
-            snapshot_provider=DataSourceCryptoRiskSnapshotProvider(source),  # type: ignore[arg-type]
+            source=runtime_source,  # type: ignore[arg-type]
+            snapshot_provider=DataSourceCryptoRiskSnapshotProvider(runtime_source),  # type: ignore[arg-type]
             pre_trade_risk_check=build_crypto_risk_setup_failure_check("test runtime"),
         )
         self._status = self._build_status(
@@ -290,6 +391,7 @@ class CryptoRiskRuntimeManager:
             enabled=config.enabled,
             wired=wired,
             fail_closed=fail_closed,
+            execution_env=config.execution_env,
             futures_base_url=config.futures_base_url if config.enabled else None,
             base_symbols=config.base_symbols,
             risk_budget=config.risk_budget,
@@ -306,11 +408,14 @@ def get_crypto_risk_runtime_config(
     enabled = _parse_enabled(source.get(CRYPTO_RISK_ENABLED_ENV))
     if not enabled:
         return CryptoRiskRuntimeConfig(
-            enabled=False, recv_window_ms=get_binance_recv_window(source)
+            enabled=False,
+            execution_env=get_binance_env(source),
+            recv_window_ms=get_binance_recv_window(source),
         )
 
     return CryptoRiskRuntimeConfig(
         enabled=True,
+        execution_env=get_binance_env(source),
         futures_base_url=_parse_base_url(source.get(CRYPTO_RISK_FUTURES_BASE_URL_ENV)),
         base_symbols=_parse_symbol_list(source.get(CRYPTO_RISK_BASE_SYMBOLS_ENV)),
         risk_budget=CryptoRiskBudget(
@@ -432,12 +537,37 @@ def crypto_risk_runtime_status_to_dict(status: CryptoRiskRuntimeStatusData) -> d
         "enabled": status.enabled,
         "wired": status.wired,
         "fail_closed": status.fail_closed,
+        "execution_env": status.execution_env,
         "futures_base_url": status.futures_base_url,
         "base_symbols": list(status.base_symbols),
         "risk_budget": crypto_risk_budget_to_dict(status.risk_budget),
         "last_error": status.last_error,
         "updated_at": status.updated_at,
         "updated_by": status.updated_by,
+    }
+
+
+def crypto_risk_probe_result_to_dict(result: CryptoRiskProbeResult) -> dict[str, Any]:
+    return {
+        "ok": result.ok,
+        "read_only": result.read_only,
+        "mode": result.mode,
+        "execution_env": result.execution_env,
+        "futures_base_url": result.futures_base_url,
+        "symbols": list(result.symbols),
+        "requested_by": result.requested_by,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
+        "duration_ms": result.duration_ms,
+        "checks": {
+            name: {
+                "status": check.status,
+                "latency_ms": check.latency_ms,
+                "message": check.message,
+                "details": check.details,
+            }
+            for name, check in sorted(result.checks.items())
+        },
     }
 
 
@@ -561,6 +691,108 @@ def _parse_text_decimal_map_from_mapping(
             min_value=Decimal("0"),
         )
     return values
+
+
+def _normalize_symbol_tuple(symbols: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    normalized_symbols: list[str] = []
+    for item in symbols:
+        symbol = _normalize_symbol(item)
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        normalized_symbols.append(symbol)
+    return tuple(normalized_symbols)
+
+
+def _crypto_risk_mode(base_url: str) -> str:
+    normalized = base_url.rstrip("/").lower()
+    if "demo" in normalized:
+        return "demo"
+    if normalized == BINANCE_USD_M_FUTURES_BASE_URL.lower():
+        return "live"
+    return "custom"
+
+
+async def _probe_check(
+    label: str,
+    fn: Callable[[], Awaitable[tuple[str, dict[str, Any]]]],
+) -> CryptoRiskProbeCheck:
+    started = time.perf_counter()
+    try:
+        message, details = await fn()
+        return CryptoRiskProbeCheck(
+            status="passed",
+            latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            message=message,
+            details=details,
+        )
+    except Exception as exc:
+        return CryptoRiskProbeCheck(
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            message=f"{label} failed: {exc}",
+            details={},
+        )
+
+
+async def _probe_venue_health(source: Any) -> tuple[str, dict[str, Any]]:
+    status = await source.get_venue_health()
+    if not status:
+        raise RuntimeError("empty venue health")
+    return "Venue health reachable", {"venue_health": status}
+
+
+async def _probe_mark_prices(source: Any, symbols: set[str]) -> tuple[str, dict[str, Any]]:
+    mark_prices = await source.get_mark_prices(symbols)
+    missing = sorted(symbol for symbol in symbols if mark_prices.get(symbol, Decimal("0")) <= 0)
+    if missing:
+        raise RuntimeError(f"missing mark prices for {', '.join(missing)}")
+    return "Mark prices reachable", {
+        "count": len(mark_prices),
+        "mark_prices": {symbol: str(price) for symbol, price in sorted(mark_prices.items())},
+    }
+
+
+async def _probe_instrument_specs(source: Any, symbols: set[str]) -> tuple[str, dict[str, Any]]:
+    specs = await source.get_instrument_specs(symbols)
+    missing = sorted(symbol for symbol in symbols if symbol not in specs)
+    if missing:
+        raise RuntimeError(f"missing instrument specs for {', '.join(missing)}")
+    return "Instrument specs reachable", {"count": len(specs), "symbols": sorted(specs)}
+
+
+async def _probe_leverage_brackets(source: Any, symbols: set[str]) -> tuple[str, dict[str, Any]]:
+    brackets = await source.get_leverage_brackets(symbols)
+    missing = sorted(symbol for symbol in symbols if not brackets.get(symbol))
+    if missing:
+        raise RuntimeError(f"missing leverage brackets for {', '.join(missing)}")
+    return "Leverage brackets reachable", {
+        "count": len(brackets),
+        "symbols": sorted(brackets),
+    }
+
+
+async def _probe_account(source: Any) -> tuple[str, dict[str, Any]]:
+    account = await source.get_account_risk()
+    return "Account risk reachable", {
+        "equity": str(account.equity),
+        "available_balance": str(account.available_balance),
+        "margin_balance": str(account.margin_balance),
+        "total_initial_margin": str(account.total_initial_margin),
+        "total_maintenance_margin": str(account.total_maintenance_margin),
+    }
+
+
+async def _probe_positions(source: Any) -> tuple[str, dict[str, Any]]:
+    positions = await source.get_positions(symbols=None)
+    nonzero_symbols = sorted(position.symbol for position in positions if position.qty != 0)
+    return "Positions reachable", {"count": len(positions), "nonzero_symbols": nonzero_symbols}
+
+
+async def _probe_open_orders(source: Any) -> tuple[str, dict[str, Any]]:
+    open_orders = await source.get_open_orders(symbols=None)
+    return "Open orders reachable", {"count": len(open_orders)}
 
 
 def _parse_enabled(raw: str | None) -> bool:

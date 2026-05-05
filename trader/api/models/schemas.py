@@ -185,12 +185,45 @@ class CryptoRiskRuntimeStatus(BaseModel):
     enabled: bool
     wired: bool
     fail_closed: bool
+    execution_env: Literal["demo", "testnet"] = "demo"
     futures_base_url: Optional[str] = None
     base_symbols: List[str] = Field(default_factory=list)
     risk_budget: CryptoRiskBudgetSchema = Field(default_factory=CryptoRiskBudgetSchema)
     last_error: Optional[str] = None
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
+
+
+class CryptoRiskProbeCheckSchema(BaseModel):
+    """数字货币独立风控只读联通性检查项。"""
+
+    status: Literal["passed", "failed"]
+    latency_ms: float
+    message: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CryptoRiskProbeRequest(BaseModel):
+    """数字货币独立风控只读 readiness probe 请求。"""
+
+    symbols: List[str] = Field(default_factory=list, max_length=20)
+    requested_by: str = Field(..., min_length=1)
+
+
+class CryptoRiskProbeResponse(BaseModel):
+    """数字货币独立风控只读 readiness probe 响应。"""
+
+    ok: bool
+    read_only: bool
+    mode: Literal["demo", "live", "custom"]
+    execution_env: Literal["demo", "testnet"] = "demo"
+    futures_base_url: Optional[str] = None
+    symbols: List[str] = Field(default_factory=list)
+    requested_by: str
+    started_at: str
+    finished_at: str
+    duration_ms: float
+    checks: Dict[str, CryptoRiskProbeCheckSchema] = Field(default_factory=dict)
 
 
 class CryptoRiskBudgetUpdateRequest(BaseModel):

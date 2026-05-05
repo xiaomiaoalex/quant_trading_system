@@ -9,15 +9,21 @@
 ## 📊 当前开发状态总览
 
 ### 最后更新时间
-- **更新日期**: 2026-04-18 (北京时间)
+- **更新日期**: 2026-05-04 (北京时间)
 - **更新人**: AI Agent
-- **当前阶段**: Phase B/C - Backtests + Reports + Audit + Replay
+- **当前阶段**: Crypto Risk Ops - Binance demo 联调与前端运维
 
 ### 分支状态
 - **主分支**: `main` ✅
 - **Phase A 分支**: `feat/phase-a-frontend` ✅ (已合并)
-- **开发分支**: `codex/task9-strategy-code-e2e-bridge` (当前)
-- **最新提交**: `feat(task-9): wire strategy code lab with async backtest and report persistence`
+- **开发分支**: `main` (当前)
+- **最新提交**: `feat(task-9.6): add crypto cluster exposure budgets`
+
+### 当前任务
+
+| ID | 修复项 | 优先级 | 执行状态 | 主责任域 | 协同责任域 | 审核门禁 | 预计完成 | 实际完成 |
+|----|--------|--------|----------|----------|------------|----------|----------|----------|
+| Task 9.12 | Crypto Risk USD-M 只读联调与运维页 | P1 | ✅ 已完成 | frontend-console | backend-api, contract-doc, qa-validation | 后端 probe + 前端状态/预算/审计/确认 + 回归通过 | 1 天 | 2026-05-04 |
 
 ---
 
@@ -124,6 +130,15 @@
 | `/health/ready` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
 | `/health/dependency` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
 | `/v1/killswitch` | GET | 🟢 可用 | ✅ 已完成 | ✅ 已完成 | - |
+
+#### Crypto Risk API
+
+| API | 方法 | 后端状态 | 前端适配 | 联调状态 | 备注 |
+|-----|------|----------|----------|----------|------|
+| `/v1/risk/crypto/runtime` | GET | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 显示 `execution_env=demo` 与 source URL |
+| `/v1/risk/crypto/budget` | PATCH | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 危险操作确认 |
+| `/v1/risk/crypto/probe` | POST | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | 只读 readiness probe，写入审计 |
+| `/v1/events?stream_key=risk:crypto` | GET | ✅ 已完成 | ✅ 已完成 | ✅ 已完成 | budget/probe 审计流 |
 
 #### Strategies API
 
@@ -418,16 +433,17 @@
 | 2026-04-18 | v1.8 | Task 9.4/9.5 联调完成，Backtests/Reports API 状态与阻塞清单同步刷新 | AI Agent |
 | 2026-04-18 | v1.9 | Task 9.6 完成：Audit API 查询能力 + /audit 页面打通并进入联调验证 | AI Agent |
 | 2026-04-18 | v2.0 | Task 9.7 完成：Replay API（触发/列表/详情）+ /replay 页面打通并进入联调验证 | AI Agent |
+| 2026-05-04 | v2.1 | Task 9.12 完成：Crypto Risk runtime/probe/budget/audit API + /crypto-risk 运维页，按 Binance demo 口径展示 execution_env | AI Agent |
 
 ---
 
 ## 🎯 下一步行动
 
 ### 立即行动（Today）
-1. [AI Agent / `backend-api`] 推进 Task 9.9: Chat 参数风格统一
-2. [AI Agent / `backend-api`] 推进 Task 9.10: Stale/Degraded 枚举统一
-3. [AI Agent / `frontend-console`] 对 Audit/Replay 页增加筛选体验优化与状态提示
-4. [AI Agent / `qa-validation`] 在可用 Node 环境执行前端 typecheck 与页面回归
+1. [AI Agent / `qa-validation`] 使用已配置 Binance demo 凭证触发 `/crypto-risk` 只读 probe
+2. [AI Agent / `backend-api`] 推进 Task 9.9: Chat 参数风格统一
+3. [AI Agent / `backend-api`] 推进 Task 9.10: Stale/Degraded 枚举统一
+4. [AI Agent / `frontend-console`] 对 Audit/Replay/Crypto Risk 页增加筛选体验优化与状态提示
 
 ### 本周行动（Week 1）
 1. [AI Agent / `backend-api`] 完成 Task 9.4/9.5 剩余回归与文档闭环

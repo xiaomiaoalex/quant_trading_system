@@ -10,7 +10,14 @@ from trader.api.crypto_risk_runtime import (
     CryptoRiskRuntimeConfig,
     CryptoRiskRuntimeManager,
 )
-from trader.core.domain.models.crypto_risk import CryptoRiskBudget
+from trader.core.domain.models.crypto_risk import (
+    CryptoAccountRisk,
+    CryptoInstrumentSpec,
+    CryptoMarketType,
+    CryptoPositionRisk,
+    CryptoRiskBudget,
+    LeverageBracket,
+)
 
 
 class FakeRiskSource:
@@ -23,6 +30,77 @@ class FakeRiskSource:
 
     async def close(self) -> None:
         self.close_count += 1
+
+
+class ProbeRiskSource(FakeRiskSource):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []
+
+    async def get_account_risk(self) -> CryptoAccountRisk:
+        self.calls.append("account")
+        return CryptoAccountRisk(
+            equity=Decimal("1000"),
+            available_balance=Decimal("800"),
+            wallet_balance=Decimal("1000"),
+            margin_balance=Decimal("1000"),
+        )
+
+    async def get_instrument_specs(
+        self,
+        symbols: set[str],
+    ) -> dict[str, CryptoInstrumentSpec]:
+        self.calls.append("instrument_specs")
+        return {
+            symbol: CryptoInstrumentSpec(
+                symbol=symbol,
+                market_type=CryptoMarketType.USD_M_FUTURES,
+                price_tick=Decimal("0.10"),
+                qty_step=Decimal("0.001"),
+                min_qty=Decimal("0.001"),
+                min_notional=Decimal("10"),
+            )
+            for symbol in symbols
+        }
+
+    async def get_leverage_brackets(self, symbols: set[str]) -> dict[str, list[LeverageBracket]]:
+        self.calls.append("leverage_brackets")
+        return {
+            symbol: [
+                LeverageBracket(
+                    symbol=symbol,
+                    notional_floor=Decimal("0"),
+                    notional_cap=Decimal("50000"),
+                    initial_leverage=Decimal("20"),
+                    maint_margin_ratio=Decimal("0.004"),
+                )
+            ]
+            for symbol in symbols
+        }
+
+    async def get_mark_prices(self, symbols: set[str]) -> dict[str, Decimal]:
+        self.calls.append("mark_prices")
+        return {symbol: Decimal("50000") for symbol in symbols}
+
+    async def get_positions(self, symbols: set[str] | None = None) -> list[CryptoPositionRisk]:
+        self.calls.append("positions")
+        return [
+            CryptoPositionRisk(
+                symbol="BTCUSDT",
+                qty=Decimal("0.01"),
+                entry_price=Decimal("49000"),
+                mark_price=Decimal("50000"),
+                leverage=Decimal("10"),
+            )
+        ]
+
+    async def get_open_orders(self, symbols: set[str] | None = None) -> list[object]:
+        self.calls.append("open_orders")
+        return []
+
+    async def get_venue_health(self) -> str:
+        self.calls.append("venue_health")
+        return "HEALTHY"
 
 
 def _component_builder(source: FakeRiskSource, check: MagicMock):
@@ -39,6 +117,7 @@ def _component_builder(source: FakeRiskSource, check: MagicMock):
 def _config() -> CryptoRiskRuntimeConfig:
     return CryptoRiskRuntimeConfig(
         enabled=True,
+        execution_env="demo",
         futures_base_url="https://example.test",
         base_symbols=("BTCUSDT",),
         risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
@@ -122,6 +201,81 @@ async def test_runtime_manager_budget_update_requires_wired_runtime() -> None:
             CryptoRiskBudget(total_notional_cap=Decimal("1")),
             updated_by="operator",
         )
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_probe_requires_wired_runtime() -> None:
+    manager = CryptoRiskRuntimeManager(pre_trade_setter=MagicMock())
+
+    with pytest.raises(RuntimeError, match="not wired"):
+        await manager.probe(symbols=("BTCUSDT",), requested_by="operator")
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_probe_checks_wired_source_read_only() -> None:
+    source = ProbeRiskSource()
+    manager = CryptoRiskRuntimeManager(
+        pre_trade_setter=MagicMock(),
+        component_builder=_component_builder(source, MagicMock()),
+    )
+    await manager.configure(
+        broker=MagicMock(),
+        api_key="key",
+        secret_key="secret",
+        config=_config(),
+        updated_by="test",
+    )
+
+    result = await manager.probe(symbols=("btc/usdt",), requested_by="operator")
+
+    assert result.ok is True
+    assert result.read_only is True
+    assert result.mode == "custom"
+    assert result.execution_env == "demo"
+    assert result.symbols == ("BTCUSDT",)
+    assert result.requested_by == "operator"
+    assert result.checks["account"].status == "passed"
+    assert result.checks["instrument_specs"].status == "passed"
+    assert result.checks["leverage_brackets"].status == "passed"
+    assert result.checks["mark_prices"].details["mark_prices"] == {"BTCUSDT": "50000"}
+    assert result.checks["positions"].details["count"] == 1
+    assert result.checks["open_orders"].details["count"] == 0
+    assert source.calls == [
+        "venue_health",
+        "mark_prices",
+        "instrument_specs",
+        "leverage_brackets",
+        "account",
+        "positions",
+        "open_orders",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_probe_labels_demo_source_without_testnet() -> None:
+    source = ProbeRiskSource()
+    manager = CryptoRiskRuntimeManager(
+        pre_trade_setter=MagicMock(),
+        component_builder=_component_builder(source, MagicMock()),
+    )
+    await manager.configure(
+        broker=MagicMock(),
+        api_key="key",
+        secret_key="secret",
+        config=CryptoRiskRuntimeConfig(
+            enabled=True,
+            execution_env="demo",
+            futures_base_url="https://demo-api.binance.com/fapi",
+            base_symbols=("BTCUSDT",),
+            risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
+        ),
+        updated_by="test",
+    )
+
+    result = await manager.probe(symbols=("BTCUSDT",), requested_by="operator")
+
+    assert result.mode == "demo"
+    assert result.execution_env == "demo"
 
 
 @pytest.mark.asyncio

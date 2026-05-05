@@ -4,9 +4,35 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 20:55 (北京时间)
+2026-05-04 21:36 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：数字货币独立风控 P3.2c Binance demo 联调入口与前端运维
+- 完成时间: 2026-05-04 21:36 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2c
+- 开发前状态:
+  - P3.2b 已具备 symbol/cluster/total/margin/强平缓冲预算和审计
+  - runtime 可查询和热更新，但缺少对已 wired Binance USD-M 风控 source 的只读联通性检查
+  - 前端没有专门页面区分 Binance demo 执行环境、USD-M 风控 source URL、预算热更新和风险审计流
+- 开发后状态:
+  - `CryptoRiskRuntimeStatus` 与 probe 响应新增 `execution_env`，默认反映当前 Binance demo 执行环境
+  - 新增 `POST /v1/risk/crypto/probe`，只读读取 venue health、mark price、instrument spec、leverage bracket、account、positions、open orders，并写入 `risk:crypto` / `crypto_risk.probe_run`
+  - 新增 Frontend `/crypto-risk` 运维页，支持 runtime 状态、只读 probe、预算热更新、`risk:crypto` 审计流查看和 POST/PATCH 二次确认
+  - 前端新增 `cryptoRisk` 类型、API client、TanStack Query hooks、Zod 契约和预算输入解析测试
+- Issue 状态迁移:
+  - USD-M 风控 source 无只读联通性检查：`待确认` → `已验证（read-only probe）`
+  - demo 执行环境与风控 source URL 容易被误写成 testnet：`待确认` → `已验证（execution_env + docs/UI 口径）`
+  - Crypto Risk 缺少前端运维入口：`待确认` → `已验证（/crypto-risk 页面）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - Frontend `npm run lint` → passed with 4 pre-existing warnings ✅
+  - Frontend `npm run test` → 65 passed ✅
+- 注意事项:
+  - 本次新增的是只读 readiness probe 和运维入口，不新增 Futures 下单路径
+  - 尚未使用真实 demo 凭证在运行中后端上发起外部 Binance 联通性检查；需要由运维在 `/crypto-risk` 页或 API 明确触发
 
 ### 本次任务：数字货币独立风控 P3.2b 组合级 Cluster 风险预算
 - 完成时间: 2026-05-04 20:55 (北京时间)

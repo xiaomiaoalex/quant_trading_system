@@ -318,6 +318,54 @@ interface Alert {
 }
 ```
 
+### 3.4 Crypto Risk 运维模型
+
+```typescript
+type CryptoRiskSourceMode = "demo" | "live" | "custom";
+type CryptoRiskExecutionEnv = "demo" | "testnet";
+
+interface CryptoRiskBudget {
+  symbol_notional_caps: Record<string, string>;
+  symbol_clusters: Record<string, string>;
+  cluster_notional_caps: Record<string, string>;
+  total_notional_cap: string;
+  max_margin_ratio: string;
+  min_liquidation_buffer_ratio: string;
+}
+
+interface CryptoRiskRuntimeStatus {
+  enabled: boolean;
+  wired: boolean;
+  fail_closed: boolean;
+  execution_env: CryptoRiskExecutionEnv;
+  futures_base_url?: string | null;
+  base_symbols: string[];
+  risk_budget: CryptoRiskBudget;
+  last_error?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+interface CryptoRiskProbeResponse {
+  ok: boolean;
+  read_only: boolean;
+  mode: CryptoRiskSourceMode;
+  execution_env: CryptoRiskExecutionEnv;
+  futures_base_url?: string | null;
+  symbols: string[];
+  requested_by: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  checks: Record<string, {
+    status: "passed" | "failed";
+    latency_ms: number;
+    message: string;
+    details: Record<string, unknown>;
+  }>;
+}
+```
+
 ---
 
 ## 4. 对账模型 (Reconciliation Models)
@@ -567,6 +615,10 @@ interface ListOrdersParams {
 | POST | `/v1/risk/limits` | 设置风控限额 |
 | POST | `/v1/risk/events` | 上报风险事件 |
 | POST | `/v1/risk/recover` | 恢复待处理效果 |
+| GET | `/v1/risk/crypto/runtime` | Crypto Risk runtime 状态 |
+| PATCH | `/v1/risk/crypto/budget` | Crypto Risk 预算热更新 |
+| POST | `/v1/risk/crypto/probe` | Crypto Risk 只读联通性检查 |
+| GET | `/v1/risk/crypto/budget/audit` | Crypto Risk 预算审计 |
 
 ### 7.4 对账接口
 

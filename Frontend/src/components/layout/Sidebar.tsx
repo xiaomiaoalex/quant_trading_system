@@ -17,6 +17,7 @@ const navItems: NavItem[] = [
   { path: '/backtests', label: 'Backtests', phase: 'P1' },
   { path: '/portfolio-allocation', label: 'Portfolio Allocation', phase: 'P1' },
   { path: '/portfolio-autopilot', label: 'Portfolio Autopilot', phase: 'P1' },
+  { path: '/crypto-risk', label: 'Crypto Risk', phase: 'P1' },
   { path: '/reports', label: 'Reports', phase: 'P1' },
   { path: '/audit', label: 'Audit', phase: 'P2' },
   { path: '/replay', label: 'Replay', phase: 'P2' },

@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-04 20:55 (北京时间)
+- 最后更新: 2026-05-04 21:36 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -19,6 +19,7 @@ flowchart TB
         API["FastAPI Routes"]
         Lifecycle["Strategy Lifecycle / Runner"]
         CryptoRuntime["Crypto Risk Runtime Config"]
+        CryptoOps["Crypto Risk Ops API"]
         Monitor["Monitor / SSE / Runtime Services"]
         KillAPI["KillSwitch API"]
     end
@@ -55,7 +56,9 @@ flowchart TB
     end
 
     API --> Lifecycle
+    API --> CryptoOps
     Lifecycle --> CryptoRuntime
+    CryptoOps --> CryptoRuntime
     CryptoRuntime --> Gate
     CryptoRuntime --> CryptoSnapshot
     CryptoRuntime --> CryptoSource
@@ -171,6 +174,9 @@ sequenceDiagram
 - 当 `CRYPTO_RISK_ENABLED=true` 但凭证缺失、配置非法或 runtime wiring 失败时，Control Plane 会注入 fail-closed risk check，后续 OMS 下单必须拒绝而不是绕过独立风控。
 - `GET /v1/risk/crypto/runtime` 暴露 runtime 状态；`PATCH /v1/risk/crypto/budget` 仅热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，不重新创建 Binance source 或泄露凭证。
 - 每次预算热更新成功后写入控制面事件流 `risk:crypto` / `crypto_risk.budget_updated`；专用审计查询与通用 `/v1/events` 共用同一来源，便于回放与运维追踪。
+- `POST /v1/risk/crypto/probe` 是 Control Plane 的只读 readiness probe；它复用已 wired 的 USD-M 风控 source 读取账户风险、mark price、交易规则、杠杆分层、持仓、在途订单和 venue health，并写入 `risk:crypto` / `crypto_risk.probe_run` 审计事件。
+- 当前执行适配器仍是 Binance Spot Demo 路径；`execution_env=demo` 反映实际执行环境，USD-M source 的 `mode` 仅描述只读风控数据源 URL，不代表 Futures 下单能力。
+- Frontend `/crypto-risk` 运维页通过 `GET /v1/risk/crypto/runtime`、`PATCH /v1/risk/crypto/budget`、`POST /v1/risk/crypto/probe` 和 `/v1/events?stream_key=risk:crypto` 完成状态查看、预算热更新、只读联通性检查与审计追踪。
 - `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
 - `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 cluster 敞口和合约保证金纯计算。
 - `CryptoRiskBudget` 支持 `symbol_clusters` 与 `cluster_notional_caps`；cluster 风险按“已成交持仓 + active open orders + 本次拟下单”聚合，命中 cap 时由 Policy Plane 拒绝，不修改 OMS 状态。

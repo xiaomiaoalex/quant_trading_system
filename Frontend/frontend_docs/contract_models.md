@@ -125,7 +125,57 @@ interface MonitorSnapshot {
 }
 ```
 
-## 4. 对账与事件模型
+## 4. Crypto Risk 运维模型
+
+```typescript
+type CryptoRiskSourceMode = "demo" | "live" | "custom";
+type CryptoRiskExecutionEnv = "demo" | "testnet";
+
+interface CryptoRiskBudget {
+  symbol_notional_caps: Record<string, string>;
+  symbol_clusters: Record<string, string>;
+  cluster_notional_caps: Record<string, string>;
+  total_notional_cap: string;
+  max_margin_ratio: string;
+  min_liquidation_buffer_ratio: string;
+}
+
+interface CryptoRiskRuntimeStatus {
+  enabled: boolean;
+  wired: boolean;
+  fail_closed: boolean;
+  execution_env: CryptoRiskExecutionEnv;
+  futures_base_url?: string | null;
+  base_symbols: string[];
+  risk_budget: CryptoRiskBudget;
+  last_error?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+interface CryptoRiskProbeCheck {
+  status: "passed" | "failed";
+  latency_ms: number;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+interface CryptoRiskProbeResponse {
+  ok: boolean;
+  read_only: boolean;
+  mode: CryptoRiskSourceMode;
+  execution_env: CryptoRiskExecutionEnv;
+  futures_base_url?: string | null;
+  symbols: string[];
+  requested_by: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  checks: Record<string, CryptoRiskProbeCheck>;
+}
+```
+
+## 5. 对账与事件模型
 
 ```typescript
 interface OrderDrift {
@@ -171,7 +221,7 @@ interface SnapshotEnvelope {
 }
 ```
 
-## 5. 通用模型
+## 6. 通用模型
 
 ```typescript
 interface ActionResult {
@@ -184,4 +234,3 @@ interface HealthResponse {
   time: string;
 }
 ```
-

@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-04 21:36 - 数字货币独立风控 P3.2c Binance demo 联调入口与前端运维
+
+- 背景: P3.2b 已完成 cluster 预算和审计，但运维仍无法确认已 wired USD-M 风控 source 的只读读取链路，也没有前端入口把 demo 执行环境、source URL、预算和审计放在同一视图。
+- 决策: 不新增 Futures 下单能力；只在已 wired runtime 上做 read-only readiness probe，并把 `execution_env` 与 source `mode` 分开，避免把当前 Binance demo 连接误称为 testnet。
+- 改动: 后端新增 `execution_env` 状态字段、`POST /v1/risk/crypto/probe` 和 `crypto_risk.probe_run` 审计事件；前端新增 `/crypto-risk` 页面、`cryptoRisk` 类型/API/hooks/Zod 契约、预算输入解析工具与测试；补充前端导航和契约文档。
+- 验证: crypto runtime config/manager/API 回归 23 passed；Frontend typecheck passed；Frontend lint passed with 4 pre-existing warnings；Frontend tests 65 passed。
+- 风险/遗留: 本次没有自动使用真实 demo 凭证向 Binance 发起外部调用；需要后端以 `CRYPTO_RISK_ENABLED=true` 完成 wiring 后，由运维在 `/crypto-risk` 页或 API 明确触发只读 probe。生产级 PG 风控审计持久化仍待后续。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`Frontend/frontend_docs/FRONTEND_PROJECT_TRACKER.md`
+
 ### 2026-05-04 20:55 - 数字货币独立风控 P3.2b 组合级 Cluster 风险预算
 
 - 背景: P0/P1/P2/P3.1 已把单币种 cap、账户总 cap、保证金和强平缓冲接入 pre-trade，但多个 alt 仓位共享 BTC/ETH beta 时仍缺少组合级预算约束。

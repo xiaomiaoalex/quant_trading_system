@@ -35,6 +35,8 @@ from trader.api.models.schemas import (
     ActionResult,
     KillSwitchSetRequest,
     CryptoRiskBudgetUpdateRequest,
+    CryptoRiskProbeRequest,
+    CryptoRiskProbeResponse,
     CryptoRiskRuntimeStatus,
     EventEnvelope,
     TimeWindowConfigSchema,
@@ -43,6 +45,7 @@ from trader.api.models.schemas import (
 )
 from trader.api.crypto_risk_runtime import (
     crypto_risk_budget_to_dict,
+    crypto_risk_probe_result_to_dict,
     crypto_risk_runtime_status_to_dict,
     get_crypto_risk_runtime_manager,
     merge_crypto_risk_budget,
@@ -61,6 +64,7 @@ logger = logging.getLogger(__name__)
 EFFECT_STATUS_TIMEOUT_SEC = 2.0
 CRYPTO_RISK_STREAM_KEY = "risk:crypto"
 CRYPTO_RISK_BUDGET_UPDATED_EVENT = "crypto_risk.budget_updated"
+CRYPTO_RISK_PROBE_RUN_EVENT = "crypto_risk.probe_run"
 
 
 def _killswitch_matches(current_state, expected_state) -> bool:
@@ -286,6 +290,26 @@ async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
     return crypto_risk_runtime_status_to_dict(status)
 
 
+@router.post("/v1/risk/crypto/probe", response_model=CryptoRiskProbeResponse)
+async def probe_crypto_risk_runtime(request: CryptoRiskProbeRequest):
+    """Run a read-only crypto risk source readiness probe."""
+    manager = get_crypto_risk_runtime_manager()
+    try:
+        result = await manager.probe(
+            symbols=tuple(request.symbols),
+            requested_by=request.requested_by,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[CryptoRisk] Failed to run readiness probe")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    payload = crypto_risk_probe_result_to_dict(result)
+    _append_crypto_probe_audit_event(payload)
+    return payload
+
+
 @router.get("/v1/risk/crypto/budget/audit", response_model=list[EventEnvelope])
 async def list_crypto_risk_budget_audit(
     since_ts_ms: Optional[int] = Query(None, description="Filter by timestamp (ms)"),
@@ -297,6 +321,19 @@ async def list_crypto_risk_budget_audit(
         event_type=CRYPTO_RISK_BUDGET_UPDATED_EVENT,
         since_ts_ms=since_ts_ms,
         limit=limit,
+    )
+
+
+def _append_crypto_probe_audit_event(payload: dict[str, Any]) -> None:
+    get_storage().append_event(
+        {
+            "stream_key": CRYPTO_RISK_STREAM_KEY,
+            "event_type": CRYPTO_RISK_PROBE_RUN_EVENT,
+            "schema_version": 1,
+            "trace_id": f"crypto-risk-probe:{uuid.uuid4().hex}",
+            "ts_ms": int(time.time() * 1000),
+            "payload": payload,
+        }
     )
 
 
@@ -328,6 +365,7 @@ def _crypto_runtime_audit_view(status: Any) -> dict[str, Any]:
         "enabled": bool(status.enabled),
         "wired": bool(status.wired),
         "fail_closed": bool(status.fail_closed),
+        "execution_env": status.execution_env,
         "base_symbols": list(status.base_symbols),
         "last_error": status.last_error,
     }

@@ -13,6 +13,7 @@ import {
   Research,
   PortfolioAllocation,
   PortfolioAutopilot,
+  CryptoRiskOps,
 } from './pages'
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
         <Route path="/backtests" element={<Backtests />} />
         <Route path="/portfolio-allocation" element={<PortfolioAllocation />} />
         <Route path="/portfolio-autopilot" element={<PortfolioAutopilot />} />
+        <Route path="/crypto-risk" element={<CryptoRiskOps />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/audit" element={<Audit />} />

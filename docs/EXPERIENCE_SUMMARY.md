@@ -4,6 +4,38 @@
 
 ---
 
+## 二十八、Crypto Risk demo 运维联调经验（2026-05-04）
+
+### 28.1 踩坑记录：执行环境与风控数据源 URL 不能混成一个“环境名”
+
+**问题描述**：
+系统当前实际执行链路连接 Binance demo，但 USD-M 风控 source 使用独立 `CRYPTO_RISK_FUTURES_BASE_URL`。如果只按 base URL 推断 `testnet/live`，前端和文档会把“当前连接 demo”的事实说错，联调时容易误判是否会触发真实下单路径。
+
+**解决方案**：
+- 在 runtime status 和 probe response 中新增 `execution_env`，明确来自 `BINANCE_ENV`。
+- probe 的 `mode` 只描述 USD-M 风控 source URL，且 probe 始终 `read_only=true`。
+- 前端 `/crypto-risk` 页同时展示 `execution_env`、source URL、probe result 和审计流，避免单字段过度解释。
+
+**经验**：
+- 交易系统里“执行环境”和“只读风险数据源”是两个维度，不能用同一个标签承载。
+- 联调按钮必须先做语义隔离：只读检查就是只读检查，不应暗示已具备 Futures 下单能力。
+
+### 28.2 设计模式：Read-only Probe 复用已 wired runtime，而不是临时创建 source
+
+**问题描述**：
+为了方便联通性检查，容易在 API 调用时临时创建一个交易所 source。但这会绕过应用启动时的凭证、proxy、fail-closed 和 pre-trade wiring 状态，导致“探针通了，但真实 runtime 没通”的假阳性。
+
+**解决方案**：
+- `POST /v1/risk/crypto/probe` 只允许在 runtime 已 enabled 且 wired 时执行，否则返回 409。
+- probe 逐项读取 venue health、mark price、instrument spec、leverage bracket、account、positions 和 open orders，并把结果写入 `risk:crypto` 审计事件。
+- 前端对 probe 和预算热更新都使用确认框，保持运维动作可感知。
+
+**经验**：
+- 运维探针应该验证“当前运行中的链路”，而不是验证“某段新建代码能否访问网络”。
+- read-only probe 的审计事件同样重要，因为它能证明何时、由谁、以哪些 symbols 做过联调验证。
+
+---
+
 ## 二十七、Black 与 Python 3.12.5 兼容经验（2026-05-04）
 
 ### 27.1 踩坑记录：新版 Black 会在 Python 3.12.5 上拒绝格式化

@@ -25,6 +25,7 @@ def test_crypto_risk_runtime_config_is_disabled_by_default() -> None:
     config = get_crypto_risk_runtime_config({})
 
     assert config.enabled is False
+    assert config.execution_env == "demo"
     assert config.base_symbols == ()
     assert config.risk_budget.total_notional_cap == Decimal("0")
     assert config.risk_budget.max_margin_ratio == Decimal("0.80")
@@ -34,7 +35,7 @@ def test_crypto_risk_runtime_config_parses_enabled_budget_and_symbols() -> None:
     config = get_crypto_risk_runtime_config(
         {
             CRYPTO_RISK_ENABLED_ENV: "true",
-            CRYPTO_RISK_FUTURES_BASE_URL_ENV: "https://testnet.binancefuture.com/",
+            CRYPTO_RISK_FUTURES_BASE_URL_ENV: "https://demo-api.binance.com/fapi/",
             CRYPTO_RISK_BASE_SYMBOLS_ENV: " btc/usdt, ETH-USDT, btcusdt ",
             CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV: "25000.5",
             CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV: "btcusdt=10000, ETH-USDT=5000.25",
@@ -46,7 +47,8 @@ def test_crypto_risk_runtime_config_parses_enabled_budget_and_symbols() -> None:
     )
 
     assert config.enabled is True
-    assert config.futures_base_url == "https://testnet.binancefuture.com"
+    assert config.execution_env == "demo"
+    assert config.futures_base_url == "https://demo-api.binance.com/fapi"
     assert config.base_symbols == ("BTCUSDT", "ETHUSDT")
     assert config.risk_budget.total_notional_cap == Decimal("25000.5")
     assert config.risk_budget.symbol_notional_caps == {
