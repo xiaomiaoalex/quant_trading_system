@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from dataclasses import replace
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Awaitable, Callable, Mapping

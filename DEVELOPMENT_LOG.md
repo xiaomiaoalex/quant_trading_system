@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-05 22:06 - 安装并固定 isort，补跑 Crypto Risk 运维回归
+
+- 背景: 之前多次 Crypto Risk 任务记录 `isort` 因当前 Python 环境未安装而未执行成功；用户要求安装 `isort` 并跑之前漏跑的检查。
+- 决策: 固定 `isort==5.13.2` 到 `pyproject.toml` 和 `trader/requirements-ci.txt`；不做全仓自动格式化，避免把历史导入排序问题混入当前任务。
+- 改动: 安装 `isort==5.13.2`；对本次 Crypto Risk 相关 6 个 Python 文件运行 scoped `isort --profile black` 修复导入排序。
+- 验证: scoped `isort --check-only --profile black` passed；scoped `black --check` passed；Crypto Risk runtime/API 回归 23 passed；Frontend typecheck passed；Frontend lint passed with 4 pre-existing warnings；Frontend tests 65 passed。
+- 风险/遗留: 全仓 `python -m isort --check-only --profile black trader/` 已可运行，但暴露大量历史导入排序遗留；需要单独安排全仓 import sort 收敛任务。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-04 21:36 - 数字货币独立风控 P3.2c Binance demo 联调入口与前端运维
 
 - 背景: P3.2b 已完成 cluster 预算和审计，但运维仍无法确认已 wired USD-M 风控 source 的只读读取链路，也没有前端入口把 demo 执行环境、source URL、预算和审计放在同一视图。

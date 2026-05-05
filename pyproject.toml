@@ -21,6 +21,7 @@ dependencies = [
  "uvicorn>=0.34.0",
  # Testing
  "black==24.4.2",
+ "isort==5.13.2",
  "pytest>=8.3.4",
  "pytest-asyncio>=0.25.2",
  "openpyxl>=3.1.5",

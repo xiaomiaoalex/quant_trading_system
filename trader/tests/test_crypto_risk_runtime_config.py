@@ -13,8 +13,8 @@ from trader.api.crypto_risk_runtime import (
     CRYPTO_RISK_SYMBOL_CLUSTERS_ENV,
     CRYPTO_RISK_SYMBOL_NOTIONAL_CAPS_ENV,
     CRYPTO_RISK_TOTAL_NOTIONAL_CAP_ENV,
-    build_crypto_risk_setup_failure_check,
     build_crypto_risk_runtime_components,
+    build_crypto_risk_setup_failure_check,
     get_crypto_risk_runtime_config,
 )
 from trader.core.application.risk_engine import RejectionReason, RiskLevel

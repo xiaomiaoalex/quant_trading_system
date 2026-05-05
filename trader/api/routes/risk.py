@@ -26,23 +26,9 @@ import logging
 import time
 import uuid
 from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException, Query, Response
 
-from trader.api.models.schemas import (
-    VersionedConfig,
-    VersionedConfigUpsertRequest,
-    RiskEventIngestRequest,
-    ActionResult,
-    KillSwitchSetRequest,
-    CryptoRiskBudgetUpdateRequest,
-    CryptoRiskProbeRequest,
-    CryptoRiskProbeResponse,
-    CryptoRiskRuntimeStatus,
-    EventEnvelope,
-    TimeWindowConfigSchema,
-    TimeWindowConfigUpdateRequest,
-    TimeWindowSlotSchema,
-)
 from trader.api.crypto_risk_runtime import (
     crypto_risk_budget_to_dict,
     crypto_risk_probe_result_to_dict,
@@ -50,13 +36,28 @@ from trader.api.crypto_risk_runtime import (
     get_crypto_risk_runtime_manager,
     merge_crypto_risk_budget,
 )
-from trader.core.domain.rules.time_window_policy import (
-    TimeWindowPolicy,
-    TimeWindowConfig as TWConfig,
-    TimeWindowSlot,
-    TimeWindowPeriod,
+from trader.api.models.schemas import (
+    ActionResult,
+    CryptoRiskBudgetUpdateRequest,
+    CryptoRiskProbeRequest,
+    CryptoRiskProbeResponse,
+    CryptoRiskRuntimeStatus,
+    EventEnvelope,
+    KillSwitchSetRequest,
+    RiskEventIngestRequest,
+    TimeWindowConfigSchema,
+    TimeWindowConfigUpdateRequest,
+    TimeWindowSlotSchema,
+    VersionedConfig,
+    VersionedConfigUpsertRequest,
 )
-from trader.services import RiskService, KillSwitchService, EventService
+from trader.core.domain.rules.time_window_policy import TimeWindowConfig as TWConfig
+from trader.core.domain.rules.time_window_policy import (
+    TimeWindowPeriod,
+    TimeWindowPolicy,
+    TimeWindowSlot,
+)
+from trader.services import EventService, KillSwitchService, RiskService
 from trader.storage.in_memory import get_storage
 
 router = APIRouter(tags=["Risk"])

@@ -4,9 +4,30 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-04 21:36 (北京时间)
+2026-05-05 22:06 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：安装并固定 isort，补跑 Crypto Risk 运维回归
+- 完成时间: 2026-05-05 22:06 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 当前 Python 环境未安装 `isort`，前几次 Crypto Risk 任务只能记录 `isort` 未执行成功
+  - `pyproject.toml` 与 `trader/requirements-ci.txt` 只固定了 `black==24.4.2`
+- 开发后状态:
+  - 已安装并固定 `isort==5.13.2`
+  - 本次 Crypto Risk 相关 Python 文件已完成 scoped `isort --profile black` 修复
+  - 全仓 `python -m isort --check-only --profile black trader/` 已可运行，但暴露大量历史导入排序遗留，未做全仓格式化以避免无关大 diff
+- 测试结果:
+  - `python -m isort --check-only --profile black trader/api/crypto_risk_runtime.py trader/api/models/schemas.py trader/api/routes/risk.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py` → passed ✅
+  - `python -m black --check --line-length 100 ...`（同上 6 个 Python 文件）→ passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - Frontend `npm run lint` → passed with 4 pre-existing warnings ✅
+  - Frontend `npm run test` → 65 passed ✅
+- 注意事项:
+  - 全仓 isort 收敛应作为独立格式化任务执行，避免把历史导入排序一次性混入功能提交
 
 ### 本次任务：数字货币独立风控 P3.2c Binance demo 联调入口与前端运维
 - 完成时间: 2026-05-04 21:36 (北京时间)
