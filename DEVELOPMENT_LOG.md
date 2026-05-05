@@ -142,6 +142,15 @@
 - 风险/遗留: 当前只显示最新 saved code 或完整模块源码；后续若需要历史审查，应新增版本选择、diff 和权限控制。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
 
+### 2026-05-05 22:32 - 全仓 Python 格式化收敛与 CI 门禁
+
+- 背景: `isort` 安装固定后，全仓检查暴露历史导入排序和 Black 格式债；用户要求先提交当前代码，再做一次纯格式化提交，并将 `black`/`isort` 加入 CI 门禁。
+- 决策: 将依赖/scoped 修复、纯格式化、CI 门禁拆成连续独立提交；纯格式化提交记录到 `.git-blame-ignore-revs`，降低后续 blame 噪音。
+- 改动: 新增 `Python Formatting Gate`，在 CI 中执行 `python -m isort --check-only --profile black trader/` 和 `python -m black --check --line-length 100 trader/`；新增 `.git-blame-ignore-revs` 指向格式化提交 `0df5107`；同步项目状态与经验总结。
+- 验证: `python -m isort --check-only --profile black trader/` passed；`python -m black --check --line-length 100 trader/` passed；核心域/应用层回归 passed；PG/快照持久化集成测试 passed；Binance/Crypto Risk 回归 74 passed。
+- 风险/遗留: CI 会阻断新的格式漂移；仍有既有 Pydantic V2 deprecated config 与 unknown integration mark warnings 待后续清理。
+- 关联文档: `.github/workflows/ci-gate.yml`、`.git-blame-ignore-revs`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-04-30 16:17 - 端到端研究与自动组合运行第一版纵向切片
 
 - 背景: 用户目标升级为从 Crypto 多源数据、策略开发、回测、门禁、部署、仓位管理到组合自动启停的流畅工作台；现有仓库已有很多后端能力，但 Strategy Lab 前端契约断裂，生命周期、仓位和自动组合控制未形成统一入口。

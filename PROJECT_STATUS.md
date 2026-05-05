@@ -4,9 +4,29 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-05 22:06 (北京时间)
+2026-05-05 22:32 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：全仓 Python 格式化收敛与 CI 门禁
+- 完成时间: 2026-05-05 22:32 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `isort` 已安装并固定，但全仓 `isort --check-only` 仍暴露历史导入排序债
+  - CI 未强制执行 `black` / `isort`，后续提交仍可能重新引入格式漂移
+- 开发后状态:
+  - 已创建独立纯格式化提交 `0df5107 chore: normalize python formatting`
+  - 新增 `.git-blame-ignore-revs` 记录纯格式化提交，便于后续 blame 忽略批量格式化噪音
+  - `.github/workflows/ci-gate.yml` 新增 `Python Formatting Gate`，强制执行 `isort --check-only --profile black trader/` 与 `black --check --line-length 100 trader/`
+- 测试结果:
+  - `python -m isort --check-only --profile black trader/` → passed ✅
+  - `python -m black --check --line-length 100 trader/` → passed ✅
+  - 核心域/应用层回归（deterministic/hard/risk/position）→ passed ✅
+  - PG 与快照持久化集成测试（Docker Compose Postgres）→ passed ✅
+  - Binance/Crypto Risk 回归 → 74 passed ✅
+- 注意事项:
+  - 以后功能提交若未按 `black`/`isort` 收敛，CI 会提前阻断，避免格式债继续扩大
 
 ### 本次任务：安装并固定 isort，补跑 Crypto Risk 运维回归
 - 完成时间: 2026-05-05 22:06 (北京时间)
