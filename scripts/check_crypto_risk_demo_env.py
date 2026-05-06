@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trader.adapters.binance.crypto_risk_source import BINANCE_USD_M_FUTURES_BASE_URL
 from trader.api.crypto_risk_runtime import (
@@ -208,6 +211,17 @@ def _check_futures_source(
                 message="CRYPTO_RISK_FUTURES_BASE_URL points at testnet, not demo.",
             )
         )
+    elif mode == "spot_demo_invalid":
+        issues.append(
+            DemoPreflightIssue(
+                severity="error",
+                code="CRYPTO_RISK_FUTURES_URL_SPOT_DEMO",
+                message=(
+                    "CRYPTO_RISK_FUTURES_BASE_URL points at Spot Demo. "
+                    "USD-M demo risk source should use https://demo-fapi.binance.com."
+                ),
+            )
+        )
     elif mode == "live":
         issues.append(
             DemoPreflightIssue(
@@ -237,6 +251,8 @@ def classify_futures_source_mode(base_url: str) -> str:
     normalized = base_url.rstrip("/").lower()
     if "testnet" in normalized:
         return "testnet"
+    if normalized.startswith("https://demo-api.binance.com"):
+        return "spot_demo_invalid"
     if "demo" in normalized:
         return "demo"
     if normalized == BINANCE_USD_M_FUTURES_BASE_URL.lower():

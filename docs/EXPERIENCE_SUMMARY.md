@@ -20,6 +20,20 @@
 - 联调脚本应先做“无网络、无凭证打印”的静态自检，再触发真实 probe。
 - 交易环境标签不能承担多个维度；执行环境、风控 source、下单 smoke 必须分开说明。
 
+### 30.2 踩坑记录：Spot Demo URL 加 `/fapi` 不是 USD-M Demo API
+
+**问题描述**：
+首次真实 probe 使用 `https://demo-api.binance.com/fapi` 作为 USD-M 风控 source，runtime 虽然成功 wired，但所有 `/fapi/*` endpoints 均返回 404。原因是 `demo-api.binance.com` 是 Spot Demo base URL，不能通过追加 `/fapi` 变成 USD-M Futures Demo。
+
+**解决方案**：
+- 将 runbook、`.env.example` 和本地 `.env` 的 `CRYPTO_RISK_FUTURES_BASE_URL` 改为 `https://demo-fapi.binance.com`。
+- 在 `scripts/check_crypto_risk_demo_env.py` 中新增 `CRYPTO_RISK_FUTURES_URL_SPOT_DEMO` 阻断，显式拒绝 `https://demo-api.binance.com/fapi`。
+- 补充 CLI/URL 回归测试，真实 demo probe 随后通过，7 项只读检查全部 passed。
+
+**经验**：
+- “URL 看起来像 demo”不够，endpoint 家族必须匹配市场类型；Spot Demo 和 USD-M Demo 是两个 base URL。
+- preflight 不应只用字符串包含 `demo` 放行，应识别已知错误组合。
+
 ---
 
 ## 二十九、isort 固定与格式化范围控制经验（2026-05-05）

@@ -42,6 +42,7 @@
 | **数字货币独立风控 P3.2b** | `core/domain/services/portfolio_exposure_aggregator.py`, `core/application/plugins/crypto_pre_trade_risk_plugin.py` | **2026-05-04 完成：symbol→cluster 风险映射、cluster notional cap、pre-trade 组合级敞口拦截，支持环境变量和预算热更新 API** |
 | **数字货币独立风控 P3.2c** | `api/routes/risk.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-04 完成：Binance demo 执行环境可观测、USD-M 风控 source 只读 readiness probe、Crypto Risk 前端运维页与审计流** |
 | **数字货币独立风控 P3.3a** | `scripts/check_crypto_risk_demo_env.py`, `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` | **2026-05-05 完成：Binance demo 联调前静态自检、只读 probe 运行手册、demo 默认 `.env.example`** |
+| **数字货币独立风控 P3.3b** | `scripts/check_crypto_risk_demo_env.py`, `/v1/risk/crypto/probe` | **2026-05-06 完成：真实 Binance demo 凭证只读 probe 通过，USD-M demo source 固定为 `https://demo-fapi.binance.com`，审计事件已写入 `risk:crypto`** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 
@@ -65,7 +66,7 @@
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
-- **Crypto Risk P3.3b/P4**: 使用真实 Binance demo 凭证按 runbook 触发只读 probe；随后推进生产级 PG 风控审计持久化和 Funding/OI 风险系数
+- **Crypto Risk P4**: 推进生产级 PG 风控审计持久化、Funding/OI 风险系数和 fail-closed 负向演练自动化
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成

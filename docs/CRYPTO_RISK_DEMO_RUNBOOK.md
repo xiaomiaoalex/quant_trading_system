@@ -20,7 +20,7 @@ BINANCE_SECRET_KEY=<real demo secret>
 LIVE_TRADING_ENABLED=false
 
 CRYPTO_RISK_ENABLED=true
-CRYPTO_RISK_FUTURES_BASE_URL=https://demo-api.binance.com/fapi
+CRYPTO_RISK_FUTURES_BASE_URL=https://demo-fapi.binance.com
 CRYPTO_RISK_BASE_SYMBOLS=BTCUSDT,ETHUSDT
 CRYPTO_RISK_TOTAL_NOTIONAL_CAP=10000
 CRYPTO_RISK_SYMBOL_CLUSTERS=BTCUSDT=BTC_BETA,ETHUSDT=ETH_BETA
@@ -53,6 +53,7 @@ python scripts/check_crypto_risk_demo_env.py --env-file .env --strict
 - `CRYPTO_RISK_FUTURES_URL_MISSING`: 未显式配置 USD-M 风控 source
 - `CRYPTO_RISK_FUTURES_URL_TESTNET`: source 指向 testnet
 - `CRYPTO_RISK_FUTURES_URL_LIVE`: source 指向 live USD-M，不适合 demo rehearsal
+- `CRYPTO_RISK_FUTURES_URL_SPOT_DEMO`: source 错用了 Spot Demo URL；USD-M demo source 应使用 `https://demo-fapi.binance.com`
 - `CRYPTO_RISK_BUDGET_MISSING`: 未配置 symbol/cluster/total 任一风险预算
 - `CRYPTO_RISK_CLUSTER_SYMBOL_UNMAPPED`: cluster cap 开启但 base symbol 未映射 cluster
 

@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-06 11:41 - Crypto Risk P3.3b Binance demo 真实只读 Probe 验证
+
+- 背景: P3.3a 已提供 demo preflight 与 runbook；用户确认继续后，需要用本地真实 demo 凭证启动后端并触发 `/v1/risk/crypto/probe`。
+- 决策: 先运行 preflight，再启动后端；probe 只走 read-only API，不调用下单、撤单或杠杆调整。发现 `https://demo-api.binance.com/fapi` 返回 404 后，将 USD-M demo source 修正为 `https://demo-fapi.binance.com`，并把该错误组合写入 preflight 阻断。
+- 改动: 修复 `scripts/check_crypto_risk_demo_env.py` 直接 CLI 运行时的 repo root import；新增 CLI 回归与 Spot Demo `/fapi` URL 拒绝测试；更新 `.env.example` 与 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` 的 USD-M demo source。
+- 验证: preflight passed；runtime status 显示 `enabled=true/wired=true/fail_closed=false/execution_env=demo`；`POST /v1/risk/crypto/probe` 返回 `ok=true/read_only=true`，account、mark_prices、instrument_specs、leverage_brackets、positions、open_orders、venue_health 均 passed；`risk:crypto / crypto_risk.probe_run` 审计事件已写入；demo 自检测试 6 passed。
+- 风险/遗留: 本次仍是只读联通性验证；生产级 PG 风控审计持久化、Funding/OI 风险系数和 fail-closed 负向演练仍需后续推进。
+- 关联文档: `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`、`.env.example`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 2026-05-05 22:06 - 安装并固定 isort，补跑 Crypto Risk 运维回归
 
 - 背景: 之前多次 Crypto Risk 任务记录 `isort` 因当前 Python 环境未安装而未执行成功；用户要求安装 `isort` 并跑之前漏跑的检查。

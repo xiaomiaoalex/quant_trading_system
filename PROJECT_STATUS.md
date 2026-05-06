@@ -4,9 +4,33 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-05 22:51 (北京时间)
+2026-05-06 11:41 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Crypto Risk P3.3b Binance demo 真实只读 Probe 验证
+- 完成时间: 2026-05-06 11:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3b
+- 开发前状态:
+  - P3.3a 已有 demo runbook 和 preflight，但尚未用真实 demo 凭证触发外部只读 probe
+  - runbook 和 `.env.example` 误将 USD-M demo source 写为 `https://demo-api.binance.com/fapi`
+- 开发后状态:
+  - 本地 `.env` 补齐非密钥 `CRYPTO_RISK_*` 配置并通过 preflight
+  - 实测 `https://demo-api.binance.com/fapi` 对 USD-M `/fapi/*` endpoints 返回 404，已修正为 `https://demo-fapi.binance.com`
+  - 后端 runtime 成功 wired：`enabled=true`、`wired=true`、`fail_closed=false`、`execution_env=demo`
+  - `POST /v1/risk/crypto/probe` 使用真实 demo 凭证完成只读验证，7 项检查全部 passed，并写入 `risk:crypto / crypto_risk.probe_run`
+- 验证结果:
+  - runtime source: `https://demo-fapi.binance.com`
+  - probe symbols: `BTCUSDT`, `ETHUSDT`
+  - probe duration: 1425.067ms
+  - account / mark_prices / instrument_specs / leverage_brackets / positions / open_orders / venue_health → passed ✅
+  - open orders: 0
+  - nonzero position symbols: `BTCUSDT`
+  - `python -m pytest -q trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 6 passed ✅
+- 注意事项:
+  - 本次 probe 为只读联通性验证，没有下单、撤单或调整杠杆
+  - 本地 8080 后端由本次联调启动，完成后可按需停止或继续用于前端 `/crypto-risk` 查看
 
 ### 本次任务：Crypto Risk P3.3 Binance demo 联调自检与运行手册
 - 完成时间: 2026-05-05 22:51 (北京时间)

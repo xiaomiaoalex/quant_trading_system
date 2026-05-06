@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -23,7 +25,7 @@ def _base_demo_env() -> dict[str, str]:
         "BINANCE_API_KEY": "real_demo_key",
         "BINANCE_SECRET_KEY": "real_demo_secret",
         "CRYPTO_RISK_ENABLED": "true",
-        "CRYPTO_RISK_FUTURES_BASE_URL": "https://demo-api.binance.com/fapi",
+        "CRYPTO_RISK_FUTURES_BASE_URL": "https://demo-fapi.binance.com",
         "CRYPTO_RISK_BASE_SYMBOLS": "btcusdt,eth-usdt",
         "CRYPTO_RISK_TOTAL_NOTIONAL_CAP": "10000",
         "CRYPTO_RISK_SYMBOL_CLUSTERS": "BTCUSDT=BTC_BETA,ETHUSDT=ETH_BETA",
@@ -59,6 +61,18 @@ def test_demo_preflight_rejects_testnet_execution_env_and_source() -> None:
     assert "CRYPTO_RISK_FUTURES_URL_TESTNET" in codes
 
 
+def test_demo_preflight_rejects_spot_demo_fapi_path() -> None:
+    module = _load_script_module()
+    env = _base_demo_env() | {
+        "CRYPTO_RISK_FUTURES_BASE_URL": "https://demo-api.binance.com/fapi",
+    }
+
+    report = module.build_demo_preflight_report(env)
+
+    codes = {issue.code for issue in report.errors}
+    assert "CRYPTO_RISK_FUTURES_URL_SPOT_DEMO" in codes
+
+
 def test_demo_preflight_requires_explicit_source_and_budget() -> None:
     module = _load_script_module()
     env = {
@@ -87,3 +101,28 @@ def test_demo_preflight_rejects_cluster_cap_with_unmapped_symbol() -> None:
 
     codes = {issue.code for issue in report.errors}
     assert "CRYPTO_RISK_CLUSTER_SYMBOL_UNMAPPED" in codes
+
+
+def test_demo_preflight_cli_runs_from_repo_root_without_pythonpath() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    process_env = os.environ.copy()
+    process_env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/check_crypto_risk_demo_env.py",
+            "--env-file",
+            "",
+            "--json",
+        ],
+        cwd=repo_root,
+        env=process_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "ModuleNotFoundError" not in result.stderr
+    assert "BINANCE_ENV_MISSING" in result.stdout
