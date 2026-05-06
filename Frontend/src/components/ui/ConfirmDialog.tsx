@@ -130,33 +130,35 @@ export function ConfirmDialog({
         aria-describedby="dialog-message"
       >
         <div className="flex items-start gap-4">
-          <div className="flex-shrink-0">{config.icon}</div>
-          <div className="flex-1">
-            <h2 id="dialog-title" className="text-lg font-semibold text-white">
+          <div className="flex-shrink-0 rounded-full bg-gray-700/30 p-2">
+            {config.icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 id="dialog-title" className="text-lg font-semibold text-white tracking-tight">
               {title}
             </h2>
-            <div id="dialog-message" className="mt-2 text-sm text-gray-400">
+            <div id="dialog-message" className="mt-2 text-sm text-gray-400 leading-relaxed">
               {message}
             </div>
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-gray-700/30">
           <button
-        ref={cancelButtonRef}
-        type="button"
-        onClick={onCancel}
-        disabled={isLoading}
-        className="rounded-md bg-gray-700 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50" // prettier-ignore
-      >
-        {cancelLabel}
-      </button>
+            ref={cancelButtonRef}
+            type="button"
+            onClick={onCancel}
+            disabled={isLoading}
+            className="rounded-md bg-gray-700/60 px-4 py-2 text-sm font-medium text-gray-200 transition-colors hover:bg-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {cancelLabel}
+          </button>
           <button
             type="button"
             onClick={handleConfirm}
             disabled={isLoading}
             className={clsx(
-              'rounded-md px-4 py-2 text-sm font-medium text-white transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50', // prettier-ignore
+              'rounded-md px-4 py-2 text-sm font-medium text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50',
               config.confirmClass
             )}
           >

@@ -21,16 +21,16 @@ export function EmptyState({
   return (
     <div
       className={clsx(
-        'flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-3 rounded-lg border border-gray-700/50 bg-gray-800/20 p-6', // prettier-ignore
+        'flex h-full min-h-[200px] w-full flex-col items-center justify-center gap-3 rounded-lg border border-accent-1/60 bg-surface-3/40 p-6',
         className
       )}
       role="status"
     >
       {icon ? (
-        <div className="text-gray-500">{icon}</div>
+        <div className="text-accent-3">{icon}</div>
       ) : (
         <svg
-          className="h-12 w-12 text-gray-600"
+          className="h-12 w-12 text-accent-2"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -44,13 +44,13 @@ export function EmptyState({
           />
         </svg>
       )}
-      <h3 className="text-lg font-medium text-gray-300">{title}</h3>
-      {message && <p className="max-w-md text-center text-sm text-gray-500">{message}</p>}
+      <h3 className="text-lg font-medium text-accent-5">{title}</h3>
+      {message && <p className="max-w-md text-center text-sm text-accent-3">{message}</p>}
       {action && (
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-2 rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900" // prettier-ignore
+          className="mt-2 rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50 focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           {action.label}
         </button>
