@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
 from trader.adapters.persistence.postgres import (
     PostgreSQLStorage,
+    check_postgres_connection,
     close_pool,
     is_postgres_available,
 )
@@ -24,6 +25,9 @@ from trader.storage.in_memory import get_storage, reset_storage
 
 async def _clear_postgres_risk_state() -> None:
     if not is_postgres_available():
+        return
+    reachable, _ = await check_postgres_connection(timeout=0.5)
+    if not reachable:
         return
     storage = PostgreSQLStorage()
     await storage.connect()
