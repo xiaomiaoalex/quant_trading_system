@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-
-from trader.core.domain.models.crypto_risk import CryptoPositionRisk, OpenOrderRisk
+from typing import Protocol, Sequence
 
 _ACTIVE_ORDER_STATUSES = {
     "OPEN",
@@ -13,6 +12,23 @@ _ACTIVE_ORDER_STATUSES = {
     "PARTIALLY_FILLED",
     "CANCEL_PENDING",
 }
+
+
+class PositionRiskLike(Protocol):
+    symbol: str
+    qty: Decimal
+
+
+class OpenOrderRiskLike(Protocol):
+    symbol: str
+    reduce_only: bool
+    status: str
+
+    @property
+    def signed_remaining_qty(self) -> Decimal: ...
+
+    @property
+    def notional(self) -> Decimal: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +46,8 @@ class OpenOrderExposureCalculator:
     def calculate_symbol_exposure(
         self,
         symbol: str,
-        positions: list[CryptoPositionRisk],
-        open_orders: list[OpenOrderRisk],
+        positions: Sequence[PositionRiskLike],
+        open_orders: Sequence[OpenOrderRiskLike],
         mark_price: Decimal,
     ) -> SymbolOpenOrderExposure:
         current_qty = sum((p.qty for p in positions if p.symbol == symbol), Decimal("0"))
@@ -64,8 +80,8 @@ class OpenOrderExposureCalculator:
 
     def calculate_total_risk_notional(
         self,
-        positions: list[CryptoPositionRisk],
-        open_orders: list[OpenOrderRisk],
+        positions: Sequence[PositionRiskLike],
+        open_orders: Sequence[OpenOrderRiskLike],
         mark_prices: dict[str, Decimal],
     ) -> Decimal:
         symbols = {position.symbol for position in positions}

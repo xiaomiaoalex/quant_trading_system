@@ -4,9 +4,106 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-06 13:15 (北京时间)
+2026-05-07 03:30 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P4.3 DecisionTrace 审计查询闭环
+- 完成时间: 2026-05-07 03:30 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.3
+- 开发前状态:
+  - pre-trade rejection 已写入 `risk_audit_events`，但 `trace_id` 与 `decision_trace_id` 还没有明确优先级
+  - Crypto Risk 运维页仍通过通用 `/v1/events` 看 `risk:crypto`，无法 PG-first 按 trace/signal 定位拒绝证据
+- 开发后状态:
+  - `decision_trace_id` 成为业务决策链路 ID；pre-trade audit 优先用 `metadata.decision_trace_id` 作为 `MarketRiskAuditEvent.trace_id`
+  - budget/probe/pre-trade 审计 payload 均带 `decision_trace_id`
+  - 新增 `GET /v1/risk/crypto/audit`，支持 `event_type`、`trace_id`、`signal_id`、`since_ts_ms`、`limit`
+  - Crypto Risk 运维页 Audit Stream 改为调用 PG-first crypto audit API，并支持 event/trace/signal 过滤
+- Issue 状态迁移:
+  - 风控审计只能按 stream 粗查：`待确认` → `已验证（trace/signal PG-first 查询）`
+  - `trace_id` 与业务决策 ID 语义不清：`待确认` → `已验证（decision_trace_id 标准化）`
+- 验证结果:
+  - 红测：`test_runtime_pre_trade_rejection_writes_market_audit_event` 先失败于 `decision_trace_id` 未成为 trace；`test_crypto_risk_audit_filters_by_trace_and_signal` 先失败于 404 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_p0.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 33 passed ✅
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_risk_engine_layers.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 16 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - scoped `py_compile`、`isort --check-only`、`black --check`、`git diff --check` → passed ✅
+- 注意事项:
+  - `signal_id` 过滤当前在 API 层对 payload 做过滤；PG 表已能按 `trace_id` 走索引，后续高频场景可考虑 JSONB expression index
+  - 下一步可继续 Funding/OI 风险系数，或给前端增加按 rejection reason 的聚合统计
+
+### 本次任务：P4.2 Pre-trade 拒绝证据写入市场风险审计
+- 完成时间: 2026-05-06 17:40 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.2 第一刀
+- 开发前状态:
+  - budget/probe 已进入 `risk_audit_events`，但真实下单前风控拒绝只写 OMS/策略事件与内存计数
+  - 运维侧无法长期追踪“哪个信号被哪条 crypto 风控规则拒绝、推荐 KillSwitch 级别是多少”
+- 开发后状态:
+  - 新增 `crypto_risk.pre_trade_rejected` 市场风险审计事件
+  - 新增 `build_audited_crypto_pre_trade_risk_check()`，在 Control/Service wrapper 层观察 pre-trade 结果，拒绝或异常时写入 `MarketRiskAuditRepository`
+  - `CryptoRiskRuntimeManager` 的 runtime wiring、预算热更新重建 check、fail-closed setup check 均使用审计 wrapper
+  - `CryptoPreTradeRiskPlugin` 和 Core domain services 仍保持无 IO，审计故障不会覆盖原始拒绝/异常语义
+- Issue 状态迁移:
+  - pre-trade rejection evidence 未持久化：`待确认` → `已验证（risk_audit_events / crypto_risk.pre_trade_rejected）`
+- 验证结果:
+  - 先写失败测试：`test_runtime_pre_trade_rejection_writes_market_audit_event` 初始失败于审计事件为空 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_p0.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 32 passed ✅
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_risk_engine_layers.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 16 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - scoped `py_compile`、`isort --check-only`、`black --check` → passed ✅
+- 注意事项:
+  - 当前 evidence 已包含 `signal_id`、`strategy_id`/`strategy_name`、symbol、qty、price、rejection_reason、risk_level、details 与 recommended KillSwitch level
+  - 下一步应把这些审计事件串入统一 `DecisionTraceId`，并在运维页增加按 signal/trace 查询的视图
+
+### 本次任务：P4.1 市场无关 PG 风险审计仓储
+- 完成时间: 2026-05-06 17:19 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.1
+- 开发前状态:
+  - P4.0 已有 `MarketRiskAuditEvent` 契约，但 budget/probe 仍直接写控制面内存事件流
+  - `risk:crypto` 审计查询没有 PG-first 仓储，长期回放仍会受进程重启影响
+- 开发后状态:
+  - 新增 `risk_audit_events` 表迁移和 `PostgresMarketRiskAuditStorage`
+  - 新增 `MarketRiskAuditRepository`，PG 可用时优先写/读 PG，PG 不可用或失败时回退控制面内存事件流
+  - crypto budget/probe 审计改为通过 `MarketRiskAuditEvent` 写入，`risk:crypto` 是 market audit 的过滤视图
+  - 写入成功后仍同步内存事件投影，保持旧 `/v1/events?stream_key=risk:crypto` 查询兼容
+- Issue 状态迁移:
+  - 风控审计只在控制面内存事件流：`待确认` → `已验证（PG-first MarketRiskAuditRepository）`
+  - `crypto_risk_audit_events` 平台级命名风险：`待确认` → `已验证（统一 risk_audit_events）`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_market_risk_audit_repository.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_p0.py --tb=short` → 24 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - 新增真实 PG 覆盖：`risk_audit_events` 建表、JSONB payload 写入、`stream_key/event_type/since_ts_ms` 过滤和测试数据清理 ✅
+  - `python -m py_compile trader\adapters\persistence\postgres\risk_audit_storage.py trader\adapters\persistence\market_risk_audit_repository.py trader\api\routes\risk.py trader\core\domain\models\market_risk.py` → passed ✅
+- 注意事项:
+  - Docker Postgres 真实集成已补跑通过；当前仍需避免与其他会清库的 PG 测试并行执行
+  - 下一步应把 pre-trade rejection evidence 也写入 `risk_audit_events`，并与 DecisionTrace 串联
+
+### 本次任务：P4.0 市场无关风险契约抽象
+- 完成时间: 2026-05-06 16:45 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.0 第一刀
+- 开发前状态:
+  - 核心 OMS/RiskEngine/RiskSizer 较通用，但 `CryptoRisk*` DTO、审计契约和部分 Core service 类型仍明显绑定数字货币
+  - 回测端口已有 `DataProviderPort`，但 `VectorBTAdapter` 内部直接实例化 `BinanceDataProvider`
+- 开发后状态:
+  - 新增 `MarketInstrumentSpec`、`MarketRiskSnapshot`、`MarketRiskBudget`、`MarketRiskAuditEvent` 等市场无关风险 DTO
+  - `CryptoInstrumentSpec`、`CryptoRiskSnapshot` 等保留为 specialization，并支持投影到 `MarketRisk*` 契约
+  - `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator` 改为依赖结构字段，可消费 market DTO
+  - `VectorBTAdapter` 支持注入 `DataProviderPort`，默认 Binance provider 只作为兼容 fallback
+- Issue 状态迁移:
+  - 平台级风控契约被 `CryptoRisk*` 命名锁死：`待确认` → `已验证（MarketRisk contract）`
+  - 回测引擎直接绑定 Binance 数据源：`待确认` → `已验证（DataProviderPort 注入）`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_p0.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 18 passed ✅
+- 注意事项:
+  - `MarginRiskCalculator` 仍是 crypto/futures 专用；A 股后续应新增现金股票规则插件，而不是复用保证金/强平模型
+  - 下一步 PG 风控审计应落 `risk_audit_events` / `MarketRiskAuditRepository`，并让 `risk:crypto` 作为过滤视图
 
 ### 本次任务：Crypto Risk P3.3c Fail-Closed 负向演练自动化
 - 完成时间: 2026-05-06 13:15 (北京时间)

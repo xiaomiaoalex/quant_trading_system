@@ -1,5 +1,9 @@
 import { APIClient } from './client'
-import type { CryptoRiskBudgetUpdateRequest, CryptoRiskProbeRequest } from '@/types'
+import type {
+  CryptoRiskAuditFilters,
+  CryptoRiskBudgetUpdateRequest,
+  CryptoRiskProbeRequest,
+} from '@/types'
 
 export class CryptoRiskAPI extends APIClient {
   async getRuntime(): Promise<unknown> {
@@ -14,12 +18,14 @@ export class CryptoRiskAPI extends APIClient {
     return this.post<unknown>('/v1/risk/crypto/probe', request)
   }
 
-  async listEvents(limit = 50): Promise<unknown> {
+  async listEvents(filters: CryptoRiskAuditFilters = { limit: 50 }): Promise<unknown> {
     const query = new URLSearchParams({
-      stream_key: 'risk:crypto',
-      limit: String(limit),
+      limit: String(filters.limit ?? 50),
     })
-    return this.get<unknown>(`/v1/events?${query.toString()}`)
+    if (filters.event_type) query.set('event_type', filters.event_type)
+    if (filters.trace_id) query.set('trace_id', filters.trace_id)
+    if (filters.signal_id) query.set('signal_id', filters.signal_id)
+    return this.get<unknown>(`/v1/risk/crypto/audit?${query.toString()}`)
   }
 }
 

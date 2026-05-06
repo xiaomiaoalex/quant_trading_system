@@ -25,6 +25,51 @@
 
 ## 最近记录
 
+### 2026-05-07 03:30 - P4.3 DecisionTrace 审计查询闭环
+
+- 背景: P4.2 已把 pre-trade rejection 写入 `risk_audit_events`，但 trace 语义还停留在事件字段，前端也只能通过通用 `/v1/events` 粗看 `risk:crypto`。
+- 决策: 将 `decision_trace_id` 作为业务决策链路 ID，并同步到 `MarketRiskAuditEvent.trace_id`；新增 crypto 风控专用审计查询 API，前端运维页走 PG-first 审计源。
+- 改动: `crypto_pre_trade_risk_audit.py` 优先使用 `Signal.metadata.decision_trace_id`，payload 增加 `decision_trace_id`；`risk.py` 新增 `GET /v1/risk/crypto/audit` 并让 budget/probe 审计 payload 自动携带 `decision_trace_id`；Frontend `CryptoRiskOps` 增加 event/trace/signal 过滤并调用新 API。
+- 验证: P4.3 两条红测先失败于 trace 未标准化和接口 404；实现后风控/API/OMS/PG 单测 33 passed，市场抽象/快照/回测回归 16 passed，真实 PG 集成 40 passed，P0 回归 99 passed，Frontend `npm run typecheck` passed；scoped `py_compile`、`isort --check-only`、`black --check`、`git diff --check` passed。
+- 风险/遗留: `signal_id` 当前在 API 层过滤 payload；后续如果审计量变大，应考虑 JSONB expression index 或将 signal_id 升为表字段。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-06 17:40 - P4.2 Pre-trade 拒绝证据写入市场风险审计
+
+- 背景: P4.1 已让 budget/probe 审计进入 `risk_audit_events`，但真实 pre-trade 风控拒绝仍缺少 PG-first 长期证据，无法按 signal/trace 回放“为什么没下单”。
+- 决策: 不把 IO 塞入 `CryptoPreTradeRiskPlugin`；在 Control/Service 装配层新增 audited pre-trade wrapper，观察 `RiskCheckResult` 并写 `MarketRiskAuditEvent`。
+- 改动: 新增 `trader/services/crypto_pre_trade_risk_audit.py`；`CryptoRiskRuntimeManager` 在 runtime wiring、预算热更新和 setup fail-closed check 中使用审计 wrapper；接口契约和架构图补充 `crypto_risk.pre_trade_rejected` 事件语义；真实 PG 审计测试兼容分散 Postgres 环境变量。
+- 验证: P4.2 红测先失败于审计事件为空；完成实现后相关风控/API/OMS/PG 单测 32 passed，市场抽象/快照/回测回归 16 passed，真实 PG 集成 40 passed，P0 回归 99 passed；scoped `py_compile`、`isort --check-only`、`black --check` passed。
+- 风险/遗留: 当前事件已经记录 signal 与 rejection evidence，但尚未串入统一 DecisionTraceId；前端运维页也还没有专门的 pre-trade rejection 查询视图。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-06 17:28 - P4.1 真实 PG 集成补充验证
+
+- 背景: P4.1 初始验证覆盖了 fake pool、API 和核心回归，但尚未用 Docker Postgres 验证 `risk_audit_events` 的真实 DDL/JSONB/查询路径。
+- 决策: 保留 fake pool 单测用于 fallback 与分支覆盖，新增真实 asyncpg 集成用例专门验证市场无关风险审计表。
+- 改动: `test_market_risk_audit_repository.py` 增加真实 PG 用例，使用唯一 `trace_id` 写入并清理 `risk_audit_events`，验证 payload、asset/venue 和时间过滤。
+- 验证: `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed。
+- 风险/遗留: 真实 PG 测试共享同一数据库，仍应避免与会执行全库 clear 的 PG 用例并行运行；pre-trade rejection evidence 尚未接入 `risk_audit_events`。
+- 关联文档: `PROJECT_STATUS.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-06 17:19 - P4.1 市场无关 PG 风险审计仓储
+
+- 背景: P4.0 已把风险契约抽到 `MarketRisk*`，但 crypto budget/probe 审计仍只落控制面内存事件流；继续做运维和 DecisionTrace 前，需要先把平台级风险审计落到市场无关 PG 表。
+- 决策: 新增 `risk_audit_events` 作为平台表，`risk:crypto` 仅作为 `stream_key` 过滤视图；repository 采用 PG-first，同时写内存投影保留旧 `/v1/events` 兼容。
+- 改动: 新增 `PostgresMarketRiskAuditStorage`、`MarketRiskAuditRepository` 和迁移 `008_risk_audit_events.sql`；`PATCH /v1/risk/crypto/budget` 与 `POST /v1/risk/crypto/probe` 改为写 `MarketRiskAuditEvent`；`GET /v1/risk/crypto/budget/audit` 改为通过 repository 查询；测试隔离补充 market risk audit repository reset。
+- 验证: `test_market_risk_audit_repository.py`、`test_crypto_risk_runtime_api.py`、`test_market_risk_contract.py`、`test_crypto_risk_p0.py` 合计 24 passed；相关模块 `py_compile` passed。
+- 风险/遗留: 本轮尚未用 Docker Postgres 跑真实集成；pre-trade rejection evidence 还未进入 `risk_audit_events`，DecisionTrace 也尚未串联。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-06 16:45 - P4.0 市场无关风险契约抽象
+
+- 背景: 审计发现核心骨架较通用，但风险 DTO、审计契约和回测实现仍被 Crypto/Binance 命名牵引；继续做 PG 审计前需要先补市场无关风险契约。
+- 决策: 采用薄抽象，不删除现有 crypto 风控；新增 `MarketRisk*` DTO，让 crypto specialization 可投影到通用契约，并先解开最明显的 Binance 回测数据源硬编码。
+- 改动: 新增 `trader/core/domain/models/market_risk.py`；`CryptoInstrumentSpec`、`CryptoAccountRisk`、`CryptoPositionRisk`、`OpenOrderRisk`、`CryptoRiskBudget`、`CryptoRiskSnapshot` 增加 `to_market_*` 投影；`ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator` 改为结构化输入；`VectorBTAdapter` 支持注入 `DataProviderPort`；接口契约、架构图、计划、状态和经验文档同步更新。
+- 验证: `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_p0.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 18 passed。
+- 风险/遗留: `MarginRiskCalculator` 仍是 crypto/futures 专用；PG 风控审计尚未落库，下一步应以 `MarketRiskAuditRepository` / `risk_audit_events` 为平台契约。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-06 13:15 - Crypto Risk P3.3c Fail-Closed 负向演练自动化
 
 - 背景: 正常 Binance demo 只读 probe 已通过，但坏 symbol / 缺关键市场数据时仍缺少可重复的负向演练脚本，无法自动证明失败 probe 有审计且没有订单副作用。

@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-04 21:36 (北京时间)
+- 最后更新: 2026-05-07 03:30 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -37,7 +37,8 @@ flowchart TB
         OMS["OMS Monotonic State Machine"]
         Deterministic["Deterministic Layer / Replay"]
         Domain["Domain Models: Order, Position, Signal"]
-        CryptoRisk["Crypto Risk Models / Margin / Open Orders / Cluster Exposure"]
+        MarketRisk["Market Risk Contract"]
+        CryptoRisk["Crypto Risk Specialization / Margin / Open Orders / Cluster Exposure"]
     end
 
     subgraph Adapter["Adapter Plane: trader/adapters/"]
@@ -52,6 +53,7 @@ flowchart TB
     subgraph Persistence["Persistence Plane: trader/adapters/persistence/"]
         EventLog["Append-only Event Log"]
         PG["PostgreSQL Repositories"]
+        RiskAudit["risk_audit_events / MarketRiskAuditRepository"]
         Projection["Read Models / Projectors"]
     end
 
@@ -62,17 +64,22 @@ flowchart TB
     CryptoRuntime --> Gate
     CryptoRuntime --> CryptoSnapshot
     CryptoRuntime --> CryptoSource
+    CryptoRuntime --> RiskAudit
     Lifecycle --> Gate
     Gate --> Risk
     Risk --> CryptoGate
     CryptoGate --> CryptoSnapshot
+    CryptoGate --> MarketRisk
     CryptoGate --> CryptoRisk
+    CryptoRisk --> MarketRisk
     CryptoSnapshot --> CryptoSource
     Risk --> Kill
     Gate --> OMS
     OMS --> Deterministic
     OMS --> EventLog
     EventLog --> Projection
+    CryptoOps --> RiskAudit
+    RiskAudit --> Projection
     Projection --> API
     Binance --> PublicWS
     Binance --> PrivateWS
@@ -168,6 +175,7 @@ sequenceDiagram
 
 ### Crypto 独立风控补充
 
+- `MarketRiskSnapshot`、`MarketInstrumentSpec`、`MarketRiskBudget` 和 `MarketRiskAuditEvent` 是 Core / Policy / Persistence 的市场无关风险契约；Crypto 风控继续保留为 specialization，通过转换方法投影到通用契约。
 - 策略只提交 `Signal` / trade intent；最终放行、拒绝、缩量建议和 KillSwitch 建议由 Policy Plane 决定。
 - `CryptoPreTradeRiskPlugin` 通过 `CryptoRiskSnapshot` 读取账户、规则、mark price、在途订单、持仓和风险预算；`DataSourceCryptoRiskSnapshotProvider` 位于 Service 层，调用 Adapter 边界清洗后的 `CryptoRiskDataSource` 构建快照，Core 计算保持无 IO。
 - `trader/api/crypto_risk_runtime.py` 位于 Control Plane，解析 `CRYPTO_RISK_*` 环境配置，默认关闭；显式启用时由 lifespan 创建 Binance USD-M source、snapshot provider，并把 `pre_trade_risk_check` late-bind 到 OMS。
@@ -175,13 +183,21 @@ sequenceDiagram
 - `GET /v1/risk/crypto/runtime` 暴露 runtime 状态；`PATCH /v1/risk/crypto/budget` 仅热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，不重新创建 Binance source 或泄露凭证。
 - 每次预算热更新成功后写入控制面事件流 `risk:crypto` / `crypto_risk.budget_updated`；专用审计查询与通用 `/v1/events` 共用同一来源，便于回放与运维追踪。
 - `POST /v1/risk/crypto/probe` 是 Control Plane 的只读 readiness probe；它复用已 wired 的 USD-M 风控 source 读取账户风险、mark price、交易规则、杠杆分层、持仓、在途订单和 venue health，并写入 `risk:crypto` / `crypto_risk.probe_run` 审计事件。
+- `MarketRiskAuditRepository` 负责 PG-first 风险审计持久化；`risk:crypto` 通过 `risk_audit_events` 的 `stream_key` 过滤展示，同时保留控制面内存事件投影作为 PG 不可用时的回退和旧 `/v1/events` 兼容视图。
+- Runtime 注入 OMS 的 crypto `pre_trade_risk_check` 会由 Control/Service wrapper 增补拒绝审计；当风控结果为拒绝或风控回调异常时，写入 `risk:crypto` / `crypto_risk.pre_trade_rejected`，但不改变 Core plugin 的无 IO 边界，也不让审计故障覆盖原始 fail-closed 决策。
+- `decision_trace_id` 是业务决策链路 ID；crypto budget/probe/pre-trade 审计会把它写入 `MarketRiskAuditEvent.trace_id` 与 payload，`GET /v1/risk/crypto/audit` 可按 `trace_id` 或 `signal_id` 查询 PG-first evidence。
 - 当前执行适配器仍是 Binance Spot Demo 路径；`execution_env=demo` 反映实际执行环境，USD-M source 的 `mode` 仅描述只读风控数据源 URL，不代表 Futures 下单能力。
 - Frontend `/crypto-risk` 运维页通过 `GET /v1/risk/crypto/runtime`、`PATCH /v1/risk/crypto/budget`、`POST /v1/risk/crypto/probe` 和 `/v1/events?stream_key=risk:crypto` 完成状态查看、预算热更新、只读联通性检查与审计追踪。
 - `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
-- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 cluster 敞口和合约保证金纯计算。
+- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 group/cluster 敞口和合约保证金纯计算；前三者只依赖市场无关字段，`MarginRiskCalculator` 保持 crypto/futures 专用。
 - `CryptoRiskBudget` 支持 `symbol_clusters` 与 `cluster_notional_caps`；cluster 风险按“已成交持仓 + active open orders + 本次拟下单”聚合，命中 cap 时由 Policy Plane 拒绝，不修改 OMS 状态。
 - 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
 - OMS 下单入口可注入独立 `pre_trade_risk_check` 回调；该回调拒绝或异常时必须在 broker `place_order` 之前阻断订单。
+
+### 回测市场无关补充
+
+- `VectorBTAdapter` 通过 `DataProviderPort` 获取历史 K 线；Binance 历史数据源只作为默认装配，A 股或其他市场数据源应在 Service/Adapter 层注入。
+- 回测执行成本、交易时段、T+1、涨跌停和 lot 约束不得写死在 engine 内，应通过市场规则或执行模型 specialization 接入。
 
 ---
 

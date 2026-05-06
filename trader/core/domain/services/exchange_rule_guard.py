@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
+from typing import Protocol
 
-from trader.core.domain.models.crypto_risk import CryptoInstrumentSpec
 from trader.core.domain.models.order import OrderSide
+
+
+class InstrumentSpecLike(Protocol):
+    symbol: str
+    price_tick: Decimal
+    qty_step: Decimal
+    min_qty: Decimal
+    min_notional: Decimal
+    max_qty: Decimal | None
+    max_notional: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +35,7 @@ def _floor_to_step(value: Decimal, step: Decimal) -> Decimal:
 class ExchangeRuleGuard:
     def check_order(
         self,
-        spec: CryptoInstrumentSpec,
+        spec: InstrumentSpecLike,
         side: OrderSide,
         qty: Decimal,
         price: Decimal,

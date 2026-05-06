@@ -4,6 +4,15 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
 
+from trader.core.domain.models.market_risk import (
+    AssetClass,
+    MarketAccountRisk,
+    MarketInstrumentSpec,
+    MarketOpenOrderRisk,
+    MarketPositionRisk,
+    MarketRiskBudget,
+    MarketRiskSnapshot,
+)
 from trader.core.domain.models.order import OrderSide
 
 
@@ -65,6 +74,22 @@ class CryptoInstrumentSpec:
         self.max_qty = None if self.max_qty is None else _decimal(self.max_qty)
         self.max_notional = None if self.max_notional is None else _decimal(self.max_notional)
 
+    def to_market_spec(self, venue: str = "binance") -> MarketInstrumentSpec:
+        return MarketInstrumentSpec(
+            symbol=self.symbol,
+            venue=venue,
+            asset_class=AssetClass.CRYPTO,
+            price_tick=self.price_tick,
+            qty_step=self.qty_step,
+            min_qty=self.min_qty,
+            min_notional=self.min_notional,
+            max_qty=self.max_qty,
+            max_notional=self.max_notional,
+            base_asset=self.base_asset,
+            quote_asset=self.quote_asset,
+            metadata={"market_type": self.market_type.value},
+        )
+
 
 @dataclass(slots=True)
 class LeverageBracket:
@@ -103,6 +128,27 @@ class CryptoAccountRisk:
         self.total_initial_margin = _decimal(self.total_initial_margin)
         self.total_maintenance_margin = _decimal(self.total_maintenance_margin)
 
+    def to_market_account(
+        self,
+        venue: str = "binance",
+        account_id: str = "",
+        currency: str = "USDT",
+    ) -> MarketAccountRisk:
+        return MarketAccountRisk(
+            equity=self.equity,
+            available_cash=self.available_balance,
+            venue=venue,
+            asset_class=AssetClass.CRYPTO,
+            account_id=account_id,
+            currency=currency,
+            metadata={
+                "wallet_balance": self.wallet_balance,
+                "margin_balance": self.margin_balance,
+                "total_initial_margin": self.total_initial_margin,
+                "total_maintenance_margin": self.total_maintenance_margin,
+            },
+        )
+
 
 @dataclass(slots=True)
 class CryptoPositionRisk:
@@ -128,12 +174,33 @@ class CryptoPositionRisk:
         return abs(self.qty) * self.mark_price
 
     @property
+    def risk_price(self) -> Decimal:
+        return self.mark_price
+
+    @property
     def liquidation_buffer_ratio(self) -> Decimal | None:
         if self.liquidation_price is None or self.mark_price <= 0 or self.qty == 0:
             return None
         if self.qty > 0:
             return (self.mark_price - self.liquidation_price) / self.mark_price
         return (self.liquidation_price - self.mark_price) / self.mark_price
+
+    def to_market_position(self, venue: str = "binance") -> MarketPositionRisk:
+        return MarketPositionRisk(
+            symbol=self.symbol,
+            venue=venue,
+            asset_class=AssetClass.CRYPTO,
+            qty=self.qty,
+            entry_price=self.entry_price,
+            risk_price=self.mark_price,
+            metadata={
+                "mark_price": self.mark_price,
+                "leverage": self.leverage,
+                "margin_mode": self.margin_mode.value,
+                "liquidation_price": self.liquidation_price,
+                "liquidation_buffer_ratio": self.liquidation_buffer_ratio,
+            },
+        )
 
 
 @dataclass(slots=True)
@@ -166,6 +233,20 @@ class OpenOrderRisk:
     def notional(self) -> Decimal:
         return self.remaining_qty * self.price
 
+    def to_market_open_order(self, venue: str = "binance") -> MarketOpenOrderRisk:
+        return MarketOpenOrderRisk(
+            cl_ord_id=self.cl_ord_id,
+            symbol=self.symbol,
+            venue=venue,
+            asset_class=AssetClass.CRYPTO,
+            side=self.side,
+            qty=self.qty,
+            filled_qty=self.filled_qty,
+            price=self.price,
+            reduce_only=self.reduce_only,
+            status=self.status,
+        )
+
 
 @dataclass(slots=True)
 class CryptoRiskBudget:
@@ -190,6 +271,18 @@ class CryptoRiskBudget:
         self.max_margin_ratio = _decimal(self.max_margin_ratio)
         self.min_liquidation_buffer_ratio = _decimal(self.min_liquidation_buffer_ratio)
 
+    def to_market_budget(self) -> MarketRiskBudget:
+        return MarketRiskBudget(
+            symbol_notional_caps=dict(self.symbol_notional_caps),
+            symbol_groups=dict(self.symbol_clusters),
+            group_notional_caps=dict(self.cluster_notional_caps),
+            total_notional_cap=self.total_notional_cap,
+            metadata={
+                "max_margin_ratio": self.max_margin_ratio,
+                "min_liquidation_buffer_ratio": self.min_liquidation_buffer_ratio,
+            },
+        )
+
 
 @dataclass(slots=True)
 class CryptoRiskSnapshot:
@@ -204,3 +297,30 @@ class CryptoRiskSnapshot:
 
     def __post_init__(self) -> None:
         self.mark_prices = _decimal_dict(self.mark_prices)
+
+    def to_market_snapshot(
+        self,
+        venue: str = "binance",
+        account_id: str = "",
+        currency: str = "USDT",
+    ) -> MarketRiskSnapshot:
+        return MarketRiskSnapshot(
+            account=self.account.to_market_account(
+                venue=venue,
+                account_id=account_id,
+                currency=currency,
+            ),
+            instrument_specs={
+                symbol: spec.to_market_spec(venue=venue)
+                for symbol, spec in self.instrument_specs.items()
+            },
+            positions=[position.to_market_position(venue=venue) for position in self.positions],
+            open_orders=[order.to_market_open_order(venue=venue) for order in self.open_orders],
+            risk_prices=dict(self.mark_prices),
+            risk_budget=self.risk_budget.to_market_budget(),
+            venue_health=self.venue_health,
+            metadata={
+                "source": "crypto",
+                "leverage_bracket_symbols": tuple(self.leverage_brackets),
+            },
+        )

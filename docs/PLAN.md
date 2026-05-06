@@ -44,6 +44,10 @@
 | **数字货币独立风控 P3.3a** | `scripts/check_crypto_risk_demo_env.py`, `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` | **2026-05-05 完成：Binance demo 联调前静态自检、只读 probe 运行手册、demo 默认 `.env.example`** |
 | **数字货币独立风控 P3.3b** | `scripts/check_crypto_risk_demo_env.py`, `/v1/risk/crypto/probe` | **2026-05-06 完成：真实 Binance demo 凭证只读 probe 通过，USD-M demo source 固定为 `https://demo-fapi.binance.com`，审计事件已写入 `risk:crypto`** |
 | **数字货币独立风控 P3.3c** | `scripts/rehearse_crypto_risk_demo_fail_closed.py` | **2026-05-06 完成：不存在 symbol 负向 probe 自动演练，验证 `ok=false/read_only=true`、失败审计事件和订单列表不变** |
+| **市场无关风险契约 P4.0** | `core/domain/models/market_risk.py`, `core/domain/services/*exposure*.py`, `services/backtesting/vectorbt_adapter.py` | **2026-05-06 完成：新增 MarketRisk DTO、Crypto specialization 投影、通用规则/敞口计算器结构化输入、VectorBT DataProviderPort 注入** |
+| **市场无关风险审计 P4.1** | `adapters/persistence/market_risk_audit_repository.py`, `adapters/persistence/postgres/risk_audit_storage.py`, `api/routes/risk.py` | **2026-05-06 完成：`risk_audit_events` PG-first 仓储、`risk:crypto` 过滤视图、budget/probe 审计接入与内存事件投影兼容；真实 PG 集成回归 40 passed** |
+| **Pre-trade 风控拒绝证据 P4.2** | `services/crypto_pre_trade_risk_audit.py`, `api/crypto_risk_runtime.py` | **2026-05-06 完成：runtime pre-trade 拒绝/异常写入 `risk_audit_events`，事件为 `crypto_risk.pre_trade_rejected`，Core 风控插件保持无 IO** |
+| **DecisionTrace 审计查询 P4.3** | `api/routes/risk.py`, `services/crypto_pre_trade_risk_audit.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-07 完成：`decision_trace_id` 标准化，新增 `/v1/risk/crypto/audit` PG-first 查询，前端支持 event/trace/signal 过滤** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 
@@ -67,7 +71,7 @@
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
-- **Crypto Risk P4**: 推进生产级 PG 风控审计持久化、Funding/OI 风险系数和 fail-closed 负向演练自动化
+- **Crypto Risk P4.4**: 在 PG 审计基础上继续 Funding/OI 风险系数、rejection reason 聚合统计和更细的运维查询视图
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成

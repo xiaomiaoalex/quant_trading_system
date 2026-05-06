@@ -7,6 +7,7 @@ import {
   CryptoRiskRuntimeStatusSchema,
 } from '@/contracts'
 import type {
+  CryptoRiskAuditFilters,
   CryptoRiskBudgetUpdateRequest,
   CryptoRiskEventEnvelope,
   CryptoRiskProbeRequest,
@@ -17,7 +18,7 @@ import type {
 export const cryptoRiskKeys = {
   all: ['crypto-risk'] as const,
   runtime: () => [...cryptoRiskKeys.all, 'runtime'] as const,
-  events: (limit: number) => [...cryptoRiskKeys.all, 'events', limit] as const,
+  events: (filters: CryptoRiskAuditFilters) => [...cryptoRiskKeys.all, 'events', filters] as const,
 }
 
 export function useCryptoRiskRuntime() {
@@ -39,11 +40,11 @@ export function useCryptoRiskRuntime() {
   })
 }
 
-export function useCryptoRiskEvents(limit = 50) {
+export function useCryptoRiskEvents(filters: CryptoRiskAuditFilters = { limit: 50 }) {
   return useQuery<CryptoRiskEventEnvelope[]>({
-    queryKey: cryptoRiskKeys.events(limit),
+    queryKey: cryptoRiskKeys.events(filters),
     queryFn: async () => {
-      const raw = await cryptoRiskAPI.listEvents(limit)
+      const raw = await cryptoRiskAPI.listEvents(filters)
       const parsed = CryptoRiskEventEnvelopeListSchema.safeParse(raw)
       if (!parsed.success) {
         throw new Error(

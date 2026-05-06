@@ -29,6 +29,9 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
+from trader.adapters.persistence.market_risk_audit_repository import (
+    get_market_risk_audit_repository,
+)
 from trader.api.crypto_risk_runtime import (
     crypto_risk_budget_to_dict,
     crypto_risk_probe_result_to_dict,
@@ -51,6 +54,7 @@ from trader.api.models.schemas import (
     VersionedConfig,
     VersionedConfigUpsertRequest,
 )
+from trader.core.domain.models.market_risk import AssetClass, MarketRiskAuditEvent
 from trader.core.domain.rules.time_window_policy import TimeWindowConfig as TWConfig
 from trader.core.domain.rules.time_window_policy import (
     TimeWindowPeriod,
@@ -58,7 +62,6 @@ from trader.core.domain.rules.time_window_policy import (
     TimeWindowSlot,
 )
 from trader.services import EventService, KillSwitchService, RiskService
-from trader.storage.in_memory import get_storage
 
 router = APIRouter(tags=["Risk"])
 logger = logging.getLogger(__name__)
@@ -66,6 +69,7 @@ EFFECT_STATUS_TIMEOUT_SEC = 2.0
 CRYPTO_RISK_STREAM_KEY = "risk:crypto"
 CRYPTO_RISK_BUDGET_UPDATED_EVENT = "crypto_risk.budget_updated"
 CRYPTO_RISK_PROBE_RUN_EVENT = "crypto_risk.probe_run"
+CRYPTO_RISK_PRE_TRADE_REJECTED_EVENT = "crypto_risk.pre_trade_rejected"
 
 
 def _killswitch_matches(current_state, expected_state) -> bool:
@@ -279,7 +283,7 @@ async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
             min_liquidation_buffer_ratio=request.min_liquidation_buffer_ratio,
         )
         status = await manager.update_budget(budget, updated_by=request.updated_by)
-        _append_crypto_budget_audit_event(before_status, status, request.updated_by)
+        await _append_crypto_budget_audit_event(before_status, status, request.updated_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -307,7 +311,7 @@ async def probe_crypto_risk_runtime(request: CryptoRiskProbeRequest):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     payload = crypto_risk_probe_result_to_dict(result)
-    _append_crypto_probe_audit_event(payload)
+    await _append_crypto_probe_audit_event(payload)
     return payload
 
 
@@ -317,48 +321,103 @@ async def list_crypto_risk_budget_audit(
     limit: int = Query(200, ge=1, le=2000, description="Max audit events"),
 ):
     """List crypto risk budget update audit events."""
-    return EventService().list_events(
+    events = await get_market_risk_audit_repository().list_events(
         stream_key=CRYPTO_RISK_STREAM_KEY,
         event_type=CRYPTO_RISK_BUDGET_UPDATED_EVENT,
+        trace_id=None,
         since_ts_ms=since_ts_ms,
         limit=limit,
     )
+    return [EventEnvelope(**_to_event_envelope_dict(event)) for event in events]
 
 
-def _append_crypto_probe_audit_event(payload: dict[str, Any]) -> None:
-    get_storage().append_event(
-        {
-            "stream_key": CRYPTO_RISK_STREAM_KEY,
-            "event_type": CRYPTO_RISK_PROBE_RUN_EVENT,
-            "schema_version": 1,
-            "trace_id": f"crypto-risk-probe:{uuid.uuid4().hex}",
-            "ts_ms": int(time.time() * 1000),
-            "payload": payload,
-        }
+@router.get("/v1/risk/crypto/audit", response_model=list[EventEnvelope])
+async def list_crypto_risk_audit(
+    event_type: Optional[str] = Query(None, description="Filter by crypto risk event type"),
+    trace_id: Optional[str] = Query(None, description="Filter by decision trace ID"),
+    signal_id: Optional[str] = Query(None, description="Filter by strategy signal ID"),
+    since_ts_ms: Optional[int] = Query(None, description="Filter by timestamp (ms)"),
+    limit: int = Query(200, ge=1, le=2000, description="Max audit events"),
+):
+    """List crypto risk audit events from the market-neutral risk audit stream."""
+    query_limit = 2000 if signal_id else limit
+    events = await get_market_risk_audit_repository().list_events(
+        stream_key=CRYPTO_RISK_STREAM_KEY,
+        event_type=event_type,
+        trace_id=trace_id,
+        since_ts_ms=since_ts_ms,
+        limit=query_limit,
+    )
+    if signal_id:
+        signal_id_text = signal_id.strip()
+        events = [
+            event
+            for event in events
+            if str(event.get("payload", {}).get("signal_id", "")) == signal_id_text
+        ]
+    return [EventEnvelope(**_to_event_envelope_dict(event)) for event in events[:limit]]
+
+
+async def _append_crypto_probe_audit_event(payload: dict[str, Any]) -> None:
+    await _append_crypto_market_audit_event(
+        event_type=CRYPTO_RISK_PROBE_RUN_EVENT,
+        trace_prefix="crypto-risk-probe",
+        payload=payload,
     )
 
 
-def _append_crypto_budget_audit_event(
+async def _append_crypto_budget_audit_event(
     before_status: Any,
     after_status: Any,
     updated_by: str,
 ) -> None:
-    get_storage().append_event(
-        {
-            "stream_key": CRYPTO_RISK_STREAM_KEY,
-            "event_type": CRYPTO_RISK_BUDGET_UPDATED_EVENT,
-            "schema_version": 1,
-            "trace_id": f"crypto-risk-budget:{uuid.uuid4().hex}",
-            "ts_ms": int(time.time() * 1000),
-            "payload": {
-                "updated_by": updated_by,
-                "previous_budget": crypto_risk_budget_to_dict(before_status.risk_budget),
-                "new_budget": crypto_risk_budget_to_dict(after_status.risk_budget),
-                "runtime_before": _crypto_runtime_audit_view(before_status),
-                "runtime_after": _crypto_runtime_audit_view(after_status),
-            },
-        }
+    await _append_crypto_market_audit_event(
+        event_type=CRYPTO_RISK_BUDGET_UPDATED_EVENT,
+        trace_prefix="crypto-risk-budget",
+        payload={
+            "updated_by": updated_by,
+            "previous_budget": crypto_risk_budget_to_dict(before_status.risk_budget),
+            "new_budget": crypto_risk_budget_to_dict(after_status.risk_budget),
+            "runtime_before": _crypto_runtime_audit_view(before_status),
+            "runtime_after": _crypto_runtime_audit_view(after_status),
+        },
     )
+
+
+async def _append_crypto_market_audit_event(
+    *,
+    event_type: str,
+    trace_prefix: str,
+    payload: dict[str, Any],
+) -> None:
+    decision_trace_id = str(
+        payload.get("decision_trace_id") or f"{trace_prefix}:{uuid.uuid4().hex}"
+    )
+    audit_payload = {**payload, "decision_trace_id": decision_trace_id}
+    event = MarketRiskAuditEvent(
+        stream_key=CRYPTO_RISK_STREAM_KEY,
+        event_type=event_type,
+        schema_version=1,
+        trace_id=decision_trace_id,
+        ts_ms=int(time.time() * 1000),
+        asset_class=AssetClass.CRYPTO,
+        venue="binance",
+        account_id="crypto_risk",
+        payload=audit_payload,
+    )
+    await get_market_risk_audit_repository().append(event)
+
+
+def _to_event_envelope_dict(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "event_id": record.get("event_id"),
+        "stream_key": record["stream_key"],
+        "event_type": record["event_type"],
+        "schema_version": record.get("schema_version", 1),
+        "trace_id": record.get("trace_id"),
+        "ts_ms": record["ts_ms"],
+        "payload": record.get("payload", {}),
+    }
 
 
 def _crypto_runtime_audit_view(status: Any) -> dict[str, Any]:

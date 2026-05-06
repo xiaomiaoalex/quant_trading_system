@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
 from trader.api.main import app
+from trader.api.routes import risk as risk_routes
 from trader.core.domain.models.crypto_risk import (
     CryptoAccountRisk,
     CryptoInstrumentSpec,
@@ -18,9 +19,46 @@ from trader.storage.in_memory import reset_storage
 
 
 @pytest.fixture(autouse=True)
-def reset_crypto_risk_runtime_manager() -> None:
+def reset_crypto_risk_runtime_manager(monkeypatch) -> None:
     get_crypto_risk_runtime_manager().reset_for_tests()
-    reset_storage()
+    storage = reset_storage()
+    audit_repo = MemoryOnlyMarketRiskAuditRepository(storage)
+    monkeypatch.setattr(risk_routes, "get_market_risk_audit_repository", lambda: audit_repo)
+
+
+class MemoryOnlyMarketRiskAuditRepository:
+    def __init__(self, storage) -> None:
+        self._storage = storage
+
+    async def append(self, event):
+        record = event.to_record()
+        return self._storage.append_event(
+            {
+                "stream_key": record["stream_key"],
+                "event_type": record["event_type"],
+                "schema_version": record["schema_version"],
+                "trace_id": record["trace_id"],
+                "ts_ms": record["ts_ms"],
+                "payload": record["payload"],
+            }
+        )
+
+    async def list_events(
+        self,
+        *,
+        stream_key=None,
+        event_type=None,
+        trace_id=None,
+        since_ts_ms=None,
+        limit=2000,
+    ):
+        return self._storage.list_events(
+            stream_key=stream_key,
+            event_type=event_type,
+            trace_id=trace_id,
+            since_ts_ms=since_ts_ms,
+            limit=limit,
+        )
 
 
 def test_get_crypto_risk_runtime_status_defaults_disabled() -> None:
@@ -117,6 +155,36 @@ class ProbeRiskSource:
 
     async def get_venue_health(self) -> str:
         return "HEALTHY"
+
+
+class CapturingMarketRiskAuditRepository:
+    def __init__(self) -> None:
+        self.appended = []
+
+    async def append(self, event):
+        record = event.to_record()
+        self.appended.append(record)
+        return {**record, "event_id": len(self.appended)}
+
+    async def list_events(
+        self,
+        *,
+        stream_key=None,
+        event_type=None,
+        trace_id=None,
+        since_ts_ms=None,
+        limit=2000,
+    ):
+        events = list(self.appended)
+        if stream_key is not None:
+            events = [event for event in events if event["stream_key"] == stream_key]
+        if event_type is not None:
+            events = [event for event in events if event["event_type"] == event_type]
+        if trace_id is not None:
+            events = [event for event in events if event["trace_id"] == trace_id]
+        if since_ts_ms is not None:
+            events = [event for event in events if event["ts_ms"] >= since_ts_ms]
+        return [{**event, "event_id": index + 1} for index, event in enumerate(events[-limit:])]
 
 
 @pytest.mark.asyncio
@@ -216,6 +284,7 @@ async def test_patch_crypto_risk_budget_writes_audit_event() -> None:
     assert event["trace_id"].startswith("crypto-risk-budget:")
     payload = event["payload"]
     assert payload["updated_by"] == "risk_operator"
+    assert payload["decision_trace_id"].startswith("crypto-risk-budget:")
     assert payload["previous_budget"]["total_notional_cap"] == "10000"
     assert payload["previous_budget"]["symbol_notional_caps"] == {"BTCUSDT": "5000"}
     assert payload["new_budget"]["total_notional_cap"] == "25000"
@@ -224,6 +293,32 @@ async def test_patch_crypto_risk_budget_writes_audit_event() -> None:
     assert payload["new_budget"]["cluster_notional_caps"] == {"ETH_BETA": "12000"}
     assert payload["runtime_before"]["wired"] is True
     assert payload["runtime_after"]["wired"] is True
+
+
+@pytest.mark.asyncio
+async def test_crypto_risk_budget_audit_uses_market_risk_repository(monkeypatch) -> None:
+    repo = CapturingMarketRiskAuditRepository()
+    monkeypatch.setattr(risk_routes, "get_market_risk_audit_repository", lambda: repo)
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={"total_notional_cap": "30000", "updated_by": "risk_operator"},
+    )
+    audit_response = client.get("/v1/risk/crypto/budget/audit")
+
+    assert response.status_code == 200
+    assert audit_response.status_code == 200
+    assert len(repo.appended) == 1
+    assert repo.appended[0]["stream_key"] == "risk:crypto"
+    assert repo.appended[0]["asset_class"] == "crypto"
+    assert repo.appended[0]["venue"] == "binance"
+    assert repo.appended[0]["account_id"] == "crypto_risk"
+    assert audit_response.json()[0]["event_type"] == "crypto_risk.budget_updated"
 
 
 @pytest.mark.asyncio
@@ -239,3 +334,44 @@ async def test_failed_crypto_risk_budget_update_does_not_write_audit_event() -> 
     assert response.status_code == 409
     assert audit_response.status_code == 200
     assert audit_response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_crypto_risk_audit_filters_by_trace_and_signal(monkeypatch) -> None:
+    repo = CapturingMarketRiskAuditRepository()
+    monkeypatch.setattr(risk_routes, "get_market_risk_audit_repository", lambda: repo)
+    await risk_routes._append_crypto_market_audit_event(
+        event_type="crypto_risk.pre_trade_rejected",
+        trace_prefix="crypto-pre-trade",
+        payload={
+            "decision_trace_id": "decision-trace-1",
+            "signal_id": "signal-1",
+            "symbol": "BTCUSDT",
+        },
+    )
+    await risk_routes._append_crypto_market_audit_event(
+        event_type="crypto_risk.pre_trade_rejected",
+        trace_prefix="crypto-pre-trade",
+        payload={
+            "decision_trace_id": "decision-trace-2",
+            "signal_id": "signal-2",
+            "symbol": "ETHUSDT",
+        },
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/risk/crypto/audit",
+        params={
+            "event_type": "crypto_risk.pre_trade_rejected",
+            "trace_id": "decision-trace-1",
+            "signal_id": "signal-1",
+        },
+    )
+
+    assert response.status_code == 200
+    events = response.json()
+    assert len(events) == 1
+    assert events[0]["trace_id"] == "decision-trace-1"
+    assert events[0]["payload"]["decision_trace_id"] == "decision-trace-1"
+    assert events[0]["payload"]["signal_id"] == "signal-1"

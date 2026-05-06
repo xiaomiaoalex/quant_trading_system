@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Sequence
 
-from trader.core.domain.models.crypto_risk import CryptoPositionRisk, OpenOrderRisk
-from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
+from trader.core.domain.services.open_order_exposure import (
+    OpenOrderExposureCalculator,
+    OpenOrderRiskLike,
+    PositionRiskLike,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,8 +25,8 @@ class PortfolioExposureAggregator:
     def calculate_cluster_exposures(
         self,
         *,
-        positions: list[CryptoPositionRisk],
-        open_orders: list[OpenOrderRisk],
+        positions: Sequence[PositionRiskLike],
+        open_orders: Sequence[OpenOrderRiskLike],
         mark_prices: dict[str, Decimal],
         symbol_clusters: dict[str, str],
     ) -> dict[str, ClusterExposure]:

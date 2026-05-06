@@ -4,6 +4,94 @@
 
 ---
 
+## 三十一、市场无关风险契约抽象经验（2026-05-06）
+
+### 31.1 踩坑记录：不要把第一个市场 specialization 当成平台契约
+
+**问题描述**：
+Crypto 风控先落地后，`CryptoRiskSnapshot`、`CryptoInstrumentSpec`、`mark_price`、`liquidation_price`、`leverage_brackets` 很容易变成后续审计、回测和前端的默认语言。这样短期推进快，但以后接 A 股时会把 T+1、涨跌停、100 股手数等规则硬塞进 crypto 语义。
+
+**解决方案**：
+- 新增 `MarketInstrumentSpec`、`MarketRiskSnapshot`、`MarketRiskBudget`、`MarketRiskAuditEvent` 作为市场无关契约。
+- `CryptoRiskSnapshot` 继续保留，但只作为 crypto specialization，并提供 `to_market_snapshot()` 投影。
+- 平台级审计契约改为 `risk:market` / `risk_audit_events`，`risk:crypto` 作为过滤视图而不是独立平台表。
+
+**经验**：
+- 抽象层不需要一开始很厚，但名字必须先站对位置。
+- 市场特有字段进入 `metadata` 或专用 plugin，不要污染通用 DTO。
+
+### 31.2 设计模式：先让通用计算器依赖结构字段，而不是具体市场类型
+
+**问题描述**：
+`OpenOrderExposureCalculator` 和 `PortfolioExposureAggregator` 的算法本身适用于 A 股行业敞口、Crypto cluster 和其他市场 group，但类型签名直接依赖 `CryptoPositionRisk` / `OpenOrderRisk`。
+
+**解决方案**：
+- 把这些计算器的输入改为 `Protocol` 风格的结构字段：`symbol`、`qty`、`status`、`reduce_only`、`notional`、`signed_remaining_qty`。
+- 原 crypto DTO 和新的 market DTO 都能被同一计算器消费。
+
+**经验**：
+- 纯计算服务的复用性往往卡在类型边界，不一定卡在算法。
+- 用结构化 Protocol 解耦，比复制一套 `ChinaStockExposureAggregator` 更稳。
+
+### 31.3 设计模式：PG-first 审计也要保留兼容投影
+
+**问题描述**：
+`risk:crypto` budget/probe 审计原本写入控制面内存事件流，前端和测试会通过 `/v1/events?stream_key=risk:crypto` 查看。如果直接切到 PG 表，长期持久化好了，但旧观察入口会突然看不到事件。
+
+**解决方案**：
+- `MarketRiskAuditRepository` 优先写入/查询 `risk_audit_events`。
+- PG 写入成功后同步写一个控制面内存事件投影。
+- PG 不可用或写入失败时回退到内存事件流，避免风控运维动作因为审计存储短暂故障而 fail-open 或失去可观察性。
+
+**经验**：
+- 持久化升级应区分“真相源”和“兼容读模型”；真相源迁移到 PG，不代表旧读入口必须立刻删除。
+- 对审计系统来说，过渡期双写投影比一次性切换更稳，尤其是前端和运维脚本已经依赖旧查询入口时。
+
+### 31.4 测试经验：PG fake pool 之后要补真实 JSONB 集成
+
+**问题描述**：
+`PostgresMarketRiskAuditStorage` 的 fake pool 可以验证 SQL 调用顺序和 repository fallback，但看不到 PostgreSQL 对 JSONB 参数、DDL 初始化和过滤条件的真实行为。
+
+**解决方案**：
+- 在 fake pool 单测之外，补充真实 `asyncpg` + Docker Postgres 用例。
+- 用唯一 `trace_id` 写入 `risk_audit_events`，验证 JSONB payload、asset/venue 字段和 `since_ts_ms` 过滤。
+- 测试前后按 `trace_id` 删除数据，避免影响共享 PG 数据库里的其他集成测试。
+
+**经验**：
+- fake pool 适合覆盖降级路径和边界分支，真实 PG 用例负责兜住驱动、类型转换和表结构。
+- 会清库的 PG 测试与按 trace 清理的审计测试不要并行跑，避免共享数据库互相踩状态。
+
+### 31.5 设计模式：pre-trade evidence 用 wrapper 写，不污染 Core plugin
+
+**问题描述**：
+`CryptoPreTradeRiskPlugin` 能给出确定性拒绝结果，但如果直接在 plugin 内写 PG 审计，会破坏 Core/Policy 无 IO 边界；如果只在 OMS 记录 `strategy.order.rejected`，又缺少市场风险维度的长期可查询证据。
+
+**解决方案**：
+- 在 Control/Service 装配层包一层 `build_audited_crypto_pre_trade_risk_check()`。
+- wrapper 只观察 `RiskCheckResult`：通过时不写事件，拒绝或异常时写 `risk:crypto / crypto_risk.pre_trade_rejected`。
+- 审计写入失败只记录 warning，不改变原始风控结论；已拒绝仍拒绝，回调异常仍 fail-closed。
+
+**经验**：
+- 风控决策和风控证据是两件事；前者必须纯且确定，后者应在边界层落库。
+- wrapper 模式适合把审计、trace 和运维 evidence 接到现有闭环，不需要让策略、OMS 或 Core plugin 互相知道太多。
+
+### 31.6 设计模式：`decision_trace_id` 是业务追踪，`trace_id` 是存储索引
+
+**问题描述**：
+前期事件里已有 `trace_id`，但它更像事件存储和日志字段；pre-trade rejection 需要回答的是“同一个策略信号为什么被拒绝”，所以需要稳定的业务决策链路 ID。若前端只看 payload，也应该能看到同一个 ID。
+
+**解决方案**：
+- 将 `decision_trace_id` 写入 payload，并同步作为 `MarketRiskAuditEvent.trace_id`。
+- pre-trade audit 优先读取 `Signal.metadata["decision_trace_id"]`，再兼容旧 `trace_id`。
+- 新增 `/v1/risk/crypto/audit`，按 `trace_id` 走 PG-first 查询，按 `signal_id` 在 payload 层过滤。
+- 前端 Crypto Risk Audit Stream 改用专用审计 API，并提供 event/trace/signal 过滤。
+
+**经验**：
+- 业务 trace 和存储 trace 可以共用值，但命名责任要清楚：`decision_trace_id` 解释业务链路，`trace_id` 服务索引和通用事件接口。
+- 先用 API 层 payload 过滤能快速闭环；当 rejection 事件量上来后，再把高频字段升为独立列或 JSONB expression index。
+
+---
+
 ## 三十、Crypto Risk demo 联调自检经验（2026-05-05）
 
 ### 30.1 踩坑记录：demo 执行环境和 USD-M 风控 source 不是同一个开关

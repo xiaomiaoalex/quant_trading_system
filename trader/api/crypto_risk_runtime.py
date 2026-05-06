@@ -18,6 +18,7 @@ from trader.core.application.ports import BrokerPort
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
 from trader.core.domain.models.crypto_risk import CryptoRiskBudget
 from trader.core.domain.models.signal import Signal
+from trader.services.crypto_pre_trade_risk_audit import build_audited_crypto_pre_trade_risk_check
 from trader.services.crypto_risk_snapshot import (
     CryptoRiskSnapshotProviderConfig,
     DataSourceCryptoRiskSnapshotProvider,
@@ -190,7 +191,11 @@ class CryptoRiskRuntimeManager:
             old_components = self._components
             self._config = runtime_config
             self._components = None
-            self._apply_pre_trade_check(build_crypto_risk_setup_failure_check(reason))
+            self._apply_pre_trade_check(
+                build_audited_crypto_pre_trade_risk_check(
+                    build_crypto_risk_setup_failure_check(reason)
+                )
+            )
             self._status = self._build_status(
                 config=runtime_config,
                 wired=False,
@@ -220,9 +225,12 @@ class CryptoRiskRuntimeManager:
                     risk_budget=risk_budget,
                 ),
             )
-            pre_trade_risk_check = build_crypto_pre_trade_risk_check(
+            raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(
                 broker=self._broker,
                 snapshot_provider=snapshot_provider,
+            )
+            pre_trade_risk_check = build_audited_crypto_pre_trade_risk_check(
+                raw_pre_trade_risk_check
             )
             self._components = CryptoRiskRuntimeComponents(
                 source=self._components.source,
@@ -499,10 +507,11 @@ def build_crypto_risk_runtime_components(
             risk_budget=runtime_config.risk_budget,
         ),
     )
-    pre_trade_risk_check = build_crypto_pre_trade_risk_check(
+    raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(
         broker=broker,
         snapshot_provider=snapshot_provider,
     )
+    pre_trade_risk_check = build_audited_crypto_pre_trade_risk_check(raw_pre_trade_risk_check)
     return CryptoRiskRuntimeComponents(
         source=source,
         snapshot_provider=snapshot_provider,

@@ -90,6 +90,9 @@ export function CryptoRiskOps() {
   const [updatedBy, setUpdatedBy] = useState('frontend_operator')
   const [probeSymbols, setProbeSymbols] = useState('BTCUSDT')
   const [requestedBy, setRequestedBy] = useState('frontend_operator')
+  const [auditEventType, setAuditEventType] = useState('')
+  const [auditTraceId, setAuditTraceId] = useState('')
+  const [auditSignalId, setAuditSignalId] = useState('')
   const [isBudgetDirty, setIsBudgetDirty] = useState(false)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -104,7 +107,17 @@ export function CryptoRiskOps() {
     refetch,
     isFetching,
   } = useCryptoRiskRuntime()
-  const { data: events, refetch: refetchEvents, isFetching: isEventsFetching } = useCryptoRiskEvents(50)
+  const auditFilters = useMemo(
+    () => ({
+      event_type: auditEventType || undefined,
+      trace_id: auditTraceId.trim() || undefined,
+      signal_id: auditSignalId.trim() || undefined,
+      limit: 50,
+    }),
+    [auditEventType, auditTraceId, auditSignalId]
+  )
+  const { data: events, refetch: refetchEvents, isFetching: isEventsFetching } =
+    useCryptoRiskEvents(auditFilters)
   const {
     updateBudget,
     isPending: isBudgetPending,
@@ -423,6 +436,50 @@ export function CryptoRiskOps() {
         <section className="rounded-md border border-gray-700 bg-gray-800/40">
           <div className="border-b border-gray-700 px-4 py-3">
             <h2 className="text-sm font-semibold text-gray-200">Audit Stream</h2>
+          </div>
+          <div className="grid gap-3 border-b border-gray-700 p-4 md:grid-cols-[1fr_1fr_1fr_auto]">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Event</span>
+              <select
+                value={auditEventType}
+                onChange={event => setAuditEventType(event.target.value)}
+                className="h-10 w-full rounded-md border border-gray-700 bg-gray-950 px-3 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              >
+                <option value="">All</option>
+                <option value="crypto_risk.pre_trade_rejected">Pre-trade Rejected</option>
+                <option value="crypto_risk.budget_updated">Budget Updated</option>
+                <option value="crypto_risk.probe_run">Probe Run</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Trace</span>
+              <input
+                value={auditTraceId}
+                onChange={event => setAuditTraceId(event.target.value)}
+                className="h-10 w-full rounded-md border border-gray-700 bg-gray-950 px-3 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Signal</span>
+              <input
+                value={auditSignalId}
+                onChange={event => setAuditSignalId(event.target.value)}
+                className="h-10 w-full rounded-md border border-gray-700 bg-gray-950 px-3 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditEventType('')
+                  setAuditTraceId('')
+                  setAuditSignalId('')
+                }}
+                className="h-10 rounded-md bg-gray-800 px-3 text-sm font-medium text-gray-300 hover:bg-gray-700"
+              >
+                Clear
+              </button>
+            </div>
           </div>
           <div className="max-h-[420px] overflow-auto">
             <table className="min-w-full text-sm">

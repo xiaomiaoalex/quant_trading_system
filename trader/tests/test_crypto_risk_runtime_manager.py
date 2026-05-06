@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,6 +10,7 @@ from trader.api.crypto_risk_runtime import (
     CryptoRiskRuntimeConfig,
     CryptoRiskRuntimeManager,
 )
+from trader.core.application.risk_engine import RejectionReason, RiskCheckResult
 from trader.core.domain.models.crypto_risk import (
     CryptoAccountRisk,
     CryptoInstrumentSpec,
@@ -18,6 +19,8 @@ from trader.core.domain.models.crypto_risk import (
     CryptoRiskBudget,
     LeverageBracket,
 )
+from trader.core.domain.models.signal import Signal, SignalType
+from trader.storage.in_memory import get_storage
 
 
 class FakeRiskSource:
@@ -101,6 +104,12 @@ class ProbeRiskSource(FakeRiskSource):
     async def get_venue_health(self) -> str:
         self.calls.append("venue_health")
         return "HEALTHY"
+
+
+class RejectingRiskSource(ProbeRiskSource):
+    async def get_positions(self, symbols: set[str] | None = None) -> list[CryptoPositionRisk]:
+        self.calls.append("positions")
+        return []
 
 
 def _component_builder(source: FakeRiskSource, check: MagicMock):
@@ -279,6 +288,69 @@ async def test_runtime_manager_probe_labels_demo_source_without_testnet() -> Non
 
 
 @pytest.mark.asyncio
+async def test_runtime_pre_trade_rejection_writes_market_audit_event(monkeypatch) -> None:
+    source = RejectingRiskSource()
+    setter = MagicMock()
+    manager = CryptoRiskRuntimeManager(pre_trade_setter=setter)
+    monkeypatch.setattr(
+        "trader.api.crypto_risk_runtime.BinanceFuturesRiskDataSource", lambda _c: source
+    )
+
+    await manager.configure(
+        broker=_risk_engine_broker(),
+        api_key="key",
+        secret_key="secret",
+        config=CryptoRiskRuntimeConfig(
+            enabled=True,
+            execution_env="demo",
+            futures_base_url="https://example.test",
+            base_symbols=("BTCUSDT",),
+            risk_budget=CryptoRiskBudget(symbol_notional_caps={"BTCUSDT": Decimal("100")}),
+        ),
+        updated_by="test",
+    )
+
+    check = setter.call_args.args[0]
+    result: RiskCheckResult = await check(
+        Signal(
+            signal_id="signal-audit-1",
+            strategy_name="momentum",
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            quantity=Decimal("1"),
+            price=Decimal("50000"),
+            metadata={
+                "strategy_id": "strategy-live-1",
+                "decision_trace_id": "decision-trace-1",
+                "trace_id": "legacy-trace-ignored",
+            },
+        )
+    )
+
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.CRYPTO_OPEN_ORDER_EXPOSURE
+    events = get_storage().list_events(
+        stream_key="risk:crypto",
+        event_type="crypto_risk.pre_trade_rejected",
+        trace_id="decision-trace-1",
+    )
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload["signal_id"] == "signal-audit-1"
+    assert payload["decision_trace_id"] == "decision-trace-1"
+    assert payload["strategy_id"] == "strategy-live-1"
+    assert payload["strategy_name"] == "momentum"
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["signal_type"] == "LONG"
+    assert payload["qty"] == "1"
+    assert payload["price"] == "50000"
+    assert payload["rejection_reason"] == "CRYPTO_OPEN_ORDER_EXPOSURE"
+    assert payload["risk_level"] == "HIGH"
+    assert payload["recommended_killswitch_level"] == 1
+    assert payload["details"]["symbol_cap"] == "100"
+
+
+@pytest.mark.asyncio
 async def test_runtime_manager_fail_closed_closes_existing_source() -> None:
     source = FakeRiskSource()
     manager = CryptoRiskRuntimeManager(
@@ -299,3 +371,13 @@ async def test_runtime_manager_fail_closed_closes_existing_source() -> None:
     assert status.wired is False
     assert status.last_error == "wiring failed"
     assert source.close_count == 1
+
+
+def _risk_engine_broker() -> MagicMock:
+    account = MagicMock()
+    account.total_equity = Decimal("100000")
+    account.available_cash = Decimal("100000")
+    broker = MagicMock()
+    broker.get_account = AsyncMock(return_value=account)
+    broker.get_positions = AsyncMock(return_value=[])
+    return broker

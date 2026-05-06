@@ -23,6 +23,16 @@ from trader.core.domain.models.events import (
     create_position_updated_event,
 )
 from trader.core.domain.models.money import Money
+from trader.core.domain.models.market_risk import (
+    AssetClass,
+    MarketAccountRisk,
+    MarketInstrumentSpec,
+    MarketOpenOrderRisk,
+    MarketPositionRisk,
+    MarketRiskAuditEvent,
+    MarketRiskBudget,
+    MarketRiskSnapshot,
+)
 from trader.core.domain.models.order import (
     Order,
     OrderSide,
@@ -37,6 +47,15 @@ from trader.core.domain.models.signal import Signal, SignalType
 __all__ = [
     # Money
     "Money",
+    # Market Risk
+    "AssetClass",
+    "MarketAccountRisk",
+    "MarketInstrumentSpec",
+    "MarketOpenOrderRisk",
+    "MarketPositionRisk",
+    "MarketRiskAuditEvent",
+    "MarketRiskBudget",
+    "MarketRiskSnapshot",
     # Order
     "Order",
     "OrderStatus",

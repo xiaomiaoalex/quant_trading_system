@@ -39,6 +39,13 @@ export interface CryptoRiskProbeRequest {
   requested_by: string
 }
 
+export interface CryptoRiskAuditFilters {
+  event_type?: string
+  trace_id?: string
+  signal_id?: string
+  limit?: number
+}
+
 export interface CryptoRiskProbeCheck {
   status: CryptoRiskProbeCheckStatus
   latency_ms: number

@@ -66,6 +66,9 @@ def _reset_global_test_state() -> None:
     from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.adapters.persistence.execution_repository import reset_execution_repository
     from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
+    from trader.adapters.persistence.market_risk_audit_repository import (
+        reset_market_risk_audit_repository,
+    )
     from trader.adapters.persistence.position_repository import reset_position_repository
     from trader.adapters.persistence.risk_repository import reset_risk_event_repository
     from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
@@ -85,6 +88,7 @@ def _reset_global_test_state() -> None:
     reset_order_ownership_registry()
     reset_execution_repository()
     reset_killswitch_repository()
+    reset_market_risk_audit_repository()
     reset_position_repository()
     reset_risk_event_repository()
     reset_runtime_state_repository()
