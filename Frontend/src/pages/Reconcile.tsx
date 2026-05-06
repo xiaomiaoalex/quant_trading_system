@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useReconcileReport, useDriftEvents, useTriggerReconciliation, useSSE } from '@/hooks'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { ReconcileSummaryCard, ReconcileDriftTable } from '@/components/reconcile'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError, isAPIError } from '@/api/client'
 import { reconcileKeys } from '@/hooks/useReconcile'
 
@@ -47,24 +48,17 @@ export function Reconcile() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold text-white">Reconciliation</h1>
-            {isFetching && <span className="text-xs text-gray-500">Refreshing...</span>}
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowTriggerConfirm(true)}
-              disabled={isTriggering}
-              className="rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 hover:bg-blue-900/50 disabled:opacity-50"
-            >
-              {isTriggering ? 'Triggering...' : 'Trigger Reconciliation'}
-            </button>
-            <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="Reconciliation">
+        {isFetching && <span className="text-xs text-accent-3">Refreshing...</span>}
+        <button
+          onClick={() => setShowTriggerConfirm(true)}
+          disabled={isTriggering}
+          className="rounded-md bg-blue-900/30 px-4 py-2 text-sm font-medium text-blue-300 transition-colors hover:bg-blue-900/50 disabled:opacity-50"
+        >
+          {isTriggering ? 'Triggering...' : 'Trigger Reconciliation'}
+        </button>
+        <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
+      </PageHeader>
 
       <div className="p-6 space-y-6">
         {successMsg && (
