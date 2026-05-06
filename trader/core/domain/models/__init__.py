@@ -22,7 +22,6 @@ from trader.core.domain.models.events import (
     create_order_filled_event,
     create_position_updated_event,
 )
-from trader.core.domain.models.money import Money
 from trader.core.domain.models.market_risk import (
     AssetClass,
     MarketAccountRisk,
@@ -33,6 +32,7 @@ from trader.core.domain.models.market_risk import (
     MarketRiskBudget,
     MarketRiskSnapshot,
 )
+from trader.core.domain.models.money import Money
 from trader.core.domain.models.order import (
     Order,
     OrderSide,
