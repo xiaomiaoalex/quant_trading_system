@@ -33,6 +33,7 @@ PostgresAuditLogStorage - PostgreSQL AI审计日志存储
     - idx_ai_audit_created: (created_at DESC)
     - idx_ai_audit_entry_id: (entry_id)
 """
+
 from __future__ import annotations
 
 import json
@@ -40,7 +41,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from trader.core.domain.models.events import EventType
 from insight.ai_audit_log import (
     AIAuditLog,
     AuditEntry,
@@ -50,6 +50,7 @@ from insight.ai_audit_log import (
     AuditStatus,
 )
 
+from trader.core.domain.models.events import EventType
 
 # ==================== 类型映射 ====================
 
@@ -86,29 +87,30 @@ _STR_TO_EVENT = {v: k for k, v in _EVENT_TO_STR.items()}
 
 # ==================== Postgres 实现 ====================
 
+
 class PostgresAuditLogStorage:
     """
     PostgreSQL AI 审计日志存储
-    
+
     实现 AuditLogStorage 协议，将审计日志持久化到 PostgreSQL。
-    
+
     依赖：
     - 需要 PostgreSQL 数据库
     - 需要创建 ai_audit_log 表
     """
-    
+
     def __init__(
         self,
         pool_or_connection: Any = None,
     ) -> None:
         """
         初始化 PostgresAuditLogStorage
-        
+
         Args:
             pool_or_connection: 数据库连接池或连接对象
         """
         self._pool = pool_or_connection
-    
+
     def _entry_to_row(self, entry: AuditEntry) -> dict:
         """将 AuditEntry 转换为数据库行"""
         return {
@@ -123,14 +125,16 @@ class PostgresAuditLogStorage:
             "code_hash": entry.code_hash,
             "llm_backend": entry.llm_backend,
             "llm_model": entry.llm_model,
-            "execution_result": json.dumps(entry.execution_result) if entry.execution_result else None,
+            "execution_result": (
+                json.dumps(entry.execution_result) if entry.execution_result else None
+            ),
             "approver": entry.approver,
             "approval_comment": entry.approval_comment,
             "metadata": json.dumps(entry.metadata) if entry.metadata else None,
             "created_at": entry.created_at.isoformat() if entry.created_at else None,
             "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
         }
-    
+
     def _row_to_entry(self, row: dict) -> AuditEntry:
         """将数据库行转换为 AuditEntry"""
         return AuditEntry(
@@ -145,25 +149,35 @@ class PostgresAuditLogStorage:
             code_hash=row["code_hash"] or "",
             llm_backend=row["llm_backend"] or "",
             llm_model=row["llm_model"] or "",
-            execution_result=json.loads(row["execution_result"]) if row["execution_result"] else None,
+            execution_result=(
+                json.loads(row["execution_result"]) if row["execution_result"] else None
+            ),
             approver=row["approver"],
             approval_comment=row["approval_comment"],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.now(timezone.utc),
-            updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.now(timezone.utc),
+            created_at=(
+                datetime.fromisoformat(row["created_at"])
+                if row["created_at"]
+                else datetime.now(timezone.utc)
+            ),
+            updated_at=(
+                datetime.fromisoformat(row["updated_at"])
+                if row["updated_at"]
+                else datetime.now(timezone.utc)
+            ),
         )
-    
+
     async def save(self, entry: AuditEntry) -> None:
         """
         保存审计条目
-        
+
         使用 INSERT ... ON CONFLICT DO UPDATE 实现幂等写入。
         """
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         row = self._entry_to_row(entry)
-        
+
         query = """
             INSERT INTO ai_audit_log (
                 entry_id, strategy_id, strategy_name, version,
@@ -181,41 +195,41 @@ class PostgresAuditLogStorage:
                 updated_at = EXCLUDED.updated_at,
                 metadata = EXCLUDED.metadata
         """
-        
+
         async with self._pool.acquire() as conn:
             await conn.execute(query, row)
-    
+
     async def get(self, entry_id: str) -> Optional[AuditEntry]:
         """获取审计条目"""
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         query = "SELECT * FROM ai_audit_log WHERE entry_id = $1"
-        
+
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(query, entry_id)
-        
+
         if row is None:
             return None
-        
+
         return self._row_to_entry(dict(row))
-    
+
     async def get_by_strategy(self, strategy_id: str) -> List[AuditEntry]:
         """获取策略的所有版本"""
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         query = """
             SELECT * FROM ai_audit_log
             WHERE strategy_id = $1
             ORDER BY created_at DESC
         """
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, strategy_id)
-        
+
         return [self._row_to_entry(dict(row)) for row in rows]
-    
+
     async def list_by_status(
         self,
         status: AuditStatus,
@@ -224,7 +238,7 @@ class PostgresAuditLogStorage:
         """按状态查询"""
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         status_str = _STATUS_TO_STR.get(status, status.value)
         query = """
             SELECT * FROM ai_audit_log
@@ -232,12 +246,12 @@ class PostgresAuditLogStorage:
             ORDER BY created_at DESC
             LIMIT $2
         """
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, status_str, limit)
-        
+
         return [self._row_to_entry(dict(row)) for row in rows]
-    
+
     async def list_by_time_range(
         self,
         start: datetime,
@@ -247,33 +261,33 @@ class PostgresAuditLogStorage:
         """按时间范围查询"""
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         query = """
             SELECT * FROM ai_audit_log
             WHERE created_at >= $1 AND created_at <= $2
             ORDER BY created_at DESC
             LIMIT $3
         """
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, start.isoformat(), end.isoformat(), limit)
-        
+
         return [self._row_to_entry(dict(row)) for row in rows]
-    
+
     async def list_recent(self, limit: int = 100) -> List[AuditEntry]:
         """获取最近的审计记录"""
         if self._pool is None:
             raise RuntimeError("Database pool not initialized")
-        
+
         query = """
             SELECT * FROM ai_audit_log
             ORDER BY created_at DESC
             LIMIT $1
         """
-        
+
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, limit)
-        
+
         return [self._row_to_entry(dict(row)) for row in rows]
 
 
@@ -324,32 +338,34 @@ COMMENT ON COLUMN ai_audit_log.metadata IS 'Extended metadata as JSON';
 
 # ==================== 工厂函数 ====================
 
+
 async def create_postgres_audit_storage(
     connection_string: str | None = None,
 ) -> PostgresAuditLogStorage:
     """
     创建 PostgreSQL 审计存储
-    
+
     Args:
         connection_string: PostgreSQL 连接字符串
-        
+
     Returns:
         PostgresAuditLogStorage 实例
     """
     import asyncpg
-    
+
     if connection_string is None:
         # 从环境变量获取
         import os
+
         connection_string = os.environ.get("POSTGRES_CONNECTION_STRING")
-    
+
     if connection_string is None:
         raise ValueError("PostgreSQL connection string not provided")
-    
+
     pool = await asyncpg.create_pool(connection_string, min_size=1, max_size=10)
-    
+
     # 创建表（如果不存在）
     async with pool.acquire() as conn:
         await conn.execute(MIGRATION_SQL)
-    
+
     return PostgresAuditLogStorage(pool_or_connection=pool)

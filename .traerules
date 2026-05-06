@@ -1,5 +1,23 @@
 # .traerules — quant_trading_system 工程规则
-# 版本：v2.0（移除 MCP，双 AI 协作模式已废弃）
+# 版本：v2.1（与 AGENTS.md / CLAUDE.md 同步）
+
+> 本文件是 Trae/Kilo 等工具入口的工程规则。核心架构、接口契约、测试与文档闭环要求必须与
+> `AGENTS.md`、`CLAUDE.md` 保持同步；若任一入口更新，必须检查另外两个入口是否需要同步。
+
+---
+
+## 零、任务处理原则与项目扫描
+
+1. **复杂任务追踪**：面对多步骤任务，必须先创建 TODO 列表，并在执行过程中实时更新状态。
+2. **项目扫描**：开始编码前先扫描 `trader/`、`trader/adapters/`、`trader/api/`、`trader/services/`、`trader/tests/`、`Frontend/` 与关键配置。
+3. **上下文对齐**：修改代码前优先检索 `trader/core/` 下相关逻辑，确保不违反确定性原则。
+4. **架构图同步**：涉及层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环或运行拓扑变更时，先查阅并按需更新 `docs/PROJECT_ARCHITECTURE.md`。
+5. **接口契约优先**：涉及函数签名、DTO、事件 Schema、API 字段、跨层调用或命名重构时，先查阅并按需更新 `docs/INTERFACE_CONTRACTS.md`。
+6. **文档闭环**：任何功能性变更必须同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md` 和 `docs/EXPERIENCE_SUMMARY.md`。
+7. **文档新鲜度**：影响当前状态、下一步计划、阶段完成度、优先级判断的任务，必须同步刷新相关计划/状态文档。
+8. **TDD 防幻觉流程**：涉及代码行为变更时，必须优先写出能复现目标行为/缺陷的测试；测试必须基于真实已检索接口或先更新接口契约，禁止先臆造实现 API。
+
+未理解项目结构和主数据流前，不直接大改。
 
 ---
 
@@ -10,20 +28,51 @@
 3. **Fail-Closed**：无法确认一致性时，进入 DEGRADED_MODE 并触发 KillSwitch，禁止猜测继续。禁止裸 `except: pass`。
 4. **确定性并发**：同一 `cl_ord_id` 的并发处理必须加锁（hashed lock / actor 分区），不依赖时序假设。
 5. **Broker 是真相源**：WS 为低延迟驱动，REST 为纠偏；重连后必须先做 REST Alignment 再恢复业务。
+6. **接口契约一致**：函数签名、DTO、事件 Schema、API 字段、跨层调用和命名重构必须遵守 `docs/INTERFACE_CONTRACTS.md`。外部字段只能在 Adapter/API 边界转换。
 
 ---
 
-## 二、架构边界（禁止越界）
+## 二、常用指令
 
-| 平面 | 允许 | 禁止 |
-|------|------|------|
-| **Core** (`core/`) | 领域模型、状态机、纯计算 | 任何 IO、网络、DB、环境变量、sleep |
-| **Adapter** (`adapters/`) | WS/REST、限流退避、双驱动合并、对齐恢复 | 直接修改 Core 状态（只能发 canonical events） |
-| **Control** (`api/`, `services/`) | 策略注册、风控配置、KillSwitch、审计 | 绕过 Risk/Policy 直接下单 |
+### 环境配置与检查
+
+- **安装依赖**: `pip install -r trader/requirements-ci.txt`
+- **类型检查**: `mypy trader/`
+- **格式化**: `black trader/ --line-length 100` | `isort trader/ --profile black`
+
+### 测试执行
+
+- **全量测试**: `python -m pytest -q trader/tests/ --tb=short`
+- **P0 回归集**: `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short`
+- **Postgres 集成测试**:
+  ```bash
+  docker compose up -d
+  POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py --tb=short
+  ```
+
+### 启动 API
+
+- `uvicorn trader.api.main:app --port 8080`
 
 ---
 
-## 三、KillSwitch 级别
+## 三、五层架构边界（禁止越界）
+
+本系统采用五层平面架构，严禁跨层直接调用或状态污染。
+
+| 平面 | 路径 | 允许 | 禁止 |
+|------|------|------|------|
+| **Core Plane** | `trader/core/` | 领域模型、OMS、RiskEngine、DeterministicLayer、纯计算 | 任何 IO、网络、DB、环境变量、sleep、外部原始字段名 |
+| **Adapter Plane** | `trader/adapters/` | WS/REST、限流退避、数据清洗、Public/Private Stream 物理隔离、REST Alignment | 直接修改 Core 状态、共享 Public/Private Stream 状态 |
+| **Persistence Plane** | `trader/adapters/persistence/` | append-only event log、PG risk repository、投影读模型 | 绕过事件溯源语义直接覆盖真相源 |
+| **Policy Plane** | `trader/core/application/`, `trader/services/risk.py` | KillSwitch、风险规则、TimeWindow、决策策略 | Fail-open、绕过 KillSwitch 升级语义 |
+| **Control Plane** | `trader/api/`, `trader/services/` | FastAPI、生命周期管理、策略注册、全局风险触发 | 绕过 Risk/Policy/Core 直接下单 |
+
+数据流主路径：Binance WS/REST → Adapter 清洗 → OMS/Core → Persistence/Event Log → API/Frontend。
+
+---
+
+## 四、KillSwitch 级别
 
 | 级别 | 名称 | 行为 |
 |------|------|------|
@@ -32,11 +81,11 @@
 | L2 | CANCEL_ALL_AND_HALT | 撤所有挂单，禁止交易 |
 | L3 | LIQUIDATE_AND_DISCONNECT | 强平所有持仓，断开 Broker |
 
-Adapter 进入 DEGRADED_MODE 时，必须通过 Control Plane API 触发全局 KillSwitch L1。
+所有 KillSwitch 升级在当前 session 内不可逆（Fail-Closed）。Adapter 进入 DEGRADED_MODE 时，必须通过 Control Plane 触发全局 KillSwitch L1 或更高等级。
 
 ---
 
-## 四、开发流程（Kilo 插件多角色模式）
+## 五、开发流程（Kilo 插件多角色模式）
 
 ### 分支命名规范
 
@@ -86,7 +135,7 @@ test(task-1.3): 补充深度检查滑点估算单测
 
 ---
 
-## 五、Git 操作规则
+## 六、Git 操作规则
 
 **标准 Git 工作流**：
 ```bash
@@ -108,17 +157,56 @@ git push -u origin feature/task-1.5/monitor-alert
 
 ---
 
-## 六、代码规范
+## 七、代码规范
 
-- **类型注解**：所有函数签名和类属性必须有类型注解，使用 `str | None` 风格（Python 3.10+）。
+- **Language**：Python 3.12.5，async-first。
+- **类型注解**：所有函数签名和类属性必须有严格类型注解，使用 `str | None` 风格。
 - **Async-First**：统一 `asyncio`，禁止在异步上下文使用阻塞网络库（用 aiohttp/httpx async）。锁用 `asyncio.Lock`。
 - **格式**：Black（line-length=100）+ isort（black profile）。
+- **Classes**：优先使用 `@dataclass(slots=True)`。
+- **Concurrency**：仅使用 `asyncio.Lock`、hashed lock、actor/queue 模式，不依赖 asyncio 调度顺序。
 - **可观测性**：外部消息必须携带 `local_receive_ts_ms`、`exchange_event_ts_ms`、`seq`、`source`；关键状态迁移打结构化日志含 `trace_id`。
+- **接口契约**：涉及函数签名、DTO、事件 Schema、API 字段、跨层调用或命名重构时，先更新 `docs/INTERFACE_CONTRACTS.md`，再改类型定义和实现。
 - **输出纪律**：收到编码任务直接输出可运行代码 + 必要注释 + 单测，不复述需求。
 
 ---
 
-## 七、AI 集成约束
+## 八、测试规范
+
+AI 生成的代码必须伴随高密度测试覆盖，无法被测试验证的代码不得合并。
+
+### TDD 开发流程（防止 AI 幻觉）
+
+- **Red**：先检索现有接口、类型和调用点，再编写失败测试。测试必须失败在目标行为上，而不是 import error、拼写错误或虚构接口。
+- **Green**：只写让测试通过的最小实现，优先复用既有模块和契约，不新增无证据抽象。
+- **Refactor**：测试通过后再做小步重构，并保持核心不变性和接口契约不变。
+- **No Hallucinated API**：如果测试需要的新函数、字段或 DTO 尚不存在，必须先更新 `docs/INTERFACE_CONTRACTS.md` 并说明兼容策略，再修改测试和实现。
+- **Verification**：至少运行新增/修改测试；涉及共享核心逻辑时，继续运行相关回归或 P0 回归集。
+
+### 单元测试
+
+- 覆盖所有状态迁移路径、合法/非法迁移拒绝、终态不可覆盖。
+- 覆盖空值、零值、最大值、负数、重复 ID、乱序序列号等边界。
+- 覆盖异常抛出、Fail-Closed、降级触发、幂等性和并发安全。
+- 使用 `trader/tests/fakes/` 的 fake_clock / fake_http / fake_websocket，严禁在单测中访问网络。
+- 时间相关测试使用 fake_clock，禁止 `time.sleep`。
+
+### 集成测试
+
+- 覆盖 PG event_store 幂等 append、乱序读取、快照恢复。
+- 覆盖 REST Alignment 重连后恢复 OMS 状态。
+- 覆盖风险仓储 PG 写入、读取、并发幂等。
+
+### E2E 测试
+
+- 正常闭环：下单 → 成交回报 → OMS FILLED → Position 更新 → 事件写入。
+- 失败回退：DEGRADED_MODE → KillSwitch L1 → 新开仓拒绝。
+- 重连恢复：WS 断线 → 重连 → REST Alignment → OMS 与交易所一致。
+- KillSwitch 升级：L0 → L1 → L2 触发条件与行为。
+
+---
+
+## 九、AI 集成约束
 
 - AI 只做建议/诊断/分析，不得直接下单或绕过 Risk/Policy/Core。
 - 高风险动作（风控阈值变更、KillSwitch 降级）必须 Human-in-the-Loop 确认。
@@ -127,7 +215,20 @@ git push -u origin feature/task-1.5/monitor-alert
 
 ---
 
-## 八、经验查询规范
+## 十、工程纪律与排查规则
+
+- 改多个文件时，先说明每个文件为什么要改。
+- 大改动前先给方案、范围、风险、验证方式。
+- 能局部修复就不要全局翻修。
+- 涉及规范变更时，先改文档，再改代码。
+- 涉及代码行为变更时，先按 TDD 流程写失败测试，再做最小实现和重构。
+- 涉及前后端联调时，先画出最小数据流，并标注每个节点的字段名、类型、实际值。
+- 监控页面数据异常时，按 Frontend 页面 → hook → API response → Service 聚合 → 领域计算 → OMS 原始数据来源排查。
+- Position、Exposure、Daily PnL、Unrealized PnL 必须明确输入数据、计算公式、更新时间点和展示口径。
+
+---
+
+## 十一、经验查询规范
 
 **在执行以下操作前，必须先查询经验文档** (`docs/EXPERIENCE_SUMMARY.md`)：
 
@@ -150,63 +251,48 @@ python scripts/get_experience.py <keyword>
 
 ---
 
-## 九、文档更新规则（开发后必须执行）
+## 十二、文档更新规则（开发后必须执行）
 
-### 9.1 PROJECT_STATUS.md 滚动式追踪
+完成任务后，必须确保 `.traerules`、`AGENTS.md`、`CLAUDE.md` 的公共规则不漂移。
 
-**更新时机**：每次完成开发任务提交前
+### 12.0 `docs/PROJECT_ARCHITECTURE.md`
 
-**追踪格式**：
-```
-## 本次开发记录
+任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新架构图文档。图文必须反映当前仓库现状，禁止让架构图停留在旧阶段。
 
-### 开发前状态
-- 记录本次开发开始前的状态（issue、待办事项等）
+### 12.1 `docs/INTERFACE_CONTRACTS.md`
 
-### 本次开发动作 (YYYY-MM-DD)
-- 具体完成了哪些工作
-- 新增/修改的文件
-- 解决的 issue
+涉及函数签名、DTO、事件 Schema、API 字段、跨层调用或命名重构时，必须先更新接口契约，明确标准字段名、旧字段兼容策略、转换边界和对应测试。
 
-### 下一步计划 (依据 PLAN.md)
-- 根据 PLAN.md 记录下一步开发动作
-```
+### 12.2 `PROJECT_STATUS.md`
 
-### 9.2 EXPERIENCE_SUMMARY.md 经验积累
+每次完成开发任务后更新：
+- 记录开发前后状态对比
+- 将 Issue 从“待确认”移至“已验证”
+- 更新最后操作时间戳
+- 如改变下一步优先级、阶段目标或完成度判断，同步更新对应段落
 
-**更新时机**：完成以下类型任务时
-- 修复了重要bug（尤其是复现条件复杂、耗时长的）
-- 发现并解决了反复出现的问题
-- 调试过程中遇到的非预期行为及其解决方案
-- 架构决策或重大设计变更
-- 外部API集成（如本项目中的 CoinGecko、Binance API）
+### 12.3 `docs/EXPERIENCE_SUMMARY.md`
 
-**经验文档格式**：
-```markdown
-### 问题名称
+记录本次开发中的踩坑记录、设计模式、可复用经验和反复出现的问题。
 
-**问题描述**：...
-**问题原因**：...
-**解决方案**：...
-**经验**：...
-```
+### 12.4 `DEVELOPMENT_LOG.md`
 
-### 9.3 提交要求
+追加本次开发记录，说明背景、决策、改动、验证、风险/遗留和关联文档。只追加，不重写历史；若后续推翻前一条判断，在新记录中说明。
 
-**文档更新必须作为提交的一部分**，不得单独提交文档更新。
+### 12.5 计划文档新鲜度
 
-**提交流程**：
-```bash
-# 1. 完成代码和测试
-git add .
+涉及排期、阶段切换、优先级重排时，必须同步更新 `PLAN.md` 或独立阶段计划文档，确保只有一个当前执行入口。
 
-# 2. 同时添加文档更新
-git add PROJECT_STATUS.md docs/EXPERIENCE_SUMMARY.md
+### 12.6 提交要求
 
-# 3. 一次性提交（代码+文档）
-git commit -m "feat(task-x): 完成功能开发
+文档更新必须作为提交的一部分，不得让代码、状态、计划和经验文档脱节。
 
-- 新增 xxx 功能
-- 更新 PROJECT_STATUS.md
-- 添加经验总结"
-```
+---
+
+## 十三、红线操作
+
+- 删除文件、目录、git 历史前必须先问用户。
+- 修改 `.env`、密钥、CI/CD 配置前必须先问用户。
+- 数据库 schema 变更前必须先问用户。
+- `git push`、`git rebase`、`git reset --hard`、强制推送前必须先问用户。
+- 安装新的全局依赖、修改系统配置、生产部署、公开发布、真实账户操作前必须先问用户。

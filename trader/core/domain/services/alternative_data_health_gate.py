@@ -11,12 +11,13 @@ Functions:
 
 This module is IO-free (Core Plane constraint).
 """
+
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
-import math
 
 
 class DataSourceType(Enum):
@@ -29,48 +30,48 @@ class DataSourceType(Enum):
 
 
 class DataHealthLevel(Enum):
-    HEALTHY = "healthy"     # All metrics acceptable
-    DEGRADED = "degraded"   # Some degradation, reduced confidence
+    HEALTHY = "healthy"  # All metrics acceptable
+    DEGRADED = "degraded"  # Some degradation, reduced confidence
     UNHEALTHY = "unhealthy"  # Significant issues, heavily discounted
-    STALE = "stale"         # Data too old, should block new positions
+    STALE = "stale"  # Data too old, should block new positions
     UNAVAILABLE = "unavailable"  # No data, fail-closed
 
 
 @dataclass(frozen=True, slots=True)
 class DataHealthMetrics:
     source: DataSourceType
-    freshness_seconds: float | None       # Seconds since last update
-    coverage_pct: float | None            # % of expected data points available
-    delay_seconds: float | None            # Known latency in seconds
-    source_quality_score: float | None     # 0.0 to 1.0 quality score
+    freshness_seconds: float | None  # Seconds since last update
+    coverage_pct: float | None  # % of expected data points available
+    delay_seconds: float | None  # Known latency in seconds
+    source_quality_score: float | None  # 0.0 to 1.0 quality score
 
 
 @dataclass(frozen=True, slots=True)
 class DataHealthThresholds:
-    max_freshness_seconds: float = 600.0      # 10 min for most crypto data
-    min_coverage_pct: float = 0.80           # 80% coverage minimum
-    max_delay_seconds: float = 120.0          # 2 min max delay
-    min_quality_score: float = 0.5           # 0.5 quality minimum
+    max_freshness_seconds: float = 600.0  # 10 min for most crypto data
+    min_coverage_pct: float = 0.80  # 80% coverage minimum
+    max_delay_seconds: float = 120.0  # 2 min max delay
+    min_quality_score: float = 0.5  # 0.5 quality minimum
 
 
 @dataclass(frozen=True, slots=True)
 class DataHealthConfig:
     thresholds: DataHealthThresholds
-    staleness_grace_seconds: float = 60.0     # Additional grace period before blocking
+    staleness_grace_seconds: float = 60.0  # Additional grace period before blocking
     fail_closed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class DataReliabilityResult:
     health_level: DataHealthLevel
-    reliability_coef: float           # 0.0 to 1.0 for risk_sizer
+    reliability_coef: float  # 0.0 to 1.0 for risk_sizer
     freshness_coef: float
     coverage_coef: float
     delay_coef: float
     quality_coef: float
-    is_blocked: bool                   # True if new positions should be blocked
+    is_blocked: bool  # True if new positions should be blocked
     reason: str
-    stale_data_sources: list[str]      # List of sources in STALE or worse
+    stale_data_sources: list[str]  # List of sources in STALE or worse
 
 
 class AlternativeDataHealthGate:
@@ -86,9 +87,7 @@ class AlternativeDataHealthGate:
             config = DataHealthConfig(thresholds=DataHealthThresholds())
         self._config = config
 
-    def evaluate(
-        self, metrics: list[DataHealthMetrics]
-    ) -> DataReliabilityResult:
+    def evaluate(self, metrics: list[DataHealthMetrics]) -> DataReliabilityResult:
         """
         Evaluate a list of data source metrics and return combined reliability.
 
@@ -149,9 +148,7 @@ class AlternativeDataHealthGate:
             if source_level_for_none is not None:
                 source_level = source_level_for_none
             else:
-                source_level = self._determine_source_level(
-                    freshness, coverage, delay, quality
-                )
+                source_level = self._determine_source_level(freshness, coverage, delay, quality)
 
             if source_level == DataHealthLevel.STALE:
                 stale_sources.append(f"{m.source.value}:stale")
@@ -163,7 +160,10 @@ class AlternativeDataHealthGate:
 
         # Use geometric mean of per-source combined values for consistency
         # Use log-space computation to avoid float underflow for very small values
-        combined_values = [f * c * d * q for f, c, d, q in zip(freshness_coefs, coverage_coefs, delay_coefs, quality_coefs)]
+        combined_values = [
+            f * c * d * q
+            for f, c, d, q in zip(freshness_coefs, coverage_coefs, delay_coefs, quality_coefs)
+        ]
         n = len(combined_values)
         if n == 0:
             reliability_coef = 0.0

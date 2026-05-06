@@ -9,6 +9,7 @@ Responsibilities:
 - Opposing signal netting or mutual exclusion
 - Output approved/clipped/rejected with reason
 """
+
 from __future__ import annotations
 
 import math
@@ -58,33 +59,35 @@ class CapitalAllocatorConfig:
     def __post_init__(self) -> None:
         # Validate thresholds are non-negative
         if self.total_exposure_budget < 0:
-            raise ValueError(f"total_exposure_budget must be >= 0, got {self.total_exposure_budget}")
+            raise ValueError(
+                f"total_exposure_budget must be >= 0, got {self.total_exposure_budget}"
+            )
         if self.net_exposure_limit < 0:
             raise ValueError(f"net_exposure_limit must be >= 0, got {self.net_exposure_limit}")
         if self.same_direction_budget < 0:
-            raise ValueError(f"same_direction_budget must be >= 0, got {self.same_direction_budget}")
+            raise ValueError(
+                f"same_direction_budget must be >= 0, got {self.same_direction_budget}"
+            )
         if self.min_trade_size < 0:
             raise ValueError(f"min_trade_size must be >= 0, got {self.min_trade_size}")
         if self.max_request_size is not None and self.max_request_size < 0:
             raise ValueError(f"max_request_size must be >= 0, got {self.max_request_size}")
         if not (0.0 <= self.confidence_threshold <= 1.0):
-            raise ValueError(f"confidence_threshold must be in [0, 1], got {self.confidence_threshold}")
+            raise ValueError(
+                f"confidence_threshold must be in [0, 1], got {self.confidence_threshold}"
+            )
 
 
 class PortfolioStateProviderPort(Protocol):
     """Port for providing current portfolio state to the allocator."""
 
-    def get_net_exposure(self, symbol: str | None = None) -> float:
-        ...
+    def get_net_exposure(self, symbol: str | None = None) -> float: ...
 
-    def get_total_exposure(self) -> float:
-        ...
+    def get_total_exposure(self) -> float: ...
 
-    def get_exposure_by_side(self, side: Literal["LONG", "SHORT"]) -> float:
-        ...
+    def get_exposure_by_side(self, side: Literal["LONG", "SHORT"]) -> float: ...
 
-    def get_position_size(self, symbol: str, side: Literal["LONG", "SHORT"]) -> float:
-        ...
+    def get_position_size(self, symbol: str, side: Literal["LONG", "SHORT"]) -> float: ...
 
 
 class SimplePortfolioState:
@@ -195,7 +198,10 @@ class CapitalAllocator:
                 limiting_factor="min_trade_size",
             )
 
-        if self._config.max_request_size is not None and request.requested_size > self._config.max_request_size:
+        if (
+            self._config.max_request_size is not None
+            and request.requested_size > self._config.max_request_size
+        ):
             return AllocationResult(
                 decision=AllocationDecision.REJECTED,
                 approved_size=0.0,

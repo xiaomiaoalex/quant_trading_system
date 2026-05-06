@@ -14,13 +14,14 @@ StrategyRuntimeOrchestrator - 策略运行时编排服务
 - 不允许跨层污染
 - 使用 asyncio.TaskGroup 管理任务，确保资源正确释放
 """
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from trader.adapters.binance.public_stream import MarketEvent
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 class RuntimeStatus:
     """运行时状态"""
+
     IDLE = "IDLE"
     RUNNING = "RUNNING"
     STOPPING = "STOPPING"
@@ -44,6 +46,7 @@ class RuntimeStatus:
 @dataclass(slots=True)
 class RuntimeContext:
     """策略运行时上下文"""
+
     strategy_id: str
     symbol: str
     status: str = RuntimeStatus.IDLE
@@ -150,8 +153,7 @@ class StrategyRuntimeOrchestrator:
         if now - self._last_diag_log_ts > 10.0:
             self._last_diag_log_ts = now
             running_contexts = [
-                ctx for ctx in self._contexts.values()
-                if ctx.status == RuntimeStatus.RUNNING
+                ctx for ctx in self._contexts.values() if ctx.status == RuntimeStatus.RUNNING
             ]
             pub_running = False
             try:
@@ -194,9 +196,7 @@ class StrategyRuntimeOrchestrator:
             return data["symbol"]
         return None
 
-    def _convert_to_market_data(
-        self, event: MarketEvent, symbol: str
-    ) -> Optional[MarketData]:
+    def _convert_to_market_data(self, event: MarketEvent, symbol: str) -> Optional[MarketData]:
         """
         将 MarketEvent 转换为 MarketData
 
@@ -219,9 +219,7 @@ class StrategyRuntimeOrchestrator:
                     data_type=MarketDataType.TRADE,
                     price=price,
                     volume=volume,
-                    timestamp=datetime.fromtimestamp(
-                        event.exchange_ts_ms / 1000, tz=timezone.utc
-                    ),
+                    timestamp=datetime.fromtimestamp(event.exchange_ts_ms / 1000, tz=timezone.utc),
                     metadata={
                         "is_buyer_maker": data.get("m", False),
                         "trade_id": data.get("t"),
@@ -262,9 +260,7 @@ class StrategyRuntimeOrchestrator:
                     price=Decimal(str(data.get("b", ["0"])[0] if data.get("b") else "0")),
                     bid=Decimal(str(data.get("b", ["0"])[0] if data.get("b") else "0")),
                     ask=Decimal(str(data.get("a", ["0"])[0] if data.get("a") else "0")),
-                    timestamp=datetime.fromtimestamp(
-                        event.exchange_ts_ms / 1000, tz=timezone.utc
-                    ),
+                    timestamp=datetime.fromtimestamp(event.exchange_ts_ms / 1000, tz=timezone.utc),
                 )
 
             elif event_type == "24hrTicker" or event_type == "ticker":
@@ -275,9 +271,7 @@ class StrategyRuntimeOrchestrator:
                     data_type=MarketDataType.TICKER,
                     price=price,
                     volume=volume,
-                    timestamp=datetime.fromtimestamp(
-                        event.exchange_ts_ms / 1000, tz=timezone.utc
-                    ),
+                    timestamp=datetime.fromtimestamp(event.exchange_ts_ms / 1000, tz=timezone.utc),
                 )
 
             else:
@@ -287,9 +281,7 @@ class StrategyRuntimeOrchestrator:
                     data_type=MarketDataType.KLINE,
                     price=Decimal(str(data.get("c", data.get("price", "0")))),
                     volume=Decimal(str(data.get("v", data.get("volume", "0")))),
-                    timestamp=datetime.fromtimestamp(
-                        event.exchange_ts_ms / 1000, tz=timezone.utc
-                    ),
+                    timestamp=datetime.fromtimestamp(event.exchange_ts_ms / 1000, tz=timezone.utc),
                 )
 
         except Exception as e:
@@ -306,7 +298,8 @@ class StrategyRuntimeOrchestrator:
         """
         async with self._contexts_lock:
             running_contexts = [
-                ctx for ctx in self._contexts.values()
+                ctx
+                for ctx in self._contexts.values()
                 if ctx.status == RuntimeStatus.RUNNING and ctx.symbol == symbol
             ]
 
@@ -326,16 +319,18 @@ class StrategyRuntimeOrchestrator:
 
                 # 发布 tick 事件
                 if self._event_callback:
-                    self._event_callback(ctx.strategy_id, "strategy.tick", {
-                        "symbol": symbol,
-                        "tick_count": ctx.tick_count,
-                        "has_signal": signal is not None,
-                    })
+                    self._event_callback(
+                        ctx.strategy_id,
+                        "strategy.tick",
+                        {
+                            "symbol": symbol,
+                            "tick_count": ctx.tick_count,
+                            "has_signal": signal is not None,
+                        },
+                    )
 
             except Exception as e:
-                logger.error(
-                    f"[Orchestrator] Tick error for {ctx.strategy_id}: {e}"
-                )
+                logger.error(f"[Orchestrator] Tick error for {ctx.strategy_id}: {e}")
 
                 # runner.tick() 未捕获的异常，手动递增 info.error_count
                 info = self._runner.get_status(ctx.strategy_id)
@@ -350,9 +345,7 @@ class StrategyRuntimeOrchestrator:
 
                 # 错误次数过多，停止策略
                 if ctx.error_count >= self._max_errors_before_stop:
-                    logger.error(
-                        f"[Orchestrator] {ctx.strategy_id} error count exceeded, stopping"
-                    )
+                    logger.error(f"[Orchestrator] {ctx.strategy_id} error count exceeded, stopping")
                     await self.stop_strategy(ctx.strategy_id, reason=f"Error count exceeded: {e}")
 
     async def start_strategy(
@@ -395,7 +388,9 @@ class StrategyRuntimeOrchestrator:
             self._contexts[strategy_id] = ctx
 
         # 确保 connector 已启动并订阅对应 symbol 的行情
-        logger.info(f"[Orchestrator] start_strategy: strategy={strategy_id} self._connector={type(self._connector).__name__ if self._connector else None}")
+        logger.info(
+            f"[Orchestrator] start_strategy: strategy={strategy_id} self._connector={type(self._connector).__name__ if self._connector else None}"
+        )
         if self._connector is not None:
             symbol_lower = symbol.lower()
             if symbol_lower not in self._subscribed_symbols:
@@ -418,7 +413,9 @@ class StrategyRuntimeOrchestrator:
                 except Exception as e:
                     logger.warning(f"[Orchestrator] Failed to subscribe {symbol}: {e}")
         else:
-            logger.warning(f"[Orchestrator] No connector available, market data will not flow for {symbol}")
+            logger.warning(
+                f"[Orchestrator] No connector available, market data will not flow for {symbol}"
+            )
 
         # 全局运行标记
         self._running = True

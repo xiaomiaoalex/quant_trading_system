@@ -3,6 +3,7 @@ Audit API Routes
 ================
 AI audit log query endpoints (Task 9.6).
 """
+
 from __future__ import annotations
 
 import logging
@@ -10,8 +11,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
-
 from insight.ai_audit_log import AuditEntry as DomainAuditEntry
+
 from trader.api.models.schemas import AuditEntry
 from trader.api.routes.chat import get_chat_interface
 
@@ -130,7 +131,9 @@ async def list_audit_entries(
         entries = [entry for entry in entries if entry.strategy_id == strategy_id]
     if status:
         status_norm = status.strip().lower()
-        entries = [entry for entry in entries if entry.status and entry.status.lower() == status_norm]
+        entries = [
+            entry for entry in entries if entry.status and entry.status.lower() == status_norm
+        ]
     if event_type:
         event_type_norm = event_type.strip().lower()
         entries = [
@@ -141,23 +144,31 @@ async def list_audit_entries(
     if llm_backend:
         backend_norm = llm_backend.strip().lower()
         entries = [
-            entry for entry in entries if entry.llm_backend and entry.llm_backend.lower() == backend_norm
+            entry
+            for entry in entries
+            if entry.llm_backend and entry.llm_backend.lower() == backend_norm
         ]
 
     if since_dt:
         entries = [
             entry
             for entry in entries
-            if (entry_dt := _parse_entry_time(entry.created_at)) is not None and entry_dt >= since_dt
+            if (entry_dt := _parse_entry_time(entry.created_at)) is not None
+            and entry_dt >= since_dt
         ]
     if until_dt:
         entries = [
             entry
             for entry in entries
-            if (entry_dt := _parse_entry_time(entry.created_at)) is not None and entry_dt <= until_dt
+            if (entry_dt := _parse_entry_time(entry.created_at)) is not None
+            and entry_dt <= until_dt
         ]
 
-    entries.sort(key=lambda item: _parse_entry_time(item.created_at) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    entries.sort(
+        key=lambda item: _parse_entry_time(item.created_at)
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return entries[offset : offset + limit]
 
 
@@ -175,7 +186,9 @@ async def get_audit_entry(entry_id: str = Path(..., description="Audit entry ID"
 
 def add_audit_entry(entry: AuditEntry) -> None:
     """Add an audit entry to fallback in-memory storage."""
-    _audit_entries[:] = [existing for existing in _audit_entries if existing.entry_id != entry.entry_id]
+    _audit_entries[:] = [
+        existing for existing in _audit_entries if existing.entry_id != entry.entry_id
+    ]
     _audit_entries.append(entry)
 
 

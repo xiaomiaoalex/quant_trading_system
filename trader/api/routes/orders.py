@@ -3,10 +3,12 @@ Order API Routes
 ================
 Order and execution query endpoints.
 """
+
 from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from trader.api.models.schemas import OrderView, ExecutionView, ActionResult
+from trader.api.models.schemas import ActionResult, ExecutionView, OrderView
 from trader.services import OrderService
 
 router = APIRouter(tags=["Orders"])

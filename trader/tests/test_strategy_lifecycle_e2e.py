@@ -37,18 +37,18 @@ from trader.core.application.strategy_protocol import (
     ValidationStatus,
 )
 from trader.services.strategy_lifecycle_manager import (
+    ApprovalOutcome,
+    BacktestOutcome,
+    InMemoryLifecycleStore,
     LifecycleEvent,
     LifecycleEventType,
     LifecycleStatus,
-    StrategyLifecycle,
-    StrategyLifecycleManager,
-    ValidationOutcome,
-    BacktestOutcome,
-    ApprovalOutcome,
     StartOutcome,
     StopOutcome,
+    StrategyLifecycle,
+    StrategyLifecycleManager,
     SwapOutcome,
-    InMemoryLifecycleStore,
+    ValidationOutcome,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,9 +111,9 @@ def mock_runner():
     """Mock运行器夹具"""
     runner = MagicMock()
     runner.load_strategy = AsyncMock(return_value=MagicMock())
-    runner.start_strategy = AsyncMock(return_value=MagicMock())
-    runner.stop_strategy = AsyncMock(return_value=MagicMock())
-    runner.tick_strategy = AsyncMock(return_value=None)
+    runner.start = AsyncMock(return_value=MagicMock())
+    runner.stop = AsyncMock(return_value=MagicMock())
+    runner.unload_strategy = AsyncMock(return_value=MagicMock())
     return runner
 
 
@@ -121,16 +121,18 @@ def mock_runner():
 def mock_evaluator():
     """Mock评估器夹具"""
     evaluator = MagicMock()
-    evaluator.run_backtest = AsyncMock(return_value=MagicMock(
-        metrics=MagicMock(
-            sharpe_ratio=1.5,
-            max_drawdown=Decimal("500"),
-            win_rate=0.55,
-            total_pnl=Decimal("2000"),
-        ),
-        return_percent=20.0,
-        to_dict=MagicMock(return_value={}),
-    ))
+    evaluator.run_backtest = AsyncMock(
+        return_value=MagicMock(
+            metrics=MagicMock(
+                sharpe_ratio=1.5,
+                max_drawdown=Decimal("500"),
+                win_rate=0.55,
+                total_pnl=Decimal("2000"),
+            ),
+            return_percent=20.0,
+            to_dict=MagicMock(return_value={}),
+        )
+    )
     return evaluator
 
 
@@ -138,11 +140,13 @@ def mock_evaluator():
 def mock_hotswapper():
     """Mock热插拔管理器夹具"""
     hotswapper = MagicMock()
-    hotswapper.swap_strategy = AsyncMock(return_value=MagicMock(
-        success=True,
-        state=MagicMock(value="ACTIVE"),
-        error=None,
-    ))
+    hotswapper.swap_strategy = AsyncMock(
+        return_value=MagicMock(
+            success=True,
+            state=MagicMock(value="ACTIVE"),
+            error=None,
+        )
+    )
     hotswapper._loader = None  # 使用manager的简单加载器
     return hotswapper
 
@@ -194,7 +198,7 @@ async def test_scenario_1_ai_generated_deployment(manager, mock_strategy):
     - 性能指标正常
     """
     # 准备策略代码
-    strategy_code = '''
+    strategy_code = """
 class AIStrategy:
     name = "EMA_Cross_AI"
     version = "1.0.0"
@@ -209,7 +213,7 @@ class AIStrategy:
 
 def get_plugin():
     return AIStrategy()
-'''
+"""
 
     # 步骤1：创建策略
     lifecycle = await manager.create_strategy(
@@ -315,7 +319,7 @@ async def test_scenario_2_strategy_hotswap(manager, mock_strategy, mock_hotswapp
     - 新策略状态正确
     """
     # 准备旧策略
-    old_code = '''
+    old_code = """
 class OldStrategy:
     name = "OldStrategy"
     version = "1.0.0"
@@ -330,10 +334,10 @@ class OldStrategy:
 
 def get_plugin():
     return OldStrategy()
-'''
+"""
 
     # 准备新策略
-    new_code = '''
+    new_code = """
 class NewStrategy:
     name = "NewStrategy"
     version = "2.0.0"
@@ -348,7 +352,7 @@ class NewStrategy:
 
 def get_plugin():
     return NewStrategy()
-'''
+"""
 
     # 创建旧策略
     old_lifecycle = await manager.create_strategy(
@@ -372,11 +376,13 @@ def get_plugin():
 
     # 设置mock返回值
     # 注意: manager.swap_strategy() 内部调用 self._hotswapper.swap()，所以mock应该是swap而不是swap_strategy
-    mock_hotswapper.swap = AsyncMock(return_value=MagicMock(
-        success=True,
-        state=MagicMock(value="ACTIVE"),
-        error=None,
-    ))
+    mock_hotswapper.swap = AsyncMock(
+        return_value=MagicMock(
+            success=True,
+            state=MagicMock(value="ACTIVE"),
+            error=None,
+        )
+    )
     manager._hotswapper = mock_hotswapper
 
     # 执行热插拔
@@ -425,7 +431,7 @@ async def test_scenario_3_backtest_and_approval(manager):
     - 审批流程正确性
     - 状态转换顺序
     """
-    strategy_code = '''
+    strategy_code = """
 class BacktestStrategy:
     name = "RSI_Strategy"
     version = "1.0.0"
@@ -440,7 +446,7 @@ class BacktestStrategy:
 
 def get_plugin():
     return BacktestStrategy()
-'''
+"""
 
     # 创建策略
     lifecycle = await manager.create_strategy(
@@ -532,7 +538,7 @@ async def test_scenario_4_rollback_on_error(manager, mock_hotswapper):
     - 旧策略状态恢复
     - 错误信息记录
     """
-    old_code = '''
+    old_code = """
 class StableStrategy:
     name = "StableStrategy"
     version = "1.0.0"
@@ -547,9 +553,9 @@ class StableStrategy:
 
 def get_plugin():
     return StableStrategy()
-'''
+"""
 
-    new_code = '''
+    new_code = """
 class BuggyStrategy:
     name = "BuggyStrategy"
     version = "2.0.0"
@@ -564,7 +570,7 @@ class BuggyStrategy:
 
 def get_plugin():
     return BuggyStrategy()
-'''
+"""
 
     # 创建旧策略
     old_lifecycle = await manager.create_strategy(
@@ -587,14 +593,16 @@ def get_plugin():
 
     # 模拟热插拔失败
     # 注意: manager.swap_strategy() 内部调用 self._hotswapper.swap()，所以mock应该是swap而不是swap_strategy
-    mock_hotswapper.swap = AsyncMock(return_value=MagicMock(
-        success=False,
-        state=MagicMock(value="ERROR"),
-        error=MagicMock(
-            phase=MagicMock(value="VALIDATING"),
-            message="Validation failed",
-        ),
-    ))
+    mock_hotswapper.swap = AsyncMock(
+        return_value=MagicMock(
+            success=False,
+            state=MagicMock(value="ERROR"),
+            error=MagicMock(
+                phase=MagicMock(value="VALIDATING"),
+                message="Validation failed",
+            ),
+        )
+    )
     manager._hotswapper = mock_hotswapper
 
     # 执行热插拔（预期失败）
@@ -635,7 +643,9 @@ async def test_crash_isolation(manager):
     - 管理器仍可响应
     """
     strategy_codes = [
-        (f"strategy_crash_{i}", f'''
+        (
+            f"strategy_crash_{i}",
+            f"""
 class Strategy{i}:
     name = "Strategy{i}"
     version = "1.0.0"
@@ -650,7 +660,9 @@ class Strategy{i}:
 
 def get_plugin():
     return Strategy{i}()
-''') for i in range(3)
+""",
+        )
+        for i in range(3)
     ]
 
     # 创建3个策略
@@ -692,7 +704,7 @@ async def test_p99_latency(manager):
     验证点：
     - 各操作P99 < 500ms
     """
-    strategy_code = '''
+    strategy_code = """
 class LatencyTestStrategy:
     name = "LatencyTestStrategy"
     version = "1.0.0"
@@ -707,7 +719,7 @@ class LatencyTestStrategy:
 
 def get_plugin():
     return LatencyTestStrategy()
-'''
+"""
 
     # 多次执行操作以计算P99
     iterations = 20
@@ -745,7 +757,7 @@ async def test_status_transition_constraints(manager):
     - 非法状态转换被拒绝
     - 正确状态转换允许
     """
-    strategy_code = '''
+    strategy_code = """
 class ConstraintTestStrategy:
     name = "ConstraintTestStrategy"
     version = "1.0.0"
@@ -760,7 +772,7 @@ class ConstraintTestStrategy:
 
 def get_plugin():
     return ConstraintTestStrategy()
-'''
+"""
 
     lifecycle = await manager.create_strategy(
         code=strategy_code,
@@ -813,7 +825,7 @@ async def test_lifecycle_traceability(manager):
     - 事件包含完整元数据
     - 可以追溯任意时间点的状态
     """
-    strategy_code = '''
+    strategy_code = """
 class TraceableStrategy:
     name = "TraceableStrategy"
     version = "1.0.0"
@@ -828,7 +840,7 @@ class TraceableStrategy:
 
 def get_plugin():
     return TraceableStrategy()
-'''
+"""
 
     # 执行完整流程
     lifecycle = await manager.create_strategy(

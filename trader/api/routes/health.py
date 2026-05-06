@@ -8,24 +8,29 @@ Three-level health check:
 2. Readiness: Service can handle requests (dependencies loaded)
 3. Dependency: External dependencies status (PostgreSQL, storage)
 """
+
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Query, Request
 
+from trader.adapters.persistence.postgres import (
+    ASYNCPG_AVAILABLE,
+    check_postgres_connection,
+    is_postgres_available,
+)
 from trader.api.models.schemas import (
-    HealthResponse,
-    HealthCheckResponse,
     ComponentHealth,
     DependencyStatus,
-    HeartbeatResponse,
-    ProcessHeartbeatSchema,
     ExchangeConnectivitySchema,
     FrontendConnectionSchema,
+    HealthCheckResponse,
+    HealthResponse,
+    HeartbeatResponse,
+    ProcessHeartbeatSchema,
 )
 from trader.storage import get_storage
-from trader.adapters.persistence.postgres import is_postgres_available, ASYNCPG_AVAILABLE, check_postgres_connection
 
 logger = logging.getLogger(__name__)
 
@@ -41,43 +46,25 @@ def _check_storage_health() -> ComponentHealth:
     """Check storage accessibility"""
     try:
         get_storage()
-        return ComponentHealth(
-            status="healthy",
-            message="In-memory storage accessible"
-        )
+        return ComponentHealth(status="healthy", message="In-memory storage accessible")
     except Exception as e:
-        return ComponentHealth(
-            status="unhealthy",
-            message=f"Storage error: {str(e)}"
-        )
+        return ComponentHealth(status="unhealthy", message=f"Storage error: {str(e)}")
 
 
 async def _check_postgresql_health() -> ComponentHealth:
     """Check PostgreSQL availability with actual connection test"""
     if not ASYNCPG_AVAILABLE:
-        return ComponentHealth(
-            status="not_configured",
-            message="asyncpg not installed"
-        )
-    
+        return ComponentHealth(status="not_configured", message="asyncpg not installed")
+
     if not is_postgres_available():
-        return ComponentHealth(
-            status="not_configured",
-            message="PostgreSQL not configured"
-        )
-    
+        return ComponentHealth(status="not_configured", message="PostgreSQL not configured")
+
     is_reachable, message = await check_postgres_connection(timeout=2.0)
-    
+
     if is_reachable:
-        return ComponentHealth(
-            status="healthy",
-            message="PostgreSQL connection successful"
-        )
+        return ComponentHealth(status="healthy", message="PostgreSQL connection successful")
     else:
-        return ComponentHealth(
-            status="unhealthy",
-            message=message
-        )
+        return ComponentHealth(status="unhealthy", message=message)
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -87,10 +74,7 @@ async def health_check():
 
     Returns the current health status of the API.
     """
-    return HealthResponse(
-        status="ok",
-        time=_get_utc_time()
-    )
+    return HealthResponse(status="ok", time=_get_utc_time())
 
 
 @router.get("/health/live", response_model=HealthResponse)
@@ -101,10 +85,7 @@ async def liveness_check():
     Returns 200 if the process is alive.
     Used by Kubernetes to know when to restart the container.
     """
-    return HealthResponse(
-        status="ok",
-        time=_get_utc_time()
-    )
+    return HealthResponse(status="ok", time=_get_utc_time())
 
 
 @router.get("/health/ready", response_model=HealthCheckResponse)
@@ -118,18 +99,14 @@ async def readiness_check():
     """
     checks: Dict[str, ComponentHealth] = {}
     overall_status = "ok"
-    
+
     storage_health = _check_storage_health()
     checks["storage"] = storage_health
-    
+
     if storage_health.status == "unhealthy":
         overall_status = "degraded"
-    
-    return HealthCheckResponse(
-        status=overall_status,
-        time=_get_utc_time(),
-        checks=checks
-    )
+
+    return HealthCheckResponse(status=overall_status, time=_get_utc_time(), checks=checks)
 
 
 @router.get("/health/dependency", response_model=HealthCheckResponse)
@@ -142,25 +119,19 @@ async def dependency_check():
     """
     checks: Dict[str, ComponentHealth] = {}
     overall_status = "ok"
-    
+
     checks["postgresql"] = await _check_postgresql_health()
     checks["storage"] = _check_storage_health()
-    
+
     for component, health in checks.items():
         if health.status in ["unhealthy", "degraded"]:
             overall_status = "degraded"
             break
-    
-    dependency_status = DependencyStatus(
-        postgresql=checks["postgresql"],
-        storage=checks["storage"]
-    )
-    
+
+    dependency_status = DependencyStatus(postgresql=checks["postgresql"], storage=checks["storage"])
+
     return HealthCheckResponse(
-        status=overall_status,
-        time=_get_utc_time(),
-        checks=checks,
-        dependencies=dependency_status
+        status=overall_status, time=_get_utc_time(), checks=checks, dependencies=dependency_status
     )
 
 
@@ -170,9 +141,7 @@ _connector_getter: Optional[callable] = None
 
 
 def configure_heartbeat(
-    heartbeat_service: object,
-    connection_manager: object,
-    connector_getter: callable
+    heartbeat_service: object, connection_manager: object, connector_getter: callable
 ) -> None:
     """配置心跳服务依赖"""
     global _heartbeat_service, _connection_manager, _connector_getter
@@ -187,11 +156,11 @@ async def heartbeat_check(
 ):
     """
     三层心跳检查
-    
+
     - process: 后端进程健康（event loop lag, tasks count, uptime）
     - exchange: 交易所连接状态（WS states, last pong/rest success）
     - frontend: 前端轮询状态（active sessions, health）
-    
+
     前端应在每次轮询时传入 client_id 以表明存活。
     """
     if client_id and _connection_manager:
@@ -222,7 +191,7 @@ def _get_process_heartbeat() -> ProcessHeartbeatSchema:
                 memory_usage_mb=hb.memory_usage_mb,
                 is_healthy=hb.is_healthy,
             )
-    
+
     return ProcessHeartbeatSchema(
         event_loop_lag_ms=0.0,
         last_event_loop_check_ts_ms=0,
@@ -246,7 +215,7 @@ def _get_exchange_status() -> ExchangeConnectivitySchema:
                     last_pong_ts_ms = int(connector.public_stream._last_pong_ts * 1000)
                 except Exception:
                     pass
-                
+
                 return ExchangeConnectivitySchema(
                     public_stream_state=health.public_stream_state.value,
                     private_stream_state=health.private_stream_state.value,

@@ -9,15 +9,15 @@ Backoff Controller - Exponential Backoff with Jitter
 - 支持 Retry-After 响应头
 - 重连风暴检测
 """
+
 import asyncio
+import logging
 import random
 import time
-import logging
-from dataclasses import dataclass, field
-from typing import Dict, Optional
-from threading import Lock, RLock # <--- 加上 RLock
 from collections import defaultdict
-
+from dataclasses import dataclass, field
+from threading import Lock, RLock  # <--- 加上 RLock
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +25,20 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BackoffConfig:
     """退避配置"""
-    initial_delay: float = 1.0          # 初始延迟（秒）
-    max_delay: float = 60.0              # 最大延迟（秒）
-    multiplier: float = 2.0              # 指数乘数
-    jitter_range: float = 1.0            # Jitter 范围（0-1 之间乘数）
-    retry_after_multiplier: float = 1.0   # Retry-After 响应头乘数
-    max_retries: int = 10                # 最大重试次数
-    reset_after_seconds: float = 60.0    # 成功后退避重置时间
+
+    initial_delay: float = 1.0  # 初始延迟（秒）
+    max_delay: float = 60.0  # 最大延迟（秒）
+    multiplier: float = 2.0  # 指数乘数
+    jitter_range: float = 1.0  # Jitter 范围（0-1 之间乘数）
+    retry_after_multiplier: float = 1.0  # Retry-After 响应头乘数
+    max_retries: int = 10  # 最大重试次数
+    reset_after_seconds: float = 60.0  # 成功后退避重置时间
 
 
 @dataclass
 class TaskBackoffState:
     """单个任务的退避状态"""
+
     task_name: str
     current_delay: float
     retry_count: int
@@ -61,7 +63,7 @@ class BackoffController:
         self._total_reconnect_count = 0
         self._reconnect_timestamps: list = []
         self._reconnect_storm_threshold = 10  # 5分钟内10次重连视为风暴
-        self._reconnect_storm_window = 300     # 5分钟窗口
+        self._reconnect_storm_window = 300  # 5分钟窗口
 
     def _ensure_task_state(self, task_name: str) -> TaskBackoffState:
         """确保任务状态存在"""
@@ -89,7 +91,10 @@ class BackoffController:
             state = self._ensure_task_state(task_name)
             now = time.time()
 
-            if state.last_retry_ts > 0 and (now - state.last_retry_ts) > self._config.reset_after_seconds:
+            if (
+                state.last_retry_ts > 0
+                and (now - state.last_retry_ts) > self._config.reset_after_seconds
+            ):
                 state.current_delay = self._config.initial_delay
                 state.retry_count = 0
 
@@ -124,8 +129,7 @@ class BackoffController:
     def _apply_jitter(self, delay: float) -> float:
         """应用 Full Jitter"""
         jitter_factor = random.uniform(
-            1.0 - self._config.jitter_range,
-            1.0 + self._config.jitter_range
+            1.0 - self._config.jitter_range, 1.0 + self._config.jitter_range
         )
         return max(0.1, delay * jitter_factor)
 
@@ -229,7 +233,7 @@ class BackoffControllerAsync:
         task_name: str,
         coro_or_func,
         retry_after_s: Optional[float] = None,
-        max_retries: Optional[int] = None
+        max_retries: Optional[int] = None,
     ):
         """
         执行带退避的异步任务
@@ -247,6 +251,7 @@ class BackoffControllerAsync:
             最后一次尝试的错误
         """
         import inspect
+
         max_retries = max_retries or self._controller._config.max_retries
 
         is_coroutine = inspect.iscoroutinefunction(coro_or_func)

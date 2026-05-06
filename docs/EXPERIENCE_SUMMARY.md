@@ -4,6 +4,329 @@
 
 ---
 
+## 三十一、市场无关风险契约抽象经验（2026-05-06）
+
+### 31.1 踩坑记录：不要把第一个市场 specialization 当成平台契约
+
+**问题描述**：
+Crypto 风控先落地后，`CryptoRiskSnapshot`、`CryptoInstrumentSpec`、`mark_price`、`liquidation_price`、`leverage_brackets` 很容易变成后续审计、回测和前端的默认语言。这样短期推进快，但以后接 A 股时会把 T+1、涨跌停、100 股手数等规则硬塞进 crypto 语义。
+
+**解决方案**：
+- 新增 `MarketInstrumentSpec`、`MarketRiskSnapshot`、`MarketRiskBudget`、`MarketRiskAuditEvent` 作为市场无关契约。
+- `CryptoRiskSnapshot` 继续保留，但只作为 crypto specialization，并提供 `to_market_snapshot()` 投影。
+- 平台级审计契约改为 `risk:market` / `risk_audit_events`，`risk:crypto` 作为过滤视图而不是独立平台表。
+
+**经验**：
+- 抽象层不需要一开始很厚，但名字必须先站对位置。
+- 市场特有字段进入 `metadata` 或专用 plugin，不要污染通用 DTO。
+
+### 31.2 设计模式：先让通用计算器依赖结构字段，而不是具体市场类型
+
+**问题描述**：
+`OpenOrderExposureCalculator` 和 `PortfolioExposureAggregator` 的算法本身适用于 A 股行业敞口、Crypto cluster 和其他市场 group，但类型签名直接依赖 `CryptoPositionRisk` / `OpenOrderRisk`。
+
+**解决方案**：
+- 把这些计算器的输入改为 `Protocol` 风格的结构字段：`symbol`、`qty`、`status`、`reduce_only`、`notional`、`signed_remaining_qty`。
+- 原 crypto DTO 和新的 market DTO 都能被同一计算器消费。
+
+**经验**：
+- 纯计算服务的复用性往往卡在类型边界，不一定卡在算法。
+- 用结构化 Protocol 解耦，比复制一套 `ChinaStockExposureAggregator` 更稳。
+
+### 31.3 设计模式：PG-first 审计也要保留兼容投影
+
+**问题描述**：
+`risk:crypto` budget/probe 审计原本写入控制面内存事件流，前端和测试会通过 `/v1/events?stream_key=risk:crypto` 查看。如果直接切到 PG 表，长期持久化好了，但旧观察入口会突然看不到事件。
+
+**解决方案**：
+- `MarketRiskAuditRepository` 优先写入/查询 `risk_audit_events`。
+- PG 写入成功后同步写一个控制面内存事件投影。
+- PG 不可用或写入失败时回退到内存事件流，避免风控运维动作因为审计存储短暂故障而 fail-open 或失去可观察性。
+
+**经验**：
+- 持久化升级应区分“真相源”和“兼容读模型”；真相源迁移到 PG，不代表旧读入口必须立刻删除。
+- 对审计系统来说，过渡期双写投影比一次性切换更稳，尤其是前端和运维脚本已经依赖旧查询入口时。
+
+### 31.4 测试经验：PG fake pool 之后要补真实 JSONB 集成
+
+**问题描述**：
+`PostgresMarketRiskAuditStorage` 的 fake pool 可以验证 SQL 调用顺序和 repository fallback，但看不到 PostgreSQL 对 JSONB 参数、DDL 初始化和过滤条件的真实行为。
+
+**解决方案**：
+- 在 fake pool 单测之外，补充真实 `asyncpg` + Docker Postgres 用例。
+- 用唯一 `trace_id` 写入 `risk_audit_events`，验证 JSONB payload、asset/venue 字段和 `since_ts_ms` 过滤。
+- 测试前后按 `trace_id` 删除数据，避免影响共享 PG 数据库里的其他集成测试。
+
+**经验**：
+- fake pool 适合覆盖降级路径和边界分支，真实 PG 用例负责兜住驱动、类型转换和表结构。
+- 会清库的 PG 测试与按 trace 清理的审计测试不要并行跑，避免共享数据库互相踩状态。
+
+### 31.5 设计模式：pre-trade evidence 用 wrapper 写，不污染 Core plugin
+
+**问题描述**：
+`CryptoPreTradeRiskPlugin` 能给出确定性拒绝结果，但如果直接在 plugin 内写 PG 审计，会破坏 Core/Policy 无 IO 边界；如果只在 OMS 记录 `strategy.order.rejected`，又缺少市场风险维度的长期可查询证据。
+
+**解决方案**：
+- 在 Control/Service 装配层包一层 `build_audited_crypto_pre_trade_risk_check()`。
+- wrapper 只观察 `RiskCheckResult`：通过时不写事件，拒绝或异常时写 `risk:crypto / crypto_risk.pre_trade_rejected`。
+- 审计写入失败只记录 warning，不改变原始风控结论；已拒绝仍拒绝，回调异常仍 fail-closed。
+
+**经验**：
+- 风控决策和风控证据是两件事；前者必须纯且确定，后者应在边界层落库。
+- wrapper 模式适合把审计、trace 和运维 evidence 接到现有闭环，不需要让策略、OMS 或 Core plugin 互相知道太多。
+
+### 31.6 设计模式：`decision_trace_id` 是业务追踪，`trace_id` 是存储索引
+
+**问题描述**：
+前期事件里已有 `trace_id`，但它更像事件存储和日志字段；pre-trade rejection 需要回答的是“同一个策略信号为什么被拒绝”，所以需要稳定的业务决策链路 ID。若前端只看 payload，也应该能看到同一个 ID。
+
+**解决方案**：
+- 将 `decision_trace_id` 写入 payload，并同步作为 `MarketRiskAuditEvent.trace_id`。
+- pre-trade audit 优先读取 `Signal.metadata["decision_trace_id"]`，再兼容旧 `trace_id`。
+- 新增 `/v1/risk/crypto/audit`，按 `trace_id` 走 PG-first 查询，按 `signal_id` 在 payload 层过滤。
+- 前端 Crypto Risk Audit Stream 改用专用审计 API，并提供 event/trace/signal 过滤。
+
+**经验**：
+- 业务 trace 和存储 trace 可以共用值，但命名责任要清楚：`decision_trace_id` 解释业务链路，`trace_id` 服务索引和通用事件接口。
+- 先用 API 层 payload 过滤能快速闭环；当 rejection 事件量上来后，再把高频字段升为独立列或 JSONB expression index。
+
+---
+
+## 三十、Crypto Risk demo 联调自检经验（2026-05-05）
+
+### 30.1 踩坑记录：demo 执行环境和 USD-M 风控 source 不是同一个开关
+
+**问题描述**：
+`BINANCE_ENV=demo` 控制当前执行适配器连接 Binance Spot Demo，但 `CRYPTO_RISK_FUTURES_BASE_URL` 控制的是只读 USD-M 风控 source。若只看一个字段，容易把 demo、testnet、live 三种口径混在一起，导致 probe 使用错误凭证或错误 endpoint。
+
+**解决方案**：
+- 新增 `scripts/check_crypto_risk_demo_env.py`，在启动前显式拒绝 testnet/live USD-M source、缺失预算和 cluster 未映射。
+- `.env.example` 默认改为 demo，并把 Crypto Risk 预算配置写完整。
+- 新增 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`，把自检、runtime status、只读 probe、审计和 fail-closed 演练拆成固定步骤。
+
+**经验**：
+- 联调脚本应先做“无网络、无凭证打印”的静态自检，再触发真实 probe。
+- 交易环境标签不能承担多个维度；执行环境、风控 source、下单 smoke 必须分开说明。
+
+### 30.2 踩坑记录：Spot Demo URL 加 `/fapi` 不是 USD-M Demo API
+
+**问题描述**：
+首次真实 probe 使用 `https://demo-api.binance.com/fapi` 作为 USD-M 风控 source，runtime 虽然成功 wired，但所有 `/fapi/*` endpoints 均返回 404。原因是 `demo-api.binance.com` 是 Spot Demo base URL，不能通过追加 `/fapi` 变成 USD-M Futures Demo。
+
+**解决方案**：
+- 将 runbook、`.env.example` 和本地 `.env` 的 `CRYPTO_RISK_FUTURES_BASE_URL` 改为 `https://demo-fapi.binance.com`。
+- 在 `scripts/check_crypto_risk_demo_env.py` 中新增 `CRYPTO_RISK_FUTURES_URL_SPOT_DEMO` 阻断，显式拒绝 `https://demo-api.binance.com/fapi`。
+- 补充 CLI/URL 回归测试，真实 demo probe 随后通过，7 项只读检查全部 passed。
+
+**经验**：
+- “URL 看起来像 demo”不够，endpoint 家族必须匹配市场类型；Spot Demo 和 USD-M Demo 是两个 base URL。
+- preflight 不应只用字符串包含 `demo` 放行，应识别已知错误组合。
+
+### 30.3 设计模式：负向 Probe 要同时验证失败证据和无订单动作
+
+**问题描述**：
+只证明正常 probe 能通还不够。风控系统必须证明关键数据缺失、symbol 不存在或 source 失败时会产生可追踪失败证据，并且不会顺手触发订单动作。
+
+**解决方案**：
+- 新增 `scripts/rehearse_crypto_risk_demo_fail_closed.py`，用不存在 symbol 触发 `ok=false` 的只读 probe。
+- 脚本检查 `read_only=true`、失败检查项、匹配的 `crypto_risk.probe_run` 审计事件，以及 `/v1/orders` 演练前后内容一致。
+- 负向演练只调用只读 API，不调用下单、撤单、调整杠杆或策略启动入口。
+
+**经验**：
+- Fail-Closed 演练的验收不只是“请求失败”，还要证明失败被审计、且系统没有产生副作用。
+- 负向演练脚本应可反复运行，requested_by 独立标识每次演练，方便从事件流中定位证据。
+
+---
+
+## 二十九、isort 固定与格式化范围控制经验（2026-05-05）
+
+### 29.1 踩坑记录：工具安装完成后，全仓检查可能暴露历史格式债
+
+**问题描述**：
+安装 `isort==5.13.2` 后，`python -m isort --check-only --profile black trader/` 可以正常运行，但立即暴露大量历史导入排序问题。如果直接对全仓运行自动格式化，会产生非常大的无关 diff，掩盖当前任务的真实改动。
+
+**解决方案**：
+- 将 `isort==5.13.2` 固定到 `pyproject.toml` 和 `trader/requirements-ci.txt`，让环境问题闭环。
+- 对本次 Crypto Risk 运维相关 Python 文件运行 scoped `isort --profile black`，只修复当前交付面。
+- 在状态文档中单独记录全仓 isort 遗留，后续作为独立格式化任务处理。
+
+**经验**：
+- “安装格式化工具”和“全仓格式化收敛”应拆成两个任务；前者解决能力缺失，后者需要明确的大范围 diff 预期。
+- 在已有历史债的仓库里，提交前格式化应优先 scoped 到本次触碰文件，避免无关 churn。
+
+### 29.2 设计模式：纯格式化提交 + blame ignore + CI 门禁三件套
+
+**问题描述**：
+全仓 `black` / `isort` 收敛会产生大规模机械 diff。如果它和功能改动混在一起，代码审查、回滚、`git blame` 都会被噪音放大；如果只做格式化而不加 CI，格式债又会很快回流。
+
+**解决方案**：
+- 先提交当前功能/依赖变更，再创建独立纯格式化提交。
+- 将纯格式化提交 SHA 写入 `.git-blame-ignore-revs`，后续排查历史时可配置 Git 忽略该提交。
+- 在 CI 中新增 `isort --check-only --profile black trader/` 与 `black --check --line-length 100 trader/`，让格式规范变成门禁而不是口头约定。
+
+**经验**：
+- 纯格式化提交的价值不在“代码变美”，而在让后续所有功能 diff 更小、更可信。
+- 格式化工具一旦固定版本，就应该进入 CI；否则本地环境收敛和远端合入规则会继续漂移。
+
+---
+
+## 二十八、Crypto Risk demo 运维联调经验（2026-05-04）
+
+### 28.1 踩坑记录：执行环境与风控数据源 URL 不能混成一个“环境名”
+
+**问题描述**：
+系统当前实际执行链路连接 Binance demo，但 USD-M 风控 source 使用独立 `CRYPTO_RISK_FUTURES_BASE_URL`。如果只按 base URL 推断 `testnet/live`，前端和文档会把“当前连接 demo”的事实说错，联调时容易误判是否会触发真实下单路径。
+
+**解决方案**：
+- 在 runtime status 和 probe response 中新增 `execution_env`，明确来自 `BINANCE_ENV`。
+- probe 的 `mode` 只描述 USD-M 风控 source URL，且 probe 始终 `read_only=true`。
+- 前端 `/crypto-risk` 页同时展示 `execution_env`、source URL、probe result 和审计流，避免单字段过度解释。
+
+**经验**：
+- 交易系统里“执行环境”和“只读风险数据源”是两个维度，不能用同一个标签承载。
+- 联调按钮必须先做语义隔离：只读检查就是只读检查，不应暗示已具备 Futures 下单能力。
+
+### 28.2 设计模式：Read-only Probe 复用已 wired runtime，而不是临时创建 source
+
+**问题描述**：
+为了方便联通性检查，容易在 API 调用时临时创建一个交易所 source。但这会绕过应用启动时的凭证、proxy、fail-closed 和 pre-trade wiring 状态，导致“探针通了，但真实 runtime 没通”的假阳性。
+
+**解决方案**：
+- `POST /v1/risk/crypto/probe` 只允许在 runtime 已 enabled 且 wired 时执行，否则返回 409。
+- probe 逐项读取 venue health、mark price、instrument spec、leverage bracket、account、positions 和 open orders，并把结果写入 `risk:crypto` 审计事件。
+- 前端对 probe 和预算热更新都使用确认框，保持运维动作可感知。
+
+**经验**：
+- 运维探针应该验证“当前运行中的链路”，而不是验证“某段新建代码能否访问网络”。
+- read-only probe 的审计事件同样重要，因为它能证明何时、由谁、以哪些 symbols 做过联调验证。
+
+---
+
+## 二十七、Black 与 Python 3.12.5 兼容经验（2026-05-04）
+
+### 27.1 踩坑记录：新版 Black 会在 Python 3.12.5 上拒绝格式化
+
+**问题描述**：
+仓库技术栈固定为 Python 3.12.5。安装最新 `black==26.3.1` 或 `black==25.1.0` 后，`python -m black ...` 会提示 Python 3.12.5 存在可能影响 AST safety checks 的内存安全问题，并要求升级到 3.12.6 或降级到 3.12.4，导致格式化命令硬阻断。
+
+**解决方案**：
+- 使用 `black==24.4.2`，该版本可以在当前 Python 3.12.5 环境实际运行。
+- 在 `pyproject.toml` 与 `trader/requirements-ci.txt` 中固定同一版本，保证本地与 CI 口径一致。
+- 格式化时优先 scoped 到本次触碰的 Python 文件，避免改动用户或其他任务的未提交代码。
+
+**经验**：
+- 格式化工具也需要和项目 Python 版本形成兼容矩阵，不能只追最新版本。
+- 对已有大量未提交改动的工作区，格式化应收窄范围，避免制造无关 diff。
+
+---
+
+## 二十六、数字货币独立风控 P0 经验（2026-05-03）
+
+### 26.1 踩坑记录：reduce-only 未成交订单不能提前释放风险
+
+**问题描述**：
+合约交易中，减仓单或平仓单看起来会降低风险，但在成交确认前它仍只是交易所挂单状态。如果风控在下单时提前把未成交的 `reduce_only` 数量从风险预算中扣掉，就可能在网络延迟、撤单未确认或部分成交场景下继续允许新开仓，形成隐形超额风险。
+
+**解决方案**：
+- `OpenOrderExposureCalculator` 只把非 `reduce_only` 在途订单计入新增风险。
+- `reduce_only` 订单不提前释放当前持仓风险；只有成交事件进入账本后，真实持仓和风险才下降。
+- 风控快照中的 `OpenOrderRisk` 使用内部标准字段 `cl_ord_id`、`qty`、`filled_qty`，避免 Binance 原始字段污染 Core Plane。
+
+**经验**：
+- 在途订单风险应按“最坏成交假设”处理，而不是按交易意图处理。
+- 风险释放必须由成交回报驱动，不能由策略意图或挂单意图驱动。
+
+### 26.2 设计模式：Snapshot Provider 隔离 IO 与 Core 纯计算
+
+**问题描述**：
+加密货币风控需要交易所规则、mark price、leverage bracket、账户保证金、在途订单等大量外部状态。如果直接在风控计算里拉 REST/WS，会破坏 Core Plane 无 IO 和确定性约束。
+
+**解决方案**：
+- Adapter/Service 负责构建 `CryptoRiskSnapshot`。
+- Core domain service 只接收快照并做纯计算。
+- `CryptoPreTradeRiskPlugin` 作为 Policy Plane 门禁组合多个纯计算结果，返回明确的 `RiskCheckResult`。
+
+**经验**：
+- “快照输入 + 纯函数判断”是交易系统风控模块保持可测试、可回放、可审计的关键模式。
+- 策略只提交意图，风控只消费快照并裁决，两者之间不要共享可变状态。
+
+---
+
+## 零、AI 协作规范双入口同步经验（2026-04-28）
+
+### 0.0 多模型入口的流程要求必须同源
+
+**问题描述**：
+仓库同时存在 `AGENTS.md` 和 `CLAUDE.md`，分别面向不同 AI 助手。如果文档闭环、计划更新条件、开发记录要求只更新其中一个入口，不同模型会在同一个仓库里执行不同流程。
+
+**解决方案**：
+- 以 `AGENTS.md` 的 Mandatory Workflow 为准，同步 `CLAUDE.md` 的 Documentation Updates 段落。
+- 明确 `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`DEVELOPMENT_LOG.md` 的职责。
+- 将 `PLAN.md` 更新条件限定为排期、阶段切换、优先级重排等会影响计划新鲜度的任务。
+
+**经验**：
+- AI 协作规范本身也是项目接口，多个入口必须保持行为一致。
+- 后续修改规范时，应把 `AGENTS.md` 和 `CLAUDE.md` 视为同一约束的两个呈现面。
+
+---
+
+## 零、测试全局状态污染隔离经验（2026-04-28）
+
+### 0.0 pytest rootdir 会决定 conftest 是否生效
+
+**问题描述**：
+全量测试使用 `python -m pytest -q trader/tests/ --tb=short` 时，pytest 的 rootdir 可能落在 `trader/`，仓库根目录的 `conftest.py` 不一定覆盖 `trader/tests`。隔离逻辑如果只放在根目录，目标测试单跑可能表现正常，全量运行仍会遗漏 reset。
+
+**解决方案**：
+- 在 `trader/tests/conftest.py` 放置面向测试目录的 autouse 隔离 fixture。
+- 每个测试前后都重置控制面单例、服务层 registry、内存 storage、proxy failover、strategy event service 和敏感环境变量。
+- root `conftest.py` 可作为更外层兼容，但 `trader/tests` 的隔离入口必须自洽。
+
+**经验**：
+- 测试隔离必须位于 pytest 实际加载路径内，不能假设仓库根 conftest 一定生效。
+- 顺序污染类问题优先用“每个测试前后重置”解决，而不是依赖测试间隐含顺序。
+
+### 0.1 本地 .env 不能泄漏进默认单测路径
+
+**问题描述**：
+本地 `.env` 中的 `LIVE_TRADING_ENABLED=true`、Binance API key 和 proxy failover 配置会影响控制面测试。即使测试语义是 dry-run，如果 dispatcher 仍继续初始化 broker，就可能触发真实账户/网络路径。
+
+**解决方案**：
+- 测试夹具在每个测试前后恢复基线环境，并清空 live/API key/proxy 相关变量。
+- `live_trading_enabled=false` 时 OMS callback dispatcher 直接短路返回，不创建 broker。
+
+**经验**：
+- 单测默认路径必须 fail-closed 且无网络；真实交易、真实代理、真实 key 只能在显式集成测试中打开。
+- live 开关应该尽早短路，不能只在下单末端阻止。
+
+### 0.2 collection-time mock 比 fixture mock 更容易污染全局
+
+**问题描述**：
+某些测试模块在 import/collection 阶段写入 `sys.modules["asyncpg"] = MagicMock()`。这类污染发生在 fixture 执行之前，会让后续 PostgreSQL 测试无法区分真实 `asyncpg` 和 mock module。
+
+**解决方案**：
+- 在 `trader/tests/conftest.py` collection 早期保存真实 `asyncpg` 引用。
+- 每个测试前后如果发现 `sys.modules["asyncpg"]` 被替换为 mock，则恢复真实模块。
+
+**经验**：
+- `sys.modules` 是进程全局状态，collection-time 修改必须有统一恢复点。
+- 依赖可选三方库的测试应优先 skip 或局部 monkeypatch，避免把 mock 写进全局 module cache。
+
+### 0.3 自定义 logger handler 会让 caplog 失明
+
+**问题描述**：
+应用启动代码把 `trader` logger 的 `propagate` 设为 `False`，导致全量测试中依赖 `caplog` 的断言在顺序变化后失效。
+
+**解决方案**：
+- 测试夹具显式设置 `logging.getLogger("trader").propagate = True`。
+- 保留应用运行时 logger 配置，但测试环境以 pytest 捕获为准。
+
+**经验**：
+- 日志也是全局状态。测试断言日志内容时，应在 fixture 中固定 logger propagate/level 行为。
+- 应用运行时优化日志输出和测试捕获日志是两个场景，需要分层处理。
+
+---
+
 ## 零、deployment_id / strategy_id 事件流语义修正（2026-04-25）
 
 ### 0.0 运行实例事件不能继续挂在策略模板 ID 下
@@ -2696,6 +3019,357 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+
+---
+
+## 二十六、数字货币风控快照接线经验
+
+### 26.1 踩坑记录：有插件接口不等于运行链路真的受控
+
+**场景**：
+`CryptoPreTradeRiskPlugin` 已能消费 `CryptoRiskSnapshot`，但策略运行实际路径是 `StrategyRunner -> OMSCallbackHandler`。
+
+**问题**：
+- 如果 OMS 下单入口没有硬闸，独立风控仍可能停留在测试旁路
+- 风控拒绝必须改变订单命运，不能只产生一个计算结果
+
+**经验**：
+- 独立风控要接在真实下单前的最后公共入口
+- 测试必须断言 broker `place_order` 没有被调用，而不只断言返回了拒绝结果
+
+### 26.2 设计模式：Adapter mapper + Service snapshot provider
+
+**实现模式**：
+1. `trader/adapters/binance/crypto_risk_mapper.py` 只处理 Binance 原始字段
+2. `BinanceFuturesRiskDataSource` 负责 REST endpoint 与签名请求
+3. `DataSourceCryptoRiskSnapshotProvider` 只接收内部 DTO，聚合账户、规则、mark price、持仓和在途订单
+4. Core/Policy 只消费 `CryptoRiskSnapshot`，不接触 `clientOrderId`、`positionAmt`、`markPrice` 等外部字段
+
+**收益**：
+- 字段污染被限制在 Adapter 边界
+- Service 层可替换 fake source、Binance source 或未来多交易所 source
+- 缺 mark price / leverage bracket 时可统一 fail-closed
+
+### 26.3 隐蔽风险：总风险预算不能跳过缺价 symbol
+
+**场景**：
+总 notional cap 需要统计所有持仓与 active open orders。
+
+**问题**：
+如果某个非目标 symbol 缺少 mark price，简单跳过会低估总敞口。
+
+**经验**：
+- 快照提供者必须把目标 symbol、现有持仓 symbol、在途订单 symbol 合并成 portfolio symbols
+- 任一参与风险预算的 symbol 缺少 mark price 都应 fail-closed
+
+### 26.4 踩坑记录：启动期创建 handler 后再注入风控会失效
+
+**场景**：
+lifespan 为了把 fill handler 注册到 BinanceConnector，会先初始化 `OMSCallbackHandler`；而 crypto risk source 需要在账户/运行时配置准备好后才创建。
+
+**问题**：
+- 如果只在 `create_oms_callback()` 构造参数里传 `pre_trade_risk_check`，后续启用的 runtime risk check 不会进入已存在 handler
+- 这会造成日志显示“风控已配置”，实际下单入口仍没有独立风控的假安全感
+
+**经验**：
+- 运行时接线必须支持 late binding：route-level setter 更新全局待注入值，也要同步更新已存在的 handler
+- 对这种接线问题，测试要直接断言 setter 调用了 handler 的 `set_pre_trade_risk_check()`
+
+### 26.5 设计模式：显式启用 + 配置失败注入 fail-closed check
+
+**实现模式**：
+1. `CRYPTO_RISK_ENABLED` 默认关闭，只有显式 truthy 值才创建 Binance USD-M source
+2. 环境变量解析集中在 Control Plane runtime 模块，输出 `CryptoRiskRuntimeConfig`
+3. 缺凭证、非法 decimal、source wiring 失败时，不让 OMS 保持空风控，而是注入一个永远返回 `RISK_SYSTEM_ERROR` 的 pre-trade check
+
+**收益**：
+- 配置错误会让订单命运变成“拒绝”，而不是变成“绕过”
+- testnet/live 联调前可以安全地把接线逻辑放进主启动链路
+- 后续做热更新时可以复用同一个 runtime config + component factory
+
+### 26.6 设计模式：Runtime Manager 作为运维状态单一入口
+
+**场景**：
+P2 后 lifespan 已能创建 crypto risk source，但运维 API 还需要读取状态和热更新预算。
+
+**问题**：
+- 如果 lifespan 持有 source/check，API 另建一套状态，会出现日志显示已启用但 API 认为未启用的分叉
+- 预算热更新只修改内存数字不够，必须让新的 `CryptoRiskBudget` 真正进入 OMS pre-trade check
+
+**经验**：
+- 把 runtime source、snapshot provider、pre-trade check 和状态视图收敛到 `CryptoRiskRuntimeManager`
+- 热更新预算时复用已有 source，但重建 snapshot provider 与 risk check，并通过 route setter late-bind 到已存在 handler
+- 状态 API 不暴露 key/secret，只暴露 enabled/wired/fail_closed、预算和最近错误
+
+### 26.7 踩坑记录：风险预算热更新必须留下前后对照
+
+**场景**：
+`PATCH /v1/risk/crypto/budget` 能把新预算立即绑定到 OMS pre-trade check。
+
+**问题**：
+- 只记录“当前预算”无法回答事故复盘里的关键问题：谁、何时、从什么值改成什么值
+- 失败更新如果也混入成功审计，会让回放误判真实生效过的风险阈值
+
+**经验**：
+- 成功热更新后写入 `risk:crypto` / `crypto_risk.budget_updated` 事件
+- payload 必须同时包含 `previous_budget` 和 `new_budget`
+- 未 wired / 冲突失败不写成功审计事件；失败审计可以后续单独建事件类型
+
+### 26.8 设计模式：Cluster 预算要绑定拟下单一起计算
+
+**问题描述**：
+币圈组合中多个 alt 仓位经常共享同一个 BTC beta 或 ETH beta。只检查单 symbol cap 和账户 total cap，会让一组高度相关仓位在成交回报延迟、连续信号或分散 symbol 情况下悄悄堆到同一风险因子上。
+
+**解决方案**：
+- 在 `CryptoRiskBudget` 中加入 `symbol_clusters` 与 `cluster_notional_caps`，由运维配置 symbol 到风险簇的映射。
+- `PortfolioExposureAggregator` 保持 Core 纯计算，只基于 snapshot 中的持仓、在途订单、mark price 和拟下单生成 cluster exposure。
+- `CryptoPreTradeRiskPlugin` 在 broker 下单前检查 cluster cap；cluster cap 启用但目标 symbol 未映射时 fail-closed，避免未配置 symbol 绕过组合级预算。
+
+**经验**：
+- 组合风险不能等成交后再算，本次拟下单必须作为“最坏成交”纳入预算。
+- 先做可配置静态 cluster，比一开始上复杂相关性优化器更适合当前系统阶段；后续可以在同一聚合器边界替换为动态 beta/相关性输入。
+
+---
+
+## 二十六、研究到自动组合运行纵向切片经验
+
+### 26.1 踩坑记录：Strategy Lab 必须以 `deployment_id` 驱动运行实例
+
+**场景**：
+前端 Strategy Lab 已经有 Load/Run/Stop 按钮，但当前 API 客户端的 start/stop 端点是 `/v1/deployments/{deployment_id}`。
+
+**问题**：
+- 页面仍传 `strategy_id`，会把“策略模板”和“运行实例”混在一起
+- `loadStrategy` 缺少 `symbols/account_id/venue/mode`，导致前端 typecheck 直接失败
+
+**经验**：
+- 策略开发页面可以围绕 `strategy_id` 编辑代码，但一旦进入运行态，所有控制动作必须切换到 `deployment_id`
+- 表单中应显式展示 deployment id，避免用户和代码都误以为一个策略只能有一个运行实例
+
+### 26.2 设计模式：`StrategyCandidate` 作为研究生命周期主键
+
+**实现模式**：
+1. `candidate_id` 串联草稿、调试、回测、门禁和 promote
+2. `strategy_id` 保持策略模板语义
+3. `deployment_id` 只在通过门禁后出现
+4. 每次状态迁移写 `strategy_candidate.lifecycle` 事件
+
+**收益**：
+- 前端可以显示策略从研究到运行的完整状态链
+- 后端可以阻止“未回测/未门禁就部署”的非法跳转
+- 审计和 Replay 有稳定主键可查
+
+### 26.3 隐蔽风险：synthetic/dev_smoke 回测不能当成准入证据
+
+**场景**：
+控制面已有确定性 synthetic 回测，对开发烟测很方便。
+
+**风险**：
+- 如果不标记数据来源，用户可能把 synthetic 结果当成真实研究回测
+- 自动部署链路会放大这个误判
+
+**经验**：
+- 回测 metrics 必须带 `backtest_data_mode` 和 `feature_version`
+- 门禁必须显式拒绝 `dev_smoke`，直到接入真实 FeatureStore 数据和数据质量报告
+
+### 26.4 设计模式：删除研究候选不等于删除运行资产
+
+**场景**：
+Research 页面需要删除误建或废弃的 `StrategyCandidate`。
+
+**风险**：
+- 如果删除联动清理策略模板、代码版本、回测报告或 deployment，会破坏审计和复盘链路
+- 如果允许删除已进入运行态的 candidate，前端列表会干净，但运行系统和审计系统会失去上下文
+
+**经验**：
+- 删除 candidate 只应影响研究候选列表
+- `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 等状态必须先停止/解除运行关系
+- 删除动作本身也要写审计事件，例如 `strategy_candidate.deleted`
+
+### 26.5 设计模式：管理页源码展示使用只读源码视图
+
+**场景**：
+Strategy Details 的 Info 项需要显示策略代码。
+
+**经验**：
+- `/code/latest` 只代表 saved code version，不能拿它表达内置模块源码
+- 适合新增 `StrategyCodeView` 这种只读视图：优先返回 saved code，缺省时回退到 `trader.*` module entrypoint 源码
+- 源码读取必须限制在本仓库 `trader` 包内，避免把任意 import path 变成文件读取接口
+- 最新源码展示适合快速核对；历史审查应单独做版本选择、diff 和权限控制
+
+### 26.6 踩坑记录：TypeScript 非空断言不等于运行时非空
+
+**场景**：
+`StrategyDetailModal` 在 `isOpen=false` 时仍被挂载，父组件用 `strategy={detailStrategy!}` 传参。
+
+**问题**：
+`!` 只让 TypeScript 编译通过，不会改变运行时值；当子组件在 early return 之前访问 `strategy.strategy_id` 时，页面会直接崩溃为空白。
+
+**经验**：
+- 弹窗类组件若依赖必填对象，父组件应在对象存在时才渲染
+- 不要用非空断言掩盖 React 条件渲染问题
+
+
+---
+
+## 二十八、接口契约与命名一致性经验
+
+### 28.1 踩坑记录：同一概念多种命名会制造隐蔽故障
+
+**场景**：
+多人协作和 AI 修改代码时，常见问题不是业务逻辑本身，而是接口名称漂移：
+- `cl_ord_id` vs `client_order_id` vs `clientOrderId`
+- `qty` vs `quantity`
+- `signal_type` vs `direction`
+- `deployment_id` vs `strategy_id`
+
+**问题**：
+- 类型检查不一定能发现跨层语义错位
+- Pydantic / dict 转换可能静默丢字段
+- Adapter 原始字段泄漏到 Core 后，会破坏确定性层的领域边界
+- 回放、幂等、REST Alignment 和前端展示容易各用一套字段口径
+
+**经验**：
+- 命名规范必须从“建议”升级为“契约”
+- 契约需要覆盖字段语义、转换边界、兼容策略和测试要求
+- 文档负责统一认知，类型和测试负责防止认知失效
+
+### 28.2 设计模式：Interface Contracts 作为接口单一真相源
+
+**实现模式**：
+1. 新增 `docs/INTERFACE_CONTRACTS.md`
+2. 记录标准领域词汇和禁止混用名称
+3. 明确外部字段到内部字段的映射位置
+4. 约束 Core / Adapter / Persistence / Service / API 各层接口责任
+5. 把接口变更流程写入 `AGENTS.md`、`CLAUDE.md` 和 `.traerules`
+
+**关键约束**：
+- 先契约，后实现
+- 外部字段只在 Adapter/API 边界转换
+- 内部 DTO、事件、持久化字段必须使用标准领域词汇
+- 接口改名必须同步类型定义、实现、测试和状态文档
+
+### 28.3 后续维护经验：契约文档必须随代码一起演进
+
+**经验**：
+- `docs/INTERFACE_CONTRACTS.md` 不是一次性说明书，而是接口演进日志的当前版本
+- 每次新增 DTO、事件 Schema、API 字段或跨层调用，都应先检查是否已有标准名称
+- 如果为了兼容保留旧字段，必须明确 legacy 字段的转换边界和退出策略
+
+### 28.4 规则入口同步经验：公共约束一致，工具专属内容可保留
+
+**场景**：
+仓库同时存在 `AGENTS.md`、`CLAUDE.md` 和 `.traerules`。它们面向不同 AI/工具入口，但都会影响后续开发行为。
+
+**问题**：
+- 如果只同步 `AGENTS.md` 和 `CLAUDE.md`，Trae/Kilo 入口仍可能遵守旧规则
+- `.traerules` 曾保留旧三平面架构、旧文档更新流程和 Python 3.10+ 描述
+- 多入口规则漂移会让同一仓库出现“不同助手执行不同工程纪律”的问题
+
+**经验**：
+- 三份规则文档不必逐字相同，但公共工程约束必须一致
+- 公共约束包括架构边界、接口契约、测试规范、文档闭环、技术栈和红线操作
+- 工具专属内容（如 Trae/Kilo 的分支、PR、角色流程）可以保留，但不能覆盖公共约束
+- 修改任一规则入口时，必须检查另外两个入口是否需要同步
+
+### 28.5 TDD 防幻觉经验：先让真实接口失败，再写实现
+
+**场景**：
+AI 修改代码时，常见幻觉不是语法错误，而是“看起来合理但仓库里不存在”的函数、DTO、字段或调用链。
+
+**问题**：
+- 先写实现容易围绕臆造 API 展开，后续测试也可能只是在验证虚构接口
+- 只要求“补测试”不够，因为测试本身也可能绑定错误命名或错误层级
+- 在交易系统里，虚构接口可能绕过 Core/Adapter/Persistence 边界，造成更隐蔽的状态污染
+
+**经验**：
+- 行为变更必须先走 Red → Green → Refactor
+- Red 阶段先检索真实接口和调用点，失败测试必须失败在目标行为上，而不是 import error 或拼写错误
+- 如果确实需要新增接口，先更新 `docs/INTERFACE_CONTRACTS.md`，再写测试和实现
+- Green 阶段只做最小实现，避免 AI 顺手扩展无证据抽象
+- Refactor 阶段必须保持测试、接口契约和核心不变性同时成立
+
+### 28.6 架构图维护经验：图必须成为当前状态入口
+
+**场景**：
+仓库已有长篇架构说明，但新人、用户或 AI 需要快速判断当前系统边界时，长文档不如图文入口高效。
+
+**问题**：
+- 如果只有长篇架构说明，AI 容易只抓局部段落，忽略主数据流和跨层边界
+- 架构变更后若不更新图，图会迅速变成误导性资料
+- 文档、接口契约、状态记录之间如果没有关系图，后续维护者不清楚该先更新哪一个
+
+**经验**：
+- 新增 `docs/PROJECT_ARCHITECTURE.md` 作为当前架构图文入口
+- 架构图应覆盖层级边界、主数据流、关键业务闭环、恢复闭环和文档契约关系
+- 架构变更必须先更新图，再更新接口契约、实现、测试和状态文档
+- 长篇架构说明负责背景和原则，架构图文档负责当前拓扑和维护触发条件
+
+
+---
+
+## 二十六、OMS 余额预检查与执行预算经验
+
+### 26.1 踩坑记录：余额预检查不能只覆盖限价单
+
+**场景**：
+策略运行时连续出现交易所 `insufficient balance` 拒单。
+
+**问题**：
+- 原逻辑只在 `signal.price > 0` 时做余额检查
+- 市价单或无价信号会绕过本地检查，直接把错误交给交易所
+- 交易所拒单会污染策略事件、监控指标和执行质量判断
+
+**经验**：
+- 交易所拒单只能作为最后防线，执行层必须先做本地可执行性检查
+- 市价买单也需要参考价，用于估算 quoteOrderQty、minNotional 和余额占用
+- 无法拿到账户余额时必须 fail-closed，不能 warning 后继续下单
+
+### 26.2 设计模式：Pre-trade Balance Gate
+
+**实现模式**：
+```python
+quantity, balance_requirement = await pretrade_balance_check(
+    side=side,
+    quantity=quantity,
+    reference_price=reference_price,
+    cl_ord_id=cl_ord_id,
+)
+```
+
+**关键点**：
+- BUY 检查 quote asset（如 USDT）可用余额
+- SELL 检查 base asset（如 BTC）可用余额
+- 账户余额使用 REST snapshot 刷新，测试 fake 也必须实现同等端口语义
+- 本地下单前建立短 TTL reservation，降低连续信号复用同一 stale balance 的风险
+
+### 26.3 边界约束：进程内 Reservation 只是防抖，不是最终账本
+
+**经验**：
+- 进程内 reservation 可以减少同一进程内的短时间超额提交
+- 它不能替代交易所账户流、REST 对账和持久化账户状态
+- 更完整的方案应把 reservation 独立成 AccountState/ExecutionBudget 服务，由 private stream 成交/撤单事件和 REST snapshot 共同校准
+
+
+---
+
+## 二十七、开发记录文档闭环经验
+
+### 27.1 踩坑记录：计划、状态、经验不能替代开发流水账
+
+**场景**：
+项目已有 `PLAN.md`、`PROJECT_STATUS.md` 和 `docs/EXPERIENCE_SUMMARY.md`，但缺少按时间追加的开发过程记录。
+
+**问题**：
+- `PLAN.md` 适合表达下一步计划，不适合记录每次任务的真实执行过程
+- `PROJECT_STATUS.md` 适合表达当前状态，不适合承载过多过程细节
+- `EXPERIENCE_SUMMARY.md` 适合沉淀模式和踩坑，不适合记录每次改动的完整流水
+
+**经验**：
+- 增加 `DEVELOPMENT_LOG.md` 作为只追加的开发流水账
+- 每次记录背景、决策、改动、验证、风险/遗留和关联文档
+- 复盘时先看 `DEVELOPMENT_LOG.md`，判断现状时看 `PROJECT_STATUS.md`，规划时看 `PLAN.md`
 
 ---
 

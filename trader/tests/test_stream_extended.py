@@ -3,31 +3,31 @@ Extended Tests for Stream Base and Private/Public Streams
 ========================================================
 增加 stream_base, private_stream, public_stream 模块的测试覆盖率
 """
-import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import dataclass
 
+import asyncio
+from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from trader.adapters.binance.private_stream import (
+    BinanceCredentials,
+    PrivateStreamConfig,
+    PrivateStreamManager,
+)
+from trader.adapters.binance.public_stream import PublicStreamConfig, PublicStreamManager
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM,
     StreamConfig,
-    StreamState,
     StreamEvent,
     StreamMetrics,
-)
-from trader.adapters.binance.private_stream import (
-    PrivateStreamManager,
-    PrivateStreamConfig,
-    BinanceCredentials,
-)
-from trader.adapters.binance.public_stream import (
-    PublicStreamManager,
-    PublicStreamConfig,
+    StreamState,
 )
 
 
 class ExtendedStreamFSM(BaseStreamFSM):
     """用于扩展测试的虚拟状态机"""
+
     def __init__(self, name="TestStream"):
         super().__init__(name, StreamConfig())
         self._on_start_called = False
@@ -148,9 +148,7 @@ class TestStreamConfigExtended:
     def test_config_explicit(self):
         """测试显式配置"""
         config = StreamConfig(
-            reconnect_max_attempts=5,
-            reconnect_base_delay=2.0,
-            stale_timeout_seconds=60.0
+            reconnect_max_attempts=5, reconnect_base_delay=2.0, stale_timeout_seconds=60.0
         )
 
         assert config.reconnect_max_attempts == 5

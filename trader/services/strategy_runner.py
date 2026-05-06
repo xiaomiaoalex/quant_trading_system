@@ -14,6 +14,7 @@ StrategyRunner - 策略执行器
 - KillSwitch 对接：当 KillSwitch 升级时自动停止策略
 - OMS 对接：策略信号通过 OMS 执行订单
 """
+
 import asyncio
 import importlib
 import inspect
@@ -26,15 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Protocol,
-    runtime_checkable,
-)
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from trader.core.application.risk_engine import KillSwitchLevel
 from trader.core.application.strategy_protocol import (
@@ -207,9 +200,9 @@ class StrategyRunner:
         # 避免语义冲突：如果 strategy config 中的 mode 是交易方向（而非部署模式），
         # 则保留策略配置，不被部署模式覆盖
         # Task 17 修复: FireTestStrategy 用 mode 表示 BUY/SELL/ALTERNATE
-        strategy_mode = merged.get("mode")
-        if strategy_mode and strategy_mode.upper() not in self._DEPLOYMENT_MODES:
-            # 策略配置了非部署模式的 mode 值（如 BUY/SELL/ALTERNATE），保留
+        # 只有当 config 中明确指定了 mode 且为非部署模式值时，才保留策略配置
+        if config and config.get("mode") and config["mode"].upper() not in self._DEPLOYMENT_MODES:
+            # 策略 config 明确指定了交易方向（BUY/SELL/ALTERNATE），保留
             pass
         else:
             merged["mode"] = mode
@@ -246,9 +239,7 @@ class StrategyRunner:
         try:
             signature = inspect.signature(factory)
             accepted = {
-                name: value
-                for name, value in kwargs.items()
-                if name in signature.parameters
+                name: value for name, value in kwargs.items() if name in signature.parameters
             }
             plugin = factory(**accepted)
         except (TypeError, ValueError):
@@ -337,11 +328,25 @@ class StrategyRunner:
             # 设置策略版本（如果插件支持）
             # 注意：name 属性是只读的，不能被外部修改
             # strategy_id 是 Runner 内部的标识符，存储在 _plugins 字典的 key 中
-            if hasattr(plugin, 'version'):
+            if hasattr(plugin, "version"):
                 plugin.version = version
 
-            # 初始化策略
-            await plugin.initialize(runtime_config)
+            # 初始化策略：剔除部署元数据字段，只保留策略需要的 config
+            init_config = {
+                k: v
+                for k, v in runtime_config.items()
+                if k
+                not in (
+                    "mode",
+                    "account_id",
+                    "venue",
+                    "deployment_id",
+                    "module_path",
+                    "strategy_id",
+                    "symbols",
+                )
+            }
+            await plugin.initialize(init_config)
 
             # 注册策略
             self._plugins[runtime_id] = plugin
@@ -489,8 +494,7 @@ class StrategyRunner:
         except Exception as e:
             shutdown_error = str(e)
             logger.error(
-                f"策略卸载时清理资源失败: {deployment_id}, 错误: {e}\n"
-                f"{traceback.format_exc()}"
+                f"策略卸载时清理资源失败: {deployment_id}, 错误: {e}\n" f"{traceback.format_exc()}"
             )
 
         # 即使shutdown失败，也要从字典中移除
@@ -502,7 +506,9 @@ class StrategyRunner:
 
         # 即使shutdown失败，也记录完整的策略卸载信息
         if shutdown_error:
-            logger.error(f"策略已卸载但存在资源泄漏风险: {deployment_id}, shutdown错误: {shutdown_error}")
+            logger.error(
+                f"策略已卸载但存在资源泄漏风险: {deployment_id}, shutdown错误: {shutdown_error}"
+            )
         else:
             logger.info(f"策略卸载成功: {deployment_id}")
 
@@ -528,7 +534,7 @@ class StrategyRunner:
 
         # 重新初始化策略（确保每次 start 都有干净的状态）
         plugin = self._plugins.get(strategy_id)
-        if plugin and hasattr(plugin, 'initialize'):
+        if plugin and hasattr(plugin, "initialize"):
             try:
                 await plugin.initialize(
                     self._build_runtime_init_config(
@@ -557,11 +563,17 @@ class StrategyRunner:
         # Task 9.11: Broadcast SSE update for real-time frontend updates
         try:
             from trader.api.routes.sse import broadcast_strategy_update
-            asyncio.create_task(broadcast_strategy_update(strategy_id, {
-                "type": "strategy_started",
-                "status": "RUNNING",
-                "symbols": info.symbols,
-            }))
+
+            asyncio.create_task(
+                broadcast_strategy_update(
+                    strategy_id,
+                    {
+                        "type": "strategy_started",
+                        "status": "RUNNING",
+                        "symbols": info.symbols,
+                    },
+                )
+            )
         except Exception:
             pass  # SSE broadcast is non-critical
 
@@ -588,7 +600,9 @@ class StrategyRunner:
             "mode": info.mode,
             "env": info.env,
             "started_at": int(info.started_at.timestamp() * 1000) if info.started_at else None,
-            "last_tick_at": int(info.last_tick_at.timestamp() * 1000) if info.last_tick_at else None,
+            "last_tick_at": (
+                int(info.last_tick_at.timestamp() * 1000) if info.last_tick_at else None
+            ),
         }
         try:
             # Task 18: Handle both sync and async storage backends
@@ -629,7 +643,7 @@ class StrategyRunner:
 
         # 重置策略内部状态（调用 shutdown）
         plugin = self._plugins.get(strategy_id)
-        if plugin and hasattr(plugin, 'shutdown'):
+        if plugin and hasattr(plugin, "shutdown"):
             try:
                 await plugin.shutdown()
             except Exception as e:
@@ -644,10 +658,16 @@ class StrategyRunner:
         # Task 9.11: Broadcast SSE update for real-time frontend updates
         try:
             from trader.api.routes.sse import broadcast_strategy_update
-            asyncio.create_task(broadcast_strategy_update(strategy_id, {
-                "type": "strategy_stopped",
-                "status": "STOPPED",
-            }))
+
+            asyncio.create_task(
+                broadcast_strategy_update(
+                    strategy_id,
+                    {
+                        "type": "strategy_stopped",
+                        "status": "STOPPED",
+                    },
+                )
+            )
         except Exception:
             pass  # SSE broadcast is non-critical
 
@@ -698,9 +718,7 @@ class StrategyRunner:
         logger.info(f"策略恢复成功: {strategy_id}")
         return info
 
-    async def tick(
-        self, strategy_id: str, market_data: MarketData
-    ) -> Optional[Signal]:
+    async def tick(self, strategy_id: str, market_data: MarketData) -> Optional[Signal]:
         """
         驱动策略Tick
 
@@ -744,9 +762,7 @@ class StrategyRunner:
                 ks_level = self._killswitch_callback(strategy_id)
                 if ks_level >= KillSwitchLevel.L1_NO_NEW_POSITIONS:
                     info.blocked_reason = f"KillSwitch L{ks_level} active"
-                    logger.warning(
-                        f"策略 {strategy_id} 被 KillSwitch L{ks_level} 阻止"
-                    )
+                    logger.warning(f"策略 {strategy_id} 被 KillSwitch L{ks_level} 阻止")
                     # L2+ 需要完全停止策略
                     if ks_level >= KillSwitchLevel.L2_CANCEL_ALL_AND_HALT:
                         await self.stop(strategy_id)
@@ -772,8 +788,7 @@ class StrategyRunner:
             timeout_seconds = limits.timeout_seconds if limits else 0.0
             if timeout_seconds > 0:
                 signal = await asyncio.wait_for(
-                    plugin.on_market_data(market_data),
-                    timeout=timeout_seconds
+                    plugin.on_market_data(market_data), timeout=timeout_seconds
                 )
             else:
                 signal = await plugin.on_market_data(market_data)
@@ -809,16 +824,22 @@ class StrategyRunner:
                     if self._event_callback:
                         try:
                             direction = signal.signal_type.value if signal.signal_type else None
-                            self._event_callback(strategy_id, "strategy.signal", {
-                                "deployment_id": info.deployment_id,
-                                "strategy_id": info.strategy_id,
-                                "symbol": signal.symbol,
-                                "direction": direction,
-                                "signal_type": signal.signal_type.value if signal.signal_type else None,
-                                "quantity": str(signal.quantity) if signal.quantity else None,
-                                "price": str(signal.price) if signal.price else None,
-                                "reason": signal.reason,
-                            })
+                            self._event_callback(
+                                strategy_id,
+                                "strategy.signal",
+                                {
+                                    "deployment_id": info.deployment_id,
+                                    "strategy_id": info.strategy_id,
+                                    "symbol": signal.symbol,
+                                    "direction": direction,
+                                    "signal_type": (
+                                        signal.signal_type.value if signal.signal_type else None
+                                    ),
+                                    "quantity": str(signal.quantity) if signal.quantity else None,
+                                    "price": str(signal.price) if signal.price else None,
+                                    "reason": signal.reason,
+                                },
+                            )
                         except Exception as e:
                             logger.error(f"事件发布失败: {strategy_id}, 错误: {e}")
 
@@ -835,15 +856,19 @@ class StrategyRunner:
                                 side = None
                                 logger.warning(
                                     f"[StrategyRunner] Skipping order event for invalid signal type: {signal.signal_type}"
+                                )
+                            self._event_callback(
+                                strategy_id,
+                                "strategy.order.submitted",
+                                {
+                                    "deployment_id": info.deployment_id,
+                                    "strategy_id": info.strategy_id,
+                                    "symbol": signal.symbol,
+                                    "side": side,
+                                    "quantity": str(signal.quantity) if signal.quantity else None,
+                                    "price": str(signal.price) if signal.price else None,
+                                },
                             )
-                            self._event_callback(strategy_id, "strategy.order.submitted", {
-                                "deployment_id": info.deployment_id,
-                                "strategy_id": info.strategy_id,
-                                "symbol": signal.symbol,
-                                "side": side,
-                                "quantity": str(signal.quantity) if signal.quantity else None,
-                                "price": str(signal.price) if signal.price else None,
-                            })
                     except Exception as e:
                         logger.error(f"OMS 执行失败: {strategy_id}, 错误: {e}")
                         signal = None
@@ -854,8 +879,7 @@ class StrategyRunner:
                         await self._signal_callback(strategy_id, signal)
                     except Exception as e:
                         logger.error(
-                            f"信号回调异常: {strategy_id}, 错误: {e}\n"
-                            f"{traceback.format_exc()}"
+                            f"信号回调异常: {strategy_id}, 错误: {e}\n" f"{traceback.format_exc()}"
                         )
 
             return signal
@@ -863,33 +887,36 @@ class StrategyRunner:
         except asyncio.TimeoutError:
             info.error_count += 1
             info.last_error = f"策略执行超时: {timeout_seconds}s"
-            logger.error(
-                f"策略执行超时: {strategy_id}, 超时: {timeout_seconds}s"
-            )
+            logger.error(f"策略执行超时: {strategy_id}, 超时: {timeout_seconds}s")
             if self._event_callback:
-                self._event_callback(strategy_id, "strategy.error", {
-                    "deployment_id": info.deployment_id,
-                    "strategy_id": info.strategy_id,
-                    "error_message": info.last_error,
-                    "error_type": "TIMEOUT",
-                })
+                self._event_callback(
+                    strategy_id,
+                    "strategy.error",
+                    {
+                        "deployment_id": info.deployment_id,
+                        "strategy_id": info.strategy_id,
+                        "error_message": info.last_error,
+                        "error_type": "TIMEOUT",
+                    },
+                )
             return None
 
         except Exception as e:
             # 异常隔离：记录错误但不崩溃
             info.error_count += 1
             info.last_error = str(e)
-            logger.error(
-                f"策略Tick异常: {strategy_id}, 错误: {e}\n"
-                f"{traceback.format_exc()}"
-            )
+            logger.error(f"策略Tick异常: {strategy_id}, 错误: {e}\n" f"{traceback.format_exc()}")
             if self._event_callback:
-                self._event_callback(strategy_id, "strategy.error", {
-                    "deployment_id": info.deployment_id,
-                    "strategy_id": info.strategy_id,
-                    "error_message": str(e),
-                    "error_type": "TICK_EXCEPTION",
-                })
+                self._event_callback(
+                    strategy_id,
+                    "strategy.error",
+                    {
+                        "deployment_id": info.deployment_id,
+                        "strategy_id": info.strategy_id,
+                        "error_message": str(e),
+                        "error_type": "TICK_EXCEPTION",
+                    },
+                )
 
             # 错误次数过多，标记为ERROR状态
             if info.error_count >= self._max_errors_before_error_state:
@@ -1021,8 +1048,8 @@ class StrategyRunner:
             # 调用策略的 update_config 方法
             # 如果插件没有实现 update_config，则使用 initialize 作为后备
             try:
-                if hasattr(plugin, 'update_config'):
-                    update_method = getattr(plugin, 'update_config')
+                if hasattr(plugin, "update_config"):
+                    update_method = getattr(plugin, "update_config")
                     if asyncio.iscoroutinefunction(update_method):
                         validation_result: ValidationResult = await update_method(config)
                     else:
@@ -1124,15 +1151,19 @@ class StrategyRunner:
             plugin = self._plugins[strategy_id]
 
             # 如果插件支持 update_config，使用它进行验证
-            if hasattr(plugin, 'update_config'):
-                update_method = getattr(plugin, 'update_config')
+            if hasattr(plugin, "update_config"):
+                update_method = getattr(plugin, "update_config")
                 if asyncio.iscoroutinefunction(update_method):
                     return await update_method(config)
                 else:
                     return update_method(config)
             else:
                 # 如果插件不支持 update_config，返回警告
-                from trader.core.application.strategy_protocol import ValidationResult, ValidationStatus
+                from trader.core.application.strategy_protocol import (
+                    ValidationResult,
+                    ValidationStatus,
+                )
+
                 return ValidationResult(
                     status=ValidationStatus.VALID,
                     warnings=["Plugin does not support update_config, will use initialize"],
@@ -1150,10 +1181,7 @@ class StrategyRunner:
     def list_deployments_for_strategy(self, strategy_id: str) -> List[StrategyRuntimeInfo]:
         """按模板 strategy_id 查找所有已加载 deployment。"""
 
-        return [
-            info for info in self._infos.values()
-            if info.strategy_id == strategy_id
-        ]
+        return [info for info in self._infos.values() if info.strategy_id == strategy_id]
 
     async def shutdown(self) -> None:
         """

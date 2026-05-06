@@ -3,15 +3,24 @@
 简化版验证脚本 - 直接测试核心功能
 """
 import sys
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
+
+from decimal import Decimal
 
 from trader.core.application.deterministic_layer import (
-    DeterministicApplier, RawOrderUpdate, RawFillUpdate,
-    OrderVersionVector, ShadowState, TTLSet,
-    cas_apply_order, cas_apply_fill,
-    STATUS_RANK, TERMINAL_MIN_RANK
+    STATUS_RANK,
+    TERMINAL_MIN_RANK,
+    DeterministicApplier,
+    OrderVersionVector,
+    RawFillUpdate,
+    RawOrderUpdate,
+    ShadowState,
+    TTLSet,
+    cas_apply_fill,
+    cas_apply_order,
 )
-from decimal import Decimal
+
 
 def test_ttl_set():
     """测试TTLSet"""
@@ -28,6 +37,7 @@ def test_ttl_set():
     print("TTL expiry: PASS")
     print()
 
+
 def test_status_rank():
     """测试STATUS_RANK"""
     print("=== Test STATUS_RANK ===")
@@ -37,6 +47,7 @@ def test_status_rank():
     assert TERMINAL_MIN_RANK == 50
     print("STATUS_RANK: PASS")
     print()
+
 
 def test_cas_order_normal():
     """测试正常订单生命周期"""
@@ -50,7 +61,7 @@ def test_cas_order_normal():
         status="NEW",
         exchange_event_ts_ms=1000,
         local_receive_ts_ms=1000,
-        source="WS"
+        source="WS",
     )
     events = cas_apply_order(vv, shadow, "cl_001", update1)
     assert len(events) == 1, "NEW should be accepted"
@@ -64,7 +75,7 @@ def test_cas_order_normal():
         filled_qty=Decimal("5"),
         exchange_event_ts_ms=2000,
         local_receive_ts_ms=2000,
-        source="WS"
+        source="WS",
     )
     events = cas_apply_order(vv, shadow, "cl_001", update2)
     assert len(events) == 1, "PARTIALLY_FILLED should be accepted"
@@ -77,13 +88,14 @@ def test_cas_order_normal():
         filled_qty=Decimal("10"),
         exchange_event_ts_ms=3000,
         local_receive_ts_ms=3000,
-        source="WS"
+        source="WS",
     )
     events = cas_apply_order(vv, shadow, "cl_001", update3)
     assert len(events) == 1, "FILLED should be accepted"
     assert vv.last_status_rank == STATUS_RANK["FILLED"]
     print("FILLED: PASS")
     print()
+
 
 def test_cas_order_rollback():
     """测试订单回滚保护"""
@@ -97,7 +109,7 @@ def test_cas_order_rollback():
         status="FILLED",
         exchange_event_ts_ms=1000,
         local_receive_ts_ms=1000,
-        source="WS"
+        source="WS",
     )
     cas_apply_order(vv, shadow, "cl_001", update1)
 
@@ -107,12 +119,13 @@ def test_cas_order_rollback():
         status="PARTIALLY_FILLED",
         exchange_event_ts_ms=2000,
         local_receive_ts_ms=2000,
-        source="WS"
+        source="WS",
     )
     events = cas_apply_order(vv, shadow, "cl_001", update2)
     assert len(events) == 0, "Rollback should be rejected"
     print("Rollback rejected: PASS")
     print()
+
 
 def test_cas_fill_dedup():
     """测试成交去重"""
@@ -127,7 +140,7 @@ def test_cas_fill_dedup():
         fill_price=Decimal("100"),
         exchange_event_ts_ms=1000,
         local_receive_ts_ms=1000,
-        source="WS"
+        source="WS",
     )
     events1 = cas_apply_fill(vv, shadow, "cl_001", fill1)
     assert len(events1) == 1, "First fill should be accepted"
@@ -138,6 +151,7 @@ def test_cas_fill_dedup():
     assert len(events2) == 0, "Duplicate fill should be rejected"
     print("Duplicate rejected: PASS")
     print()
+
 
 def test_finality_override():
     """测试终态override"""
@@ -152,7 +166,7 @@ def test_finality_override():
         filled_qty=Decimal("5"),
         exchange_event_ts_ms=1000,
         local_receive_ts_ms=1000,
-        source="WS"
+        source="WS",
     )
     cas_apply_order(vv, shadow, "cl_001", update1)
 
@@ -164,12 +178,13 @@ def test_finality_override():
         exchange_event_ts_ms=800,  # 更早的时间戳
         local_receive_ts_ms=2000,
         source="REST",
-        finality_override=True
+        finality_override=True,
     )
     events = cas_apply_order(vv, shadow, "cl_001", update2)
     assert len(events) == 1, "Finality override should be accepted"
     print("Finality override: PASS")
     print()
+
 
 def test_applier():
     """测试DeterministicApplier"""
@@ -185,7 +200,7 @@ def test_applier():
             status="NEW",
             exchange_event_ts_ms=1000,
             local_receive_ts_ms=1000,
-            source="WS"
+            source="WS",
         )
         events = await applier.apply_order_update(update)
         assert len(events) == 1, "Order update failed"
@@ -198,7 +213,7 @@ def test_applier():
             fill_qty=Decimal("10"),
             fill_price=Decimal("100"),
             local_receive_ts_ms=1000,
-            source="WS"
+            source="WS",
         )
         events = await applier.apply_fill_update(fill)
         assert len(events) == 1, "Fill update failed"
@@ -216,6 +231,7 @@ def test_applier():
     print("get_shadow_order: PASS")
     print()
 
+
 def test_stale_rest():
     """测试stale REST拒绝"""
     print("=== Test Stale REST Rejection ===")
@@ -231,7 +247,7 @@ def test_stale_rest():
             filled_qty=Decimal("10"),
             exchange_event_ts_ms=3000,
             local_receive_ts_ms=3000,
-            source="WS"
+            source="WS",
         )
         await applier.apply_order_update(ws_update)
 
@@ -242,7 +258,7 @@ def test_stale_rest():
             filled_qty=Decimal("5"),
             exchange_event_ts_ms=2000,  # 更早
             local_receive_ts_ms=4000,
-            source="REST"
+            source="REST",
         )
         events = await applier.apply_order_update(rest_update)
         assert len(events) == 0, "Stale REST should be rejected"
@@ -254,6 +270,7 @@ def test_stale_rest():
 
     asyncio.run(run_test())
     print()
+
 
 def test_concurrency():
     """测试并发安全"""
@@ -290,6 +307,7 @@ def test_concurrency():
     asyncio.run(run_test())
     print()
 
+
 def test_concurrent_fill_dedup():
     """测试并发成交去重"""
     print("=== Test Concurrent Fill Deduplication ===")
@@ -321,6 +339,7 @@ def test_concurrent_fill_dedup():
     asyncio.run(run_test())
     print()
 
+
 def test_fill_with_price_update():
     """测试成交价格更新"""
     print("=== Test Fill Price Update ===")
@@ -335,7 +354,7 @@ def test_fill_with_price_update():
         fill_price=Decimal("100"),
         exchange_event_ts_ms=1000,
         local_receive_ts_ms=1000,
-        source="WS"
+        source="WS",
     )
     cas_apply_fill(vv, shadow, "cl_001", fill1)
 
@@ -347,7 +366,7 @@ def test_fill_with_price_update():
         fill_price=Decimal("110"),
         exchange_event_ts_ms=2000,
         local_receive_ts_ms=2000,
-        source="WS"
+        source="WS",
     )
     events = cas_apply_fill(vv, shadow, "cl_001", fill2)
     assert len(events) == 1
@@ -357,6 +376,7 @@ def test_fill_with_price_update():
     assert order.avg_price == Decimal("105"), f"Expected 105, got {order.avg_price}"
     print("Fill price update: PASS")
     print()
+
 
 def test_get_all_orders():
     """测试获取所有订单"""
@@ -369,10 +389,7 @@ def test_get_all_orders():
         # 添加多个订单
         for i in range(3):
             update = RawOrderUpdate(
-                cl_ord_id=f"cl_{i}",
-                status="NEW",
-                local_receive_ts_ms=1000 + i,
-                source="WS"
+                cl_ord_id=f"cl_{i}", status="NEW", local_receive_ts_ms=1000 + i, source="WS"
             )
             await applier.apply_order_update(update)
 
@@ -383,6 +400,7 @@ def test_get_all_orders():
     asyncio.run(run_test())
     print()
 
+
 def test_get_version_vector():
     """测试获取版本向量"""
     print("=== Test Get Version Vector ===")
@@ -392,10 +410,7 @@ def test_get_version_vector():
         applier = DeterministicApplier(partitions=16)
 
         update = RawOrderUpdate(
-            cl_ord_id="cl_001",
-            status="FILLED",
-            local_receive_ts_ms=1000,
-            source="WS"
+            cl_ord_id="cl_001", status="FILLED", local_receive_ts_ms=1000, source="WS"
         )
         await applier.apply_order_update(update)
 
@@ -406,6 +421,7 @@ def test_get_version_vector():
 
     asyncio.run(run_test())
     print()
+
 
 def test_apply_fill_no_cl_ord_id():
     """测试无cl_ord_id的成交"""
@@ -422,7 +438,7 @@ def test_apply_fill_no_cl_ord_id():
             fill_qty=Decimal("10"),
             fill_price=Decimal("100"),
             local_receive_ts_ms=1000,
-            source="WS"
+            source="WS",
         )
         events = await applier.apply_fill_update(fill)
         assert len(events) == 0, "Should return empty for unknown broker"
@@ -430,6 +446,7 @@ def test_apply_fill_no_cl_ord_id():
 
     asyncio.run(run_test())
     print()
+
 
 def test_apply_order_no_cl_ord_id():
     """测试无cl_ord_id的订单"""
@@ -441,10 +458,7 @@ def test_apply_order_no_cl_ord_id():
 
         # 使用 broker_order_id 但没有映射
         update = RawOrderUpdate(
-            broker_order_id="unknown_broker",
-            status="NEW",
-            local_receive_ts_ms=1000,
-            source="WS"
+            broker_order_id="unknown_broker", status="NEW", local_receive_ts_ms=1000, source="WS"
         )
         events = await applier.apply_order_update(update)
         assert len(events) == 0, "Should return empty for unknown broker"
@@ -453,10 +467,12 @@ def test_apply_order_no_cl_ord_id():
     asyncio.run(run_test())
     print()
 
+
 def test_resolve_cl_ord_id_via_broker():
     """测试通过broker_order_id解析cl_ord_id"""
     print("=== Test Resolve cl_ord_id via broker ===")
     from trader.core.application.deterministic_layer import resolve_cl_ord_id
+
     shadow = ShadowState()
 
     # 先添加订单建立映射
@@ -469,6 +485,7 @@ def test_resolve_cl_ord_id_via_broker():
     print("Resolve via broker: PASS")
     print()
 
+
 def test_reset_method():
     """测试重置方法"""
     print("=== Test Reset Method ===")
@@ -478,10 +495,7 @@ def test_reset_method():
         applier = DeterministicApplier(partitions=16)
 
         update = RawOrderUpdate(
-            cl_ord_id="cl_001",
-            status="NEW",
-            local_receive_ts_ms=1000,
-            source="WS"
+            cl_ord_id="cl_001", status="NEW", local_receive_ts_ms=1000, source="WS"
         )
         await applier.apply_order_update(update)
         assert applier.get_shadow_order("cl_001") is not None
@@ -493,6 +507,7 @@ def test_reset_method():
 
     asyncio.run(run_test())
     print()
+
 
 if __name__ == "__main__":
     print("Running deterministic layer validation tests...\n")
@@ -525,5 +540,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

@@ -19,29 +19,31 @@ PositionLedgerManager - 策略级持仓账本管理器
     for evt in events:
         event_bus.publish(evt)
 """
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
+from trader.core.domain.models.events import (
+    DomainEvent,
+    create_lot_closed_event,
+    create_lot_opened_event,
+    create_lot_reduced_event,
+    create_strategy_position_updated_event,
+)
 from trader.core.domain.models.position import (
+    CostBasisMethod,
     PositionLedger,
     PositionLot,
     PositionStatus,
-    CostBasisMethod,
-)
-from trader.core.domain.models.events import (
-    DomainEvent,
-    create_lot_opened_event,
-    create_lot_reduced_event,
-    create_lot_closed_event,
-    create_strategy_position_updated_event,
 )
 
 
 @dataclass
 class ReconciliationReport:
     """对账报告"""
+
     strategy_id: str
     symbol: str
     broker_qty: Decimal
@@ -175,25 +177,29 @@ class PositionLedgerManager:
 
             if closed_lot is not None:
                 # 完全平仓
-                events.append(create_lot_closed_event(
-                    lot_id=lot_id,
-                    strategy_id=ledger.strategy_id,
-                    symbol=ledger.symbol,
-                    close_price=price,
-                    total_realized_pnl=closed_lot.realized_pnl,
-                ))
+                events.append(
+                    create_lot_closed_event(
+                        lot_id=lot_id,
+                        strategy_id=ledger.strategy_id,
+                        symbol=ledger.symbol,
+                        close_price=price,
+                        total_realized_pnl=closed_lot.realized_pnl,
+                    )
+                )
             elif open_lot is not None:
                 # 部分平仓：PnL = (卖出价 - 批次成本价) × 数量
                 lot_pnl = (price - lot_fill_price) * reduce_qty
-                events.append(create_lot_reduced_event(
-                    lot_id=lot_id,
-                    strategy_id=ledger.strategy_id,
-                    symbol=ledger.symbol,
-                    reduce_qty=reduce_qty,
-                    reduce_price=price,
-                    remaining_qty=open_lot.remaining_qty,
-                    realized_pnl=lot_pnl,
-                ))
+                events.append(
+                    create_lot_reduced_event(
+                        lot_id=lot_id,
+                        strategy_id=ledger.strategy_id,
+                        symbol=ledger.symbol,
+                        reduce_qty=reduce_qty,
+                        reduce_price=price,
+                        remaining_qty=open_lot.remaining_qty,
+                        realized_pnl=lot_pnl,
+                    )
+                )
 
         events.append(self._make_strategy_position_updated_event(ledger))
         return events

@@ -13,10 +13,11 @@ Heartbeat Service - 后端进程心跳检测
 - 轻量级: 检测间隔 10s，不阻塞事件循环
 - Windows 兼容: 内存检测可选降级
 """
+
 import asyncio
 import logging
-import time
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProcessHeartbeat:
     """进程心跳"""
+
     event_loop_lag_ms: float
     last_event_loop_check_ts_ms: int
     active_tasks: int
@@ -46,6 +48,7 @@ class ProcessHeartbeatService:
     - 调度一个立即执行的 task，记录 scheduled time 和 actual execution time 的差值
     - 差值 > 1s 视为事件循环卡顿
     """
+
     _check_interval: float = 10.0
     _max_lag_threshold_ms: float = 1000.0
     _start_time: float = field(default_factory=time.time)
@@ -121,20 +124,18 @@ class ProcessHeartbeatService:
         """
         loop = asyncio.get_running_loop()
         start_time = loop.time()
-        
+
         def _scheduled_callback():
             pass
-        
+
         loop.call_later(0, _scheduled_callback)
         await asyncio.sleep(0)
-        
+
         elapsed = loop.time() - start_time
         lag_ms = elapsed * 1000
 
         if lag_ms > self._max_lag_threshold_ms:
-            logger.warning(
-                f"[Heartbeat] Loop lag threshold exceeded: {lag_ms:.1f}ms"
-            )
+            logger.warning(f"[Heartbeat] Loop lag threshold exceeded: {lag_ms:.1f}ms")
 
         return lag_ms
 
@@ -149,15 +150,18 @@ class ProcessHeartbeatService:
         """
         try:
             import sys
+
             if sys.platform == "win32":
                 try:
                     import psutil
+
                     process = psutil.Process(os.getpid())
                     return process.memory_info().rss / (1024 * 1024)
                 except ImportError:
                     return None
             else:
                 import resource
+
                 usage = resource.getrusage(resource.RUSAGE_SELF)
                 return usage.ru_maxrss / 1024
         except Exception as e:

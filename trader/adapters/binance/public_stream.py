@@ -9,13 +9,14 @@ Public Stream Manager - Binance Public WebSocket Stream
 - 心跳检测
 - 数据解析和元数据打标
 """
+
 import asyncio
 import json
 import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
@@ -24,12 +25,14 @@ if TYPE_CHECKING:
 import websockets
 import websockets.client as ws_client
 
-from trader.adapters.binance.stream_base import (
-    BaseStreamFSM, StreamConfig, StreamState, StreamEvent
-)
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
+from trader.adapters.binance.stream_base import (
+    BaseStreamFSM,
+    StreamConfig,
+    StreamEvent,
+    StreamState,
+)
 from trader.adapters.binance.websockets_compat import install_connection_lost_guard
-
 
 logger = logging.getLogger(__name__)
 install_connection_lost_guard(logger)
@@ -38,6 +41,7 @@ install_connection_lost_guard(logger)
 @dataclass
 class MarketEvent:
     """市场事件"""
+
     stream: str
     event_type: str
     data: Dict[str, Any]
@@ -49,6 +53,7 @@ class MarketEvent:
 @dataclass
 class PublicStreamConfig:
     """公有流配置"""
+
     base_url: str = "wss://stream.binance.com:9443/ws"
     reconnect_delay: float = 1.0
     max_reconnect_delay: float = 60.0
@@ -74,7 +79,7 @@ class PublicStreamManager(BaseStreamFSM):
     def __init__(
         self,
         config: Optional[PublicStreamConfig] = None,
-        stream_config: Optional[StreamConfig] = None
+        stream_config: Optional[StreamConfig] = None,
     ):
         fsm_config = stream_config or StreamConfig()
         super().__init__("PublicStream", fsm_config)
@@ -140,6 +145,7 @@ class PublicStreamManager(BaseStreamFSM):
     async def _on_start(self) -> None:
         """启动时的具体逻辑"""
         import aiohttp
+
         self._session = aiohttp.ClientSession()
         await self._connect_with_retry()
 
@@ -254,8 +260,7 @@ class PublicStreamManager(BaseStreamFSM):
             try:
                 sleep_delay = self._apply_jitter(delay)
                 logger.info(
-                    f"[{self._name}] Reconnecting in {sleep_delay:.2f}s "
-                    f"(base={delay:.2f}s)"
+                    f"[{self._name}] Reconnecting in {sleep_delay:.2f}s " f"(base={delay:.2f}s)"
                 )
                 await asyncio.sleep(sleep_delay)
 
@@ -296,11 +301,7 @@ class PublicStreamManager(BaseStreamFSM):
             stream_name = ""
 
             # Combined stream: {"stream":"btcusdt@trade","data":{...}}
-            if (
-                isinstance(raw, dict)
-                and "data" in raw
-                and isinstance(raw.get("data"), dict)
-            ):
+            if isinstance(raw, dict) and "data" in raw and isinstance(raw.get("data"), dict):
                 data = raw["data"]
                 stream_name = str(raw.get("stream") or "")
             else:
@@ -319,7 +320,7 @@ class PublicStreamManager(BaseStreamFSM):
                 data=data,
                 exchange_ts_ms=exchange_ts,
                 local_receive_ts_ms=int(now * 1000),
-                source="WS"
+                source="WS",
             )
 
             self._last_data_ts = now
@@ -379,8 +380,7 @@ class PublicStreamManager(BaseStreamFSM):
                     self._public_config.ping_interval + self._public_config.stale_timeout
                 ):
                     logger.warning(
-                        f"[{self._name}] Pong timeout: "
-                        f"{time_since_pong:.1f}s since last pong"
+                        f"[{self._name}] Pong timeout: " f"{time_since_pong:.1f}s since last pong"
                     )
                     await self.reconnect()
 

@@ -18,19 +18,19 @@ Binance Spot Demo / Spot Testnet Broker Adapter
 """
 
 from __future__ import annotations
-from urllib.parse import urlencode
 
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Union
+from urllib.parse import urlencode
 
 import aiohttp
-import logging
 
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
 from trader.core.application.ports import (
@@ -42,7 +42,6 @@ from trader.core.application.ports import (
 )
 from trader.core.domain.models.order import OrderSide, OrderStatus, OrderType
 from trader.core.domain.models.position import BrokerPosition
-
 
 DEFAULT_SPOT_DEMO_BASE_URL = "https://demo-api.binance.com/api"
 DEFAULT_SPOT_DEMO_WS_URL = "wss://demo-stream.binance.com/ws"
@@ -176,9 +175,7 @@ class BinanceSpotDemoBrokerConfig:
                 verify_ssl=verify_ssl,
             )
         else:
-            raise ValueError(
-                f"Unsupported env={env!r}, expected 'demo' or 'testnet'"
-            )
+            raise ValueError(f"Unsupported env={env!r}, expected 'demo' or 'testnet'")
 
 
 class BinanceSpotDemoBroker(BrokerPort):
@@ -596,10 +593,15 @@ class BinanceSpotDemoBroker(BrokerPort):
             # For other order types (STOP_LOSS, etc.)
             params["quantity"] = str(quantity)
 
-        if order_type_value not in {"MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT"}:
-            raise ValueError(
-                f"Unsupported spot order_type for current adapter: {order_type_value}"
-            )
+        if order_type_value not in {
+            "MARKET",
+            "LIMIT",
+            "STOP_LOSS",
+            "STOP_LOSS_LIMIT",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_LIMIT",
+        }:
+            raise ValueError(f"Unsupported spot order_type for current adapter: {order_type_value}")
 
         data = await self._request("POST", "/v3/order", params=params, signed=True)
         return self._parse_order_response(data)
@@ -723,16 +725,16 @@ class BinanceSpotDemoBroker(BrokerPort):
     async def get_ticker_prices(self, symbols: List[str]) -> Dict[str, Decimal]:
         """
         获取多个交易对的当前价格。
-        
+
         Args:
             symbols: 要查询的交易对列表，如 ["BTCUSDT", "ETHUSDT"]
-            
+
         Returns:
             Dict[str, Decimal]: symbol -> price 映射
         """
         if not self._connected:
             raise ConnectionError("Broker not connected")
-        
+
         prices: Dict[str, Decimal] = {}
         for symbol in symbols:
             try:
@@ -748,5 +750,5 @@ class BinanceSpotDemoBroker(BrokerPort):
             except Exception as e:
                 logger.warning(f"[Broker] Failed to get ticker for {symbol}: {e}")
                 prices[symbol.upper()] = Decimal("0")
-        
+
         return prices

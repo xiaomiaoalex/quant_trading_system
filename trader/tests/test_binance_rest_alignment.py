@@ -3,17 +3,19 @@ REST Alignment Coordinator Unit Tests
 ======================================
 测试 REST 对齐协调器的功能。
 """
-import pytest
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from trader.adapters.binance.rate_limit import Priority
 from trader.adapters.binance.rest_alignment import (
-    RESTAlignmentCoordinator,
     AlignmentConfig,
     AlignmentMetrics,
+    RESTAlignmentCoordinator,
     RestAlignmentSnapshot,
 )
-from trader.adapters.binance.rate_limit import Priority
 
 
 class TestAlignmentConfig:
@@ -52,7 +54,7 @@ class TestRestAlignmentSnapshot:
             trades=[{"trade_id": "456"}],
             exchange_ts_ms=1609459200000,
             local_ts_ms=1609459200000,
-            alignment_reason="manual"
+            alignment_reason="manual",
         )
 
         assert len(snapshot.open_orders) == 1
@@ -66,10 +68,7 @@ class TestRESTAlignmentCoordinator:
 
     def test_initialization(self):
         """测试初始化"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_api_key", secret_key="test_secret_key")
 
         assert coordinator._api_key == "test_api_key"
         assert coordinator._secret_key == "test_secret_key"
@@ -77,10 +76,7 @@ class TestRESTAlignmentCoordinator:
 
     def test_snapshot_handler_registration(self):
         """测试快照处理器注册"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(snapshot):
             pass
@@ -92,10 +88,7 @@ class TestRESTAlignmentCoordinator:
     @pytest.mark.asyncio
     async def test_start_stop(self):
         """测试启动停止"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_api_key", secret_key="test_secret_key")
 
         await coordinator.start()
         assert coordinator._running is True
@@ -108,10 +101,7 @@ class TestRESTAlignmentCoordinator:
     @pytest.mark.asyncio
     async def test_force_alignment_too_soon(self):
         """测试频繁对齐被跳过"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_api_key", secret_key="test_secret_key")
         coordinator._config.min_alignment_interval = 60.0
 
         await coordinator.start()
@@ -123,10 +113,7 @@ class TestRESTAlignmentCoordinator:
 
     def test_get_metrics(self):
         """测试获取指标"""
-        coordinator = RESTAlignmentCoordinator(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        coordinator = RESTAlignmentCoordinator(api_key="test_api_key", secret_key="test_secret_key")
 
         metrics = coordinator.get_metrics()
 

@@ -3,32 +3,34 @@ Unit Tests - API Models
 ========================
 Tests for Pydantic schemas and data validation.
 """
-import pytest
+
 from datetime import datetime
 from decimal import Decimal
 
+import pytest
+
 from trader.api.models.schemas import (
+    ActionResult,
+    BacktestRequest,
+    BacktestRun,
+    BrokerAccount,
+    BrokerStatus,
+    Deployment,
+    DeploymentCreateRequest,
+    EventEnvelope,
+    ExecutionView,
+    HealthResponse,
+    KillSwitchSetRequest,
+    KillSwitchState,
+    OrderView,
+    PnlView,
+    PositionView,
+    ReplayRequest,
+    SnapshotEnvelope,
     Strategy,
     StrategyRegisterRequest,
     StrategyVersion,
     VersionedConfig,
-    Deployment,
-    DeploymentCreateRequest,
-    BacktestRequest,
-    BacktestRun,
-    OrderView,
-    ExecutionView,
-    PositionView,
-    PnlView,
-    EventEnvelope,
-    SnapshotEnvelope,
-    ReplayRequest,
-    KillSwitchState,
-    KillSwitchSetRequest,
-    BrokerAccount,
-    BrokerStatus,
-    HealthResponse,
-    ActionResult,
 )
 
 
@@ -42,7 +44,7 @@ class TestStrategyModels:
             name="Mean Reversion",
             description="Mean reversion strategy",
             entrypoint="strategies.mean_reversion:Strategy",
-            language="python"
+            language="python",
         )
         assert req.strategy_id == "strat_001"
         assert req.name == "Mean Reversion"
@@ -55,7 +57,7 @@ class TestStrategyModels:
             name="Mean Reversion",
             entrypoint="strategies.mean_reversion:Strategy",
             created_at="2026-02-25T12:00:00Z",
-            updated_at="2026-02-25T12:00:00Z"
+            updated_at="2026-02-25T12:00:00Z",
         )
         assert strategy.strategy_id == "strat_001"
         assert strategy.created_at is not None
@@ -67,7 +69,7 @@ class TestStrategyModels:
             version=1,
             code_ref="git:abc123",
             param_schema={"param1": {"type": "number"}},
-            created_by="system"
+            created_by="system",
         )
         assert version.version == 1
         assert version.code_ref == "git:abc123"
@@ -75,10 +77,7 @@ class TestStrategyModels:
     def test_versioned_config(self):
         """Test VersionedConfig model"""
         config = VersionedConfig(
-            scope="GLOBAL",
-            version=1,
-            config={"max_position_size": 1000},
-            created_by="admin"
+            scope="GLOBAL", version=1, config={"max_position_size": 1000}, created_by="admin"
         )
         assert config.scope == "GLOBAL"
         assert config.version == 1
@@ -97,7 +96,7 @@ class TestDeploymentModels:
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT", "ETHUSDT"],
-            created_by="system"
+            created_by="system",
         )
         assert req.deployment_id == "deploy_001"
         assert req.venue == "BINANCE"
@@ -112,7 +111,7 @@ class TestDeploymentModels:
             account_id="acc_001",
             venue="BINANCE",
             symbols=["BTCUSDT"],
-            status="STOPPED"
+            status="STOPPED",
         )
         assert deployment.status == "STOPPED"
         assert deployment.params_version is None
@@ -130,7 +129,7 @@ class TestBacktestModels:
             start_ts_ms=1700000000000,
             end_ts_ms=1700100000000,
             venue="BINANCE",
-            requested_by="user001"
+            requested_by="user001",
         )
         assert req.strategy_id == "strat_001"
         assert req.start_ts_ms < req.end_ts_ms
@@ -144,7 +143,7 @@ class TestBacktestModels:
             version=1,
             symbols=["BTCUSDT"],
             start_ts_ms=1700000000000,
-            end_ts_ms=1700100000000
+            end_ts_ms=1700100000000,
         )
         assert run.status == "RUNNING"
         assert run.metrics is None
@@ -167,7 +166,7 @@ class TestOrderModels:
             qty="1.0",
             limit_price="50000.0",
             tif="GTC",
-            status="NEW"
+            status="NEW",
         )
         assert order.side == "BUY"
         assert order.order_type == "LIMIT"
@@ -181,7 +180,7 @@ class TestOrderModels:
             fill_qty="1.0",
             fill_price="50000.0",
             fee="10.0",
-            fee_currency="USDT"
+            fee_currency="USDT",
         )
         assert exec_view.fill_qty == "1.0"
         assert exec_view.fee == "10.0"
@@ -200,7 +199,7 @@ class TestPortfolioModels:
             avg_cost="49000.0",
             mark_price="50000.0",
             unrealized_pnl="1000.0",
-            realized_pnl="0.0"
+            realized_pnl="0.0",
         )
         assert position.unrealized_pnl == "1000.0"
 
@@ -211,7 +210,7 @@ class TestPortfolioModels:
             venue="BINANCE",
             realized_pnl="500.0",
             unrealized_pnl="1000.0",
-            total_pnl="1500.0"
+            total_pnl="1500.0",
         )
         assert pnl.total_pnl == "1500.0"
 
@@ -227,7 +226,7 @@ class TestEventModels:
             schema_version=1,
             trace_id="trace_001",
             ts_ms=1700000000000,
-            payload={"order_id": "ord_001"}
+            payload={"order_id": "ord_001"},
         )
         assert event.event_type == "ORDER_CREATED"
         assert event.payload["order_id"] == "ord_001"
@@ -238,16 +237,13 @@ class TestEventModels:
             stream_key="positions",
             snapshot_type="PositionSnapshot",
             ts_ms=1700000000000,
-            payload={"BTCUSDT": {"qty": "1.0"}}
+            payload={"BTCUSDT": {"qty": "1.0"}},
         )
         assert snapshot.snapshot_type == "PositionSnapshot"
 
     def test_replay_request(self):
         """Test ReplayRequest model"""
-        request = ReplayRequest(
-            stream_key="orders",
-            requested_by="admin"
-        )
+        request = ReplayRequest(stream_key="orders", requested_by="admin")
         assert request.stream_key == "orders"
         assert request.from_ts_ms is None
 
@@ -258,10 +254,7 @@ class TestKillSwitchModels:
     def test_kill_switch_state(self):
         """Test KillSwitchState model"""
         state = KillSwitchState(
-            scope="GLOBAL",
-            level=2,
-            reason="Emergency stop",
-            updated_by="system"
+            scope="GLOBAL", level=2, reason="Emergency stop", updated_by="system"
         )
         assert state.level == 2
         assert state.scope == "GLOBAL"
@@ -269,10 +262,7 @@ class TestKillSwitchModels:
     def test_kill_switch_set_request(self):
         """Test KillSwitchSetRequest model"""
         request = KillSwitchSetRequest(
-            scope="GLOBAL",
-            level=1,
-            reason="Testing",
-            updated_by="admin"
+            scope="GLOBAL", level=1, reason="Testing", updated_by="admin"
         )
         assert request.level == 1
 
@@ -287,16 +277,14 @@ class TestBrokerModels:
             venue="BINANCE",
             broker_type="BINANCE",
             status="READY",
-            capabilities={"supports_margin": True}
+            capabilities={"supports_margin": True},
         )
         assert broker.status == "READY"
 
     def test_broker_status(self):
         """Test BrokerStatus model"""
         status = BrokerStatus(
-            account_id="acc_001",
-            connected=True,
-            last_heartbeat_ts_ms=1700000000000
+            account_id="acc_001", connected=True, last_heartbeat_ts_ms=1700000000000
         )
         assert status.connected is True
 

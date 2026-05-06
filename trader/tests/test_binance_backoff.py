@@ -3,15 +3,13 @@ Backoff Controller Unit Tests
 ==============================
 测试指数退避控制器的功能。
 """
+
 import time
+from unittest.mock import patch
+
 import pytest
 
-from trader.adapters.binance.backoff import (
-    BackoffController,
-    BackoffConfig,
-    BackoffControllerAsync,
-)
-from unittest.mock import patch
+from trader.adapters.binance.backoff import BackoffConfig, BackoffController, BackoffControllerAsync
 
 
 class TestBackoffController:
@@ -148,11 +146,7 @@ class TestBackoffControllerAsync:
                 raise Exception("Temporary error")
             return "success"
 
-        result = await controller.execute_with_backoff(
-            "test",
-            flaky_task,
-            max_retries=3
-        )
+        result = await controller.execute_with_backoff("test", flaky_task, max_retries=3)
         assert result == "success"
         assert attempt_count["count"] == 2
 
@@ -165,11 +159,7 @@ class TestBackoffControllerAsync:
             raise Exception("Permanent error")
 
         with pytest.raises(Exception, match="Permanent error"):
-            await controller.execute_with_backoff(
-                "test",
-                failing_task,
-                max_retries=2
-            )
+            await controller.execute_with_backoff("test", failing_task, max_retries=2)
 
 
 if __name__ == "__main__":

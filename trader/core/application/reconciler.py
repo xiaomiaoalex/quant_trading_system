@@ -1,9 +1,9 @@
+import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-import logging
-from typing import List, Optional, Dict, Any, Callable, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,9 @@ class ReconcileReport:
         self.phantom_count = sum(1 for d in self.drifts if d.drift_type == DriftType.PHANTOM)
         self.diverged_count = sum(1 for d in self.drifts if d.drift_type == DriftType.DIVERGED)
         self.within_grace_period_count = sum(
-            1 for d in self.drifts if d.grace_period_remaining_sec is not None and d.grace_period_remaining_sec > 0
+            1
+            for d in self.drifts
+            if d.grace_period_remaining_sec is not None and d.grace_period_remaining_sec > 0
         )
 
 

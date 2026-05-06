@@ -3,13 +3,15 @@ Tests for BinanceExecutionAdapter
 =================================
 KillSwitch L2+ blocks backtest, OMS callback receives fills.
 """
-import pytest
+
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from trader.services.backtesting.ports import BacktestConfig, BacktestResult
+import pytest
+
 from trader.services.backtesting.binance_execution_adapter import BinanceExecutionAdapter
+from trader.services.backtesting.ports import BacktestConfig, BacktestResult
 
 
 @pytest.fixture
@@ -206,8 +208,11 @@ class TestBinanceExecutionAdapterOptimization:
         adapter = BinanceExecutionAdapter()
         param_ranges = {"fast_period": [5, 10, 15], "slow_period": [20, 30]}
 
-        with patch.object(adapter._vectorbt, "run_optimization", new_callable=AsyncMock) as mock_opt:
+        with patch.object(
+            adapter._vectorbt, "run_optimization", new_callable=AsyncMock
+        ) as mock_opt:
             from trader.services.backtesting.ports import OptimizationResult
+
             mock_opt.return_value = OptimizationResult(
                 best_params={"fast_period": 10, "slow_period": 30},
                 best_metrics=BacktestResult(
@@ -244,7 +249,10 @@ class TestBinanceExecutionAdapterResultPassThrough:
             profit_factor=Decimal("3.0"),
             num_trades=50,
             final_capital=Decimal("12500"),
-            equity_curve=[{"timestamp": "2021-01-01", "equity": 10000}, {"timestamp": "2021-01-31", "equity": 12500}],
+            equity_curve=[
+                {"timestamp": "2021-01-01", "equity": 10000},
+                {"timestamp": "2021-01-31", "equity": 12500},
+            ],
             trades=[{"trade_id": 0, "pnl": 500.0}],
             metrics={"custom_metric": 123},
             start_date=sample_config.start_date,

@@ -1,3 +1,6 @@
 export { AppShell } from './AppShell'
 export { Sidebar } from './Sidebar'
 export { Topbar } from './Topbar'
+export { GlobalStatusRibbon } from './GlobalStatusRibbon'
+export { ErrorBoundary } from './ErrorBoundary'
+export { PageHeader } from './PageHeader'

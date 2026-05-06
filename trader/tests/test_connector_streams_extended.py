@@ -3,25 +3,24 @@ Extended Coverage Tests for Connector and Streams
 ================================================
 增加 connector, private_stream, public_stream 模块的测试覆盖率
 """
-import pytest
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from trader.adapters.binance.connector import (
-    BinanceConnector,
-    BinanceConnectorConfig,
     AdapterHealth,
     AdapterHealthReport,
+    BinanceConnector,
+    BinanceConnectorConfig,
 )
 from trader.adapters.binance.private_stream import (
-    PrivateStreamManager,
-    PrivateStreamConfig,
     BinanceCredentials,
+    PrivateStreamConfig,
+    PrivateStreamManager,
 )
-from trader.adapters.binance.public_stream import (
-    PublicStreamManager,
-    PublicStreamConfig,
-)
+from trader.adapters.binance.public_stream import PublicStreamConfig, PublicStreamManager
 from trader.adapters.binance.stream_base import StreamState
 
 
@@ -46,10 +45,7 @@ class TestPrivateStreamExtended:
 
     def test_credentials_defaults(self):
         """测试默认凭证"""
-        creds = BinanceCredentials(
-            api_key="test_key",
-            secret_key="test_secret"
-        )
+        creds = BinanceCredentials(api_key="test_key", secret_key="test_secret")
 
         assert creds.testnet is True
 
@@ -63,8 +59,7 @@ class TestPrivateStreamExtended:
     def test_private_stream_config_explicit(self):
         """测试显式配置"""
         config = PrivateStreamConfig(
-            base_url="wss://custom.url/ws",
-            rest_url="https://custom.api/api"
+            base_url="wss://custom.url/ws", rest_url="https://custom.api/api"
         )
 
         assert config.base_url == "wss://custom.url/ws"
@@ -73,10 +68,7 @@ class TestPrivateStreamExtended:
     @pytest.mark.asyncio
     async def test_private_stream_initialization(self):
         """测试私有流初始化"""
-        creds = BinanceCredentials(
-            api_key="test_key",
-            secret_key="test_secret"
-        )
+        creds = BinanceCredentials(api_key="test_key", secret_key="test_secret")
 
         manager = PrivateStreamManager(credentials=creds)
 
@@ -99,7 +91,7 @@ class TestPublicStreamExtended:
         config = PublicStreamConfig(
             streams=["btcusdt@trade", "ethusdt@trade"],
             reconnect_delay=2.0,
-            max_reconnect_delay=120.0
+            max_reconnect_delay=120.0,
         )
 
         assert len(config.streams) == 2
@@ -108,9 +100,7 @@ class TestPublicStreamExtended:
     @pytest.mark.asyncio
     async def test_public_stream_initialization(self):
         """测试公有流初始化"""
-        config = PublicStreamConfig(
-            streams=["btcusdt@trade"]
-        )
+        config = PublicStreamConfig(streams=["btcusdt@trade"])
 
         manager = PublicStreamManager(config=config)
 

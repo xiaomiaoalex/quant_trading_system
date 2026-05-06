@@ -3,6 +3,7 @@ Unit Tests - Monitor API Endpoints
 =================================
 Tests for FastAPI Monitor endpoints using TestClient.
 """
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -71,8 +72,7 @@ class TestMonitorEndpoints:
         response = self.client.get("/v1/monitor/alerts")
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
-        assert len(data) == 0
+        assert data == {"alerts": [], "total_count": 0}
 
     def test_add_alert_rule(self):
         """Test adding an alert rule"""
@@ -107,7 +107,7 @@ class TestMonitorEndpoints:
         # Add rule
         response = self.client.post("/v1/monitor/rules", json=rule)
         assert response.status_code == 200
-        
+
         # Remove rule
         response = self.client.delete("/v1/monitor/rules/temp_rule")
         assert response.status_code == 200
@@ -137,11 +137,11 @@ class TestMonitorEndpoints:
         }
         response = self.client.post("/v1/monitor/rules", json=rule)
         assert response.status_code == 200
-        
+
         # Get snapshot (values from internal services, not query params)
         response = self.client.get("/v1/monitor/snapshot")
         assert response.status_code == 200
-        
+
         # Clear the rule (even if it didn't trigger, the rule should be clearable)
         response = self.client.post("/v1/monitor/alerts/clear_test_rule/clear")
         assert response.status_code == 200
@@ -170,12 +170,12 @@ class TestMonitorEndpoints:
         }
         response = self.client.post("/v1/monitor/rules", json=rule)
         assert response.status_code == 200
-        
+
         # Get snapshot - alerts will trigger based on internal values
         response = self.client.get("/v1/monitor/snapshot")
         assert response.status_code == 200
         data = response.json()
-        
+
         # Snapshot structure should be correct
         assert "active_alerts" in data
         assert isinstance(data["active_alerts"], list)
@@ -194,17 +194,17 @@ class TestMonitorEndpoints:
         }
         response = self.client.post("/v1/monitor/rules", json=rule)
         assert response.status_code == 200
-        
+
         # Get snapshot and verify structure
         response = self.client.get("/v1/monitor/snapshot")
         assert response.status_code == 200
         data = response.json()
-        
+
         # Verify alert structure is correct
         assert "active_alerts" in data
         assert "alert_count_by_severity" in data
         assert isinstance(data["active_alerts"], list)
-        
+
         # Should not have triggered the alert
         alert_names = [a["rule_name"] for a in data["active_alerts"]]
         assert "no_trigger_rule" not in alert_names

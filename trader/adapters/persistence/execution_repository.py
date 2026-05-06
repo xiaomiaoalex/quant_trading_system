@@ -1,4 +1,5 @@
 """PG-first execution repository."""
+
 import asyncio
 import logging
 import uuid
@@ -104,7 +105,9 @@ class ExecutionRepository:
 
         execution_id = execution_data.get("execution_id") or str(uuid.uuid4())
         before = self._memory_storage.get_execution_dedup_stats().get("execution_dedup_hits", 0)
-        result = self._memory_storage.create_execution({**execution_data, "execution_id": execution_id})
+        result = self._memory_storage.create_execution(
+            {**execution_data, "execution_id": execution_id}
+        )
         after = self._memory_storage.get_execution_dedup_stats().get("execution_dedup_hits", before)
         created = after == before
         if not created:
@@ -136,7 +139,9 @@ class ExecutionRepository:
                 )
             except Exception as exc:
                 logger.warning("PostgreSQL list_executions failed, falling back to memory: %s", exc)
-        return self._memory_storage.list_executions(cl_ord_id=cl_ord_id, since_ts_ms=since_ts_ms, limit=limit)
+        return self._memory_storage.list_executions(
+            cl_ord_id=cl_ord_id, since_ts_ms=since_ts_ms, limit=limit
+        )
 
 
 _repository_instance: Optional[ExecutionRepository] = None

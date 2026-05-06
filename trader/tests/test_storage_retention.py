@@ -1,10 +1,15 @@
 """Storage retention and compatibility tests."""
+
 import time
 
 import pytest
 
+from trader.services.strategy_event_service import (
+    StrategyEvent,
+    StrategyEventService,
+    StrategyEventType,
+)
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
-from trader.services.strategy_event_service import StrategyEvent, StrategyEventService, StrategyEventType
 
 
 @pytest.fixture
@@ -52,16 +57,20 @@ def test_snapshots_trimmed_per_stream(bounded_storage):
 @pytest.mark.asyncio
 async def test_clear_events_correct_prefix():
     event_service = StrategyEventService(max_events_per_strategy=100)
-    await event_service.publish(StrategyEvent(
-        strategy_id="strat_a",
-        event_type=StrategyEventType.SIGNAL_GENERATED,
-        payload={"msg": "a"},
-    ))
-    await event_service.publish(StrategyEvent(
-        strategy_id="strat_b",
-        event_type=StrategyEventType.SIGNAL_GENERATED,
-        payload={"msg": "b"},
-    ))
+    await event_service.publish(
+        StrategyEvent(
+            strategy_id="strat_a",
+            event_type=StrategyEventType.SIGNAL_GENERATED,
+            payload={"msg": "a"},
+        )
+    )
+    await event_service.publish(
+        StrategyEvent(
+            strategy_id="strat_b",
+            event_type=StrategyEventType.SIGNAL_GENERATED,
+            payload={"msg": "b"},
+        )
+    )
     assert await event_service.clear_events("strat_a") == 1
     remaining = await event_service.list_events()
     assert len(remaining) == 1
@@ -92,8 +101,12 @@ def test_memory_stats(bounded_storage):
 
 def test_runtime_state_deployment_id_keying():
     storage = ControlPlaneInMemoryStorage()
-    storage.save_strategy_runtime_state({"deployment_id": "d1", "strategy_id": "s", "status": "RUNNING"})
-    storage.save_strategy_runtime_state({"deployment_id": "d2", "strategy_id": "s", "status": "STOPPED"})
+    storage.save_strategy_runtime_state(
+        {"deployment_id": "d1", "strategy_id": "s", "status": "RUNNING"}
+    )
+    storage.save_strategy_runtime_state(
+        {"deployment_id": "d2", "strategy_id": "s", "status": "STOPPED"}
+    )
     assert len(storage.strategy_runtime_states) == 2
     assert storage.get_strategy_runtime_state("d1")["status"] == "RUNNING"
     assert storage.delete_strategy_runtime_state("d1") is True
@@ -133,12 +146,14 @@ def test_replay_uses_data_when_payload_missing():
     from trader.services.event import EventService
 
     storage = ControlPlaneInMemoryStorage()
-    storage.append_event({
-        "stream_key": "deployment:dep_1",
-        "event_type": "strategy.signal",
-        "ts_ms": 1000,
-        "data": {"cl_ord_id": "order-1", "value": 42},
-    })
+    storage.append_event(
+        {
+            "stream_key": "deployment:dep_1",
+            "event_type": "strategy.signal",
+            "ts_ms": 1000,
+            "data": {"cl_ord_id": "order-1", "value": 42},
+        }
+    )
     events = EventService(storage=storage)._to_stream_events(
         ReplayRequest(stream_key="deployment:dep_1", requested_by="test")
     )

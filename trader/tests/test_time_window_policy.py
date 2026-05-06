@@ -3,15 +3,17 @@ Test TimeWindowPolicy - 时间窗口风控策略单元测试
 ================================================
 测试时段边界、系数应用、RESTRICTED时段拒绝新开仓等场景。
 """
-import pytest
+
 from datetime import time
 
+import pytest
+
 from trader.core.domain.rules.time_window_policy import (
-    TimeWindowPeriod,
-    TimeWindowSlot,
     TimeWindowConfig,
     TimeWindowContext,
+    TimeWindowPeriod,
     TimeWindowPolicy,
+    TimeWindowSlot,
 )
 
 
@@ -345,7 +347,7 @@ class TestTimeWindowPolicyFailClosed:
         """测试评估异常时返回 RESTRICTED（Fail-Closed）"""
         config = TimeWindowConfig()  # 空配置
         policy = TimeWindowPolicy(config)
-        
+
         # 任何时间都无匹配，应返回默认（PRIME）
         # 但如果配置异常，应该 Fail-Closed
         ctx = policy.evaluate(12, 0)

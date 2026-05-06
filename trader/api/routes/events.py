@@ -3,13 +3,21 @@ Event API Routes
 ================
 Event log, snapshot, and replay endpoints (Task 9.7, 9.11).
 """
-import uuid
-import asyncio
-from datetime import datetime, timezone
-from typing import Optional, Dict
-from fastapi import APIRouter, HTTPException, Query, Path, BackgroundTasks
 
-from trader.api.models.schemas import EventEnvelope, SnapshotEnvelope, ReplayRequest, ActionResult, ReplayJob
+import asyncio
+import uuid
+from datetime import datetime, timezone
+from typing import Dict, Optional
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Path, Query
+
+from trader.api.models.schemas import (
+    ActionResult,
+    EventEnvelope,
+    ReplayJob,
+    ReplayRequest,
+    SnapshotEnvelope,
+)
 from trader.services import EventService
 
 router = APIRouter(tags=["Events", "Snapshots", "Replay"])
@@ -34,8 +42,7 @@ def _evict_replay_jobs_locked() -> None:
     if len(_replay_jobs) <= _MAX_REPLAY_JOBS:
         return
     evictable = [
-        job for job in _replay_jobs.values()
-        if job.status.upper() in {"COMPLETED", "FAILED"}
+        job for job in _replay_jobs.values() if job.status.upper() in {"COMPLETED", "FAILED"}
     ]
     evictable.sort(key=lambda item: item.requested_at)
     for job in evictable:
@@ -53,7 +60,7 @@ def _evict_replay_jobs_locked() -> None:
 async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
     """
     后台执行 replay 任务。
-    
+
     更新 job 状态为 RUNNING，执行完成后更新为 COMPLETED/FAILED。
     """
     async with _replay_jobs_lock:
@@ -61,13 +68,13 @@ async def _run_replay_task(job_id: str, request: ReplayRequest) -> None:
             job = _replay_jobs[job_id]
             job.status = "RUNNING"
             job.started_at = _utc_now_iso()
-    
+
     service = EventService()
-    
+
     try:
         # 执行 replay
         summary = await service.run_replay(request)
-        
+
         async with _replay_jobs_lock:
             if job_id in _replay_jobs:
                 job = _replay_jobs[job_id]
@@ -122,7 +129,7 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
     # 创建 job 记录
     job_id = str(uuid.uuid4())
     now = _utc_now_iso()
-    
+
     job = ReplayJob(
         job_id=job_id,
         stream_key=request.stream_key,
@@ -134,15 +141,15 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
         result_summary=None,
         error=None,
     )
-    
+
     # 存储 job
     async with _replay_jobs_lock:
         _replay_jobs[job_id] = job
         _evict_replay_jobs_locked()
-    
+
     # 使用 BackgroundTasks 异步执行
     background_tasks.add_task(_run_replay_task, job_id, request)
-    
+
     return job
 
 
@@ -150,7 +157,7 @@ async def trigger_replay(request: ReplayRequest, background_tasks: BackgroundTas
 async def get_replay_status(job_id: str = Path(..., description="Replay job ID")):
     """
     Get replay job status (Task 9.7)。
-    
+
     返回任务的当前状态和结果摘要。
     """
     async with _replay_jobs_lock:
@@ -193,7 +200,7 @@ async def list_snapshots(
 ):
     """
     List snapshots for a stream (Task 9.11)。
-    
+
     支持按时间范围筛选。
     """
     service = EventService()

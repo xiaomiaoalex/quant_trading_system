@@ -15,35 +15,68 @@
 3. 模型应该是纯Python对象，不依赖外部库
 """
 
+from trader.core.domain.models.events import (
+    DomainEvent,
+    EventType,
+    create_order_created_event,
+    create_order_filled_event,
+    create_position_updated_event,
+)
+from trader.core.domain.models.market_risk import (
+    AssetClass,
+    MarketAccountRisk,
+    MarketInstrumentSpec,
+    MarketOpenOrderRisk,
+    MarketPositionRisk,
+    MarketRiskAuditEvent,
+    MarketRiskBudget,
+    MarketRiskSnapshot,
+)
 from trader.core.domain.models.money import Money
 from trader.core.domain.models.order import (
-    Order, OrderStatus, OrderSide, OrderType, OrderTimeInForce
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderTimeInForce,
+    OrderType,
 )
-from trader.core.domain.models.position import Position, BrokerPosition, PositionReconciliation
+from trader.core.domain.models.orderbook import DepthCheckResult, OrderBook, OrderBookLevel
+from trader.core.domain.models.position import BrokerPosition, Position, PositionReconciliation
 from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.domain.models.events import (
-    DomainEvent, EventType,
-    create_order_created_event, create_order_filled_event, create_position_updated_event
-)
-from trader.core.domain.models.orderbook import OrderBook, OrderBookLevel, DepthCheckResult
 
 __all__ = [
     # Money
     "Money",
-
+    # Market Risk
+    "AssetClass",
+    "MarketAccountRisk",
+    "MarketInstrumentSpec",
+    "MarketOpenOrderRisk",
+    "MarketPositionRisk",
+    "MarketRiskAuditEvent",
+    "MarketRiskBudget",
+    "MarketRiskSnapshot",
     # Order
-    "Order", "OrderStatus", "OrderSide", "OrderType", "OrderTimeInForce",
-
+    "Order",
+    "OrderStatus",
+    "OrderSide",
+    "OrderType",
+    "OrderTimeInForce",
     # Position
-    "Position", "BrokerPosition", "PositionReconciliation",
-
+    "Position",
+    "BrokerPosition",
+    "PositionReconciliation",
     # Signal
-    "Signal", "SignalType",
-
+    "Signal",
+    "SignalType",
     # Events
-    "DomainEvent", "EventType",
-    "create_order_created_event", "create_order_filled_event", "create_position_updated_event",
-
+    "DomainEvent",
+    "EventType",
+    "create_order_created_event",
+    "create_order_filled_event",
+    "create_position_updated_event",
     # OrderBook
-    "OrderBook", "OrderBookLevel", "DepthCheckResult",
+    "OrderBook",
+    "OrderBookLevel",
+    "DepthCheckResult",
 ]

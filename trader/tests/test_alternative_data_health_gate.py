@@ -2,7 +2,9 @@
 Tests for Alternative Data Health Gate
 ======================================
 """
+
 import pytest
+
 from trader.core.domain.services.alternative_data_health_gate import (
     AlternativeDataHealthGate,
     DataHealthConfig,
@@ -85,7 +87,9 @@ class TestAlternativeDataHealthGate:
         assert result.is_blocked is True
 
     def test_missing_data_fail_closed(self):
-        gate = AlternativeDataHealthGate(DataHealthConfig(thresholds=DataHealthThresholds(), fail_closed=True))
+        gate = AlternativeDataHealthGate(
+            DataHealthConfig(thresholds=DataHealthThresholds(), fail_closed=True)
+        )
         result = gate.evaluate([])
         assert result.health_level == DataHealthLevel.UNAVAILABLE
         assert result.reliability_coef == 0.0
@@ -200,7 +204,7 @@ class TestAlternativeDataHealthGate:
         config = DataHealthConfig(
             thresholds=DataHealthThresholds(
                 max_freshness_seconds=60.0,  # Stricter
-                min_coverage_pct=0.95,        # Stricter
+                min_coverage_pct=0.95,  # Stricter
             )
         )
         gate = AlternativeDataHealthGate(config)
@@ -208,7 +212,7 @@ class TestAlternativeDataHealthGate:
             DataHealthMetrics(
                 source=DataSourceType.FUNDING_RATE,
                 freshness_seconds=120.0,  # Stale under custom threshold
-                coverage_pct=0.90,         # Low under custom threshold
+                coverage_pct=0.90,  # Low under custom threshold
                 delay_seconds=5.0,
                 source_quality_score=0.90,
             ),
@@ -221,10 +225,10 @@ class TestAlternativeDataHealthGate:
         metrics = [
             DataHealthMetrics(
                 source=DataSourceType.FUNDING_RATE,
-                freshness_seconds=30.0,      # 1.0 coef
-                coverage_pct=1.0,            # 1.0 coef
-                delay_seconds=0.0,           # 1.0 coef
-                source_quality_score=1.0,    # 1.0 coef
+                freshness_seconds=30.0,  # 1.0 coef
+                coverage_pct=1.0,  # 1.0 coef
+                delay_seconds=0.0,  # 1.0 coef
+                source_quality_score=1.0,  # 1.0 coef
             ),
         ]
         result = gate.evaluate(metrics)
@@ -239,17 +243,17 @@ class TestAlternativeDataHealthGate:
         config = DataHealthConfig(
             thresholds=DataHealthThresholds(
                 max_freshness_seconds=200.0,  # freshness_seconds=250 exceeds this
-                max_delay_seconds=20.0,       # delay_seconds=30 exceeds this
+                max_delay_seconds=20.0,  # delay_seconds=30 exceeds this
             )
         )
         gate = AlternativeDataHealthGate(config)
         metrics = [
             DataHealthMetrics(
                 source=DataSourceType.FUNDING_RATE,
-                freshness_seconds=250.0,     # 0.0 coef (exceeds max)
-                coverage_pct=0.90,           # 1.0 coef
-                delay_seconds=30.0,          # ~0.5 coef (exceeds max)
-                source_quality_score=0.80,   # 1.0 coef
+                freshness_seconds=250.0,  # 0.0 coef (exceeds max)
+                coverage_pct=0.90,  # 1.0 coef
+                delay_seconds=30.0,  # ~0.5 coef (exceeds max)
+                source_quality_score=0.80,  # 1.0 coef
             ),
         ]
         result = gate.evaluate(metrics)

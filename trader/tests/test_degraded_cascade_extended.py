@@ -3,23 +3,25 @@ Extended Coverage Tests for DegradedCascade
 ==========================================
 增加 degraded_cascade 模块的测试覆盖率
 """
-import pytest
+
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
+import pytest
+
+from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport
 from trader.adapters.binance.degraded_cascade import (
-    DegradedCascadeController,
     CascadeConfig,
     CascadeMetrics,
     CascadeState,
+    DegradedCascadeController,
 )
-from trader.adapters.binance.connector import AdapterHealth, AdapterHealthReport
 from trader.adapters.binance.environmental_risk import (
     EnvironmentalRiskEvent,
-    RiskSeverity,
-    RiskScope,
     RecommendedLevel,
+    RiskScope,
+    RiskSeverity,
 )
 
 
@@ -36,8 +38,7 @@ class TestDegradedCascadeExtended:
     def test_cascade_config_explicit(self):
         """测试显式配置"""
         config = CascadeConfig(
-            control_plane_base_url="http://custom:8080",
-            self_protection_trigger_ms=60000
+            control_plane_base_url="http://custom:8080", self_protection_trigger_ms=60000
         )
 
         assert config.control_plane_base_url == "http://custom:8080"
@@ -54,9 +55,7 @@ class TestDegradedCascadeExtended:
     @pytest.mark.asyncio
     async def test_ensure_http_client_creates_new(self):
         """测试创建新的 HTTP 客户端"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
         controller._http_client = None
 
         client = await controller._ensure_http_client()
@@ -66,9 +65,7 @@ class TestDegradedCascadeExtended:
     @pytest.mark.asyncio
     async def test_ensure_http_client_reuses_existing(self):
         """测试复用现有的 HTTP 客户端"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         mock_client = MagicMock()
         mock_client.closed = False
@@ -80,26 +77,20 @@ class TestDegradedCascadeExtended:
 
     def test_can_open_new_position_normal(self):
         """测试正常状态下可以开仓"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         assert controller.can_open_new_position() is True
 
     def test_can_cancel_order_normal(self):
         """测试正常状态下可以撤单"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         assert controller.can_cancel_order() is True
 
     @pytest.mark.asyncio
     async def test_exit_self_protection_already_inactive(self):
         """测试退出自保 - 已经是 inactive"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         controller._self_protection_active = False
 
@@ -110,9 +101,7 @@ class TestDegradedCascadeExtended:
     @pytest.mark.asyncio
     async def test_close(self):
         """测试关闭"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         controller._http_client = MagicMock()
 
@@ -121,9 +110,7 @@ class TestDegradedCascadeExtended:
     @pytest.mark.asyncio
     async def test_on_degraded_enter_already_degraded(self):
         """测试已进入 DEGRADED 状态"""
-        controller = DegradedCascadeController(
-            control_plane_base_url="http://localhost:8080"
-        )
+        controller = DegradedCascadeController(control_plane_base_url="http://localhost:8080")
 
         controller._state = CascadeState.DEGRADED
         controller._http_client = MagicMock()
@@ -138,7 +125,7 @@ class TestDegradedCascadeExtended:
             backoff_state={},
             overall_health=AdapterHealth.DEGRADED,
             last_update_ts=1609459200.0,
-            metrics={}
+            metrics={},
         )
 
         await controller.on_adapter_health_changed(health, "test_reason")

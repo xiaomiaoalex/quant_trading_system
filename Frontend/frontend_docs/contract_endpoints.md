@@ -119,6 +119,36 @@ interface TriggerReconcileRequest {
 | POST | `/v1/risk/limits` | 设置风险限制 |
 | POST | `/v1/risk/events` | 风险事件上报 |
 | POST | `/v1/risk/recover` | 风险恢复 |
+| GET | `/v1/risk/crypto/runtime` | Crypto Risk runtime 状态 |
+| PATCH | `/v1/risk/crypto/budget` | Crypto Risk 预算热更新 |
+| POST | `/v1/risk/crypto/probe` | Crypto Risk 只读联通性检查 |
+| GET | `/v1/risk/crypto/budget/audit` | Crypto Risk 预算审计 |
+| GET | `/v1/events?stream_key=risk:crypto` | Crypto Risk 预算与 probe 审计流 |
+
+Crypto Risk 关键请求/响应：
+```typescript
+interface CryptoRiskProbeRequest {
+  symbols: string[];
+  requested_by: string;
+}
+
+interface CryptoRiskProbeResponse {
+  ok: boolean;
+  read_only: true;
+  mode: "demo" | "live" | "custom";
+  execution_env: "demo" | "testnet";
+  futures_base_url?: string | null;
+  symbols: string[];
+  requested_by: string;
+  duration_ms: number;
+  checks: Record<string, {
+    status: "passed" | "failed";
+    latency_ms: number;
+    message: string;
+    details: Record<string, unknown>;
+  }>;
+}
+```
 
 ## 6. AI Lab
 
@@ -148,4 +178,3 @@ interface TriggerReconcileRequest {
 ```typescript
 // TODO: BLOCKED BY BACKEND API
 ```
-

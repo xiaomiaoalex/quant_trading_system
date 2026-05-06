@@ -17,18 +17,19 @@ API-first 架构:
 - BinanceAnnouncementCrawler: Orchestration Layer
 - RawAnnouncement: 统一数据模型
 """
+
 from trader.adapters.announcements.binance_crawler import (
-    BinanceAnnouncementCrawler,
     AnnouncementEvent,
+    BinanceAnnouncementCrawler,
     crawl_once,
 )
+from trader.adapters.announcements.html_source import BinanceHtmlAnnouncementSource
 from trader.adapters.announcements.models import (
-    RawAnnouncement,
     AnnouncementType,
+    RawAnnouncement,
     classify_announcement,
 )
 from trader.adapters.announcements.ws_source import BinanceWsAnnouncementSource
-from trader.adapters.announcements.html_source import BinanceHtmlAnnouncementSource
 
 __all__ = [
     # Core Crawler

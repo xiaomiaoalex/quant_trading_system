@@ -4,9 +4,718 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-04-27 23:24 (北京时间)
+2026-05-07 03:30 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P4.3 DecisionTrace 审计查询闭环
+- 完成时间: 2026-05-07 03:30 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.3
+- 开发前状态:
+  - pre-trade rejection 已写入 `risk_audit_events`，但 `trace_id` 与 `decision_trace_id` 还没有明确优先级
+  - Crypto Risk 运维页仍通过通用 `/v1/events` 看 `risk:crypto`，无法 PG-first 按 trace/signal 定位拒绝证据
+- 开发后状态:
+  - `decision_trace_id` 成为业务决策链路 ID；pre-trade audit 优先用 `metadata.decision_trace_id` 作为 `MarketRiskAuditEvent.trace_id`
+  - budget/probe/pre-trade 审计 payload 均带 `decision_trace_id`
+  - 新增 `GET /v1/risk/crypto/audit`，支持 `event_type`、`trace_id`、`signal_id`、`since_ts_ms`、`limit`
+  - Crypto Risk 运维页 Audit Stream 改为调用 PG-first crypto audit API，并支持 event/trace/signal 过滤
+- Issue 状态迁移:
+  - 风控审计只能按 stream 粗查：`待确认` → `已验证（trace/signal PG-first 查询）`
+  - `trace_id` 与业务决策 ID 语义不清：`待确认` → `已验证（decision_trace_id 标准化）`
+- 验证结果:
+  - 红测：`test_runtime_pre_trade_rejection_writes_market_audit_event` 先失败于 `decision_trace_id` 未成为 trace；`test_crypto_risk_audit_filters_by_trace_and_signal` 先失败于 404 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_p0.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 33 passed ✅
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_risk_engine_layers.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 16 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - scoped `py_compile`、`isort --check-only`、`black --check`、`git diff --check` → passed ✅
+- 注意事项:
+  - `signal_id` 过滤当前在 API 层对 payload 做过滤；PG 表已能按 `trace_id` 走索引，后续高频场景可考虑 JSONB expression index
+  - 下一步可继续 Funding/OI 风险系数，或给前端增加按 rejection reason 的聚合统计
+
+### 本次任务：P4.2 Pre-trade 拒绝证据写入市场风险审计
+- 完成时间: 2026-05-06 17:40 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.2 第一刀
+- 开发前状态:
+  - budget/probe 已进入 `risk_audit_events`，但真实下单前风控拒绝只写 OMS/策略事件与内存计数
+  - 运维侧无法长期追踪“哪个信号被哪条 crypto 风控规则拒绝、推荐 KillSwitch 级别是多少”
+- 开发后状态:
+  - 新增 `crypto_risk.pre_trade_rejected` 市场风险审计事件
+  - 新增 `build_audited_crypto_pre_trade_risk_check()`，在 Control/Service wrapper 层观察 pre-trade 结果，拒绝或异常时写入 `MarketRiskAuditRepository`
+  - `CryptoRiskRuntimeManager` 的 runtime wiring、预算热更新重建 check、fail-closed setup check 均使用审计 wrapper
+  - `CryptoPreTradeRiskPlugin` 和 Core domain services 仍保持无 IO，审计故障不会覆盖原始拒绝/异常语义
+- Issue 状态迁移:
+  - pre-trade rejection evidence 未持久化：`待确认` → `已验证（risk_audit_events / crypto_risk.pre_trade_rejected）`
+- 验证结果:
+  - 先写失败测试：`test_runtime_pre_trade_rejection_writes_market_audit_event` 初始失败于审计事件为空 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_p0.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 32 passed ✅
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_risk_engine_layers.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 16 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - scoped `py_compile`、`isort --check-only`、`black --check` → passed ✅
+- 注意事项:
+  - 当前 evidence 已包含 `signal_id`、`strategy_id`/`strategy_name`、symbol、qty、price、rejection_reason、risk_level、details 与 recommended KillSwitch level
+  - 下一步应把这些审计事件串入统一 `DecisionTraceId`，并在运维页增加按 signal/trace 查询的视图
+
+### 本次任务：P4.1 市场无关 PG 风险审计仓储
+- 完成时间: 2026-05-06 17:19 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.1
+- 开发前状态:
+  - P4.0 已有 `MarketRiskAuditEvent` 契约，但 budget/probe 仍直接写控制面内存事件流
+  - `risk:crypto` 审计查询没有 PG-first 仓储，长期回放仍会受进程重启影响
+- 开发后状态:
+  - 新增 `risk_audit_events` 表迁移和 `PostgresMarketRiskAuditStorage`
+  - 新增 `MarketRiskAuditRepository`，PG 可用时优先写/读 PG，PG 不可用或失败时回退控制面内存事件流
+  - crypto budget/probe 审计改为通过 `MarketRiskAuditEvent` 写入，`risk:crypto` 是 market audit 的过滤视图
+  - 写入成功后仍同步内存事件投影，保持旧 `/v1/events?stream_key=risk:crypto` 查询兼容
+- Issue 状态迁移:
+  - 风控审计只在控制面内存事件流：`待确认` → `已验证（PG-first MarketRiskAuditRepository）`
+  - `crypto_risk_audit_events` 平台级命名风险：`待确认` → `已验证（统一 risk_audit_events）`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_market_risk_audit_repository.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_p0.py --tb=short` → 24 passed ✅
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest -q trader/tests/test_postgres_storage.py trader/tests/test_risk_idempotency_persistence.py trader/tests/test_market_risk_audit_repository.py --tb=short` → 40 passed ✅
+  - 新增真实 PG 覆盖：`risk_audit_events` 建表、JSONB payload 写入、`stream_key/event_type/since_ts_ms` 过滤和测试数据清理 ✅
+  - `python -m py_compile trader\adapters\persistence\postgres\risk_audit_storage.py trader\adapters\persistence\market_risk_audit_repository.py trader\api\routes\risk.py trader\core\domain\models\market_risk.py` → passed ✅
+- 注意事项:
+  - Docker Postgres 真实集成已补跑通过；当前仍需避免与其他会清库的 PG 测试并行执行
+  - 下一步应把 pre-trade rejection evidence 也写入 `risk_audit_events`，并与 DecisionTrace 串联
+
+### 本次任务：P4.0 市场无关风险契约抽象
+- 完成时间: 2026-05-06 16:45 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P4.0 第一刀
+- 开发前状态:
+  - 核心 OMS/RiskEngine/RiskSizer 较通用，但 `CryptoRisk*` DTO、审计契约和部分 Core service 类型仍明显绑定数字货币
+  - 回测端口已有 `DataProviderPort`，但 `VectorBTAdapter` 内部直接实例化 `BinanceDataProvider`
+- 开发后状态:
+  - 新增 `MarketInstrumentSpec`、`MarketRiskSnapshot`、`MarketRiskBudget`、`MarketRiskAuditEvent` 等市场无关风险 DTO
+  - `CryptoInstrumentSpec`、`CryptoRiskSnapshot` 等保留为 specialization，并支持投影到 `MarketRisk*` 契约
+  - `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator` 改为依赖结构字段，可消费 market DTO
+  - `VectorBTAdapter` 支持注入 `DataProviderPort`，默认 Binance provider 只作为兼容 fallback
+- Issue 状态迁移:
+  - 平台级风控契约被 `CryptoRisk*` 命名锁死：`待确认` → `已验证（MarketRisk contract）`
+  - 回测引擎直接绑定 Binance 数据源：`待确认` → `已验证（DataProviderPort 注入）`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_market_risk_contract.py trader/tests/test_crypto_risk_p0.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 18 passed ✅
+- 注意事项:
+  - `MarginRiskCalculator` 仍是 crypto/futures 专用；A 股后续应新增现金股票规则插件，而不是复用保证金/强平模型
+  - 下一步 PG 风控审计应落 `risk_audit_events` / `MarketRiskAuditRepository`，并让 `risk:crypto` 作为过滤视图
+
+### 本次任务：Crypto Risk P3.3c Fail-Closed 负向演练自动化
+- 完成时间: 2026-05-06 13:15 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3c
+- 开发前状态:
+  - 正常 demo 只读 probe 已通过，但坏 symbol / 缺关键市场数据时的失败证据仍依赖人工操作
+  - runbook 只描述负向演练思路，没有可复用脚本验证失败 probe 审计和无订单动作
+- 开发后状态:
+  - 新增 `scripts/rehearse_crypto_risk_demo_fail_closed.py`，只调用 runtime、probe、events、orders 的只读接口
+  - 脚本使用不存在 symbol 触发负向 probe，要求 `ok=false`、`read_only=true`、存在失败检查项、审计事件匹配且订单列表不变
+  - `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` 新增脚本化 Fail-Closed 演练步骤
+- 验证结果:
+  - 真实本地后端演练：`QTSFAILCLOSEDUSDT` → `ok=false`，failed checks=`instrument_specs, leverage_brackets, mark_prices` ✅
+  - `risk:crypto / crypto_risk.probe_run` 失败审计事件匹配 ✅
+  - `/v1/orders` 演练前后内容一致 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_fail_closed_rehearsal.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 10 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m isort --check-only --profile black trader/ scripts/check_crypto_risk_demo_env.py scripts/rehearse_crypto_risk_demo_fail_closed.py` → passed ✅
+  - `python -m black --check --line-length 100 trader/ scripts/check_crypto_risk_demo_env.py scripts/rehearse_crypto_risk_demo_fail_closed.py` → passed ✅
+  - `python -m py_compile scripts\rehearse_crypto_risk_demo_fail_closed.py scripts\check_crypto_risk_demo_env.py` → passed ✅
+- 注意事项:
+  - 本演练验证的是只读 probe 失败闭环，不会触发策略信号或真实下单
+  - 下一步应将 probe/budget/pre-trade rejection 审计从控制面内存事件流推进到 PG 持久化
+
+### 本次任务：Crypto Risk P3.3b Binance demo 真实只读 Probe 验证
+- 完成时间: 2026-05-06 11:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3b
+- 开发前状态:
+  - P3.3a 已有 demo runbook 和 preflight，但尚未用真实 demo 凭证触发外部只读 probe
+  - runbook 和 `.env.example` 误将 USD-M demo source 写为 `https://demo-api.binance.com/fapi`
+- 开发后状态:
+  - 本地 `.env` 补齐非密钥 `CRYPTO_RISK_*` 配置并通过 preflight
+  - 实测 `https://demo-api.binance.com/fapi` 对 USD-M `/fapi/*` endpoints 返回 404，已修正为 `https://demo-fapi.binance.com`
+  - 后端 runtime 成功 wired：`enabled=true`、`wired=true`、`fail_closed=false`、`execution_env=demo`
+  - `POST /v1/risk/crypto/probe` 使用真实 demo 凭证完成只读验证，7 项检查全部 passed，并写入 `risk:crypto / crypto_risk.probe_run`
+- 验证结果:
+  - runtime source: `https://demo-fapi.binance.com`
+  - probe symbols: `BTCUSDT`, `ETHUSDT`
+  - probe duration: 1425.067ms
+  - account / mark_prices / instrument_specs / leverage_brackets / positions / open_orders / venue_health → passed ✅
+  - open orders: 0
+  - nonzero position symbols: `BTCUSDT`
+  - `python -m pytest -q trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 6 passed ✅
+- 注意事项:
+  - 本次 probe 为只读联通性验证，没有下单、撤单或调整杠杆
+  - 本地 8080 后端由本次联调启动，完成后可按需停止或继续用于前端 `/crypto-risk` 查看
+
+### 本次任务：Crypto Risk P3.3 Binance demo 联调自检与运行手册
+- 完成时间: 2026-05-05 22:51 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3a
+- 开发前状态:
+  - 已有 `/v1/risk/crypto/runtime`、`/v1/risk/crypto/probe` 和前端 `/crypto-risk`
+  - 缺少 demo 联调前的本地环境自检，`.env.example` 仍以 testnet 口径为主
+  - 运维流程容易把 Binance Spot Demo 执行环境和 USD-M 只读风控 source 混成一个环境
+- 开发后状态:
+  - 新增 `scripts/check_crypto_risk_demo_env.py`，在不访问网络、不打印凭证的前提下检查 demo 环境、Crypto Risk 启用、显式 USD-M source、预算和 cluster 映射
+  - 新增 `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`，明确自检、启动、runtime status、只读 probe、审计确认和 fail-closed 演练步骤
+  - `.env.example` 改为 Binance demo 默认，并补充 Crypto Risk 预算和 source 配置示例
+  - `docs/PLAN.md` 将 P3.3 拆分为已完成 demo runbook/self-check 与后续 PG audit/funding/OI 任务
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m isort --check-only --profile black trader/ scripts/check_crypto_risk_demo_env.py` → passed ✅
+  - `python -m black --check --line-length 100 trader/ scripts/check_crypto_risk_demo_env.py` → passed ✅
+  - `python -m py_compile scripts\check_crypto_risk_demo_env.py` → passed ✅
+- 注意事项:
+  - 本次没有使用真实 demo 凭证访问 Binance；外部只读 probe 仍需按 runbook 在本机运行后端后手动触发
+  - `scripts/test_binance_demo_connection.py` 与 `scripts/smoke_trade_roundtrip.py` 会走订单生命周期，不属于只读风控 probe
+
+### 本次任务：全仓 Python 格式化收敛与 CI 门禁
+- 完成时间: 2026-05-05 22:32 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `isort` 已安装并固定，但全仓 `isort --check-only` 仍暴露历史导入排序债
+  - CI 未强制执行 `black` / `isort`，后续提交仍可能重新引入格式漂移
+- 开发后状态:
+  - 已创建独立纯格式化提交 `0df5107 chore: normalize python formatting`
+  - 新增 `.git-blame-ignore-revs` 记录纯格式化提交，便于后续 blame 忽略批量格式化噪音
+  - `.github/workflows/ci-gate.yml` 新增 `Python Formatting Gate`，强制执行 `isort --check-only --profile black trader/` 与 `black --check --line-length 100 trader/`
+- 测试结果:
+  - `python -m isort --check-only --profile black trader/` → passed ✅
+  - `python -m black --check --line-length 100 trader/` → passed ✅
+  - 核心域/应用层回归（deterministic/hard/risk/position）→ passed ✅
+  - PG 与快照持久化集成测试（Docker Compose Postgres）→ passed ✅
+  - Binance/Crypto Risk 回归 → 74 passed ✅
+- 注意事项:
+  - 以后功能提交若未按 `black`/`isort` 收敛，CI 会提前阻断，避免格式债继续扩大
+
+### 本次任务：安装并固定 isort，补跑 Crypto Risk 运维回归
+- 完成时间: 2026-05-05 22:06 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 当前 Python 环境未安装 `isort`，前几次 Crypto Risk 任务只能记录 `isort` 未执行成功
+  - `pyproject.toml` 与 `trader/requirements-ci.txt` 只固定了 `black==24.4.2`
+- 开发后状态:
+  - 已安装并固定 `isort==5.13.2`
+  - 本次 Crypto Risk 相关 Python 文件已完成 scoped `isort --profile black` 修复
+  - 全仓 `python -m isort --check-only --profile black trader/` 已可运行，但暴露大量历史导入排序遗留，未做全仓格式化以避免无关大 diff
+- 测试结果:
+  - `python -m isort --check-only --profile black trader/api/crypto_risk_runtime.py trader/api/models/schemas.py trader/api/routes/risk.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py` → passed ✅
+  - `python -m black --check --line-length 100 ...`（同上 6 个 Python 文件）→ passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - Frontend `npm run lint` → passed with 4 pre-existing warnings ✅
+  - Frontend `npm run test` → 65 passed ✅
+- 注意事项:
+  - 全仓 isort 收敛应作为独立格式化任务执行，避免把历史导入排序一次性混入功能提交
+
+### 本次任务：数字货币独立风控 P3.2c Binance demo 联调入口与前端运维
+- 完成时间: 2026-05-04 21:36 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2c
+- 开发前状态:
+  - P3.2b 已具备 symbol/cluster/total/margin/强平缓冲预算和审计
+  - runtime 可查询和热更新，但缺少对已 wired Binance USD-M 风控 source 的只读联通性检查
+  - 前端没有专门页面区分 Binance demo 执行环境、USD-M 风控 source URL、预算热更新和风险审计流
+- 开发后状态:
+  - `CryptoRiskRuntimeStatus` 与 probe 响应新增 `execution_env`，默认反映当前 Binance demo 执行环境
+  - 新增 `POST /v1/risk/crypto/probe`，只读读取 venue health、mark price、instrument spec、leverage bracket、account、positions、open orders，并写入 `risk:crypto` / `crypto_risk.probe_run`
+  - 新增 Frontend `/crypto-risk` 运维页，支持 runtime 状态、只读 probe、预算热更新、`risk:crypto` 审计流查看和 POST/PATCH 二次确认
+  - 前端新增 `cryptoRisk` 类型、API client、TanStack Query hooks、Zod 契约和预算输入解析测试
+- Issue 状态迁移:
+  - USD-M 风控 source 无只读联通性检查：`待确认` → `已验证（read-only probe）`
+  - demo 执行环境与风控 source URL 容易被误写成 testnet：`待确认` → `已验证（execution_env + docs/UI 口径）`
+  - Crypto Risk 缺少前端运维入口：`待确认` → `已验证（/crypto-risk 页面）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py --tb=short` → 23 passed ✅
+  - Frontend `npm run typecheck` → passed ✅
+  - Frontend `npm run lint` → passed with 4 pre-existing warnings ✅
+  - Frontend `npm run test` → 65 passed ✅
+- 注意事项:
+  - 本次新增的是只读 readiness probe 和运维入口，不新增 Futures 下单路径
+  - 尚未使用真实 demo 凭证在运行中后端上发起外部 Binance 联通性检查；需要由运维在 `/crypto-risk` 页或 API 明确触发
+
+### 本次任务：数字货币独立风控 P3.2b 组合级 Cluster 风险预算
+- 完成时间: 2026-05-04 20:55 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2b
+- 开发前状态:
+  - P0/P1/P2/P3.1 已能按单 symbol、账户总 notional、margin ratio 和强平缓冲做 pre-trade 拦截
+  - 不同 alt 仓位仍只在 total cap 下合并，缺少 BTC beta / ETH beta 等组合级风险簇预算
+  - 预算热更新 API 不支持 symbol→cluster 映射和 cluster cap
+- 开发后状态:
+  - `CryptoRiskBudget` 新增 `symbol_clusters` 与 `cluster_notional_caps`
+  - 新增 `PortfolioExposureAggregator`，按 `已成交持仓 + active open orders + 本次拟下单` 聚合 cluster risk notional
+  - `CryptoPreTradeRiskPlugin` 新增 cluster cap 检查，超限返回 `CRYPTO_CLUSTER_EXPOSURE` 并建议 L1 `NO_NEW_POSITIONS`
+  - `CRYPTO_RISK_SYMBOL_CLUSTERS`、`CRYPTO_RISK_CLUSTER_NOTIONAL_CAPS` 环境变量和 `PATCH /v1/risk/crypto/budget` 均支持 cluster 预算
+- Issue 状态迁移:
+  - Alt 仓位只受单币种/账户总 cap 约束：`待确认` → `已验证（cluster exposure cap）`
+  - BTC beta / ETH beta 等相关性风险无法配置预算：`待确认` → `已验证（symbol_clusters + cluster_notional_caps）`
+  - 组合级预算无法热更新：`待确认` → `已验证（runtime budget API）`
+- 测试结果:
+  - P3.2b/受影响 crypto/runtime/API/risk/OMS 回归 → 67 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 12 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 当前 cluster 风险以配置映射为准，尚未实现动态相关性矩阵或 BTC beta 回归估计
+  - Binance USD-M testnet/live 真实联调、前端运维入口和 PG 级预算审计持久化仍留给后续
+
+### 本次任务：数字货币独立风控 P3.2a 预算热更新审计
+- 完成时间: 2026-05-04 19:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.2a
+- 开发前状态:
+  - P3.1 已有 runtime status API 与预算热更新 API
+  - 成功热更新预算后没有独立审计事件，后续难以回放“谁在何时把阈值从多少改到多少”
+  - 运维只能通过通用状态接口看当前值，无法查询历史变更
+- 开发后状态:
+  - `PATCH /v1/risk/crypto/budget` 成功后写入控制面事件流 `stream_key=risk:crypto`
+  - 新增事件类型 `crypto_risk.budget_updated`，payload 记录 `updated_by`、`previous_budget`、`new_budget`、`runtime_before`、`runtime_after`
+  - 新增 `GET /v1/risk/crypto/budget/audit`，按同一 event log 来源查询预算热更新审计记录
+  - 未 wired/runtime 冲突导致的失败更新不会写入成功审计事件
+- Issue 状态迁移:
+  - 预算热更新无历史审计：`待确认` → `已验证（event log audit）`
+  - 风险预算运维入口只能看当前值：`待确认` → `已验证（audit query）`
+- 测试结果:
+  - P3.2a/受影响 crypto/OMS/risk/API 回归 → 65 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\routes\risk.py trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\models\schemas.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 11 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 审计事件当前写入控制面 in-memory event log；生产级 PG event log 持久化仍属于后续基础设施任务
+  - Binance USD-M testnet/live 真实联调和前端运维入口仍留给 P3.2b
+
+### 本次任务：数字货币独立风控 P3.1 Runtime API 与预算热更新
+- 完成时间: 2026-05-04 19:05 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.1
+- 开发前状态:
+  - P2 已能在 lifespan 显式启用 Binance USD-M source 并注入 OMS pre-trade 风控
+  - runtime 状态只存在于启动日志/局部变量，外部无法查询当前是否 enabled/wired/fail_closed
+  - 风险预算只能通过环境变量静态配置，调整 symbol/total/margin 阈值需要重启
+- 开发后状态:
+  - 新增 `CryptoRiskRuntimeManager`，作为 lifespan 和 Risk API 共用的单一 runtime 状态源
+  - 新增 `GET /v1/risk/crypto/runtime`，返回 enabled、wired、fail_closed、base symbols、预算、最近错误等状态，不暴露凭证
+  - 新增 `PATCH /v1/risk/crypto/budget`，热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，late-bind 到已存在 OMS handler
+  - `main.py` 改为通过 runtime manager 完成启用、fail-closed 和 shutdown close，避免 lifespan 与 API 状态分叉
+- Issue 状态迁移:
+  - Crypto risk runtime 无可观测状态：`待确认` → `已验证（runtime status API）`
+  - 风险预算只能重启生效：`待确认` → `已验证（budget hot update API）`
+  - lifespan 与运维 API 可能出现双状态源：`待确认` → `已验证（runtime manager 单一状态源）`
+- 测试结果:
+  - P3.1/受影响 crypto/OMS/risk/API 回归 → passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\routes\risk.py trader\api\models\schemas.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 11 files unchanged ✅
+  - `git diff --check` → passed ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - 真实 Binance USD-M testnet/live 联调尚未执行，需要有效 futures key、testnet/live base URL 和人工确认
+  - 预算热更新当前是进程内 runtime 更新，尚未持久化审计；下一步 P3.2 补前端入口和审计记录
+
+### 本次任务：数字货币独立风控 P2 运行时启用与 lifespan 接线
+- 完成时间: 2026-05-04 15:21 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P2 第一版
+- 开发前状态:
+  - P1 已有 Binance USD-M risk source、snapshot provider 与 OMS `pre_trade_risk_check` 注入点
+  - 应用启动时仍不会根据配置创建 source，也不会把真实 risk check 注入已初始化的 OMS handler
+  - 显式启用但配置错误时缺少统一 fail-closed runtime check
+- 开发后状态:
+  - 新增 `trader/api/crypto_risk_runtime.py`，解析 `CRYPTO_RISK_ENABLED`、USD-M base URL、基础 symbols、总/symbol notional cap、margin/强平缓冲阈值、timeout/proxy/retry 等运行时配置
+  - `trader/api/main.py` 在 lifespan 中默认关闭 crypto risk；显式启用时创建 Binance USD-M source、snapshot provider 与 pre-trade risk check，并保存 source 用于 shutdown close
+  - `OMSCallbackHandler.set_pre_trade_risk_check()` 与策略路由 `set_pre_trade_risk_check()` 支持 handler 已创建后的 late binding
+  - 启用但凭证缺失、配置非法或 runtime wiring 失败时，注入 fail-closed risk check，避免无声绕过独立风控
+- Issue 状态迁移:
+  - Crypto risk source 只存在代码未接入启动链路：`待确认` → `已验证（lifespan wiring）`
+  - OMS handler 先创建导致后续 risk check 注入不生效：`待确认` → `已验证（late binding）`
+  - `CRYPTO_RISK_ENABLED=true` 配置错误可能 fail-open：`待确认` → `已验证（setup failure check）`
+- 测试结果:
+  - P2/受影响 crypto/OMS/risk 回归（runtime config、route injection、Binance mapper/source、snapshot provider、OMS pretrade、balance、observability、crypto P0、risk engine layers）→ 53 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile trader\api\crypto_risk_runtime.py trader\api\main.py trader\api\routes\strategies.py trader\services\oms_callback.py` → passed ✅
+  - `python -m black --check --line-length 100 ...` → 7 files unchanged ✅
+  - `python -m isort --check-only --profile black ...` → 未执行成功（当前 Python 环境未安装 `isort`）
+- 注意事项:
+  - P2 仍未做真实 Binance USD-M testnet/live 网络联调；下一步进入 Crypto Risk P3
+  - 风险预算当前通过环境变量配置，尚未提供热更新 API 或前端运维入口
+
+### 本次任务：数字货币独立风控 P1 快照采集与 OMS 接线
+- 完成时间: 2026-05-04 10:16 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P1 第一版
+- 开发前状态:
+  - `CryptoPreTradeRiskPlugin` 已能消费 `CryptoRiskSnapshot`，但快照仍依赖外部 fake/static provider
+  - Binance 原始字段到 Core DTO 的转换边界尚未固化
+  - `StrategyRunner -> OMSCallbackHandler` 运行链路没有可注入的独立 pre-trade 风控检查点
+- 开发后状态:
+  - 新增 `trader/adapters/binance/crypto_risk_mapper.py`，将 Binance `clientOrderId`、`origQty`、`positionAmt`、`markPrice`、`notionalCap` 等字段转换为内部 DTO
+  - 新增 `BinanceFuturesRiskDataSource`，提供 USD-M futures account、positionRisk、openOrders、exchangeInfo、leverageBracket、premiumIndex 的 Adapter 边界数据源
+  - 新增 `DataSourceCryptoRiskSnapshotProvider`，聚合账户、持仓、在途订单、规则、杠杆分层和 mark price；缺关键数据 fail-closed
+  - `OMSCallbackHandler` 新增 `pre_trade_risk_check` 注入点；拒绝或异常时在 broker `place_order` 前阻断订单
+  - `trader/api/routes/strategies.py` 新增 `set_pre_trade_risk_check()`，为应用启动期接入独立风控预留运行入口
+- Issue 状态迁移:
+  - `CryptoRiskSnapshotProvider` 只存在接口无实现：`待确认` → `已验证（Service Provider + Binance Source）`
+  - Binance 原始字段可能泄漏到 Service/Core：`待确认` → `已验证（Adapter mapper 边界）`
+  - OMS 下单前缺少独立风控硬闸：`待确认` → `已验证（pre_trade_risk_check 阻断 place_order）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_binance_crypto_risk_mapper.py trader/tests/test_binance_crypto_risk_source.py trader/tests/test_crypto_risk_snapshot_provider.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 13 passed ✅
+  - 受影响回归（`test_oms_pretrade_balance.py`、`test_runtime_observability.py`、`test_crypto_risk_p0.py`、`test_risk_engine_layers.py`）→ 28 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m black --check ... --line-length 100` → 9 files unchanged ✅
+- 注意事项:
+  - 当前提供的是可注入接线和 USD-M Adapter source；生产启动时仍需在 lifespan/配置层显式创建 `BinanceFuturesRiskDataSource`、风险预算和 `build_crypto_pre_trade_risk_check()` 后注入
+  - Binance Futures 真实联调需要有效 API key 与 testnet/live 环境，当前单测不访问网络
+
+### 本次任务：安装并固定 Black 格式化工具
+- 完成时间: 2026-05-04 09:40 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 当前 Python 环境没有安装 `black`，无法执行项目约定的格式化命令
+  - 直接安装最新 `black==26.3.1` 后，在仓库固定的 Python 3.12.5 上被 Black 硬阻断
+- 开发后状态:
+  - 已安装并验证 `black==24.4.2`
+  - `pyproject.toml` 和 `trader/requirements-ci.txt` 均新增 `black==24.4.2`
+  - 已对 crypto 风控相关 Python 文件和 `risk_engine.py` 运行 scoped black 格式化
+- 测试结果:
+  - `python -m black --version` → `black 24.4.2`, Python 3.12.5 ✅
+  - `python -m black --check ... --line-length 100` → 8 files unchanged ✅
+  - `python -m py_compile ...` → passed ✅
+  - `python -m pytest -q trader\tests\test_crypto_risk_p0.py --tb=short` → 7 passed ✅
+  - 风控核心回归（`test_risk_engine_layers.py`、`test_risk_sizer.py`、`test_position_risk_constructor.py`、`test_risk_intervention_matrix.py`、`test_risk_intervention_tracker.py`）→ 157 passed ✅
+- 注意事项:
+  - Black 25.1.0/26.3.1 会因 Python 3.12.5 的 AST safety check 风险拒绝实际格式化；在仓库继续固定 Python 3.12.5 时，`black==24.4.2` 是当前可运行选择
+
+### 本次任务：数字货币独立风控 P0 模块落地
+- 完成时间: 2026-05-03 00:00 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P0 纯计算与插件骨架
+- 开发前状态:
+  - 风控已有 `RiskSizer`、`PositionRiskConstructor`、`RiskEngine` 和 KillSwitch 框架
+  - 数字货币合约特有的交易所规则、在途订单占用、mark price、leverage bracket、保证金/强平缓冲尚未形成独立门禁
+  - 策略信号仍可能只按数量/金额进入通用 pre-trade 风控
+- 开发后状态:
+  - 新增 `CryptoRiskSnapshot`、`CryptoInstrumentSpec`、`LeverageBracket`、`CryptoPositionRisk`、`OpenOrderRisk` 和 `CryptoRiskBudget`
+  - 新增 `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`MarginRiskCalculator` 三个 Core 纯计算服务
+  - 新增 `CryptoPreTradeRiskPlugin`，通过快照提供者把交易所规则、在途订单和保证金检查接入 `RiskEngine` pre-trade 插件体系
+  - `RejectionReason` 增加 crypto 风控拒绝原因，KillSwitch 推荐保持单调保守
+- Issue 状态迁移:
+  - 数字货币合约仓位风险维度缺失：`待确认` → `已验证（P0 纯计算）`
+  - 在途订单未占用风险预算：`待确认` → `已验证（OpenOrderExposure）`
+  - 交易所规则未统一进入 Core 风控：`待确认` → `已验证（ExchangeRuleGuard）`
+  - 保证金/杠杆分层未独立校验：`待确认` → `已验证（MarginRiskCalculator 初版）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py --tb=short` → 7 passed ✅
+  - `python -m pytest -q trader\tests\test_risk_engine_layers.py trader\tests\test_risk_sizer.py trader\tests\test_position_risk_constructor.py trader\tests\test_risk_intervention_matrix.py trader\tests\test_risk_intervention_tracker.py --tb=short` → 157 passed ✅
+  - `python -m py_compile trader\core\domain\models\crypto_risk.py trader\core\domain\services\exchange_rule_guard.py trader\core\domain\services\open_order_exposure.py trader\core\domain\services\margin_risk_calculator.py trader\core\application\plugins\crypto_pre_trade_risk_plugin.py trader\core\application\risk_engine.py` → passed ✅
+  - `python -m pytest -q trader\tests\test_binance_connector.py trader\tests\test_binance_private_stream.py trader\tests\test_binance_degraded_cascade.py trader\tests\test_deterministic_layer.py trader\tests\test_hard_properties.py --tb=short` → 99 passed ✅
+- 注意事项:
+  - P1 已补齐 Binance Adapter/Service 快照提供者与 OMS 前置风控注入点；真实交易环境仍需在启动配置层显式启用
+  - 当时 `black` 未安装；后续已固定 `black==24.4.2` 并完成 scoped format
+
+### 本次任务：Strategy Details 支持查看模块 entrypoint 源码
+- 完成时间: 2026-04-30 17:29 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Strategy Details 的 Info 项只调用 `/v1/strategies/{strategy_id}/code/latest`
+  - 内置 `trader.*` module entrypoint 策略没有 saved code version，只能显示 “No saved code version is available”
+- 开发后状态:
+  - 新增 `StrategyCodeView` DTO 与 `GET /v1/strategies/{strategy_id}/code/view`
+  - 该接口优先返回 Strategy Lab saved code；没有 saved code 时安全读取本仓库 `trader.*` 模块源码
+  - Frontend Strategy Details 的 Strategy Code 区块改为展示 `saved code` 或 `module entrypoint` 源码
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_code_view.py --tb=short` → 2 passed ✅
+  - `python -m py_compile trader\api\routes\strategies.py trader\api\models\schemas.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `git diff --check` → passed ✅
+
+### 本次任务：修复 Strategy Management 空白页
+- 完成时间: 2026-04-30 16:48 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 问题原因:
+  - `StrategyDetailModal` 在未选中策略时仍被渲染
+  - `strategy={detailStrategy!}` 只影响 TypeScript 类型，运行时仍可能传入 `null`
+  - 新增的最新代码查询会提前访问 `strategy.strategy_id`，导致 `/strategies` 页面运行时崩溃为空白
+- 修复:
+  - `Strategies.tsx` 改为只有 `detailStrategy` 存在时才渲染 `StrategyDetailModal`
+- 测试结果:
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `Invoke-WebRequest http://127.0.0.1:5173/strategies` → 200 ✅
+- 注意事项:
+  - `npm run build` 在诊断时仍受既有 `tsconfig.node.json` 的 `allowImportingTsExtensions` 配置限制失败，和本次空白页问题无关
+
+### 本次任务：Strategy Details Info 展示最新策略代码
+- 完成时间: 2026-04-30 16:45 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Strategy Management 的 Strategy Details 卡片 Info 项只展示元数据、运行指标、配置和错误信息
+  - 已保存的动态策略代码只能在 Backtests/Strategy Lab 或 API 中查看，管理页无法直接核对源码
+- 开发后状态:
+  - 新增前端 `useLatestStrategyCode(strategy_id)` 查询，复用 `/v1/strategies/{strategy_id}/code/latest`
+  - Strategy Details 的 Info 项新增 Strategy Code 区块，展示最新 `code_version`、checksum、创建时间和代码内容
+  - 对未保存代码版本的模块 entrypoint 策略显示清晰的无代码提示
+- 测试结果:
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 当前展示的是最新保存代码版本，不是历史版本选择器；后续可加版本下拉和 diff
+
+### 本次任务：Research 页面支持删除 StrategyCandidate
+- 完成时间: 2026-04-30 16:37 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - Research 页面只能创建并列出 candidate，无法删除误建或废弃的研究候选
+  - 后端 `StrategyCandidate` API 也缺少删除入口
+- 开发后状态:
+  - 新增 `DELETE /v1/strategy-candidates/{candidate_id}`，只删除研究候选实体，不删除策略模板、代码版本、回测报告或 deployment
+  - `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 状态会拒绝删除，避免删除仍关联运行链路的候选
+  - 删除动作写入 `strategy_candidate.deleted` 审计事件
+  - Frontend Research 页面每个候选增加 Delete 按钮，受保护状态自动禁用
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py --tb=short` → 6 passed ✅
+  - `python -m py_compile trader\api\routes\strategy_candidates.py trader\services\strategy_candidate.py trader\storage\in_memory.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 当前删除是控制面 in-memory 删除；生产级 PG 持久化落地时应保留相同行为和审计事件
+
+### 本次任务：端到端研究与自动组合运行第一版纵向切片
+- 完成时间: 2026-04-30 16:17 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成第一版纵向切片
+- 开发前状态:
+  - Strategy Lab 已有代码调试、保存、回测、加载、启动、停止按钮，但加载策略缺少 `symbols/account_id/venue/mode`，前端 typecheck 失败
+  - `startStrategy` / `stopStrategy` 在 Strategy Lab 中仍使用 `strategy_id`，与当前 `/v1/deployments/{deployment_id}` 运行实例契约不一致
+  - 策略生命周期、回测门禁、仓位分配和组合自动控制能力分散存在，缺少统一 API 入口和前端工作台入口
+- 开发后状态:
+  - 新增 `StrategyCandidate` 控制面 API，覆盖创建、调试、回测、验证和 promote 前置门禁；未到 `VALIDATION_PASSED` 的候选策略会拒绝部署
+  - 新增 Allocation API 与 Portfolio Autopilot API，支持策略预算配置、分配 trace 记录、data stale 自动暂停和组合超暴露降仓决策记录
+  - Backtest DTO 增加 `feature_version`、`data_mode`、手续费、滑点、benchmark 等研究字段；synthetic/dev_smoke 回测会被标记，不能作为部署准入
+  - Frontend 修复 Strategy Lab deployment 契约，新增 Data、Research、Portfolio Allocation、Portfolio Autopilot 工作台入口
+  - `docs/INTERFACE_CONTRACTS.md` 与 `docs/PROJECT_ARCHITECTURE.md` 已同步新增研究到自动组合运行闭环
+- Issue 状态迁移:
+  - Strategy Lab load/start/stop 契约断裂：`待确认` → `已验证`
+  - 缺少候选策略生命周期 API：`待确认` → `已验证（第一版）`
+  - dev_smoke 回测可能被误用为部署依据：`待确认` → `已验证（门禁阻断）`
+  - 缺少仓位分配与自动组合控制面 API：`待确认` → `已验证（第一版）`
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_api_strategy_runner_endpoints.py --tb=short` → 3 passed ✅
+  - `python -m py_compile trader\api\routes\strategy_candidates.py trader\api\routes\allocations.py trader\api\routes\portfolio_autopilot.py trader\api\routes\data_catalog.py trader\services\strategy_candidate.py trader\services\allocation_management.py trader\services\portfolio_autopilot.py trader\api\models\schemas.py trader\storage\in_memory.py` → passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+- 注意事项:
+  - 第一版持久化仍使用控制面 in-memory storage；生产级默认 PG 持久化仍需后续补齐
+  - Portfolio Autopilot 第一版记录和模拟控制决策，完整 live 执行闭环仍需接入真实 runtime/orchestrator 安全门禁
+
+### 本次任务：新增项目架构图文档与维护约束
+- 完成时间: 2026-04-29 23:18 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 已存在长篇架构说明 `docs/quant_trading_system Crypto v3.4.0_Architecture.md`
+  - 缺少轻量的“当前架构图入口”，无法快速查看五层架构、主数据流、下单闭环和恢复闭环
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 未明确要求架构变更时同步更新架构图
+- 开发后状态:
+  - 新增 `docs/PROJECT_ARCHITECTURE.md`，包含五层平面架构图、主数据流图、策略下单闭环、对账恢复闭环和文档契约关系
+  - 明确架构图文档的更新触发条件：层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、运行拓扑变化
+  - 三个规则入口均新增架构图同步要求，防止架构图与实现漂移
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续架构性代码改动必须先检查 `docs/PROJECT_ARCHITECTURE.md` 是否需要同步
+
+### 本次任务：新增 AI TDD 防幻觉流程约束
+- 完成时间: 2026-04-29 23:13 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 已要求高密度测试覆盖
+  - 现有规则强调“代码必须有测试”，但未明确要求 AI 先写失败测试再实现
+  - AI 仍可能先臆造函数/DTO/API，再补看似合理但绑定虚构接口的测试
+- 开发后状态:
+  - 三个规则入口均新增 TDD 防幻觉流程：Red → Green → Refactor
+  - 明确测试必须基于已检索的真实接口失败，不能失败在 import error、拼写错误或虚构接口上
+  - 如果测试需要的新函数、字段或 DTO 尚不存在，必须先更新 `docs/INTERFACE_CONTRACTS.md` 并说明兼容策略
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续行为变更应优先提交能复现目标行为或缺陷的测试，再做最小实现
+
+### 本次任务：同步 `.traerules` 与 AI 规则入口
+- 完成时间: 2026-04-29 23:04 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md` 与 `CLAUDE.md` 已包含接口契约、文档闭环、测试与架构约束
+  - `.traerules` 仍保留较旧的三平面架构、旧文档更新规则和 Python 3.10+ 描述
+  - 三个 AI/工具入口缺少“任一入口变更时检查另外两个”的显式同步约束
+- 开发后状态:
+  - `.traerules` 已同步任务处理原则、项目扫描、常用命令、五层架构、测试规范、工程纪律、文档闭环和红线操作
+  - `.traerules` 的技术栈约束同步为 Python 3.12.5、`@dataclass(slots=True)` 优先和 asyncio/Actor 并发模式
+  - `AGENTS.md`、`CLAUDE.md`、`.traerules` 均新增规则入口同步要求，避免后续公共工程约束漂移
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续修改任一 AI/工具规则入口时，需要同步检查另外两个入口
+
+### 本次任务：新增接口契约与命名规范约束
+- 完成时间: 2026-04-29 22:50 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - 仓库已有 `AGENTS.md` / `CLAUDE.md` 约束架构、测试和文档闭环
+  - 缺少统一记录函数签名、DTO、事件 Schema、API 字段、跨层调用与命名映射的接口契约文档
+  - AI 或多人协作改动时，容易出现 `cl_ord_id` / `clientOrderId`、`qty` / `quantity`、`deployment_id` / `strategy_id` 等同义不同名问题
+- 开发后状态:
+  - 新增 `docs/INTERFACE_CONTRACTS.md`，作为接口契约与命名规范单一真相源
+  - `AGENTS.md`、`CLAUDE.md` 与 `.traerules` 均新增接口契约优先规则，要求涉及签名、DTO、事件、API 字段、跨层调用或命名重构时先查阅并按需更新契约
+  - 明确外部字段只能在 Adapter/API 边界转换，内部字段必须遵守标准领域词汇
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续接口改名必须先改契约，再改类型定义、实现与测试
+  - `docs/DATA_CONTRACT.md` 继续负责研究数据字段契约；`docs/INTERFACE_CONTRACTS.md` 负责代码接口契约
+
+### 本次任务：同步 Claude 与 Agents 文档闭环要求
+- 完成时间: 2026-04-28 14:44 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `AGENTS.md` 已要求同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md`、`EXPERIENCE_SUMMARY.md`，并保持计划文档新鲜
+  - `CLAUDE.md` 的 Documentation Updates 仍保留旧规则：开发前必须更新 `PLAN.md`，且未纳入 `DEVELOPMENT_LOG.md`
+- 开发后状态:
+  - `CLAUDE.md` 的文档闭环规则已同步为与 `AGENTS.md` 一致
+  - `PLAN.md` 改为仅在排期、阶段切换、优先级重排时更新
+  - `DEVELOPMENT_LOG.md` 被明确纳入 Claude 工作流
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - 后续更新 AI 协作规范时，应同时检查 `AGENTS.md` 与 `CLAUDE.md`
+
+### 本次任务：测试全局状态污染隔离与全量回归恢复
+- 完成时间: 2026-04-28 14:41 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过全量测试 + P0 回归
+- 开发前状态:
+  - 部分测试单独运行通过，但全量运行受测试顺序污染影响，表现为路由单例、仓库单例、内存 storage、logger、环境变量和 mock module 泄漏
+  - 本地 `.env` 中的 live trading、Binance key、proxy failover 配置会进入单测默认路径，导致 dry-run 场景仍可能初始化真实 broker
+  - `test_postgres_projectors.py` 在 collection 阶段写入 `sys.modules["asyncpg"] = MagicMock()`，会污染后续 PostgreSQL 集成判断
+  - API 旧客户端/旧测试仍传 `version=1`，与当前 schema 的 string version 要求不兼容
+- 开发后状态:
+  - 新增 `trader/tests/conftest.py` 全局 autouse 隔离：测试前后清理策略路由单例、monitor 单例、仓库/registry 单例、proxy failover、strategy event service、内存 storage、敏感环境变量与 `asyncpg` module
+  - `trader/api/routes/strategies.py` 增加 `reset_strategy_route_state_for_tests()`；`live_trading_enabled=false` 时 OMS dispatcher 直接短路，不再初始化 broker
+  - Deployment schema 兼容 int/string version；legacy deployment start/stop 在 runtime 未加载时回落到 `DeploymentService`
+  - 动态 load 默认补齐 `BTCUSDT`，避免缺 symbols 抢先掩盖 explicit code_version 404
+  - 控制面异步 backtest 改为确定性 synthetic 回测路径，避免全量测试中的轮询竞态和外部依赖
+- Issue 状态迁移:
+  - 全量测试顺序污染：`待确认` → `已验证`
+  - `.env` / live / proxy / API key 污染测试：`待确认` → `已验证`
+  - `asyncpg` MagicMock collection-time 污染：`待确认` → `已验证`
+  - 旧版 `version=1` API 兼容性：`待确认` → `已验证`
+- 测试结果:
+  - `python -m pytest -q trader/tests/ --tb=short` → passed ✅
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → passed ✅
+- 注意事项:
+  - 仍存在既有 warnings：`chat.py` Pydantic V2 deprecated config、snapshot integration unknown mark、onchain AsyncMock coroutine warning
+  - root `conftest.py` 与 `trader/tests/conftest.py` 均保留隔离逻辑；`trader/tests` 下以本地 conftest 为主
+
+### 本次任务：增加开发记录文档规范
+- 完成时间: 2026-04-28 07:55 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成
+- 开发前状态:
+  - `PLAN.md` 负责计划，`PROJECT_STATUS.md` 负责状态，`docs/EXPERIENCE_SUMMARY.md` 负责经验沉淀
+  - 缺少按时间追加的开发流水账，难以快速复盘每次任务的背景、决策、验证和遗留风险
+- 开发后状态:
+  - 新增 `DEVELOPMENT_LOG.md`，作为只追加的开发记录文档
+  - 更新 `AGENTS.md`，将 `DEVELOPMENT_LOG.md` 纳入必需文档闭环
+  - 后续功能性变更需同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md` 和 `docs/EXPERIENCE_SUMMARY.md`
+- 测试结果:
+  - 文档规范变更，无代码测试
+- 注意事项:
+  - `DEVELOPMENT_LOG.md` 记录过程，`PROJECT_STATUS.md` 记录状态，二者不要互相替代
+
+### 本次任务：AccountStateService + ExecutionBudgetService 领域模型与 OMS 集成
+- 完成时间: 2026-04-28 14:00 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过规格合规 + 代码质量双审查
+- 开发前状态:
+  - OMS 内部使用进程内短 TTL `_balance_reservations` 做预算占用
+  - 没有独立的账户余额状态管理，余额检查依赖 broker API 实时查询
+  - reservation 无状态机（无 PENDING_SUBMIT → ACCEPTED → TERMINAL 生命周期）
+  - broker 异常时一律释放 reservation，不区分业务拒单 vs 网络异常
+- 开发后状态:
+  - 新增 `trader/services/account_state.py`：AccountBalance 领域模型 + AccountStateService
+    - 支持 REST snapshot 全量校准（覆盖所有 assets + 清除 stale）
+    - 支持 private stream 增量更新（outboundAccountPosition 格式）
+    - 支持 balance update delta 更新
+    - stale/fail-closed 标记（private stream 不清除 stale，只有 REST 可以）
+    - get_spendable = free - locked，下限 0
+  - 新增 `trader/services/execution_budget.py`：BalanceReservation 领域模型 + ExecutionBudgetService
+    - reserve_order：检查 spendable = account_spendable - reserved >= required
+    - 状态机：PENDING_SUBMIT → ACCEPTED（broker 成功）→ TERMINAL（成交/取消）
+    - BUY 用 quote asset，SELL 用 base asset
+    - cl_ord_id 幂等拒绝重复 reservation
+    - expire_stale_reservations 过期清理
+  - 修改 `trader/services/oms_callback.py`：OMS 集成 ExecutionBudgetService
+    - 向后兼容：不传 execution_budget 时走原有进程内逻辑
+    - budget 路径：reserve_order → broker → accept_reservation / release_reservation
+    - BrokerBusinessError → release（业务拒单）
+    - BrokerNetworkError → 不释放（保持 PENDING_SUBMIT，待 reconciliation）
+    - 成交时 release_reservation(reason="filled")（同步路径 + WS 路径）
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_account_state_service.py --tb=short` → 18 passed ✅
+  - `python -m pytest -q trader/tests/test_execution_budget_service.py --tb=short` → 23 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_automated_trading_e2e.py --tb=short` → 31 passed ✅
+  - P0 回归测试 → 109 passed ✅
+- 注意事项:
+  - budget 路径目前无专用集成测试（向后兼容保证 legacy 路径不受影响）
+  - Phase 3（private stream + REST snapshot 接入）为下一步工作
+
+### 本次任务：OMS Pre-trade 余额 Gate 完善
+- 完成时间: 2026-04-28 07:49 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成并通过针对性回归
+- 开发前状态:
+  - 策略运行时可能持续产生交易所 rejected，典型原因是 `insufficient balance`
+  - `OMSCallbackHandler` 虽有余额预检查，但只在 `signal.price > 0` 时触发，市价/无价信号会绕过检查
+  - 余额刷新失败只打 warning 后继续下单，执行层存在 fail-open 风险
+  - 多个订单共享同一账户余额时缺少本地短期 reservation，容易连续提交超额订单
+- 开发后状态:
+  - 新增 OMS pre-trade balance gate，所有下单路径先解析 base/quote asset、刷新账户余额、扣减本地 reservation 后再提交 broker
+  - BUY 使用 quote asset 可用余额校验，SELL 使用 base asset 可用余额校验
+  - `signal.price <= 0` 时尝试从 broker ticker 获取参考价，用于市价买单的 quoteOrderQty 估算、余额检查和 minNotional 检查
+  - 账户余额不可获取时 fail-closed，不再继续向交易所提交订单
+  - 下单前通过 `cl_ord_id` 建立短 TTL 余额 reservation，降低短时间连续信号造成的本地超额提交
+  - 测试 fake broker 补齐 `get_account()` / `get_positions()` / `get_exchange_info()` / `get_ticker_prices()`，匹配真实执行端口语义
+- 测试结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_runtime_observability.py trader/tests/test_oms_idempotency.py --tb=short` → 29 passed ✅
+  - `python -m pytest -q trader/tests/test_automated_trading_e2e.py --tb=short` → 27 passed ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_balance.py trader/tests/test_runtime_observability.py trader/tests/test_oms_idempotency.py trader/tests/test_automated_trading_e2e.py --tb=short` → 56 passed ✅
+  - `python -m py_compile trader\services\oms_callback.py trader\tests\test_oms_pretrade_balance.py trader\tests\test_automated_trading_e2e.py trader\api\main.py` → passed ✅
+  - `git diff --check` → passed ✅
+- 注意事项:
+  - 当前 reservation 是进程内短 TTL 防抖，不替代交易所账户流/REST 对账
+  - 后续更完整的执行预算应进入独立 AccountState/Reservation 服务，并由 private stream + REST snapshot 驱动释放与校准
 
 ### 本次任务：重新完成 PG 集成环境 Phase 1-4
 - 完成时间: 2026-04-27 23:24 (北京时间)

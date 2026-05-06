@@ -11,6 +11,8 @@ export const strategyKeys = {
   loaded: () => [...strategyKeys.all, 'loaded'] as const,
   status: (deploymentId: string) => [...strategyKeys.all, 'status', deploymentId] as const,
   params: (strategyId: string) => [...strategyKeys.all, 'params', strategyId] as const,
+  code: (strategyId: string) => [...strategyKeys.all, 'code', strategyId] as const,
+  codeView: (strategyId: string) => [...strategyKeys.all, 'code-view', strategyId] as const,
   events: (deploymentId: string) => [...strategyKeys.all, 'events', deploymentId] as const,
   signals: (deploymentId: string) => [...strategyKeys.all, 'signals', deploymentId] as const,
   errors: (deploymentId: string) => [...strategyKeys.all, 'errors', deploymentId] as const,
@@ -71,6 +73,28 @@ export function useStrategyParams(strategyId: string) {
     staleTime: 60_000,
     retry: 2,
     enabled: !!strategyId,
+  })
+}
+
+export function useLatestStrategyCode(strategyId: string) {
+  return useQuery({
+    queryKey: strategyKeys.code(strategyId),
+    queryFn: () => strategiesAPI.getLatestStrategyCode(strategyId),
+    staleTime: 30_000,
+    retry: 1,
+    enabled: !!strategyId,
+    throwOnError: false,
+  })
+}
+
+export function useStrategyCodeView(strategyId: string) {
+  return useQuery({
+    queryKey: strategyKeys.codeView(strategyId),
+    queryFn: () => strategiesAPI.getStrategyCodeView(strategyId),
+    staleTime: 30_000,
+    retry: 1,
+    enabled: !!strategyId,
+    throwOnError: false,
   })
 }
 

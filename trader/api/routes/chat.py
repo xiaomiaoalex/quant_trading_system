@@ -18,49 +18,56 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, Field
-
 from insight.chat_interface import (
     Attachment,
     ChatMessage,
     ChatResponse,
     ChatSession,
+    MessageRole,
     SessionStatus,
     StrategyChatInterface,
     StrategyContext,
-    MessageRole,
 )
+from pydantic import BaseModel, Field
+
 from trader.core.application.strategy_protocol import RiskLevel
 
 # ==================== 请求模型 ====================
 
+
 class CreateSessionRequest(BaseModel):
     """创建会话请求"""
+
     initial_message: Optional[str] = Field(None, description="初始消息")
     risk_level: str = Field("LOW", description="风险等级: LOW, MEDIUM, HIGH, CRITICAL")
 
 
 class SendMessageRequest(BaseModel):
     """发送消息请求"""
+
     message: str = Field(..., description="用户消息")
     session_id: str = Field(..., description="会话ID")
 
 
 class ApproveRequest(BaseModel):
     """审批请求"""
+
     strategy_id: Optional[str] = Field(None, description="策略ID（可选）")
     approved: bool = Field(True, description="是否批准")
 
 
 class RejectRequest(BaseModel):
     """拒绝请求"""
+
     reason: Optional[str] = Field(None, description="拒绝原因")
 
 
 # ==================== 响应模型 ====================
 
+
 class AttachmentResponse(BaseModel):
     """附件响应"""
+
     attachment_id: str
     name: str
     content: str
@@ -69,6 +76,7 @@ class AttachmentResponse(BaseModel):
 
 class ChatMessageResponse(BaseModel):
     """聊天消息响应"""
+
     message_id: str
     role: str
     content: str
@@ -81,6 +89,7 @@ class ChatMessageResponse(BaseModel):
 
 class SessionResponse(BaseModel):
     """会话响应"""
+
     session_id: str
     status: str
     created_at: datetime
@@ -95,6 +104,7 @@ class SessionResponse(BaseModel):
 
 class SendMessageResponse(BaseModel):
     """发送消息响应"""
+
     response_id: str
     message: ChatMessageResponse
     suggestions: List[str]
@@ -104,6 +114,7 @@ class SendMessageResponse(BaseModel):
 
 class RegistrationResultResponse(BaseModel):
     """注册结果响应"""
+
     success: bool
     strategy_id: Optional[str] = None
     entry_id: Optional[str] = None
@@ -112,11 +123,13 @@ class RegistrationResultResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     """错误响应"""
+
     error: str
     detail: Optional[str] = None
 
 
 # ==================== 辅助函数 ====================
+
 
 def _attachment_to_response(attachment: Attachment) -> AttachmentResponse:
     """将附件转换为响应模型"""
@@ -177,6 +190,7 @@ def get_chat_interface() -> StrategyChatInterface:
     global _chat_interface
     if _chat_interface is None:
         from insight.chat_interface import create_chat_interface
+
         _chat_interface = create_chat_interface()
     return _chat_interface
 

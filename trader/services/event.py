@@ -2,12 +2,9 @@ import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
-from trader.api.models.schemas import (
-    EventEnvelope, SnapshotEnvelope, ReplayRequest,
-    ActionResult,
-)
+from trader.api.models.schemas import ActionResult, EventEnvelope, ReplayRequest, SnapshotEnvelope
 from trader.core.application.replay_runner import ReplayOptions, ReplayRunner, StreamEvent
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 if TYPE_CHECKING:
     from trader.adapters.persistence.postgres.snapshot_storage import PostgresSnapshotStorage
@@ -16,11 +13,11 @@ if TYPE_CHECKING:
 class EventService:
     """
     Service for events and snapshots
-    
+
     Supports dual storage backend:
     - InMemoryStorage: For events (always in-memory for performance)
     - PostgresSnapshotStorage: For snapshots (production-grade persistence)
-    
+
     The snapshot storage is optional and falls back to InMemoryStorage
     when not available.
     """
@@ -53,7 +50,9 @@ class EventService:
             limit=20000,
         )
         if request.to_ts_ms is not None:
-            raw_events = [event for event in raw_events if int(event.get("ts_ms", 0)) <= request.to_ts_ms]
+            raw_events = [
+                event for event in raw_events if int(event.get("ts_ms", 0)) <= request.to_ts_ms
+            ]
 
         stream_events: List[StreamEvent] = []
         for seq, event in enumerate(raw_events):
@@ -100,7 +99,11 @@ class EventService:
                 from_seq: int = 0,
                 limit: int = 1000,
             ) -> List[StreamEvent]:
-                matched = [event for event in self._events if event.stream_key == stream_key and event.seq > from_seq]
+                matched = [
+                    event
+                    for event in self._events
+                    if event.stream_key == stream_key and event.seq > from_seq
+                ]
                 return matched[:limit]
 
             async def get_latest_seq(self, stream_key: str) -> int:
@@ -131,11 +134,11 @@ class EventService:
     def get_latest_snapshot(self, stream_key: str) -> Optional[SnapshotEnvelope]:
         """
         Get latest snapshot for a stream (sync version).
-        
+
         NOTE: This is a synchronous method. For async contexts, use
         `get_latest_snapshot_async()` instead to avoid potential deadlocks
         from blocking on future.result().
-        
+
         Priority:
         1. PostgresSnapshotStorage (production)
         2. InMemoryStorage (fallback)
@@ -143,6 +146,7 @@ class EventService:
         # Try PG storage first if available
         if self._snapshot_storage is not None:
             import asyncio
+
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
@@ -150,9 +154,9 @@ class EventService:
                     # WARNING: This blocks until the coroutine completes.
                     # For async callers, use get_latest_snapshot_async() instead.
                     import concurrent.futures
+
                     future = asyncio.run_coroutine_threadsafe(
-                        self._snapshot_storage.get_latest(stream_key),
-                        loop
+                        self._snapshot_storage.get_latest(stream_key), loop
                     )
                     snapshot = future.result(timeout=5.0)
                 else:
@@ -164,7 +168,7 @@ class EventService:
             except Exception:
                 # Fall through to InMemoryStorage
                 pass
-        
+
         # Fallback to InMemoryStorage
         snapshot_dict = self._storage.get_latest_snapshot(stream_key)
         if snapshot_dict:
@@ -174,7 +178,7 @@ class EventService:
     async def get_latest_snapshot_async(self, stream_key: str) -> Optional[SnapshotEnvelope]:
         """
         Async version of get_latest_snapshot
-        
+
         Use this method when within an async context for proper awaiting.
         """
         # Try PG storage first if available
@@ -182,7 +186,7 @@ class EventService:
             snapshot = await self._snapshot_storage.get_latest(stream_key)
             if snapshot is not None:
                 return snapshot
-        
+
         # Fallback to InMemoryStorage
         snapshot_dict = self._storage.get_latest_snapshot(stream_key)
         if snapshot_dict:
@@ -198,7 +202,7 @@ class EventService:
     ) -> List[SnapshotEnvelope]:
         """
         List snapshots for a stream with time range filter (Task 9.11).
-        
+
         Priority:
         1. PostgresSnapshotStorage (production)
         2. InMemoryStorage (fallback)
@@ -206,24 +210,30 @@ class EventService:
         # Try PG storage first if available
         if self._snapshot_storage is not None:
             import asyncio
+
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     import concurrent.futures
+
                     future = asyncio.run_coroutine_threadsafe(
-                        self._snapshot_storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit),
-                        loop
+                        self._snapshot_storage.list_snapshots(
+                            stream_key, since_ts_ms, until_ts_ms, limit
+                        ),
+                        loop,
                     )
                     snapshots = future.result(timeout=5.0)
                 else:
                     snapshots = loop.run_until_complete(
-                        self._snapshot_storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit)
+                        self._snapshot_storage.list_snapshots(
+                            stream_key, since_ts_ms, until_ts_ms, limit
+                        )
                     )
                 if snapshots:
                     return [SnapshotEnvelope(**s) for s in snapshots]
             except Exception:
                 pass
-        
+
         # Fallback to InMemoryStorage
         snapshot_dicts = self._storage.list_snapshots(stream_key, since_ts_ms, until_ts_ms, limit)
         return [SnapshotEnvelope(**s) for s in snapshot_dicts]

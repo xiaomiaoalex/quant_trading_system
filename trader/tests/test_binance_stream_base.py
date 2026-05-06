@@ -3,15 +3,17 @@ Stream Base FSM Unit Tests
 ===========================
 测试基础状态机框架。
 """
+
 import asyncio
+
 import pytest
 
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM,
     StreamConfig,
-    StreamState,
     StreamEvent,
     StreamMetrics,
+    StreamState,
 )
 
 

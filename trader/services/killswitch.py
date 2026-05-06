@@ -1,14 +1,12 @@
 import logging
 from typing import Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
-from trader.api.models.schemas import (
-    KillSwitchState, KillSwitchSetRequest,
-)
 from trader.adapters.persistence.killswitch_repository import (
     KillSwitchRepository,
     get_killswitch_repository,
 )
+from trader.api.models.schemas import KillSwitchSetRequest, KillSwitchState
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +21,10 @@ class KillSwitchService:
         require_durable_writes: bool = False,
     ):
         self._storage = storage or get_storage()
-        self._repository = (
-            repository
-            or (KillSwitchRepository(self._storage) if storage is not None else get_killswitch_repository())
+        self._repository = repository or (
+            KillSwitchRepository(self._storage)
+            if storage is not None
+            else get_killswitch_repository()
         )
         self._require_durable_writes = require_durable_writes
 

@@ -33,6 +33,21 @@
 | **自动交易生产化** | `env_config.py`, `proxy_failover.py`, `oms_idempotency.py` | **Task 16-20 完成（2026-04-20）：环境统一、成交去重、重启恢复、运行时可观测性** |
 | **SSE实时更新** | `oms_callback.py`, `strategy_runner.py`, `monitor_service.py` | **Task 9.11 完成：SSE广播集成OMS/StrategyRunner/Reconciler，Monitor和Strategies页面实时更新** |
 | **持仓追踪** | `oms.py`, `monitor_service.py` | **Task 9.11 完成：PositionExposure计算、OMS Metrics修复、Adapter Health修复** |
+| **账户状态与执行预算** | `services/account_state.py`, `services/execution_budget.py`, `services/oms_callback.py` | **Phase 1-2 完成（2026-04-28）：AccountStateService + ExecutionBudgetService 领域模型 + OMS集成。REST snapshot 校准、private stream 增量、budget reservation 状态机、broker 异常分类处理** |
+| **数字货币独立风控 P0** | `core/domain/models/crypto_risk.py`, `core/domain/services/*risk*`, `core/application/plugins/crypto_pre_trade_risk_plugin.py` | **2026-05-03 完成：CryptoRiskSnapshot 契约、交易所规则校验、在途订单风险、合约保证金估算和 RiskEngine pre-trade 插件** |
+| **数字货币独立风控 P1** | `adapters/binance/crypto_risk_*`, `services/crypto_risk_snapshot.py`, `services/oms_callback.py` | **2026-05-04 完成：Binance USD-M Adapter mapper/source、Service snapshot provider、OMS pre-trade 风控注入点** |
+| **数字货币独立风控 P2** | `api/crypto_risk_runtime.py`, `api/main.py`, `api/routes/strategies.py` | **2026-05-04 完成：Control Plane env 配置默认关闭、显式启用 Binance USD-M source、OMS late-binding、配置/接线失败 fail-closed** |
+| **数字货币独立风控 P3.1** | `api/crypto_risk_runtime.py`, `api/routes/risk.py`, `api/models/schemas.py` | **2026-05-04 完成：runtime 状态 API、风险预算热更新 API、manager 单一状态源、热更新 late-bind pre-trade check** |
+| **数字货币独立风控 P3.2a** | `api/routes/risk.py`, 控制面 event log | **2026-05-04 完成：预算热更新成功后写入 `risk:crypto` 审计事件，并提供 `GET /v1/risk/crypto/budget/audit` 查询入口** |
+| **数字货币独立风控 P3.2b** | `core/domain/services/portfolio_exposure_aggregator.py`, `core/application/plugins/crypto_pre_trade_risk_plugin.py` | **2026-05-04 完成：symbol→cluster 风险映射、cluster notional cap、pre-trade 组合级敞口拦截，支持环境变量和预算热更新 API** |
+| **数字货币独立风控 P3.2c** | `api/routes/risk.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-04 完成：Binance demo 执行环境可观测、USD-M 风控 source 只读 readiness probe、Crypto Risk 前端运维页与审计流** |
+| **数字货币独立风控 P3.3a** | `scripts/check_crypto_risk_demo_env.py`, `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` | **2026-05-05 完成：Binance demo 联调前静态自检、只读 probe 运行手册、demo 默认 `.env.example`** |
+| **数字货币独立风控 P3.3b** | `scripts/check_crypto_risk_demo_env.py`, `/v1/risk/crypto/probe` | **2026-05-06 完成：真实 Binance demo 凭证只读 probe 通过，USD-M demo source 固定为 `https://demo-fapi.binance.com`，审计事件已写入 `risk:crypto`** |
+| **数字货币独立风控 P3.3c** | `scripts/rehearse_crypto_risk_demo_fail_closed.py` | **2026-05-06 完成：不存在 symbol 负向 probe 自动演练，验证 `ok=false/read_only=true`、失败审计事件和订单列表不变** |
+| **市场无关风险契约 P4.0** | `core/domain/models/market_risk.py`, `core/domain/services/*exposure*.py`, `services/backtesting/vectorbt_adapter.py` | **2026-05-06 完成：新增 MarketRisk DTO、Crypto specialization 投影、通用规则/敞口计算器结构化输入、VectorBT DataProviderPort 注入** |
+| **市场无关风险审计 P4.1** | `adapters/persistence/market_risk_audit_repository.py`, `adapters/persistence/postgres/risk_audit_storage.py`, `api/routes/risk.py` | **2026-05-06 完成：`risk_audit_events` PG-first 仓储、`risk:crypto` 过滤视图、budget/probe 审计接入与内存事件投影兼容；真实 PG 集成回归 40 passed** |
+| **Pre-trade 风控拒绝证据 P4.2** | `services/crypto_pre_trade_risk_audit.py`, `api/crypto_risk_runtime.py` | **2026-05-06 完成：runtime pre-trade 拒绝/异常写入 `risk_audit_events`，事件为 `crypto_risk.pre_trade_rejected`，Core 风控插件保持无 IO** |
+| **DecisionTrace 审计查询 P4.3** | `api/routes/risk.py`, `services/crypto_pre_trade_risk_audit.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-07 完成：`decision_trace_id` 标准化，新增 `/v1/risk/crypto/audit` PG-first 查询，前端支持 event/trace/signal 过滤** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 
@@ -56,6 +71,7 @@
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
 - **Phase 9**: 下一阶段规划（待定义）
+- **Crypto Risk P4.4**: 在 PG 审计基础上继续 Funding/OI 风险系数、rejection reason 聚合统计和更细的运维查询视图
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 当前执行主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成

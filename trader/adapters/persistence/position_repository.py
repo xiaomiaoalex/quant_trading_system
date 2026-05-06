@@ -1,4 +1,5 @@
 """PG-first position repository."""
+
 import asyncio
 import json
 import logging
@@ -97,8 +98,12 @@ class PositionRepository:
                 )
                 """
             )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_lots_strategy_symbol ON position_lots(strategy_id, symbol)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_lots_open ON position_lots(strategy_id, symbol) WHERE NOT is_closed")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lots_strategy_symbol ON position_lots(strategy_id, symbol)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lots_open ON position_lots(strategy_id, symbol) WHERE NOT is_closed"
+            )
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS strategy_positions_proj (
@@ -110,7 +115,9 @@ class PositionRepository:
                 )
                 """
             )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_sp_strategy ON strategy_positions_proj ((state->>'strategy_id'))")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sp_strategy ON strategy_positions_proj ((state->>'strategy_id'))"
+            )
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reconciliation_log (
@@ -128,7 +135,9 @@ class PositionRepository:
                 )
                 """
             )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_recon_status_created ON reconciliation_log(status, created_at DESC)")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recon_status_created ON reconciliation_log(status, created_at DESC)"
+            )
 
     async def save_lot(self, lot_data: Dict[str, Any]) -> bool:
         if await self._ensure_postgres():
@@ -187,7 +196,9 @@ class PositionRepository:
             return True
         return False
 
-    async def list_lots(self, strategy_id: str, symbol: str, open_only: bool = True) -> List[Dict[str, Any]]:
+    async def list_lots(
+        self, strategy_id: str, symbol: str, open_only: bool = True
+    ) -> List[Dict[str, Any]]:
         if not await self._ensure_postgres():
             return []
         query = """
@@ -252,7 +263,9 @@ class PositionRepository:
             "updated_at": row["updated_at"],
         }
 
-    async def list_position_projections(self, strategy_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list_position_projections(
+        self, strategy_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         if not await self._ensure_postgres():
             return []
         query = "SELECT aggregate_id, state, version, last_event_seq, updated_at FROM strategy_positions_proj WHERE 1=1"

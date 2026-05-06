@@ -1,5 +1,12 @@
 import { useState, useCallback } from 'react'
-import { useMonitorSnapshot, useMonitorAlerts, useClearAllAlerts, useSSE, useStrategyPositions, usePositionBreakdown } from '@/hooks'
+import {
+  useMonitorSnapshot,
+  useMonitorAlerts,
+  useClearAllAlerts,
+  useSSE,
+  useStrategyPositions,
+  usePositionBreakdown,
+} from '@/hooks'
 import { useQueryClient } from '@tanstack/react-query'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog, HealthBadge } from '@/components/ui'
 import {
@@ -11,6 +18,7 @@ import {
   SafetyGateControl,
   StaleBanner,
 } from '@/components/monitor'
+import { PageHeader } from '@/components/layout'
 import { monitorKeys } from '@/hooks/useMonitorSnapshot'
 
 export function Monitor() {
@@ -20,7 +28,6 @@ export function Monitor() {
   useSSE(
     ['monitor'],
     () => {
-      // Invalidate monitor queries when SSE update is received
       console.log('[Monitor] SSE update received, invalidating queries')
       queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
       queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
@@ -82,44 +89,27 @@ export function Monitor() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      {/* Header */}
-      <div className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold text-white">System Monitor</h1>
-            <HealthBadge state={healthState} />
-          </div>
-          <div className="flex items-center gap-3">
-            {snapshot && (
-              <p className="text-sm text-gray-500">
-                Last update: {new Date(snapshot.timestamp).toLocaleTimeString()}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={refetch}
-              className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300
-                transition-colors hover:bg-gray-700 focus:outline-none focus:ring-2
-                focus:ring-gray-500"
-            >
-              Refresh
-            </button>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="System Monitor">
+        <HealthBadge state={healthState} />
+        <button
+          type="button"
+          onClick={refetch}
+          className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 transition-colors hover:bg-gray-700 focus-visible:ring-2 focus-visible:ring-gray-500"
+        >
+          Refresh
+        </button>
+      </PageHeader>
 
       <div className="p-6 space-y-6">
-        {/* Stale Banner */}
+        {/* Diagnostic Banners */}
         {isStale && <StaleBanner lastUpdate={snapshot.timestamp} onRefresh={refetch} />}
 
-        {/* Clear Success Toast */}
         {clearSuccess && (
           <div className="rounded-lg border border-green-900/50 bg-green-950/20 px-4 py-2">
             <p className="text-sm text-green-400">{clearSuccess}</p>
           </div>
         )}
 
-        {/* Degraded/Blocked Warning Banner */}
         {healthState === 'degraded' && (
           <div className="rounded-lg border border-yellow-900/50 bg-yellow-950/20 px-4 py-3">
             <p className="text-sm text-yellow-300">
@@ -130,27 +120,24 @@ export function Monitor() {
         {healthState === 'down' && (
           <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-3">
             <p className="text-sm text-red-300">
-              System is not fully operational. Trading may be restricted. Check adapter status
-              below.
+              System is not fully operational. Trading may be restricted. Check adapter status below.
             </p>
           </div>
         )}
 
-        {/* KillSwitch Status */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {/* KillSwitch Status + Control */}
+        <div className="grid gap-4 md:grid-cols-2">
           <KillSwitchIndicator
             level={snapshot.killswitch_level}
             scope={snapshot.killswitch_scope}
           />
+          <KillSwitchControl
+            currentLevel={snapshot.killswitch_level}
+            scope={snapshot.killswitch_scope}
+          />
         </div>
 
-        {/* KillSwitch Control Panel */}
-        <KillSwitchControl
-          currentLevel={snapshot.killswitch_level}
-          scope={snapshot.killswitch_scope}
-        />
-
-        {/* Safety Gate Control Panel */}
+        {/* Safety Gate Control */}
         <SafetyGateControl />
 
         {/* Key Metrics Grid */}
@@ -179,19 +166,19 @@ export function Monitor() {
 
         {/* Detailed Positions */}
         {snapshot.positions && snapshot.positions.length > 0 && (
-          <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Position Details</h3>
+          <div className="rounded-lg border border-gray-700/50 bg-surface-3/40 p-4">
+            <h3 className="text-sm font-medium text-accent-5 mb-3">Position Details</h3>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-700">
                 <thead>
                   <tr>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase w-4"></th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase">Symbol</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Quantity</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Avg Cost</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Current Price</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Exposure</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-400 uppercase">Unrealized P&L</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase w-4"></th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase">Symbol</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Quantity</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Avg Cost</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Current Price</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Exposure</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Unrealized P&L</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -202,7 +189,7 @@ export function Monitor() {
                         className="hover:bg-gray-700/30 cursor-pointer"
                         onClick={() => setExpandedSymbol(expandedSymbol === pos.symbol ? null : pos.symbol)}
                       >
-                        <td className="px-3 py-2 text-gray-400 text-right">
+                        <td className="px-3 py-2 text-accent-3 text-right">
                           {expandedSymbol === pos.symbol ? '▼' : '▶'}
                         </td>
                         <td className="px-3 py-2 text-sm font-medium text-white">{pos.symbol}</td>
@@ -226,24 +213,22 @@ export function Monitor() {
         )}
 
         {/* Trading Metrics - Task 19 OMS Observability */}
-        <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
-          <h3 className="text-sm font-medium text-gray-300 mb-3">Trading Metrics</h3>
+        <div className="rounded-lg border border-gray-700/50 bg-surface-3/40 p-4">
+          <h3 className="text-sm font-medium text-accent-5 mb-3">Trading Metrics</h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <MetricCard
-              title="Submitted"
-              value={snapshot.order_submit_ok ?? 0}
-              subValue="success"
-            />
+            <MetricCard title="Submitted" value={snapshot.order_submit_ok ?? 0} subValue="success" />
             <MetricCard
               title="Rejected"
               value={snapshot.order_submit_reject ?? 0}
-              subValue={snapshot.reject_reason_counts ? Object.keys(snapshot.reject_reason_counts).length > 0 ? Object.keys(snapshot.reject_reason_counts).join(', ') : 'none' : 'none'}
+              subValue={
+                snapshot.reject_reason_counts
+                  ? Object.keys(snapshot.reject_reason_counts).length > 0
+                    ? Object.keys(snapshot.reject_reason_counts).join(', ')
+                    : 'none'
+                  : 'none'
+              }
             />
-            <MetricCard
-              title="Error"
-              value={snapshot.order_submit_error ?? 0}
-              subValue="errors"
-            />
+            <MetricCard title="Error" value={snapshot.order_submit_error ?? 0} subValue="errors" />
             <MetricCard
               title="Fills"
               value={snapshot.fill_latency_count ?? 0}
@@ -259,8 +244,8 @@ export function Monitor() {
 
         {/* Alert Summary by Severity */}
         {Object.keys(snapshot.alert_count_by_severity).length > 0 && (
-          <div className="rounded-lg border border-gray-700/50 bg-gray-800/50 p-4">
-            <h3 className="text-sm font-medium text-gray-300 mb-3">Alert Summary</h3>
+          <div className="rounded-lg border border-gray-700/50 bg-surface-3/40 p-4">
+            <h3 className="text-sm font-medium text-accent-5 mb-3">Alert Summary</h3>
             <div className="flex flex-wrap gap-3">
               {Object.entries(snapshot.alert_count_by_severity)
                 .filter(([, count]) => count > 0)
@@ -269,7 +254,7 @@ export function Monitor() {
                     key={severity}
                     className="flex items-center gap-2 rounded-full bg-gray-700/50 px-3 py-1"
                   >
-                    <span className="text-xs font-medium text-gray-400 uppercase">{severity}</span>
+                    <span className="text-xs font-medium text-accent-3 uppercase">{severity}</span>
                     <span className="rounded-full bg-gray-600 px-2 py-0.5 text-xs font-medium text-white">
                       {count}
                     </span>
@@ -299,9 +284,7 @@ export function Monitor() {
               <button
                 type="button"
                 onClick={() => setShowClearAllDialog(true)}
-                className="rounded-md bg-red-900/30 px-4 py-2 text-sm font-medium text-red-300
-                  transition-colors hover:bg-red-900/50 focus:outline-none focus:ring-2
-                  focus:ring-red-500"
+                className="rounded-md bg-red-900/30 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/50 focus-visible:ring-2 focus-visible:ring-red-500"
               >
                 Clear All Alerts
               </button>
@@ -314,8 +297,7 @@ export function Monitor() {
       <ConfirmDialog
         isOpen={showClearAllDialog}
         title="Clear All Alerts"
-        message={`Are you sure you want to clear all ${alerts.length} active alerts?
-          This action cannot be undone and will remove all current alert states from the system.`}
+        message={`Are you sure you want to clear all ${alerts.length} active alerts? This action cannot be undone and will remove all current alert states from the system.`}
         confirmLabel="Clear All Alerts"
         cancelLabel="Cancel"
         variant="danger"
@@ -332,11 +314,11 @@ export function Monitor() {
 function ReconciliationBadge({ isReconciled }: { isReconciled: boolean }) {
   return isReconciled ? (
     <span className="inline-flex items-center gap-1 rounded-full bg-green-900/40 px-2 py-0.5 text-xs text-green-400">
-      ✅ CONSISTENT
+      CONSISTENT
     </span>
   ) : (
     <span className="inline-flex items-center gap-1 rounded-full bg-red-900/40 px-2 py-0.5 text-xs text-red-400">
-      ⚠️ DISCREPANCY
+      DISCREPANCY
     </span>
   )
 }
@@ -370,7 +352,7 @@ function StrategyPositionRow({ symbol }: { symbol: string }) {
   return (
     <>
       {/* Strategy positions */}
-      {strategyPositions && strategyPositions.length > 0 && (
+      {strategyPositions && strategyPositions.length > 0 &&
         strategyPositions.map((sp) => (
           <tr key={`${sp.strategy_id}-${symbol}`} className="bg-gray-900/50">
             <td></td>
@@ -378,7 +360,11 @@ function StrategyPositionRow({ symbol }: { symbol: string }) {
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 ml-2">├─</span>
                 <span className="text-xs font-mono text-blue-400">{sp.strategy_id}</span>
-                <span className={`text-xs rounded px-1.5 py-0.5 ${sp.status === 'ACTIVE' ? 'bg-green-900/30 text-green-400' : 'bg-gray-700 text-gray-400'}`}>
+                <span
+                  className={`text-xs rounded px-1.5 py-0.5 ${
+                    sp.status === 'ACTIVE' ? 'bg-green-900/30 text-green-400' : 'bg-gray-700 text-gray-400'
+                  }`}
+                >
                   {sp.status}
                 </span>
               </div>
@@ -387,12 +373,15 @@ function StrategyPositionRow({ symbol }: { symbol: string }) {
             <td className="px-3 py-2 text-xs text-gray-300 text-right">{sp.avg_cost}</td>
             <td className="px-3 py-2 text-right"></td>
             <td className="px-3 py-2 text-xs text-gray-400 text-right">{sp.total_cost ?? '-'}</td>
-            <td className={`px-3 py-2 text-xs text-right ${parseFloat(sp.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            <td
+              className={`px-3 py-2 text-xs text-right ${
+                parseFloat(sp.unrealized_pnl || '0') >= 0 ? 'text-green-400' : 'text-red-400'
+              }`}
+            >
               {sp.unrealized_pnl}
             </td>
           </tr>
-        ))
-      )}
+        ))}
       {/* Reconciliation status row */}
       {breakdown && (
         <tr className="bg-gray-900/30">

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Mapping, Dict
+from typing import Dict, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,9 @@ def get_binance_env_config(env: Mapping[str, str] | None = None) -> Dict[str, st
         Dict with all environment URLs
     """
     binance_env = get_binance_env(env)
-    config = BINANCE_ENV_URL_CONFIGS.get(binance_env, BINANCE_ENV_URL_CONFIGS[BINANCE_ENV_DEFAULT]).copy()
+    config = BINANCE_ENV_URL_CONFIGS.get(
+        binance_env, BINANCE_ENV_URL_CONFIGS[BINANCE_ENV_DEFAULT]
+    ).copy()
     config["env"] = binance_env
     return config
 
@@ -87,6 +89,7 @@ def get_binance_env_config(env: Mapping[str, str] | None = None) -> Dict[str, st
 def is_valid_binance_env(env_name: str) -> bool:
     """Check if an environment name is valid."""
     return env_name.lower() in VALID_BINANCE_ENVS
+
 
 BINANCE_RECV_WINDOW_ENV = "BINANCE_RECV_WINDOW"
 BINANCE_RECV_WINDOW_DEFAULT = 5000

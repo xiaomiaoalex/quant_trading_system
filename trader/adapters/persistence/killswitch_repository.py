@@ -1,4 +1,5 @@
 """PG-first KillSwitch repository."""
+
 import asyncio
 import logging
 import time
@@ -92,8 +93,12 @@ class KillSwitchRepository:
                 )
                 """
             )
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_killswitch_log_scope ON killswitch_log(scope)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_killswitch_log_ts_ms ON killswitch_log(ts_ms)")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_killswitch_log_scope ON killswitch_log(scope)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_killswitch_log_ts_ms ON killswitch_log(ts_ms)"
+            )
 
     async def save_state(
         self,
@@ -167,7 +172,9 @@ class KillSwitchRepository:
             "updated_by": "system",
         }
 
-    async def get_recent_changes(self, scope: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_recent_changes(
+        self, scope: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         if not await self._ensure_postgres():
             return []
         query = """

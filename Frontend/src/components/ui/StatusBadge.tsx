@@ -11,7 +11,7 @@ import { KILLSWITCH_DISPLAY, ADAPTER_HEALTH_DISPLAY, ALERT_SEVERITY_DISPLAY } fr
 interface HealthBadgeProps {
   state: SystemHealthState
   showLabel?: boolean
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
 }
 
 const HEALTH_CONFIG: Record<
@@ -44,21 +44,31 @@ const HEALTH_CONFIG: Record<
   },
 }
 
+const healthSizeClasses = {
+  sm: 'px-2 py-0.5 text-xs gap-1',
+  md: 'px-2.5 py-1 text-sm gap-1.5',
+  lg: 'px-3 py-1.5 text-base gap-2',
+}
+
+const healthDotClasses = {
+  sm: 'h-1.5 w-1.5',
+  md: 'h-2 w-2',
+  lg: 'h-2.5 w-2.5',
+}
+
 export function HealthBadge({ state, showLabel = true, size = 'md' }: HealthBadgeProps) {
   const config = HEALTH_CONFIG[state]
 
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full font-medium',
+        'inline-flex items-center rounded-full font-medium border border-white/5',
         config.bgColor,
         config.textColor,
-        size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm'
+        healthSizeClasses[size]
       )}
     >
-      <span
-        className={clsx('rounded-full', config.dotColor, size === 'sm' ? 'h-1.5 w-1.5' : 'h-2 w-2')}
-      />
+      <span className={clsx('rounded-full', config.dotColor, healthDotClasses[size])} />
       {showLabel && config.label}
     </span>
   )
@@ -75,9 +85,9 @@ export function AdapterStatusBadge({ status }: AdapterStatusBadgeProps) {
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium',
+        'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium border border-white/5',
         config.color,
-        'bg-current/10'
+        'bg-gray-900/40'
       )}
     >
       <span className={clsx('rounded-full h-1.5 w-1.5', config.dotColor)} />
@@ -97,7 +107,7 @@ export function SeverityBadge({ severity }: SeverityBadgeProps) {
   return (
     <span
       className={clsx(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border border-white/5',
         config.color,
         config.bgColor
       )}
@@ -118,7 +128,7 @@ export function KillSwitchBadge({ level }: KillSwitchBadgeProps) {
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium text-white',
+        'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium text-white border border-white/10 shadow-sm',
         config.color
       )}
     >

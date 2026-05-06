@@ -5,58 +5,64 @@ Main application entry point for the Systematic Trader Control Plane API.
 
 Based on OpenAPI 3.0.3 specification v0.2.0
 """
+
 import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 # 自动加载项目根目录的 .env 文件
 _env_file = Path(__file__).parent.parent.parent / ".env"
 if _env_file.exists():
     from dotenv import load_dotenv
+
     load_dotenv(_env_file)
 
 from fastapi import FastAPI
 
-from trader.api.routes import (
-    health,
-    strategies,
-    deployments,
-    backtests,
-    risk,
-    orders,
-    portfolio,
-    events,
-    killswitch,
-    brokers,
-    reconciler,
-    monitor,
-    chat,
-    portfolio_research,
-    audit,
-    sse,
-)
-from trader.services.reconciler_service import ReconcilerService
-from trader.services.strategy import StrategyService
-from trader.services.order import OrderService
-from trader.services.heartbeat import ProcessHeartbeatService
+from trader.adapters.binance.connector import BinanceConnector
 from trader.api.connections import ConnectionManager
-from trader.api.models.schemas import StrategyRegisterRequest
 from trader.api.env_config import (
+    get_binance_env,
+    get_binance_env_config,
     get_binance_recv_window,
     get_reconciler_exchange_client_order_prefixes,
     get_system_order_namespace_prefix,
-    get_binance_env,
-    get_binance_env_config,
+)
+from trader.api.models.schemas import StrategyRegisterRequest
+from trader.api.routes import (
+    allocations,
+    audit,
+    backtests,
+    brokers,
+    chat,
+    data_catalog,
+    deployments,
+    events,
+    health,
+    killswitch,
+    monitor,
+    orders,
+    portfolio,
+    portfolio_autopilot,
+    portfolio_research,
+    reconciler,
+    risk,
+    sse,
+    strategies,
+    strategy_candidates,
 )
 from trader.core.domain.services.order_ownership_registry import (
-    get_order_ownership_registry,
     OrderOwnership,
+    get_order_ownership_registry,
 )
-from trader.adapters.binance.connector import BinanceConnector
+from trader.services.heartbeat import ProcessHeartbeatService
+from trader.services.order import OrderService
+from trader.services.reconciler_service import ReconcilerService
+from trader.services.strategy import StrategyService
 
 logger = logging.getLogger(__name__)
 
@@ -66,23 +72,53 @@ API_PORT = 8080
 import re
 
 
+def _enable_windows_ansi_colors() -> None:
+    """Enable ANSI color rendering for Windows console hosts."""
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        enable_virtual_terminal_processing = 0x0004
+        std_handles = (-11, -12)  # STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+
+        for std_handle in std_handles:
+            handle = kernel32.GetStdHandle(std_handle)
+            mode = ctypes.c_uint()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                continue
+            kernel32.SetConsoleMode(
+                handle,
+                mode.value | enable_virtual_terminal_processing,
+            )
+    except Exception:
+        # Best-effort console setup only; logging must never block app startup.
+        return
+
+
+_enable_windows_ansi_colors()
+
+
 # ANSI 颜色代码
 class LogColors:
     """日志颜色定义"""
+
     RESET = "\033[0m"
     BOLD = "\033[1m"
     # 级别颜色
-    INFO = "\033[92m"      # 绿色
-    WARNING = "\033[93m"   # 黄色
-    ERROR = "\033[91m"     # 红色
+    INFO = "\033[92m"  # 绿色
+    WARNING = "\033[93m"  # 黄色
+    ERROR = "\033[91m"  # 红色
     CRITICAL = "\033[95m"  # 紫色
     # 字段颜色
     STRATEGY = "\033[94m"  # 蓝色
-    ORDER = "\033[96m"      # 青色
-    SYMBOL = "\033[95m"    # 紫色
-    PRICE = "\033[92m"     # 绿色
-    QTY = "\033[93m"       # 黄色
-    SIDE = "\033[93m"      # 黄色
+    ORDER = "\033[96m"  # 青色
+    SYMBOL = "\033[95m"  # 紫色
+    PRICE = "\033[92m"  # 绿色
+    QTY = "\033[93m"  # 黄色
+    SIDE = "\033[93m"  # 黄色
 
 
 class ColoredFormatter(logging.Formatter):
@@ -121,8 +157,7 @@ class ColoredFormatter(logging.Formatter):
         level_color = self.LEVEL_COLORS.get(record.levelname, "")
         if level_color:
             formatted = formatted.replace(
-                record.levelname,
-                f"{level_color}{record.levelname}{LogColors.RESET}"
+                record.levelname, f"{level_color}{record.levelname}{LogColors.RESET}"
             )
 
         # 替换消息中的字段颜色
@@ -147,10 +182,12 @@ def _configure_trader_logging() -> None:
             return
 
     handler = logging.StreamHandler()
-    handler.setFormatter(ColoredFormatter(
-        fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
+    handler.setFormatter(
+        ColoredFormatter(
+            fmt="%(asctime)s.%(msecs)03d %(levelname)s [%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
     handler._qts_trader_ts_handler = True  # type: ignore[attr-defined]
     trader_logger.addHandler(handler)
     trader_logger.propagate = False
@@ -217,13 +254,49 @@ async def lifespan(app: FastAPI):
         f"secret_key={'set' if secret_key else 'NOT SET'}"
     )
 
+    crypto_risk_config = None
+    crypto_risk_manager = None
+    try:
+        from trader.api.crypto_risk_runtime import (
+            get_crypto_risk_runtime_config,
+            get_crypto_risk_runtime_manager,
+        )
+        from trader.api.routes.strategies import set_pre_trade_risk_check
+
+        crypto_risk_manager = get_crypto_risk_runtime_manager()
+        crypto_risk_manager.bind_pre_trade_setter(set_pre_trade_risk_check)
+        crypto_risk_config = get_crypto_risk_runtime_config()
+        if crypto_risk_config.enabled:
+            logger.warning(
+                "[CryptoRisk] Runtime enabled: futures_base=%s base_symbols=%s",
+                crypto_risk_config.futures_base_url,
+                crypto_risk_config.base_symbols,
+            )
+            if not api_key or not secret_key:
+                await crypto_risk_manager.set_fail_closed(
+                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing",
+                    config=crypto_risk_config,
+                )
+                logger.error(
+                    "[CryptoRisk] Enabled without Binance credentials; OMS risk check "
+                    "is set to fail-closed"
+                )
+        else:
+            logger.info("[CryptoRisk] Runtime disabled")
+    except Exception as e:
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
+
+        crypto_risk_manager = crypto_risk_manager or get_crypto_risk_runtime_manager()
+        await crypto_risk_manager.set_fail_closed(str(e), config=crypto_risk_config)
+        logger.exception(
+            "[CryptoRisk] Runtime config invalid; OMS risk check is set to fail-closed"
+        )
+
     if api_key and secret_key:
         try:
-            from trader.adapters.binance.connector import (
-                BinanceConnectorConfig,
-            )
-            from trader.adapters.binance.public_stream import PublicStreamConfig
+            from trader.adapters.binance.connector import BinanceConnectorConfig
             from trader.adapters.binance.private_stream import PrivateStreamConfig
+            from trader.adapters.binance.public_stream import PublicStreamConfig
             from trader.adapters.binance.rest_alignment import AlignmentConfig
 
             # 使用统一的 env config
@@ -281,6 +354,7 @@ async def lifespan(app: FastAPI):
 
             # 注册成交回调处理器（先确保 handler 已初始化）
             from trader.api.routes.strategies import ensure_fill_handler_ready
+
             fill_handler = await ensure_fill_handler_ready()
             if fill_handler is not None:
                 connector.register_fill_handler(fill_handler)
@@ -289,13 +363,75 @@ async def lifespan(app: FastAPI):
                 logger.warning("[Lifespan] Fill handler not available yet")
 
             # ============================================================
+            # AccountStateService + ExecutionBudgetService + Bridge
+            # ============================================================
+            from trader.services.account_state import AccountStateService
+            from trader.services.account_stream_bridge import (
+                AccountStreamBridge,
+                AccountStreamBridgeConfig,
+            )
+            from trader.services.execution_budget import ExecutionBudgetService
+
+            account_state = AccountStateService()
+            execution_budget = ExecutionBudgetService(account_state)
+
+            bridge_config = AccountStreamBridgeConfig(
+                account_id=connector.broker_name,
+                venue=connector.broker_name,
+            )
+            bridge = AccountStreamBridge(account_state, bridge_config)
+
+            # 注册 account/balance handler 到 connector
+            connector.register_account_update_handler(bridge.on_account_update)
+            connector.register_balance_update_handler(bridge.on_balance_update)
+
+            # 注入到 strategies 模块，供 OMS 使用
+            from trader.api.routes.strategies import set_account_state, set_execution_budget
+
+            set_execution_budget(execution_budget)
+            set_account_state(account_state)
+
+            logger.info("[Lifespan] AccountState + ExecutionBudget + Bridge initialized")
+
+            if crypto_risk_config is not None and crypto_risk_config.enabled:
+                from trader.api.routes.strategies import get_oms_broker
+
+                try:
+                    oms_broker = get_oms_broker()
+                    if oms_broker is None:
+                        raise RuntimeError("OMS broker is not initialized")
+
+                    if crypto_risk_manager is None:
+                        raise RuntimeError("crypto risk runtime manager is not initialized")
+
+                    await crypto_risk_manager.configure(
+                        broker=oms_broker,
+                        api_key=api_key,
+                        secret_key=secret_key,
+                        config=crypto_risk_config,
+                    )
+                    logger.info(
+                        "[CryptoRisk] Binance USD-M risk source wired into OMS pre-trade gate"
+                    )
+                except Exception as e:
+                    if crypto_risk_manager is not None:
+                        await crypto_risk_manager.set_fail_closed(
+                            str(e),
+                            config=crypto_risk_config,
+                        )
+                    logger.exception(
+                        "[CryptoRisk] Runtime wiring failed; OMS risk check is fail-closed"
+                    )
+                    raise
+
+            # ============================================================
             # Task 9.11: DegradedCascadeController 初始化和注册
             # ============================================================
             from trader.adapters.binance.degraded_cascade import (
-                DegradedCascadeController,
-                CascadeConfig,
-                BackoffController,
                 BackoffConfig,
+                BackoffController,
+                CascadeConfig,
+                DegradedCascadeController,
             )
             from trader.api.routes.strategies import get_oms_metrics
 
@@ -309,9 +445,12 @@ async def lifespan(app: FastAPI):
                 oms_metrics = get_oms_metrics()
                 if oms_metrics and active:
                     # 记录本地自保触发的拒单
-                    oms_metrics["order_submit_reject"] = oms_metrics.get("order_submit_reject", 0) + 1
-                    oms_metrics.setdefault("reject_reason_counts", {})["SELF_PROTECTION"] = \
+                    oms_metrics["order_submit_reject"] = (
+                        oms_metrics.get("order_submit_reject", 0) + 1
+                    )
+                    oms_metrics.setdefault("reject_reason_counts", {})["SELF_PROTECTION"] = (
                         oms_metrics["reject_reason_counts"].get("SELF_PROTECTION", 0) + 1
+                    )
 
             # 创建级联控制器
             _cascade_config = CascadeConfig(
@@ -323,11 +462,13 @@ async def lifespan(app: FastAPI):
                 max_retries_per_event=5,
                 request_timeout=10.0,
             )
-            _cascade_backoff = BackoffController(BackoffConfig(
-                initial_delay=1.0,
-                max_delay=30.0,
-                multiplier=2.0,
-            ))
+            _cascade_backoff = BackoffController(
+                BackoffConfig(
+                    initial_delay=1.0,
+                    max_delay=30.0,
+                    multiplier=2.0,
+                )
+            )
             _cascade_controller = DegradedCascadeController(
                 control_plane_base_url=f"http://localhost:{API_PORT}",
                 backoff=_cascade_backoff,
@@ -338,7 +479,10 @@ async def lifespan(app: FastAPI):
 
             # 注册健康处理器到 connector
             async def cascade_health_handler(health_report):
-                await _cascade_controller.on_adapter_health_changed(health_report, "periodic_health_check")
+                await _cascade_controller.on_adapter_health_changed(
+                    health_report, "periodic_health_check"
+                )
+
             connector.register_health_handler(cascade_health_handler)
 
             # 启动级联控制器 worker
@@ -359,6 +503,7 @@ async def lifespan(app: FastAPI):
                     True if all checks passed, False otherwise
                 """
                 import time
+
                 checks = {}
                 try:
                     # Check 1: REST /v3/time via RESTAlignmentCoordinator
@@ -366,7 +511,9 @@ async def lifespan(app: FastAPI):
                     server_time = await c._rest_coordinator.get_server_time()
                     rest_latency_ms = (time.monotonic() - start) * 1000
                     checks["rest_time"] = True
-                    logger.info("[Binance] Self-check rest_time: OK (latency=%.1fms)", rest_latency_ms)
+                    logger.info(
+                        "[Binance] Self-check rest_time: OK (latency=%.1fms)", rest_latency_ms
+                    )
                 except Exception as e:
                     checks["rest_time"] = False
                     logger.error("[Binance] Self-check rest_time: FAILED - %s", e)
@@ -410,6 +557,7 @@ async def lifespan(app: FastAPI):
             # 确保后续即使有 SSE keep-alive 轮询触发 orchestrator 初始化，
             # connector 也能在构造时就被注入）
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
+
             logger.warning("[Lifespan] About to call set_strategy_orchestrator_connector")
             set_strategy_orchestrator_connector(connector)
             logger.warning("[Lifespan] set_strategy_orchestrator_connector returned")
@@ -417,6 +565,15 @@ async def lifespan(app: FastAPI):
             # 启动 connector（会启动 public 和 private streams）
             await connector.start()
             _binance_connector_instance = connector
+
+            # 初始 REST snapshot 校准 + 周期校准
+            async def _fetch_balances() -> list[dict]:
+                account = await connector._fetch_account()
+                return account.get("balances", [])
+
+            await bridge.fetch_and_apply_rest_snapshot(_fetch_balances)
+            bridge.start_periodic_calibration(_fetch_balances)
+            logger.info("[Lifespan] Account state REST calibration started")
 
             # Run self-check (but don't block startup)
             self_check_passed = await _run_startup_self_check(connector)
@@ -437,6 +594,7 @@ async def lifespan(app: FastAPI):
 
             # 注入 connector 到策略编排器
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
+
             set_strategy_orchestrator_connector(connector)
 
             # ============================================================
@@ -456,6 +614,7 @@ async def lifespan(app: FastAPI):
                 from trader.adapters.persistence.runtime_state_repository import (
                     get_runtime_state_repository,
                 )
+
                 runtime_repo = get_runtime_state_repository()
                 running_states = await runtime_repo.list_running_strategy_states()
 
@@ -463,9 +622,15 @@ async def lifespan(app: FastAPI):
                     logger.info("[Recovery] No running strategies to recover")
                     return
 
-                logger.info("[Recovery] Found %d running strategies to recover", len(running_states))
+                logger.info(
+                    "[Recovery] Found %d running strategies to recover", len(running_states)
+                )
 
-                from trader.api.routes.strategies import get_strategy_runner, get_strategy_orchestrator
+                from trader.api.routes.strategies import (
+                    get_strategy_orchestrator,
+                    get_strategy_runner,
+                )
+
                 runner = get_strategy_runner()
                 orchestrator = get_strategy_orchestrator()
 
@@ -479,10 +644,14 @@ async def lifespan(app: FastAPI):
                     if saved_env != binance_env:
                         logger.warning(
                             "[Recovery] Strategy %s env mismatch: saved=%s current=%s, skipping",
-                            strategy_id, saved_env, binance_env,
+                            strategy_id,
+                            saved_env,
+                            binance_env,
                         )
                         # 更新状态为错误
-                        state["recovery_error"] = f"env_mismatch: saved={saved_env} current={binance_env}"
+                        state["recovery_error"] = (
+                            f"env_mismatch: saved={saved_env} current={binance_env}"
+                        )
                         await runtime_repo.save_strategy_runtime_state(state)
                         continue
 
@@ -500,9 +669,17 @@ async def lifespan(app: FastAPI):
                             try:
                                 # 订阅已经在 connector 启动时通过 streams 配置处理
                                 # 这里只是更新 orchestrator 的订阅状态
-                                logger.info("[Recovery] Restoring subscription for %s: %s", strategy_id, symbol)
+                                logger.info(
+                                    "[Recovery] Restoring subscription for %s: %s",
+                                    strategy_id,
+                                    symbol,
+                                )
                             except Exception as e:
-                                logger.warning("[Recovery] Failed to restore subscription for %s: %s", symbol, e)
+                                logger.warning(
+                                    "[Recovery] Failed to restore subscription for %s: %s",
+                                    symbol,
+                                    e,
+                                )
 
                     # 更新策略信息中的 symbols 和 env
                     runner.update_strategy_subscription(strategy_id, symbols, binance_env)
@@ -514,14 +691,19 @@ async def lifespan(app: FastAPI):
 
                         # 发布恢复事件
                         from trader.api.routes.strategies import _event_callback_dispatcher
+
                         if _event_callback_dispatcher:
-                            _event_callback_dispatcher(deployment_id, "strategy.recovered", {
-                                "deployment_id": deployment_id,
-                                "strategy_id": strategy_id,
-                                "symbols": symbols,
-                                "env": binance_env,
-                                "recovered_at": datetime.now(timezone.utc).isoformat(),
-                            })
+                            _event_callback_dispatcher(
+                                deployment_id,
+                                "strategy.recovered",
+                                {
+                                    "deployment_id": deployment_id,
+                                    "strategy_id": strategy_id,
+                                    "symbols": symbols,
+                                    "env": binance_env,
+                                    "recovered_at": datetime.now(timezone.utc).isoformat(),
+                                },
+                            )
                     except Exception as e:
                         logger.error("[Recovery] Failed to recover strategy %s: %s", strategy_id, e)
                         state["recovery_error"] = str(e)
@@ -551,11 +733,13 @@ async def lifespan(app: FastAPI):
                     "filled_quantity": o.filled_qty or "0",
                     "created_at": (
                         datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc)
-                        if o.created_ts_ms else datetime.now(timezone.utc)
+                        if o.created_ts_ms
+                        else datetime.now(timezone.utc)
                     ),
                     "updated_at": (
                         datetime.fromtimestamp(o.updated_ts_ms / 1000, tz=timezone.utc)
-                        if o.updated_ts_ms else datetime.now(timezone.utc)
+                        if o.updated_ts_ms
+                        else datetime.now(timezone.utc)
                     ),
                 }
                 for o in orders
@@ -568,7 +752,9 @@ async def lifespan(app: FastAPI):
         try:
             # 检查是否禁用交易所对账
             if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
-                logger.info("[Reconciler] exchange_orders_getter disabled by DISABLE_EXCHANGE_RECONCILIATION=true")
+                logger.info(
+                    "[Reconciler] exchange_orders_getter disabled by DISABLE_EXCHANGE_RECONCILIATION=true"
+                )
                 return []
 
             from trader.adapters.broker.binance_spot_demo_broker import (
@@ -640,6 +826,7 @@ async def lifespan(app: FastAPI):
         if external_count > 0:
             return ownership_registry.get_external_order_ids()
         return set()
+
     # 检查是否启用交易所对账
     if os.environ.get("DISABLE_EXCHANGE_RECONCILIATION", "false").lower() == "true":
         logger.info("[Reconciler] Exchange reconciliation disabled")
@@ -663,6 +850,13 @@ async def lifespan(app: FastAPI):
         connector_getter=_connector_getter,
     )
     yield
+    try:
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
+
+        await get_crypto_risk_runtime_manager().close()
+        logger.info("[CryptoRisk] Runtime manager closed")
+    except Exception as e:
+        logger.error(f"[CryptoRisk] Error closing runtime manager: {e}")
     try:
         await strategies.shutdown_strategy_runtime_resources()
     except Exception as e:
@@ -707,6 +901,10 @@ app.include_router(reconciler.router)
 app.include_router(monitor.router)
 app.include_router(chat.router)
 app.include_router(portfolio_research.router)
+app.include_router(strategy_candidates.router)
+app.include_router(allocations.router)
+app.include_router(portfolio_autopilot.router)
+app.include_router(data_catalog.router)
 app.include_router(audit.router)
 app.include_router(sse.router)
 
@@ -723,4 +921,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=API_PORT)

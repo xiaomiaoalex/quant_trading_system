@@ -6,6 +6,7 @@ Binance 特定滑点模型：
 - 卖出时向不利方向滑（低价）
 - 基于成交量比例的动态滑点
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ class SlippageModel(Enum):
 @dataclass(slots=True)
 class BinanceSlippageConfig:
     """Binance 滑点配置"""
+
     model: SlippageModel = SlippageModel.VOLUME_BASED
     fixed_slippage_bps: float = 5.0  # 基点 (5 bps = 0.05%)
     percentage_slippage: float = 0.0005  # 0.05%

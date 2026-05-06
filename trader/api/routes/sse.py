@@ -13,7 +13,8 @@ Usage:
 import asyncio
 import json
 import logging
-from typing import Dict, Set, Callable, Any, Optional
+from typing import Any, Callable, Dict, Optional, Set
+
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
@@ -92,7 +93,9 @@ class SSEManager:
                     except Exception as e:
                         logger.warning(f"[SSE] Failed to send to {client.client_id}: {e}")
         if sent_count > 0:
-            logger.debug(f"[SSE] Broadcast {event_type} to {sent_count} clients on channel {channel}")
+            logger.debug(
+                f"[SSE] Broadcast {event_type} to {sent_count} clients on channel {channel}"
+            )
         return sent_count
 
     def subscribe(self, client_id: str, channel: str) -> bool:
@@ -198,19 +201,15 @@ async def broadcast_monitor_update(data: Dict[str, Any]) -> int:
 async def broadcast_strategy_update(strategy_id: str, data: Dict[str, Any]) -> int:
     """Broadcast strategy status update"""
     manager = get_sse_manager()
-    return await manager.broadcast("strategies", "strategy_update", {
-        "strategy_id": strategy_id,
-        **data
-    })
+    return await manager.broadcast(
+        "strategies", "strategy_update", {"strategy_id": strategy_id, **data}
+    )
 
 
 async def broadcast_order_update(order_id: str, data: Dict[str, Any]) -> int:
     """Broadcast order update"""
     manager = get_sse_manager()
-    return await manager.broadcast("orders", "order_update", {
-        "order_id": order_id,
-        **data
-    })
+    return await manager.broadcast("orders", "order_update", {"order_id": order_id, **data})
 
 
 async def broadcast_reconciliation_update(data: Dict[str, Any]) -> int:

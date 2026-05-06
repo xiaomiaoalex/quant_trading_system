@@ -42,7 +42,9 @@ class EmaCrossBtcStrategy:
 
     fast_period: int = 12
     slow_period: int = 26
-    order_size: Decimal = Decimal("0.01")  # 0.01 BTC/ETH ≈ 50-800 USDT，满足大多数交易对最低名义金额要求
+    order_size: Decimal = Decimal(
+        "0.01"
+    )  # 0.01 BTC/ETH ≈ 50-800 USDT，满足大多数交易对最低名义金额要求
     min_confidence: Decimal = Decimal("0.65")
 
     _prices: list[Decimal] = field(default_factory=list)
@@ -54,9 +56,7 @@ class EmaCrossBtcStrategy:
         if config:
             result = await self.update_config(config)
             if not result.is_valid:
-                raise ValueError(
-                    f"EMA Cross 初始化参数无效: {[e.message for e in result.errors]}"
-                )
+                raise ValueError(f"EMA Cross 初始化参数无效: {[e.message for e in result.errors]}")
 
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         self._prices.append(market_data.price)
@@ -80,7 +80,9 @@ class EmaCrossBtcStrategy:
 
         self._last_regime = regime
         signal_type = SignalType.BUY if regime == "above" else SignalType.SELL
-        diff_ratio = abs(fast_ema - slow_ema) / market_data.price if market_data.price > 0 else Decimal("0")
+        diff_ratio = (
+            abs(fast_ema - slow_ema) / market_data.price if market_data.price > 0 else Decimal("0")
+        )
         confidence = min(Decimal("0.95"), max(self.min_confidence, diff_ratio * Decimal("20")))
 
         return Signal(
@@ -187,7 +189,7 @@ class EmaCrossBtcStrategy:
 
     @staticmethod
     def _calculate_ema(values: list[Decimal], period: int) -> Decimal:
-        window = values[-max(len(values), period):]
+        window = values[-max(len(values), period) :]
         multiplier = Decimal("2") / (Decimal(period) + Decimal("1"))
         ema = window[0]
         for price in window[1:]:

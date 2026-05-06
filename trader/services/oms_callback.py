@@ -14,54 +14,78 @@ OMS Callback Handler - OMS下单回调处理
 - 不允许 except: pass
 - 失败必须 fail-closed，不能 silent fallback
 """
+
 import asyncio
+import inspect
 import logging
 import time
 import uuid
-import inspect
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, Dict, Any, Callable, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBroker
-from trader.core.domain.models.order import OrderSide, OrderType, OrderStatus
-from trader.core.domain.models.signal import Signal
-from trader.core.domain.services.position_lot_registry import (
-    get_lot_manager,
-    set_lot_manager,
-)
 from trader.adapters.persistence.execution_repository import (
     ExecutionRepository,
     get_execution_repository,
 )
 from trader.adapters.persistence.postgres import is_postgres_available
-from trader.storage.in_memory import get_storage, ControlPlaneInMemoryStorage
+from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
+from trader.core.application.risk_engine import RejectionReason, RiskCheckResult
+from trader.core.domain.models.order import OrderSide, OrderStatus, OrderType
+from trader.core.domain.models.signal import Signal
+from trader.core.domain.services.position_lot_registry import get_lot_manager, set_lot_manager
+from trader.services.account_state import AccountStateService
+from trader.services.execution_budget import ExecutionBudgetService
+from trader.storage.in_memory import ControlPlaneInMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class BalanceRequirement:
+    """Pre-trade balance requirement for one order."""
+
+    asset: str
+    required: Decimal
+    available: Decimal
+    reserved: Decimal
+
+
 class OMSCallbackError(Exception):
     """OMS回调异常"""
+
     pass
 
 
 class InsufficientBalanceError(OMSCallbackError):
     """余额不足"""
+
     pass
 
 
 class MinNotionalError(OMSCallbackError):
     """最小名义金额不满足"""
+
     pass
 
 
 class InvalidQuantityError(OMSCallbackError):
     """数量精度错误"""
+
     pass
 
 
 class TradingDisabledError(OMSCallbackError):
     """交易未启用"""
+
+    pass
+
+
+class RiskRejectedError(OMSCallbackError):
+    """Pre-trade 风控拒绝"""
+
     pass
 
 
@@ -70,7 +94,7 @@ class OMSCallbackHandler:
     OMS下单回调处理器
 
     将策略信号转换为真实订单并执行。
-    
+
     幂等性保证：
     - 使用 cl_ord_id 进行去重
     - cl_ord_id 格式: {strategy_id}_{uuid_hex}
@@ -87,6 +111,12 @@ class OMSCallbackHandler:
         fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
         position_lot_manager: Any = None,  # None = 使用全局单例
         execution_repository: Optional[ExecutionRepository] = None,
+        execution_budget: Optional[ExecutionBudgetService] = None,
+        account_state: Optional[AccountStateService] = None,
+        account_id: str = "binance_demo",
+        pre_trade_risk_check: Optional[
+            Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
+        ] = None,
     ):
         """
         初始化OMS回调处理器
@@ -100,6 +130,10 @@ class OMSCallbackHandler:
             event_callback: 事件发布回调
             fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
             position_lot_manager: None = 使用全局单例 PositionLedgerManager
+            execution_budget: 预算管理服务（可选，未传入时回退到进程内 reservation）
+            account_state: 账户状态服务（可选，配合 execution_budget 使用）
+            account_id: 账户标识符（用于 budget 预留和余额查询，默认 "binance_demo"）
+            pre_trade_risk_check: 独立风控回调；拒绝或异常时必须在下单前 fail-closed
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -112,6 +146,15 @@ class OMSCallbackHandler:
         # None = 从全局 registry 获取（推荐方式）
         self._position_lot_manager = position_lot_manager
         self._execution_repository = execution_repository or get_execution_repository()
+        self._execution_budget = execution_budget
+        self._account_state = account_state
+        self._account_id = account_id
+        self._pre_trade_risk_check = pre_trade_risk_check
+        if execution_budget is not None and account_state is None:
+            logger.warning(
+                "[OMSCallback] execution_budget provided without account_state — "
+                "emergency SELL clipping will be disabled in budget path"
+            )
 
         self._position_locks: Dict[str, asyncio.Lock] = {}
 
@@ -126,8 +169,10 @@ class OMSCallbackHandler:
         self._processed_cl_ord_ids: Dict[str, float] = {}
         self._cl_ord_id_to_strategy: Dict[str, str] = {}
         self._processed_exec_keys: Dict[str, float] = {}
+        self._balance_reservations: Dict[str, tuple[str, Decimal, float]] = {}
         self._exec_dedup_ttl_seconds: int = 900
         self._cl_ord_id_ttl_seconds: int = 3600
+        self._balance_reservation_ttl_seconds: int = 30
 
         self._cl_ord_id_dedup_hits: int = 0
         self._exec_dedup_hits: int = 0
@@ -143,6 +188,13 @@ class OMSCallbackHandler:
     def _lot_mgr(self):
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
         return self._position_lot_manager or get_lot_manager()
+
+    def set_pre_trade_risk_check(
+        self,
+        check: Optional[Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]],
+    ) -> None:
+        """Late-bind or clear the independent pre-trade risk callback."""
+        self._pre_trade_risk_check = check
 
     def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
         key = f"{strategy_id}:{symbol}"
@@ -164,8 +216,7 @@ class OMSCallbackHandler:
     def _cleanup_idle_position_locks(self) -> int:
         """清理未被持有的持仓锁，释放内存。"""
         idle_keys = [
-            k for k, lock in self._position_locks.items()
-            if not lock.locked() and not lock._waiters
+            k for k, lock in self._position_locks.items() if not lock.locked() and not lock._waiters
         ]
         for k in idle_keys:
             del self._position_locks[k]
@@ -180,7 +231,8 @@ class OMSCallbackHandler:
         """
         now = time.time()
         expired_cl = [
-            k for k, ts in self._processed_cl_ord_ids.items()
+            k
+            for k, ts in self._processed_cl_ord_ids.items()
             if now - ts > self._cl_ord_id_ttl_seconds
         ]
         for k in expired_cl:
@@ -188,7 +240,8 @@ class OMSCallbackHandler:
             self._cl_ord_id_to_strategy.pop(k, None)
 
         expired_exec = [
-            k for k, ts in self._processed_exec_keys.items()
+            k
+            for k, ts in self._processed_exec_keys.items()
             if now - ts > self._exec_dedup_ttl_seconds
         ]
         for k in expired_exec:
@@ -197,14 +250,16 @@ class OMSCallbackHandler:
         total = len(expired_cl) + len(expired_exec)
 
         expired_step = [
-            k for k, (_, cached_at) in self._step_size_cache.items()
+            k
+            for k, (_, cached_at) in self._step_size_cache.items()
             if now - cached_at > self._symbol_cache_ttl_seconds
         ]
         for k in expired_step:
             del self._step_size_cache[k]
 
         expired_min = [
-            k for k, (_, cached_at) in self._min_notional_cache.items()
+            k
+            for k, (_, cached_at) in self._min_notional_cache.items()
             if now - cached_at > self._symbol_cache_ttl_seconds
         ]
         for k in expired_min:
@@ -239,45 +294,348 @@ class OMSCallbackHandler:
             "reject_reason_counts": dict(self._reject_reason_counts),
             "fill_latency_ms_avg": (
                 self._fill_latency_sum_ms / self._fill_latency_count
-                if self._fill_latency_count > 0 else None
+                if self._fill_latency_count > 0
+                else None
             ),
             "fill_latency_count": self._fill_latency_count,
         }
 
     def _cleanup_exec_dedup(self) -> None:
         now = time.time()
-        expired_keys = [
-            key for key, expiry in self._processed_exec_keys.items()
-            if expiry <= now
-        ]
+        expired_keys = [key for key, expiry in self._processed_exec_keys.items() if expiry <= now]
         for key in expired_keys:
             del self._processed_exec_keys[key]
+
+    def _cleanup_balance_reservations(self) -> None:
+        now = time.time()
+        expired = [
+            cl_ord_id
+            for cl_ord_id, (_, _, expires_at) in self._balance_reservations.items()
+            if expires_at <= now
+        ]
+        for cl_ord_id in expired:
+            del self._balance_reservations[cl_ord_id]
+
+    def _reserved_balance(self, asset: str) -> Decimal:
+        self._cleanup_balance_reservations()
+        asset_norm = asset.upper()
+        return sum(
+            amount
+            for reserved_asset, amount, _ in self._balance_reservations.values()
+            if reserved_asset == asset_norm
+        )
+
+    def _reserve_balance(self, cl_ord_id: str, asset: str, amount: Decimal) -> None:
+        self._cleanup_balance_reservations()
+        if amount <= 0:
+            return
+        self._balance_reservations[cl_ord_id] = (
+            asset.upper(),
+            amount,
+            time.time() + self._balance_reservation_ttl_seconds,
+        )
+
+    def _release_balance_reservation(self, cl_ord_id: str) -> None:
+        self._balance_reservations.pop(cl_ord_id, None)
+
+    def _record_rejection(
+        self,
+        strategy_id: str,
+        signal: Signal,
+        side: str | None,
+        quantity: Decimal | None,
+        price: Decimal | None,
+        reason: str,
+        counter_key: str,
+    ) -> None:
+        self._publish_event(
+            strategy_id,
+            "strategy.order.rejected",
+            {
+                "symbol": signal.symbol,
+                "side": side or (str(signal.signal_type) if signal.signal_type else None),
+                "quantity": str(quantity) if quantity is not None else None,
+                "price": str(price) if price is not None else None,
+                "reason": reason,
+            },
+        )
+        self._order_submit_reject += 1
+        self._reject_reason_counts[counter_key] = self._reject_reason_counts.get(counter_key, 0) + 1
+
+    async def _run_pre_trade_risk_check(self, strategy_id: str, signal: Signal) -> None:
+        if self._pre_trade_risk_check is None:
+            return
+
+        try:
+            result_or_awaitable = self._pre_trade_risk_check(signal)
+            result = (
+                await result_or_awaitable
+                if inspect.isawaitable(result_or_awaitable)
+                else result_or_awaitable
+            )
+        except Exception as exc:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=None,
+                quantity=signal.quantity,
+                price=signal.price,
+                reason=f"RISK_SYSTEM_ERROR: {exc}",
+                counter_key=RejectionReason.RISK_SYSTEM_ERROR.value,
+            )
+            raise RiskRejectedError(f"Pre-trade risk check unavailable: {exc}") from exc
+
+        if result.passed:
+            return
+
+        counter_key = (
+            result.rejection_reason.value
+            if result.rejection_reason is not None
+            else "PRE_TRADE_RISK_REJECT"
+        )
+        reason_text = result.message or counter_key
+        self._record_rejection(
+            strategy_id=strategy_id,
+            signal=signal,
+            side=None,
+            quantity=signal.quantity,
+            price=signal.price,
+            reason=f"PRE_TRADE_RISK_REJECT: {counter_key}: {reason_text}",
+            counter_key=counter_key,
+        )
+        raise RiskRejectedError(reason_text)
+
+    def _split_symbol_assets(self, symbol: str) -> tuple[str, str]:
+        symbol_norm = symbol.upper().strip()
+        quote_assets = ("USDT", "FDUSD", "BUSD", "USDC", "USD", "BTC", "ETH")
+        for quote_asset in quote_assets:
+            if symbol_norm.endswith(quote_asset) and len(symbol_norm) > len(quote_asset):
+                return symbol_norm[: -len(quote_asset)], quote_asset
+        raise OMSCallbackError(f"Cannot infer base/quote assets for symbol={symbol}")
+
+    async def _resolve_reference_price(self, symbol: str, signal_price: Decimal) -> Decimal:
+        if signal_price > 0:
+            return signal_price
+
+        get_ticker_prices = getattr(self._broker, "get_ticker_prices", None)
+        if callable(get_ticker_prices):
+            prices_result = get_ticker_prices([symbol])
+            prices = await prices_result if inspect.isawaitable(prices_result) else prices_result
+            price = Decimal(str(prices.get(symbol) or prices.get(symbol.upper()) or "0"))
+            if price > 0:
+                return price
+
+        raise OMSCallbackError(
+            f"Positive signal price or ticker price is required before placing {symbol}"
+        )
+
+    async def _fetch_available_balances(self) -> Dict[str, Decimal]:
+        balances: Dict[str, Decimal] = {}
+
+        fetch_account = getattr(self._broker, "_fetch_account", None)
+        if callable(fetch_account):
+            try:
+                account_result = fetch_account()
+                fetched = (
+                    await account_result if inspect.isawaitable(account_result) else account_result
+                )
+            except Exception as exc:
+                raise OMSCallbackError(
+                    f"Unable to fetch account balances for pre-trade check: {exc}"
+                ) from exc
+            account = getattr(self._broker, "_account_cache", None) or fetched
+            if isinstance(account, dict):
+                for bal in account.get("balances", []):
+                    asset = str(bal.get("asset", "")).upper()
+                    if not asset:
+                        continue
+                    balances[asset] = Decimal(str(bal.get("free", "0")))
+                if balances:
+                    return balances
+
+        get_account = getattr(self._broker, "get_account", None)
+        if callable(get_account):
+            try:
+                account_result = get_account()
+                account = (
+                    await account_result if inspect.isawaitable(account_result) else account_result
+                )
+            except Exception as exc:
+                raise OMSCallbackError(
+                    f"Unable to fetch account balances for pre-trade check: {exc}"
+                ) from exc
+            currency = str(getattr(account, "currency", "USDT")).upper()
+            balances[currency] = Decimal(str(getattr(account, "available_cash", "0")))
+
+        get_positions = getattr(self._broker, "get_positions", None)
+        if callable(get_positions):
+            positions_result = get_positions()
+            positions = (
+                await positions_result
+                if inspect.isawaitable(positions_result)
+                else positions_result
+            )
+            for pos in positions or []:
+                asset = str(getattr(pos, "symbol", "")).upper()
+                qty = Decimal(str(getattr(pos, "quantity", "0")))
+                if asset and qty > 0:
+                    balances[asset] = balances.get(asset, Decimal("0")) + qty
+
+        if not balances:
+            raise OMSCallbackError("Unable to fetch account balances for pre-trade check")
+        return balances
+
+    async def _pretrade_balance_check(
+        self,
+        strategy_id: str,
+        signal: Signal,
+        side: OrderSide,
+        quantity: Decimal,
+        reference_price: Decimal,
+        cl_ord_id: str,
+        is_emergency: bool,
+    ) -> tuple[Decimal, BalanceRequirement]:
+        base_asset, quote_asset = self._split_symbol_assets(signal.symbol)
+
+        if side == OrderSide.BUY:
+            asset = quote_asset
+            required = quantity * reference_price
+        else:
+            asset = base_asset
+            required = quantity
+
+        # ==================== ExecutionBudget 路径 ====================
+        if self._execution_budget is not None:
+            account_id = self._account_id
+            venue = self._broker.broker_name
+            approved, reason = self._execution_budget.reserve_order(
+                account_id=account_id,
+                venue=venue,
+                cl_ord_id=cl_ord_id,
+                symbol=signal.symbol,
+                side=side.value,
+                quantity=quantity,
+                reference_price=reference_price,
+            )
+            if approved:
+                requirement = BalanceRequirement(
+                    asset=asset,
+                    required=required,
+                    available=Decimal("0"),
+                    reserved=Decimal("0"),
+                )
+                return quantity, requirement
+
+            # Emergency sell: 尝试用 budget service 的余额信息做 clipping
+            if side == OrderSide.SELL and is_emergency and self._account_state is not None:
+                account_spendable = self._account_state.get_spendable(account_id, venue, asset)
+                budget_reserved = self._execution_budget.get_reserved(account_id, venue, asset)
+                spendable = account_spendable - budget_reserved
+                if spendable > 0:
+                    # 释放之前的拒绝 reservation，用 clipping 后的数量重试
+                    clipped_qty = min(spendable, quantity)
+                    approved2, reason2 = self._execution_budget.reserve_order(
+                        account_id=account_id,
+                        venue=venue,
+                        cl_ord_id=cl_ord_id,
+                        symbol=signal.symbol,
+                        side=side.value,
+                        quantity=clipped_qty,
+                        reference_price=reference_price,
+                    )
+                    if approved2:
+                        logger.critical(
+                            f"[OMSCallback] EMERGENCY_EXIT quantity clipped by budget: "
+                            f"strategy={strategy_id}, symbol={signal.symbol}, "
+                            f"requested={quantity}, clipped={clipped_qty}"
+                        )
+                        requirement = BalanceRequirement(
+                            asset=asset,
+                            required=clipped_qty,
+                            available=account_spendable,
+                            reserved=budget_reserved,
+                        )
+                        return clipped_qty, requirement
+
+            # 预算不足，本地拒单
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=reference_price,
+                reason=f"EXECUTION_BUDGET_REJECT: {reason}",
+                counter_key="INSUFFICIENT_BALANCE",
+            )
+            raise InsufficientBalanceError(f"Execution budget rejected: {reason}")
+
+        # ==================== 回退路径：进程内 reservation ====================
+        balances = await self._fetch_available_balances()
+        available = balances.get(asset, Decimal("0"))
+        reserved = self._reserved_balance(asset)
+        spendable = available - reserved
+
+        requirement = BalanceRequirement(
+            asset=asset,
+            required=required,
+            available=available,
+            reserved=reserved,
+        )
+
+        if spendable >= required:
+            self._reserve_balance(cl_ord_id, asset, required)
+            return quantity, requirement
+
+        if side == OrderSide.SELL and is_emergency and spendable > 0:
+            logger.critical(
+                f"[OMSCallback] EMERGENCY_EXIT quantity clipped by balance: "
+                f"strategy={strategy_id}, symbol={signal.symbol}, "
+                f"requested={quantity}, available={spendable}"
+            )
+            clipped_qty = spendable
+            self._reserve_balance(cl_ord_id, asset, clipped_qty)
+            return clipped_qty, BalanceRequirement(asset, clipped_qty, available, reserved)
+
+        error_msg = (
+            f"Insufficient {asset} balance: required={required}, "
+            f"available={available}, reserved={reserved}, spendable={spendable}"
+        )
+        self._record_rejection(
+            strategy_id=strategy_id,
+            signal=signal,
+            side=side.value,
+            quantity=quantity,
+            price=reference_price,
+            reason=f"INSUFFICIENT_BALANCE: {error_msg}",
+            counter_key="INSUFFICIENT_BALANCE",
+        )
+        raise InsufficientBalanceError(error_msg)
 
     def _determine_order_side(self, signal: Signal) -> tuple[OrderSide, bool]:
         """
         根据信号类型确定订单方向。
-        
+
         Args:
             signal: 交易信号
-            
+
         Returns:
             tuple: (OrderSide, is_emergency)
                 - is_emergency=True 表示信号类型不明确，按紧急卖出处理
         """
         signal_value = signal.signal_type.value.upper()
-        
+
         # 明确的买入信号
         if signal_value in ("BUY", "LONG"):
             return (OrderSide.BUY, False)
-        
+
         # 明确的卖出信号
         if signal_value in ("SELL", "SHORT"):
             return (OrderSide.SELL, False)
-        
+
         # 平仓信号
         if signal_value in ("CLOSE_LONG", "CLOSE_SHORT"):
             return (OrderSide.SELL, False)
-        
+
         # 未知信号类型 -> EMERGENCY_EXIT
         logger.critical(
             f"[OMSCallback] 🚨 EMERGENCY_EXIT: 未知信号类型 {signal.signal_type}, "
@@ -312,7 +670,7 @@ class OMSCallbackHandler:
         if not cl_ord_id:
             return ""
         # 优先使用精确映射（避免截断导致的不匹配）
-        if hasattr(self, '_cl_ord_id_to_strategy') and cl_ord_id in self._cl_ord_id_to_strategy:
+        if hasattr(self, "_cl_ord_id_to_strategy") and cl_ord_id in self._cl_ord_id_to_strategy:
             return self._cl_ord_id_to_strategy[cl_ord_id]
         # 回退：按分隔符解析（兼容新旧格式）
         if "-" in cl_ord_id:
@@ -350,7 +708,8 @@ class OMSCallbackHandler:
             "reject_reason_counts": dict(self._reject_reason_counts),
             "fill_latency_ms_avg": (
                 self._fill_latency_sum_ms / self._fill_latency_count
-                if self._fill_latency_count > 0 else None
+                if self._fill_latency_count > 0
+                else None
             ),
             "fill_latency_count": self._fill_latency_count,
         }
@@ -390,13 +749,17 @@ class OMSCallbackHandler:
                 f"[OMSCallback] Live trading disabled, signal rejected: "
                 f"strategy={strategy_id}, symbol={signal.symbol}"
             )
-            self._publish_event(strategy_id, "strategy.order.rejected", {
-                "symbol": signal.symbol,
-                "side": str(signal.signal_type) if signal.signal_type else None,
-                "quantity": str(signal.quantity) if signal.quantity else None,
-                "price": str(signal.price) if signal.price else None,
-                "reason": "LIVE_TRADING_DISABLED",
-            })
+            self._publish_event(
+                strategy_id,
+                "strategy.order.rejected",
+                {
+                    "symbol": signal.symbol,
+                    "side": str(signal.signal_type) if signal.signal_type else None,
+                    "quantity": str(signal.quantity) if signal.quantity else None,
+                    "price": str(signal.price) if signal.price else None,
+                    "reason": "LIVE_TRADING_DISABLED",
+                },
+            )
             # Task 19: Track rejection
             self._order_submit_reject += 1
             reason = "LIVE_TRADING_DISABLED"
@@ -425,6 +788,8 @@ class OMSCallbackHandler:
             self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
 
+        await self._run_pre_trade_risk_check(strategy_id, signal)
+
         # ==================== 获取 stepSize ====================
         step_size = await self._get_step_size(signal.symbol)
 
@@ -445,27 +810,42 @@ class OMSCallbackHandler:
             logger.warning(f"[OMSCallback] Quantity quantization failed: {e}")
             quantity = Decimal(str(signal.quantity))
 
-        # ==================== 最小名义金额检查 ====================
+        # ==================== 方向、订单类型、参考价格 ====================
+        side, is_emergency = self._determine_order_side(signal)
+        order_type = OrderType.MARKET
+        if signal.price and signal.price > 0:
+            order_type = OrderType.LIMIT
+
         price = signal.price or Decimal("0")
-        if price <= 0:
-            logger.warning(f"[OMSCallback] Signal price is zero, cannot validate minNotional")
-        else:
-            notional = quantity * price
-            min_notional = await self._get_min_notional(signal.symbol)
-            if notional < min_notional:
-                error_msg = f"Notional {notional} below minNotional {min_notional}"
-                self._publish_event(strategy_id, "strategy.order.rejected", {
-                    "symbol": signal.symbol,
-                    "side": str(signal.signal_type) if signal.signal_type else None,
-                    "quantity": str(quantity),
-                    "price": str(price),
-                    "reason": f"MIN_NOTIONAL: {error_msg}",
-                })
-                # Task 19: Track rejection
-                self._order_submit_reject += 1
-                reason = "MIN_NOTIONAL"
-                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                raise MinNotionalError(error_msg)
+        try:
+            reference_price = await self._resolve_reference_price(signal.symbol, price)
+        except OMSCallbackError as e:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=price,
+                reason=str(e),
+                counter_key="MISSING_REFERENCE_PRICE",
+            )
+            raise
+
+        # ==================== 最小名义金额检查 ====================
+        notional = quantity * reference_price
+        min_notional = await self._get_min_notional(signal.symbol)
+        if notional < min_notional:
+            error_msg = f"Notional {notional} below minNotional {min_notional}"
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side.value,
+                quantity=quantity,
+                price=reference_price,
+                reason=f"MIN_NOTIONAL: {error_msg}",
+                counter_key="MIN_NOTIONAL",
+            )
+            raise MinNotionalError(error_msg)
 
         # ==================== 生成订单ID ====================
         # 币安要求 cl_ord_id 必须符合 ^[a-zA-Z0-9-_]{1,36}$
@@ -508,119 +888,71 @@ class OMSCallbackHandler:
 
         # ==================== 下单 ====================
         try:
-            # 转换方向
-            side, is_emergency = self._determine_order_side(signal)
-            
-            # 转换订单类型（默认市价单）
-            order_type = OrderType.MARKET
-            if signal.price and signal.price > 0:
-                order_type = OrderType.LIMIT
-
-            # 下单前余额预检查
-            if signal.price and signal.price > 0:
-                try:
-                    # 刷新账户信息确保余额最新
-                    await self._broker._fetch_account()
-                    account = self._broker._account_cache
-                    if account:
-                        # 解析交易对的 base 和 quote asset
-                        # 例如: BTCUSDT -> base=BTC, quote=USDT
-                        #      ETHUSDT -> base=ETH, quote=USDT
-                        #      BTCUSDC -> base=BTC, quote=USDC
-                        symbol = signal.symbol.upper()
-                        # 常见的 quote assets
-                        quote_assets = ("USDT", "BUSD", "USDC", "FDUSD", "USD", "BTC", "ETH")
-                        base_asset = symbol
-                        quote_asset = None
-                        for qa in quote_assets:
-                            if symbol.endswith(qa):
-                                base_asset = symbol[:-len(qa)]
-                                quote_asset = qa
-                                break
-                        
-                        if side == OrderSide.BUY:
-                            # BUY: 检查 quote asset (USDT等) 余额
-                            quote_balance = Decimal("0")
-                            for bal in account.get("balances", []):
-                                if bal.get("asset") == quote_asset:
-                                    quote_balance = Decimal(str(bal.get("free", "0")))
-                                    break
-                            notional = quantity * signal.price
-                            if quote_balance < notional:
-                                error_msg = f"Insufficient {quote_asset} balance for BUY: required={notional}, available={quote_balance}"
-                                logger.warning(f"[OMSCallback] {error_msg}")
-                                self._publish_event(strategy_id, "strategy.order.rejected", {
-                                    "symbol": signal.symbol,
-                                    "side": side.value,
-                                    "quantity": str(quantity),
-                                    "price": str(signal.price),
-                                    "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
-                                })
-                                # Task 19: Track rejection
-                                self._order_submit_reject += 1
-                                reason = "INSUFFICIENT_BALANCE"
-                                self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                                raise InsufficientBalanceError(error_msg)
-                        elif side == OrderSide.SELL:
-                            # SELL: 检查 base asset (BTC等) 余额
-                            base_balance = Decimal("0")
-                            for bal in account.get("balances", []):
-                                if bal.get("asset") == base_asset:
-                                    base_balance = Decimal(str(bal.get("free", "0")))
-                                    break
-                            logger.info(
-                                f"[OMSCallback] SELL balance check: base_asset={base_asset}, "
-                                f"required={quantity}, available={base_balance}"
-                            )
-                            if base_balance < quantity:
-                                if is_emergency:
-                                    # EMERGENCY_EXIT: 强制卖出，按实际余额调整
-                                    original_qty = quantity
-                                    quantity = base_balance
-                                    logger.critical(
-                                        f"[OMSCallback] 🚨 EMERGENCY EXIT: 余额不足强制调整! "
-                                        f"原订单={original_qty} {base_asset}, 实际卖出={quantity} {base_asset}, "
-                                        f"symbol={signal.symbol}, strategy={strategy_id}"
-                                    )
-                                else:
-                                    error_msg = f"Insufficient {base_asset} balance for SELL: required={quantity}, available={base_balance}"
-                                    logger.warning(f"[OMSCallback] {error_msg}")
-                                    self._publish_event(strategy_id, "strategy.order.rejected", {
-                                        "symbol": signal.symbol,
-                                        "side": side.value,
-                                        "quantity": str(quantity),
-                                        "price": str(signal.price),
-                                        "reason": f"INSUFFICIENT_BALANCE: {error_msg}",
-                                    })
-                                    # Task 19: Track rejection
-                                    self._order_submit_reject += 1
-                                    reason = "INSUFFICIENT_BALANCE"
-                                    self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
-                                    raise InsufficientBalanceError(error_msg)
-                except MinNotionalError:
-                    raise  # Re-raise to be caught by outer handler
-                except InvalidQuantityError:
-                    raise  # Re-raise to be caught by outer handler
-                except InsufficientBalanceError:
-                    raise  # Re-raise to be caught by outer handler
-                except Exception as e:
-                    logger.warning(f"[OMSCallback] Balance pre-check failed: {e}")
+            # 下单前余额预检查：失败即拒绝，避免依赖交易所 insufficient balance 拒单。
+            quantity, balance_requirement = await self._pretrade_balance_check(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=side,
+                quantity=quantity,
+                reference_price=reference_price,
+                cl_ord_id=cl_ord_id,
+                is_emergency=is_emergency,
+            )
+            logger.info(
+                f"[OMSCallback] Balance pre-check passed: asset={balance_requirement.asset}, "
+                f"required={balance_requirement.required}, "
+                f"available={balance_requirement.available}, "
+                f"reserved={balance_requirement.reserved}"
+            )
 
             # 下单
-            order_desc = f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
+            order_desc = (
+                f"[OMSCallback] Placing order: strategy={strategy_id}, symbol={signal.symbol}, "
+            )
             if is_emergency:
                 order_desc += f"🚨 EMERGENCY_EXIT, "
             order_desc += f"side={side.value}, type={order_type.value}, qty={quantity}, "
             order_desc += f"price={signal.price if order_type == OrderType.LIMIT else 'MARKET'}"
             logger.info(order_desc)
-            broker_order = await self._broker.place_order(
-                symbol=signal.symbol,
-                side=side,
-                order_type=order_type,
-                quantity=quantity,
-                price=signal.price if order_type == OrderType.LIMIT else None,
-                client_order_id=cl_ord_id,
-            )
+            try:
+                broker_order = await self._broker.place_order(
+                    symbol=signal.symbol,
+                    side=side,
+                    order_type=order_type,
+                    quantity=quantity,
+                    price=(
+                        signal.price
+                        if order_type == OrderType.LIMIT
+                        else (reference_price if side == OrderSide.BUY else None)
+                    ),
+                    client_order_id=cl_ord_id,
+                )
+            except BrokerBusinessError as e:
+                # 业务拒单（如交易所 insufficient balance）→ 释放 budget reservation
+                if self._execution_budget is not None:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="business_reject")
+                raise
+            except BrokerNetworkError as e:
+                # 网络异常 → 保持 reservation 不释放，标记需后续 reconciliation
+                logger.warning(
+                    f"[OMSCallback] Broker network error for cl_ord_id={cl_ord_id}: {e}. "
+                    f"Budget reservation preserved for reconciliation."
+                )
+                raise
+            except Exception as e:
+                # 其他异常 → 释放 budget reservation
+                if self._execution_budget is not None:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="unknown_error")
+                raise
+
+            # broker 成功 → 标记 reservation 为 ACCEPTED
+            if self._execution_budget is not None:
+                try:
+                    self._execution_budget.accept_reservation(cl_ord_id)
+                except (KeyError, ValueError) as e:
+                    logger.warning(
+                        f"[OMSCallback] Failed to accept budget reservation for cl_ord_id={cl_ord_id}: {e}"
+                    )
 
             # ==================== 保存订单到存储 ====================
             order_data = {
@@ -641,13 +973,23 @@ class OMSCallbackHandler:
                 "venue": self._broker.broker_name,
                 "created_at": (
                     broker_order.created_at.isoformat()
-                    if broker_order.created_at else datetime.now(timezone.utc).isoformat()
+                    if broker_order.created_at
+                    else datetime.now(timezone.utc).isoformat()
                 ),
             }
             self._storage.create_order(order_data)
 
             # ==================== 如果有成交，保存成交记录 ====================
             if broker_order.filled_quantity > 0:
+                # 释放 budget reservation（已成交，预算可回收）
+                if self._execution_budget is not None:
+                    try:
+                        self._execution_budget.release_reservation(cl_ord_id, reason="filled")
+                    except (KeyError, ValueError) as e:
+                        logger.warning(
+                            f"[OMSCallback] Failed to release budget reservation on fill "
+                            f"for cl_ord_id={cl_ord_id}: {e}"
+                        )
                 exec_id = f"{broker_order.broker_order_id}:init"
                 # Task 19: 幂等检查：避免重复计数
                 if not self._mark_exec_seen(cl_ord_id, exec_id):
@@ -694,9 +1036,7 @@ class OMSCallbackHandler:
                                 )
                             # 从 ledger 读取最新 realized_pnl 供后续使用
                             ledger = self._lot_mgr.get(strategy_id, signal.symbol)
-                            ledger_realized_pnl = (
-                                str(ledger.realized_pnl) if ledger else "0"
-                            )
+                            ledger_realized_pnl = str(ledger.realized_pnl) if ledger else "0"
                         except Exception as e:
                             logger.warning(f"[OMSCallback] Lot tracking failed: {e}")
                             ledger_realized_pnl = "0"
@@ -725,9 +1065,16 @@ class OMSCallbackHandler:
 
                         if side.value == "BUY":
                             if current_qty > 0:
-                                total_cost = current_avg_cost * current_qty + broker_order.average_price * quantity
+                                total_cost = (
+                                    current_avg_cost * current_qty
+                                    + broker_order.average_price * quantity
+                                )
                                 new_qty = current_qty + quantity
-                                new_avg_cost = total_cost / new_qty if new_qty > 0 else broker_order.average_price
+                                new_avg_cost = (
+                                    total_cost / new_qty
+                                    if new_qty > 0
+                                    else broker_order.average_price
+                                )
                             else:
                                 new_qty = current_qty + quantity
                         else:
@@ -745,17 +1092,19 @@ class OMSCallbackHandler:
                         if new_qty > 0 and new_avg_cost > 0:
                             unrealized_pnl = new_qty * (broker_order.average_price - new_avg_cost)
 
-                        self._storage.upsert_position({
-                            "account_id": "SYSTEM",
-                            "venue": self._broker.broker_name,
-                            "instrument": signal.symbol,
-                            "strategy_id": strategy_id,
-                            "qty": str(new_qty),
-                            "avg_cost": str(new_avg_cost),
-                            "mark_price": str(broker_order.average_price),
-                            "realized_pnl": ledger_realized_pnl,
-                            "unrealized_pnl": str(unrealized_pnl),
-                        })
+                        self._storage.upsert_position(
+                            {
+                                "account_id": "SYSTEM",
+                                "venue": self._broker.broker_name,
+                                "instrument": signal.symbol,
+                                "strategy_id": strategy_id,
+                                "qty": str(new_qty),
+                                "avg_cost": str(new_avg_cost),
+                                "mark_price": str(broker_order.average_price),
+                                "realized_pnl": ledger_realized_pnl,
+                                "unrealized_pnl": str(unrealized_pnl),
+                            }
+                        )
                         logger.info(
                             f"[OMSCallback] Position updated: {signal.symbol} strategy={strategy_id} "
                             f"qty={new_qty}, avg_cost={new_avg_cost}, unrealized_pnl={unrealized_pnl}"
@@ -783,16 +1132,24 @@ class OMSCallbackHandler:
                         logger.error(f"[OMSCallback] on_fill callback error: {e}")
 
             # ==================== 发布成功事件 ====================
-            event_type = "strategy.order.filled" if broker_order.filled_quantity > 0 else "strategy.order.submitted"
-            self._publish_event(strategy_id, event_type, {
-                "order_id": cl_ord_id,
-                "symbol": signal.symbol,
-                "side": side.value,
-                "quantity": str(quantity),
-                "filled_qty": str(broker_order.filled_quantity),
-                "avg_price": str(broker_order.average_price),
-                "status": broker_order.status.value,
-            })
+            event_type = (
+                "strategy.order.filled"
+                if broker_order.filled_quantity > 0
+                else "strategy.order.submitted"
+            )
+            self._publish_event(
+                strategy_id,
+                event_type,
+                {
+                    "order_id": cl_ord_id,
+                    "symbol": signal.symbol,
+                    "side": side.value,
+                    "quantity": str(quantity),
+                    "filled_qty": str(broker_order.filled_quantity),
+                    "avg_price": str(broker_order.average_price),
+                    "status": broker_order.status.value,
+                },
+            )
 
             logger.info(
                 f"[OMSCallback] Order submitted: cl_ord_id={cl_ord_id}, "
@@ -807,20 +1164,30 @@ class OMSCallbackHandler:
             # Non-blocking: fire-and-forget to avoid slowing down order processing
             try:
                 from trader.api.routes.sse import broadcast_monitor_update, broadcast_order_update
+
                 # Use create_task to schedule broadcast without awaiting
-                asyncio.create_task(broadcast_order_update(cl_ord_id, {
-                    "type": "order_update",
-                    "strategy_id": strategy_id,
-                    "symbol": signal.symbol,
-                    "side": side.value,
-                    "quantity": str(quantity),
-                    "filled_qty": str(broker_order.filled_quantity),
-                    "status": broker_order.status.value,
-                }))
-                asyncio.create_task(broadcast_monitor_update({
-                    "type": "order_update",
-                    "order_id": cl_ord_id,
-                }))
+                asyncio.create_task(
+                    broadcast_order_update(
+                        cl_ord_id,
+                        {
+                            "type": "order_update",
+                            "strategy_id": strategy_id,
+                            "symbol": signal.symbol,
+                            "side": side.value,
+                            "quantity": str(quantity),
+                            "filled_qty": str(broker_order.filled_quantity),
+                            "status": broker_order.status.value,
+                        },
+                    )
+                )
+                asyncio.create_task(
+                    broadcast_monitor_update(
+                        {
+                            "type": "order_update",
+                            "order_id": cl_ord_id,
+                        }
+                    )
+                )
             except Exception:
                 pass  # SSE broadcast is non-critical, don't fail order processing
 
@@ -832,7 +1199,23 @@ class OMSCallbackHandler:
                 "avg_price": str(broker_order.average_price),
             }
 
+        except (InsufficientBalanceError, MinNotionalError, InvalidQuantityError):
+            # Budget reservation 已在 _pretrade_balance_check 或 broker 异常中处理
+            if self._execution_budget is None:
+                self._release_balance_reservation(cl_ord_id)
+            raise
+        except (BrokerBusinessError, BrokerNetworkError):
+            # Broker 异常已在内层 try/except 处理 budget，此处只 re-raise
+            raise
         except Exception as e:
+            if self._execution_budget is None:
+                self._release_balance_reservation(cl_ord_id)
+            else:
+                # 非 broker 异常且有 budget：确保释放（兜底）
+                try:
+                    self._execution_budget.release_reservation(cl_ord_id, reason="unknown_error")
+                except (KeyError, ValueError):
+                    pass
             error_msg = str(e)
             logger.error(f"[OMSCallback] Order failed: {error_msg}")
 
@@ -840,13 +1223,17 @@ class OMSCallbackHandler:
             self._order_submit_error += 1
 
             # ==================== 发布拒单事件 ====================
-            self._publish_event(strategy_id, "strategy.order.rejected", {
-                "symbol": signal.symbol,
-                "side": str(signal.signal_type) if signal.signal_type else None,
-                "quantity": str(quantity),
-                "price": str(price),
-                "reason": error_msg,
-            })
+            self._publish_event(
+                strategy_id,
+                "strategy.order.rejected",
+                {
+                    "symbol": signal.symbol,
+                    "side": str(signal.signal_type) if signal.signal_type else None,
+                    "quantity": str(quantity),
+                    "price": str(price),
+                    "reason": error_msg,
+                },
+            )
 
             raise
 
@@ -897,7 +1284,9 @@ class OMSCallbackHandler:
             data = await self._broker.get_exchange_info(symbol=symbol)
             symbols = data.get("symbols", [])
             if not symbols:
-                logger.warning(f"[OMSCallback] Symbol {symbol} not found in exchangeInfo, using default minNotional")
+                logger.warning(
+                    f"[OMSCallback] Symbol {symbol} not found in exchangeInfo, using default minNotional"
+                )
                 self._min_notional_cache[symbol] = (Decimal("10"), time.time())
                 return Decimal("10")
 
@@ -911,11 +1300,15 @@ class OMSCallbackHandler:
                         self._min_notional_cache[symbol] = (min_notional, time.time())
                         return min_notional
 
-            logger.warning(f"[OMSCallback] No NOTIONAL/MIN_NOTIONAL filter for {symbol}, using default")
+            logger.warning(
+                f"[OMSCallback] No NOTIONAL/MIN_NOTIONAL filter for {symbol}, using default"
+            )
             self._min_notional_cache[symbol] = (Decimal("10"), time.time())
             return Decimal("10")
         except Exception as e:
-            logger.warning(f"[OMSCallback] Failed to get minNotional for {symbol}: {e}, using default")
+            logger.warning(
+                f"[OMSCallback] Failed to get minNotional for {symbol}: {e}, using default"
+            )
             self._min_notional_cache[symbol] = (Decimal("10"), time.time())
             return Decimal("10")
 
@@ -939,6 +1332,12 @@ def create_oms_callback(
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
     position_lot_manager: Any = None,
+    execution_budget: Optional[ExecutionBudgetService] = None,
+    account_state: Optional[AccountStateService] = None,
+    account_id: str = "binance_demo",
+    pre_trade_risk_check: Optional[
+        Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
+    ] = None,
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -949,6 +1348,10 @@ def create_oms_callback(
         event_callback: 事件发布回调
         fill_callback: 成交回调函数 (strategy_id, order_id, symbol, side, quantity, price)
         position_lot_manager: None = 使用全局 PositionLedgerManager 单例
+        execution_budget: 预算管理服务（可选）
+        account_state: 账户状态服务（可选）
+        account_id: 账户标识符（默认 "binance_demo"）
+        pre_trade_risk_check: 独立风控回调；拒绝或异常时 OMS 不会调用 broker 下单
 
     Returns:
         tuple: (oms_callback 函数, fill_handler 函数, handler 实例)
@@ -962,6 +1365,10 @@ def create_oms_callback(
         event_callback=event_callback,
         fill_callback=fill_callback,
         position_lot_manager=position_lot_manager,
+        execution_budget=execution_budget,
+        account_state=account_state,
+        account_id=account_id,
+        pre_trade_risk_check=pre_trade_risk_check,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -978,7 +1385,12 @@ def create_oms_callback(
         except TradingDisabledError:
             # 预期：安全闸门关闭
             return None
-        except (InsufficientBalanceError, MinNotionalError, InvalidQuantityError) as e:
+        except (
+            InsufficientBalanceError,
+            MinNotionalError,
+            InvalidQuantityError,
+            RiskRejectedError,
+        ) as e:
             # 预期：业务规则拒绝（记录为 warning）
             logger.warning(f"[OMSCallback] Signal rejected by business rule: {e}")
             return None
@@ -998,6 +1410,7 @@ def create_oms_callback(
         Returns:
             fill_handler: 接收 RawFillUpdate 并调用 fill_callback
         """
+
         async def fill_handler(update) -> None:
             """
             处理成交更新
@@ -1018,8 +1431,7 @@ def create_oms_callback(
                 price = float(update.price)
                 symbol = getattr(update, "symbol", None) or ""
                 exec_id = str(
-                    getattr(update, "exec_id", None)
-                    or getattr(update, "trade_id", "")
+                    getattr(update, "exec_id", None) or getattr(update, "trade_id", "")
                 ).strip()
                 fee = str(getattr(update, "commission", "")) or None
 
@@ -1042,6 +1454,13 @@ def create_oms_callback(
                         exec_id,
                     )
                     return
+
+                # 释放 budget reservation（WS 成交路径）
+                if handler._execution_budget is not None:
+                    try:
+                        handler._execution_budget.release_reservation(cl_ord_id, reason="filled")
+                    except (KeyError, ValueError):
+                        pass  # 可能已被 sync 路径释放
 
                 # 写执行记录（按 cl_ord_id + exec_id 幂等）
                 execution_data = {
@@ -1081,7 +1500,9 @@ def create_oms_callback(
                         ) / total_filled
                         existing_order["avg_price"] = str(weighted_avg)
 
-                    total_qty_raw = existing_order.get("qty") or existing_order.get("quantity") or "0"
+                    total_qty_raw = (
+                        existing_order.get("qty") or existing_order.get("quantity") or "0"
+                    )
                     total_qty = Decimal(str(total_qty_raw))
                     if total_qty > 0 and total_filled >= total_qty:
                         existing_order["status"] = OrderStatus.FILLED.value
@@ -1090,7 +1511,9 @@ def create_oms_callback(
                     existing_order["updated_ts_ms"] = int(time.time() * 1000)
 
                     if not symbol:
-                        symbol = str(existing_order.get("instrument") or existing_order.get("symbol") or "")
+                        symbol = str(
+                            existing_order.get("instrument") or existing_order.get("symbol") or ""
+                        )
 
                 # Note: fill_latency_count is NOT incremented here.
                 # The sync path (execute_signal) already incremented it
@@ -1118,7 +1541,9 @@ def create_oms_callback(
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链
-                    asyncio.create_task(fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price))
+                    asyncio.create_task(
+                        fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price)
+                    )
                     logger.info(
                         "[OMSCallback] Fill processed: cl_ord_id=%s, exec_id=%s, qty=%s, price=%s",
                         cl_ord_id,

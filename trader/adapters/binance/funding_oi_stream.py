@@ -15,18 +15,18 @@ Funding/OI Stream Adapter - Binance Funding Rate & Open Interest Fetcher
 - 支持多 symbol 并行拉取
 - 可配置的定时任务
 """
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
     import aiohttp
 
 from trader.adapters.persistence.feature_store import FeatureStore, get_feature_store
-
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 @dataclass
 class FundingOIConfig:
     """Funding/OI 采集配置"""
+
     base_url: str = BINANCE_FUTURES_BASE_URL
     # Funding Rate 采集间隔（秒），默认 30 分钟
     funding_poll_interval: float = 30.0 * 60
@@ -58,6 +59,7 @@ class FundingOIConfig:
 @dataclass
 class FundingRecord:
     """Funding Rate 记录"""
+
     symbol: str
     funding_rate: float
     exchange_ts_ms: int
@@ -68,6 +70,7 @@ class FundingRecord:
 @dataclass
 class OIRecord:
     """Open Interest 记录"""
+
     symbol: str
     open_interest: float
     exchange_ts_ms: int
@@ -77,6 +80,7 @@ class OIRecord:
 @dataclass
 class LongShortRatioRecord:
     """多空比记录"""
+
     symbol: str
     long_rate: float
     inverse_long_short_ratio: float
@@ -122,6 +126,7 @@ class FundingOIAdapter:
         """确保 HTTP session 可用"""
         if self._session is None or self._session.closed:
             import aiohttp
+
             timeout = aiohttp.ClientTimeout(total=self._config.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
 
@@ -262,7 +267,7 @@ class FundingOIAdapter:
                             # 取最新一条数据
                             record = data[0]
                             now_ms = int(time.time() * 1000)
-                            
+
                             # 安全获取 updateTime，缺失时记录警告
                             if "updateTime" not in record:
                                 logger.warning(
@@ -272,12 +277,15 @@ class FundingOIAdapter:
                                 exchange_ts_ms = now_ms
                             else:
                                 exchange_ts_ms = record.get("updateTime")
-                            
+
                             # 安全计算inverse_long_short_ratio，避免除零和极端小值风险
                             # 极端小值阈值：小于 1e-6 视为无效值
                             EXTREME_SMALL_THRESHOLD = 1e-6
                             long_short_ratio_val = float(record.get("longShortRatio", 0))
-                            if long_short_ratio_val == 0 or long_short_ratio_val < EXTREME_SMALL_THRESHOLD:
+                            if (
+                                long_short_ratio_val == 0
+                                or long_short_ratio_val < EXTREME_SMALL_THRESHOLD
+                            ):
                                 inverse_long_short_ratio = 0.0
                                 if long_short_ratio_val != 0:
                                     logger.warning(

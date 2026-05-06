@@ -7,15 +7,17 @@ test_position_lot - PositionLedger 单元测试（Batch 1）
 - avg_cost：加权平均成本计算
 - 空仓 / 边界条件
 """
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+
 import pytest
 
 from trader.core.domain.models.position import (
-    PositionLot,
-    PositionLedger,
-    PositionStatus,
     CostBasisMethod,
+    PositionLedger,
+    PositionLot,
+    PositionStatus,
 )
 
 
@@ -191,7 +193,9 @@ class TestPositionLedger:
         ledger.add_lot(Decimal("1.0"), Decimal("67000"), filled_at=t + timedelta(minutes=1))
 
         # (2*65000 + 1*67000) / 3 = 65666.67
-        expected = (Decimal("2") * Decimal("65000") + Decimal("1") * Decimal("67000")) / Decimal("3")
+        expected = (Decimal("2") * Decimal("65000") + Decimal("1") * Decimal("67000")) / Decimal(
+            "3"
+        )
         assert ledger.avg_cost == expected
 
     def test_avg_cost_zero_when_empty(self):
@@ -281,8 +285,11 @@ class TestPositionLedgerManager:
         """成交 BUY 返回 POSITION_LOT_OPENED 事件"""
         manager = PositionLedgerManager()
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("1.0"), Decimal("65000"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("65000"),
         )
         assert len(events) == 2  # lot_opened + strategy_position_updated
         assert events[0].event_type.value == "POSITION_LOT_OPENED"
@@ -294,8 +301,11 @@ class TestPositionLedgerManager:
         manager = PositionLedgerManager()
         manager.on_fill("strat_a", "BTCUSDT", "BUY", Decimal("1.0"), Decimal("65000"))
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("0.5"), Decimal("66000"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("0.5"),
+            Decimal("66000"),
         )
         # 1 × REDUCED + 1 × STRATEGY_POSITION_UPDATED
         assert len(events) == 2
@@ -307,8 +317,11 @@ class TestPositionLedgerManager:
         manager = PositionLedgerManager()
         manager.on_fill("strat_a", "BTCUSDT", "BUY", Decimal("1.0"), Decimal("65000"))
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "SELL",
-            Decimal("1.0"), Decimal("67000"),
+            "strat_a",
+            "BTCUSDT",
+            "SELL",
+            Decimal("1.0"),
+            Decimal("67000"),
         )
         assert events[0].event_type.value == "POSITION_LOT_CLOSED"
         assert events[0].data["total_realized_pnl"] == Decimal("2000")
@@ -317,8 +330,11 @@ class TestPositionLedgerManager:
         """每次成交都更新策略持仓汇总事件"""
         manager = PositionLedgerManager()
         events = manager.on_fill(
-            "strat_a", "BTCUSDT", "BUY",
-            Decimal("1.0"), Decimal("65000"),
+            "strat_a",
+            "BTCUSDT",
+            "BUY",
+            Decimal("1.0"),
+            Decimal("65000"),
         )
         strat_evt = events[1]
         assert strat_evt.event_type.value == "STRATEGY_POSITION_UPDATED"
@@ -374,9 +390,7 @@ class TestPositionLedgerManager:
         """计算名义敞口"""
         manager = PositionLedgerManager()
         manager.on_fill("strat_a", "BTCUSDT", "BUY", Decimal("2.0"), Decimal("65000"))
-        exposure = manager.get_total_exposure(
-            "strat_a", "BTCUSDT", Decimal("66000")
-        )
+        exposure = manager.get_total_exposure("strat_a", "BTCUSDT", Decimal("66000"))
         assert exposure == Decimal("132000")
 
     def test_list_active_only(self):
@@ -390,4 +404,3 @@ class TestPositionLedgerManager:
         symbols = {l.symbol for l in active}
         assert "ETHUSDT" in symbols
         assert "BTCUSDT" not in symbols
-

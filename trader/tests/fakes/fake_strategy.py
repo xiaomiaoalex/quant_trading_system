@@ -4,9 +4,9 @@ Fake Strategy Plugin - 用于测试
 
 提供一个可配置的 Mock 策略插件，用于 StrategyRunner 的单元测试。
 """
+
 from typing import Any, Dict, Optional
 
-from trader.core.domain.models.signal import Signal, SignalType
 from trader.core.application.strategy_protocol import (
     MarketData,
     RiskLevel,
@@ -14,6 +14,7 @@ from trader.core.application.strategy_protocol import (
     StrategyResourceLimits,
     ValidationResult,
 )
+from trader.core.domain.models.signal import Signal, SignalType
 
 # 全局配置，测试时可以修改
 _config = {

@@ -22,27 +22,26 @@ Position Projector - 持仓投影
 - symbol 索引（用于按标的查询）
 - updated_at 索引（用于时间排序）
 """
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from trader.adapters.persistence.postgres.projectors.base import (
-    Projectable,
-    ProjectorSnapshot,
-)
+from trader.adapters.persistence.postgres.projectors.base import Projectable, ProjectorSnapshot
 from trader.core.domain.models.events import EventType
 
-
 # ==================== 数据类型 ====================
+
 
 @dataclass
 class PositionProjection:
     """
     持仓投影数据类
-    
+
     用于类型化的投影结果访问。
     """
+
     position_id: str
     symbol: str
     quantity: Decimal
@@ -58,7 +57,7 @@ class PositionProjection:
     updated_at: datetime
     version: int
     last_event_seq: int
-    
+
     @classmethod
     def from_state(cls, position_id: str, state: Dict[str, Any]) -> "PositionProjection":
         """从状态字典创建 PositionProjection"""
@@ -79,7 +78,7 @@ class PositionProjection:
             version=state.get("_version", 1),
             last_event_seq=state.get("_last_event_seq", 0),
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -95,7 +94,11 @@ class PositionProjection:
             "is_long": self.is_long,
             "is_empty": self.is_empty,
             "opened_at": self.opened_at.isoformat() if self.opened_at else None,
-            "updated_at": self.updated_at.isoformat() if isinstance(self.updated_at, datetime) else self.updated_at,
+            "updated_at": (
+                self.updated_at.isoformat()
+                if isinstance(self.updated_at, datetime)
+                else self.updated_at
+            ),
             "version": self.version,
             "last_event_seq": self.last_event_seq,
         }
@@ -103,13 +106,14 @@ class PositionProjection:
 
 # ==================== PositionProjector ====================
 
+
 class PositionProjector(Projectable):
     """
     持仓投影
-    
+
     将持仓事件投影为可查询的读模型。
     """
-    
+
     # 该投影处理的事件类型
     EVENT_TYPES = {
         EventType.POSITION_OPENED.value,
@@ -118,7 +122,7 @@ class PositionProjector(Projectable):
         EventType.POSITION_CLOSED.value,
         EventType.POSITION_UPDATED.value,
     }
-    
+
     def __init__(self, pool: "asyncpg.Pool"):
         super().__init__(
             pool=pool,
@@ -126,16 +130,16 @@ class PositionProjector(Projectable):
             snapshot_table_name="positions_snapshots",
             event_types=[et.value for et in self.EVENT_TYPES],
         )
-    
+
     def get_projection_id_field(self) -> str:
         """主键字段名"""
         return "aggregate_id"
-    
+
     def extract_aggregate_id(self, event: "StreamEvent") -> str:
         """从事件中提取持仓 ID"""
         # 持仓事件使用 aggregate_id 作为 position_id
         return event.aggregate_id
-    
+
     def _init_position_state(self) -> Dict[str, Any]:
         return {
             "position_id": "",
@@ -153,7 +157,7 @@ class PositionProjector(Projectable):
             "opened_at": None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-    
+
     def _apply_position_opened(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         state["position_id"] = data.get("position_id", "")
         state["symbol"] = data.get("symbol", "")
@@ -166,24 +170,26 @@ class PositionProjector(Projectable):
         state["opened_at"] = data.get("opened_at") or datetime.now(timezone.utc).isoformat()
         state["is_long"] = Decimal(state["quantity"]) > 0
         state["is_empty"] = Decimal(state["quantity"]) == 0
-        
+
         # 计算市值和成本
         qty = Decimal(state["quantity"])
         cur = Decimal(state["current_price"])
         avg = Decimal(state["avg_price"])
         state["market_value"] = str(qty * cur)
         state["cost_basis"] = str(qty * avg)
-        
+
         return state
-    
-    def _apply_position_increased(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _apply_position_increased(
+        self, state: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """应用加仓事件"""
         add_qty = Decimal(str(data.get("quantity", "0")))
         add_price = Decimal(str(data.get("avg_price", "0")))
-        
+
         current_qty = Decimal(state["quantity"])
         current_avg = Decimal(state["avg_price"])
-        
+
         # 计算新的加权平均价
         new_qty = current_qty + add_qty
         if new_qty > 0:
@@ -191,71 +197,73 @@ class PositionProjector(Projectable):
             new_avg = total_cost / new_qty
         else:
             new_avg = Decimal("0")
-        
+
         state["quantity"] = str(new_qty)
         state["avg_price"] = str(new_avg)
-        
+
         # 更新市值和成本
         cur = Decimal(state["current_price"])
         state["market_value"] = str(Decimal(state["quantity"]) * cur)
         state["cost_basis"] = str(Decimal(state["quantity"]) * Decimal(state["avg_price"]))
-        
+
         state["is_long"] = Decimal(state["quantity"]) > 0
         state["is_empty"] = Decimal(state["quantity"]) == 0
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         return state
-    
-    def _apply_position_decreased(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _apply_position_decreased(
+        self, state: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """应用减仓事件"""
         reduce_qty = Decimal(str(data.get("quantity", "0")))
         reduce_price = Decimal(str(data.get("price", "0")))
-        
+
         current_qty = Decimal(state["quantity"])
         current_avg = Decimal(state["avg_price"])
-        
+
         # 限制减仓数量
         actual_reduce = min(reduce_qty, current_qty)
-        
+
         # 计算实现的盈亏
         cost = actual_reduce * current_avg
         proceeds = actual_reduce * reduce_price
         realized = proceeds - cost
-        
+
         # 更新已实现盈亏
         current_realized = Decimal(state["realized_pnl"])
         state["realized_pnl"] = str(current_realized + realized)
-        
+
         # 更新数量
         state["quantity"] = str(current_qty - actual_reduce)
-        
+
         # 更新市值和成本
         cur = Decimal(state["current_price"])
         state["market_value"] = str(Decimal(state["quantity"]) * cur)
         state["cost_basis"] = str(Decimal(state["quantity"]) * Decimal(state["avg_price"]))
-        
+
         state["is_long"] = Decimal(state["quantity"]) > 0
         state["is_empty"] = Decimal(state["quantity"]) == 0
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         return state
-    
+
     def _apply_position_closed(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         """应用平仓事件"""
         close_price = Decimal(str(data.get("price", state["current_price"])))
-        
+
         current_qty = Decimal(state["quantity"])
         current_avg = Decimal(state["avg_price"])
-        
+
         # 计算实现的盈亏
         cost = current_qty * current_avg
         proceeds = current_qty * close_price
         realized = proceeds - cost
-        
+
         # 更新已实现盈亏
         current_realized = Decimal(state["realized_pnl"])
         state["realized_pnl"] = str(current_realized + realized)
-        
+
         # 清空持仓
         state["quantity"] = "0"
         state["avg_price"] = "0"
@@ -266,10 +274,12 @@ class PositionProjector(Projectable):
         state["is_long"] = False
         state["is_empty"] = True
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         return state
-    
-    def _apply_position_updated(self, state: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _apply_position_updated(
+        self, state: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """应用持仓更新事件"""
         if "quantity" in data:
             state["quantity"] = str(data["quantity"])
@@ -283,7 +293,7 @@ class PositionProjector(Projectable):
             state["unrealized_pnl"] = str(data["unrealized_pnl"])
         if "opened_at" in data:
             state["opened_at"] = data["opened_at"]
-        
+
         # 重新计算衍生字段
         qty = Decimal(state["quantity"])
         cur = Decimal(state["current_price"])
@@ -293,9 +303,9 @@ class PositionProjector(Projectable):
         state["is_long"] = qty > 0
         state["is_empty"] = qty == 0
         state["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         return state
-    
+
     def compute_projection(
         self,
         aggregate_id: str,
@@ -303,22 +313,22 @@ class PositionProjector(Projectable):
     ) -> Dict[str, Any]:
         """
         计算持仓投影
-        
+
         通过重放事件流来计算当前持仓状态。
-        
+
         Args:
             aggregate_id: 持仓 ID
             events: 按时间顺序排列的事件列表
-            
+
         Returns:
             持仓投影状态
         """
         state = self._init_position_state()
         state["position_id"] = aggregate_id
-        
+
         for event in events:
             data = event.data if isinstance(event.data, dict) else {}
-            
+
             if event.event_type == EventType.POSITION_OPENED.value:
                 state = self._apply_position_opened(state, data)
             elif event.event_type == EventType.POSITION_INCREASED.value:
@@ -329,29 +339,29 @@ class PositionProjector(Projectable):
                 state = self._apply_position_closed(state, data)
             elif event.event_type == EventType.POSITION_UPDATED.value:
                 state = self._apply_position_updated(state, data)
-        
+
         return state
-    
+
     async def get_position(
         self,
         position_id: str,
     ) -> Optional[PositionProjection]:
         """
         获取持仓投影
-        
+
         Args:
             position_id: 持仓 ID
-            
+
         Returns:
             PositionProjection 或 None
         """
         projection = await self.get_projection(position_id)
         if projection is None:
             return None
-        
+
         state = projection["state"]
         return PositionProjection.from_state(position_id, state)
-    
+
     async def list_positions(
         self,
         symbol: Optional[str] = None,
@@ -361,11 +371,11 @@ class PositionProjector(Projectable):
         offset: int = 0,
     ) -> List[PositionProjection]:
         projections = await self.list_projections(limit=limit * 2, offset=offset)
-        
+
         results = []
         for proj in projections:
             pos = PositionProjection.from_state(proj["aggregate_id"], proj["state"])
-            
+
             if symbol and pos.symbol != symbol:
                 continue
             if strategy_id:
@@ -374,29 +384,29 @@ class PositionProjector(Projectable):
                     continue
             if is_long is not None and pos.is_long != is_long:
                 continue
-            
+
             results.append(pos)
-            
+
             if len(results) >= limit:
                 break
-        
+
         return results
-    
+
     async def get_positions_summary(self) -> Dict[str, Any]:
         """
         获取持仓汇总
-        
+
         Returns:
             持仓汇总信息
         """
         projections = await self.list_projections(limit=10000)
-        
+
         total_realized_pnl = Decimal("0")
         total_unrealized_pnl = Decimal("0")
         total_market_value = Decimal("0")
         position_count = 0
         non_empty_positions = []
-        
+
         for proj in projections:
             pos = PositionProjection.from_state(proj["aggregate_id"], proj["state"])
             if not pos.is_empty:
@@ -405,7 +415,7 @@ class PositionProjector(Projectable):
                 total_realized_pnl += pos.realized_pnl
                 total_unrealized_pnl += pos.unrealized_pnl
                 total_market_value += pos.market_value
-        
+
         return {
             "total_positions": position_count,
             "total_realized_pnl": str(total_realized_pnl),

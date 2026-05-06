@@ -8,14 +8,16 @@ periodic reconciliation loop.
 These tests verify the complete flow from drift detection
 through event publication to storage.
 """
+
 import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
+
 import pytest
 
+from trader.core.application.reconciler import DriftType
 from trader.services.reconciler_service import ReconcilerService
 from trader.storage.in_memory import ControlPlaneInMemoryStorage, get_storage, reset_storage
-from trader.core.application.reconciler import DriftType
 
 
 def _safe_stop_service(service) -> None:
@@ -81,13 +83,15 @@ class TestReconcilerServiceStorageIntegration:
         """Test that drift events are published to storage when reconcile detects drifts."""
         # Setup: Local has order that doesn't exist on exchange (GHOST)
         old_time = datetime.now(timezone.utc) - timedelta(seconds=120)
-        local_orders = self._make_local_orders([
-            {
-                "cl_ord_id": "ghost-order-1",
-                "status": "SUBMITTED",
-                "created_at": old_time,
-            }
-        ])
+        local_orders = self._make_local_orders(
+            [
+                {
+                    "cl_ord_id": "ghost-order-1",
+                    "status": "SUBMITTED",
+                    "created_at": old_time,
+                }
+            ]
+        )
         exchange_orders = self._make_exchange_orders([])
 
         async def local_getter():
@@ -115,12 +119,14 @@ class TestReconcilerServiceStorageIntegration:
     async def test_trigger_reconcile_publishes_phantom_drift_event(self):
         """Test that PHANTOM drifts (exchange-only orders) trigger event publication."""
         # Setup: Exchange has order that doesn't exist locally
-        exchange_orders = self._make_exchange_orders([
-            {
-                "cl_ord_id": "phantom-order-1",
-                "status": "OPEN",
-            }
-        ])
+        exchange_orders = self._make_exchange_orders(
+            [
+                {
+                    "cl_ord_id": "phantom-order-1",
+                    "status": "OPEN",
+                }
+            ]
+        )
         local_orders = self._make_local_orders([])
 
         async def local_getter():
@@ -145,21 +151,25 @@ class TestReconcilerServiceStorageIntegration:
     async def test_trigger_reconcile_publishes_diverged_drift_event(self):
         """Test that DIVERGED drifts (status mismatch) trigger event publication."""
         old_time = datetime.now(timezone.utc) - timedelta(seconds=120)
-        local_orders = self._make_local_orders([
-            {
-                "cl_ord_id": "diverged-order-1",
-                "status": "SUBMITTED",
-                "filled_quantity": "0.5",
-                "created_at": old_time,
-            }
-        ])
-        exchange_orders = self._make_exchange_orders([
-            {
-                "cl_ord_id": "diverged-order-1",
-                "status": "FILLED",
-                "filled_quantity": "1.0",
-            }
-        ])
+        local_orders = self._make_local_orders(
+            [
+                {
+                    "cl_ord_id": "diverged-order-1",
+                    "status": "SUBMITTED",
+                    "filled_quantity": "0.5",
+                    "created_at": old_time,
+                }
+            ]
+        )
+        exchange_orders = self._make_exchange_orders(
+            [
+                {
+                    "cl_ord_id": "diverged-order-1",
+                    "status": "FILLED",
+                    "filled_quantity": "1.0",
+                }
+            ]
+        )
 
         async def local_getter():
             return local_orders
@@ -182,21 +192,25 @@ class TestReconcilerServiceStorageIntegration:
     @pytest.mark.asyncio
     async def test_no_drift_no_event_published(self):
         """Test that when no drifts are detected, no events are published."""
-        local_orders = self._make_local_orders([
-            {
-                "cl_ord_id": "matched-order-1",
-                "status": "FILLED",
-                "filled_quantity": "1.0",
-                "created_at": datetime.now(timezone.utc),
-            }
-        ])
-        exchange_orders = self._make_exchange_orders([
-            {
-                "cl_ord_id": "matched-order-1",
-                "status": "FILLED",
-                "filled_quantity": "1.0",
-            }
-        ])
+        local_orders = self._make_local_orders(
+            [
+                {
+                    "cl_ord_id": "matched-order-1",
+                    "status": "FILLED",
+                    "filled_quantity": "1.0",
+                    "created_at": datetime.now(timezone.utc),
+                }
+            ]
+        )
+        exchange_orders = self._make_exchange_orders(
+            [
+                {
+                    "cl_ord_id": "matched-order-1",
+                    "status": "FILLED",
+                    "filled_quantity": "1.0",
+                }
+            ]
+        )
 
         async def local_getter():
             return local_orders
@@ -221,13 +235,15 @@ class TestReconcilerServiceStorageIntegration:
         """Test that orders within grace period do NOT trigger immediate event publication."""
         # Setup: Recent order (within 60s grace period)
         recent_time = datetime.now(timezone.utc) - timedelta(seconds=30)
-        local_orders = self._make_local_orders([
-            {
-                "cl_ord_id": "recent-ghost-order",
-                "status": "SUBMITTED",
-                "created_at": recent_time,
-            }
-        ])
+        local_orders = self._make_local_orders(
+            [
+                {
+                    "cl_ord_id": "recent-ghost-order",
+                    "status": "SUBMITTED",
+                    "created_at": recent_time,
+                }
+            ]
+        )
         exchange_orders = self._make_exchange_orders([])
 
         async def local_getter():
@@ -259,9 +275,9 @@ class TestReconcilerServiceStorageIntegration:
         self.service.register_drift_handler(test_handler)
 
         old_time = datetime.now(timezone.utc) - timedelta(seconds=120)
-        local_orders = self._make_local_orders([
-            {"cl_ord_id": "handler-test-order", "status": "SUBMITTED", "created_at": old_time}
-        ])
+        local_orders = self._make_local_orders(
+            [{"cl_ord_id": "handler-test-order", "status": "SUBMITTED", "created_at": old_time}]
+        )
 
         async def local_getter():
             return local_orders
@@ -279,14 +295,18 @@ class TestReconcilerServiceStorageIntegration:
     async def test_multiple_drifts_publish_multiple_events(self):
         """Test that multiple drifts result in multiple events published."""
         old_time = datetime.now(timezone.utc) - timedelta(seconds=120)
-        local_orders = self._make_local_orders([
-            {"cl_ord_id": "ghost-1", "status": "SUBMITTED", "created_at": old_time},
-            {"cl_ord_id": "ghost-2", "status": "SUBMITTED", "created_at": old_time},
-        ])
+        local_orders = self._make_local_orders(
+            [
+                {"cl_ord_id": "ghost-1", "status": "SUBMITTED", "created_at": old_time},
+                {"cl_ord_id": "ghost-2", "status": "SUBMITTED", "created_at": old_time},
+            ]
+        )
 
-        exchange_orders = self._make_exchange_orders([
-            {"cl_ord_id": "phantom-1", "status": "OPEN"},
-        ])
+        exchange_orders = self._make_exchange_orders(
+            [
+                {"cl_ord_id": "phantom-1", "status": "OPEN"},
+            ]
+        )
 
         async def local_getter():
             return local_orders
@@ -313,9 +333,9 @@ class TestReconcilerServiceStorageIntegration:
     async def test_set_last_report_works(self):
         """Test that set_last_report stores the report."""
         old_time = datetime.now(timezone.utc) - timedelta(seconds=120)
-        local_orders = self._make_local_orders([
-            {"cl_ord_id": "test-order", "status": "SUBMITTED", "created_at": old_time}
-        ])
+        local_orders = self._make_local_orders(
+            [{"cl_ord_id": "test-order", "status": "SUBMITTED", "created_at": old_time}]
+        )
 
         async def local_getter():
             return local_orders
@@ -334,9 +354,11 @@ class TestReconcilerServiceStorageIntegration:
     async def test_phantom_always_handled_immediately(self):
         """Test that PHANTOM orders are always handled immediately regardless of age."""
         # PHANTOM orders have no created_at, so grace period doesn't apply
-        exchange_orders = self._make_exchange_orders([
-            {"cl_ord_id": "phantom-no-grace", "status": "OPEN"},
-        ])
+        exchange_orders = self._make_exchange_orders(
+            [
+                {"cl_ord_id": "phantom-no-grace", "status": "OPEN"},
+            ]
+        )
 
         async def local_getter():
             return self._make_local_orders([])
@@ -437,6 +459,7 @@ class TestReconcilerServiceEdgeCases:
     @pytest.mark.asyncio
     async def test_handler_exception_does_not_propagate(self):
         """Test that handler exceptions are logged but don't stop processing."""
+
         async def failing_handler(drift):
             raise RuntimeError("Handler failed")
 
@@ -476,6 +499,7 @@ class TestReconcilerServiceEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_orders_lists(self):
         """Test reconciliation with empty order lists."""
+
         async def local_getter():
             return []
 

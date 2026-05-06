@@ -10,22 +10,22 @@ REST 对齐协调器，负责与 Binance REST API 同步账户数据。
 - 429/418 错误处理
 - 输出 RestAlignmentSnapshot
 """
+
 import asyncio
-import logging
-import time
 import hashlib
 import hmac
+import logging
+import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 if TYPE_CHECKING:
     import aiohttp
 
-from trader.adapters.binance.rate_limit import RestRateBudget, Priority, RateBudgetConfig
-from trader.adapters.binance.backoff import BackoffController, BackoffConfig
+from trader.adapters.binance.backoff import BackoffConfig, BackoffController
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
-
+from trader.adapters.binance.rate_limit import Priority, RateBudgetConfig, RestRateBudget
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RestAlignmentSnapshot:
     """REST 对齐快照"""
+
     open_orders: List[Dict[str, Any]]
     account: Dict[str, Any]
     trades: Optional[List[Dict[str, Any]]]
@@ -44,6 +45,7 @@ class RestAlignmentSnapshot:
 @dataclass
 class AlignmentConfig:
     """对齐配置"""
+
     base_url: str = "https://testnet.binance.vision/api"
     recv_window_ms: int = 10000
     proxy_url: Optional[str] = None
@@ -57,6 +59,7 @@ class AlignmentConfig:
 @dataclass
 class AlignmentMetrics:
     """对齐指标"""
+
     total_alignments: int = 0
     successful_alignments: int = 0
     failed_alignments: int = 0
@@ -110,6 +113,7 @@ class RESTAlignmentCoordinator:
             return
 
         import aiohttp
+
         self._running = True
         self._session = aiohttp.ClientSession(trust_env=True)
         await self._sync_server_time_offset()
@@ -124,6 +128,7 @@ class RESTAlignmentCoordinator:
         if self._session is None:
             return
         import aiohttp
+
         url = f"{self._config.base_url}/v3/time"
         proxy = self._resolve_proxy()
         try:
@@ -162,6 +167,7 @@ class RESTAlignmentCoordinator:
             Exception: 如果请求失败
         """
         import aiohttp
+
         if self._session is None:
             raise RuntimeError("RESTAlignmentCoordinator not started")
         url = f"{self._config.base_url}/v3/time"
@@ -189,7 +195,9 @@ class RESTAlignmentCoordinator:
 
         logger.info("[RESTAlignment] Stopped")
 
-    async def force_alignment(self, reason: str, priority: Priority = Priority.P0) -> Optional[RestAlignmentSnapshot]:
+    async def force_alignment(
+        self, reason: str, priority: Priority = Priority.P0
+    ) -> Optional[RestAlignmentSnapshot]:
         """
         强制对齐
 
@@ -203,7 +211,9 @@ class RESTAlignmentCoordinator:
         async with self._alignment_lock:
             now = time.time()
             if now - self._last_alignment_ts < self._config.min_alignment_interval:
-                logger.info(f"[RESTAlignment] Skipping alignment: too soon since last ({now - self._last_alignment_ts:.1f}s)")
+                logger.info(
+                    f"[RESTAlignment] Skipping alignment: too soon since last ({now - self._last_alignment_ts:.1f}s)"
+                )
                 return None
 
             self._last_alignment_ts = now
@@ -224,9 +234,7 @@ class RESTAlignmentCoordinator:
             return await self._do_alignment(reason, Priority.P0)
 
     async def _do_alignment(
-        self,
-        reason: str,
-        priority: Priority = Priority.P0
+        self, reason: str, priority: Priority = Priority.P0
     ) -> Optional[RestAlignmentSnapshot]:
         """
         执行对齐
@@ -238,7 +246,9 @@ class RESTAlignmentCoordinator:
         Returns:
             RestAlignmentSnapshot
         """
-        logger.info(f"[RESTAlignment] Starting alignment: reason={reason}, priority={priority.name}")
+        logger.info(
+            f"[RESTAlignment] Starting alignment: reason={reason}, priority={priority.name}"
+        )
 
         open_orders = None
         account = None
@@ -266,7 +276,7 @@ class RESTAlignmentCoordinator:
                 trades=trades,
                 exchange_ts_ms=exchange_ts,
                 local_ts_ms=int(time.time() * 1000),
-                alignment_reason=reason
+                alignment_reason=reason,
             )
 
             self._metrics.total_alignments += 1
@@ -311,10 +321,7 @@ class RESTAlignmentCoordinator:
         """获取成交记录"""
         endpoint = "/v3/myTrades"
         return await self._signed_request(
-            "GET",
-            endpoint,
-            params={"limit": limit},
-            priority=priority
+            "GET", endpoint, params={"limit": limit}, priority=priority
         )
 
     async def _signed_request(
@@ -322,12 +329,13 @@ class RESTAlignmentCoordinator:
         method: str,
         endpoint: str,
         params: Optional[Dict] = None,
-        priority: Priority = Priority.P2
+        priority: Priority = Priority.P2,
     ) -> Any:
         """
         发送签名请求
         """
         import aiohttp
+
         params = params or {}
         headers = {"X-MBX-APIKEY": self._api_key}
 
@@ -341,9 +349,7 @@ class RESTAlignmentCoordinator:
 
             query_string = urlencode(sorted(req_params.items()))
             signature = hmac.new(
-                self._secret_key.encode("utf-8"),
-                query_string.encode("utf-8"),
-                hashlib.sha256
+                self._secret_key.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256
             ).hexdigest()
             url = f"{self._config.base_url}{endpoint}?{query_string}&signature={signature}"
 
@@ -399,9 +405,13 @@ class RESTAlignmentCoordinator:
                                 current_recv_window_ms,
                             )
                             await self._sync_server_time_offset()
-                            current_recv_window_ms = min(60000, max(current_recv_window_ms * 2, 10000))
+                            current_recv_window_ms = min(
+                                60000, max(current_recv_window_ms * 2, 10000)
+                            )
                             continue
-                        logger.error(f"[RESTAlignment] Request failed: {resp.status} - {error_text}")
+                        logger.error(
+                            f"[RESTAlignment] Request failed: {resp.status} - {error_text}"
+                        )
                         raise Exception(f"HTTP {resp.status}: {error_text}")
 
             except asyncio.TimeoutError:

@@ -14,17 +14,17 @@ HITL Governance - AI治理接口 (Human-in-the-Loop)
 3. 状态转换必须是原子性的
 4. Core Plane禁止IO，纯计算逻辑和状态管理
 """
+
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Dict, List, Optional, Any
-import uuid
+from typing import Any, Dict, List, Optional
 
 from trader.core.application.risk_engine import RiskCheckResult, RiskLevel
 from trader.core.domain.models.signal import Signal
-
 
 # ==================== 常量定义 ====================
 
@@ -33,8 +33,10 @@ HITL_TIMEOUT_SECONDS = 300  # 5分钟默认超时
 
 # ==================== HITL决策枚举 ====================
 
+
 class HITLDecision(Enum):
     """HITL决策类型"""
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -42,6 +44,7 @@ class HITLDecision(Enum):
 
 
 # ==================== 数据类 ====================
+
 
 @dataclass
 class AISuggestion:
@@ -51,6 +54,7 @@ class AISuggestion:
     基于风控检查结果生成的交易建议。
     包含建议ID、信号、风控结果、推荐操作、置信度等信息。
     """
+
     suggestion_id: str
     signal: Signal
     risk_check_result: RiskCheckResult
@@ -63,9 +67,9 @@ class AISuggestion:
 
     def __post_init__(self):
         if not self.suggestion_id:
-            object.__setattr__(self, 'suggestion_id', str(uuid.uuid4()))
+            object.__setattr__(self, "suggestion_id", str(uuid.uuid4()))
         if isinstance(self.created_at, datetime) and self.created_at.tzinfo is None:
-            object.__setattr__(self, 'created_at', self.created_at.replace(tzinfo=timezone.utc))
+            object.__setattr__(self, "created_at", self.created_at.replace(tzinfo=timezone.utc))
 
 
 @dataclass
@@ -75,6 +79,7 @@ class HITLApprovalRecord:
 
     记录每次审批决策的完整信息，用于审计追溯。
     """
+
     record_id: str
     suggestion_id: str
     decision: HITLDecision
@@ -88,11 +93,11 @@ class HITLApprovalRecord:
 
     def __post_init__(self):
         if not self.record_id:
-            object.__setattr__(self, 'record_id', str(uuid.uuid4()))
+            object.__setattr__(self, "record_id", str(uuid.uuid4()))
         if isinstance(self.created_at, datetime) and self.created_at.tzinfo is None:
-            object.__setattr__(self, 'created_at', self.created_at.replace(tzinfo=timezone.utc))
+            object.__setattr__(self, "created_at", self.created_at.replace(tzinfo=timezone.utc))
         if isinstance(self.decided_at, datetime) and self.decided_at.tzinfo is None:
-            object.__setattr__(self, 'decided_at', self.decided_at.replace(tzinfo=timezone.utc))
+            object.__setattr__(self, "decided_at", self.decided_at.replace(tzinfo=timezone.utc))
 
     def is_approved(self) -> bool:
         """是否已批准"""
@@ -119,6 +124,7 @@ class HITLApprovalRecord:
 
 
 # ==================== 端口协议 ====================
+
 
 class HITLProviderPort(ABC):
     """
@@ -160,27 +166,33 @@ class HITLProviderPort(ABC):
 
 # ==================== 异常定义 ====================
 
+
 class HITLGovernanceError(Exception):
     """HITL治理异常基类"""
+
     pass
 
 
 class SuggestionNotFoundError(HITLGovernanceError):
     """建议不存在"""
+
     pass
 
 
 class InvalidDecisionError(HITLGovernanceError):
     """无效决策"""
+
     pass
 
 
 class SuggestionExpiredError(HITLGovernanceError):
     """建议已超时"""
+
     pass
 
 
 # ==================== 治理器类 ====================
+
 
 class HITLGovernance:
     """
@@ -297,9 +309,7 @@ class HITLGovernance:
         """获取风险等级的ordinal（用于比较）"""
         return list(RiskLevel).index(risk_level)
 
-    def _requires_human_review(
-        self, signal: Signal, risk_result: RiskCheckResult
-    ) -> bool:
+    def _requires_human_review(self, signal: Signal, risk_result: RiskCheckResult) -> bool:
         """
         判断是否需要人工审核
 
@@ -309,7 +319,9 @@ class HITLGovernance:
         3. 风控未通过但AI建议执行
         """
         # 风险等级触发（使用ordinal进行比较）
-        if self._get_risk_level_ordinal(risk_result.risk_level) >= self._get_risk_level_ordinal(self.HUMAN_REVIEW_RISK_LEVEL):
+        if self._get_risk_level_ordinal(risk_result.risk_level) >= self._get_risk_level_ordinal(
+            self.HUMAN_REVIEW_RISK_LEVEL
+        ):
             return True
 
         # 大额交易触发
@@ -336,7 +348,9 @@ class HITLGovernance:
         if risk_result.passed:
             reasons.append(f"风控通过（{risk_result.risk_level.value}级）")
         else:
-            reasons.append(f"风控未通过：{risk_result.rejection_reason.value if risk_result.rejection_reason else '未知原因'}")
+            reasons.append(
+                f"风控未通过：{risk_result.rejection_reason.value if risk_result.rejection_reason else '未知原因'}"
+            )
 
         # 风险等级
         if risk_result.risk_level == RiskLevel.CRITICAL:
@@ -399,19 +413,19 @@ class HITLGovernance:
     async def persist_approval_record_async(self, record_id: str) -> None:
         """
         异步保存审批记录到持久化层（由调用方在合适的async上下文中调用）
-        
+
         注意：Core Plane不直接处理IO，此方法供服务层调用以持久化审批记录。
-        
+
         Args:
             record_id: 审批记录ID
         """
         if self._provider is None:
             return
-        
+
         record = self._approval_records.get(record_id)
         if record is None:
             return
-        
+
         await self._provider.save_approval_record(record)
 
     def get_pending_suggestions(self) -> List[AISuggestion]:
@@ -596,10 +610,7 @@ class HITLGovernance:
 
     def get_record_by_suggestion(self, suggestion_id: str) -> List[HITLApprovalRecord]:
         """获取某个建议的所有审批记录"""
-        return [
-            r for r in self._approval_records.values()
-            if r.suggestion_id == suggestion_id
-        ]
+        return [r for r in self._approval_records.values() if r.suggestion_id == suggestion_id]
 
     # ==================== 审计日志 ====================
 
@@ -626,7 +637,7 @@ class HITLGovernance:
         )
 
         # 应用分页
-        return sorted_records[offset:offset + limit]
+        return sorted_records[offset : offset + limit]
 
     def get_approval_stats(self) -> Dict[str, Any]:
         """
@@ -662,7 +673,9 @@ class HITLGovernance:
 
     def needs_human_review_for_risk_level(self, risk_level: RiskLevel) -> bool:
         """判断风险等级是否需要人工审核"""
-        return self._get_risk_level_ordinal(risk_level) >= self._get_risk_level_ordinal(self.HUMAN_REVIEW_RISK_LEVEL)
+        return self._get_risk_level_ordinal(risk_level) >= self._get_risk_level_ordinal(
+            self.HUMAN_REVIEW_RISK_LEVEL
+        )
 
     def cleanup_expired_suggestions(self, current_time: datetime) -> List[str]:
         """

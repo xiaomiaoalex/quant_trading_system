@@ -3,19 +3,24 @@ Binance Connector Unit Tests
 ============================
 测试统一连接协调器的功能。
 """
-import pytest
+
 import asyncio
 import time
 from unittest.mock import AsyncMock
 
+import pytest
+
 from trader.adapters.binance.connector import (
-    BinanceConnector,
-    BinanceConnectorConfig,
     AdapterHealth,
     AdapterHealthReport,
+    BinanceConnector,
+    BinanceConnectorConfig,
 )
-from trader.adapters.binance.private_stream import ListenKeyEndpointGoneError
-from trader.adapters.binance.private_stream import RawOrderUpdate, RawFillUpdate
+from trader.adapters.binance.private_stream import (
+    ListenKeyEndpointGoneError,
+    RawFillUpdate,
+    RawOrderUpdate,
+)
 from trader.adapters.binance.public_stream import MarketEvent
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
 from trader.adapters.binance.stream_base import StreamState
@@ -67,7 +72,7 @@ class TestAdapterHealthReport:
             backoff_state={},
             overall_health=AdapterHealth.HEALTHY,
             last_update_ts=1609459200.0,
-            metrics={}
+            metrics={},
         )
 
         assert report.public_stream_state == StreamState.CONNECTED
@@ -79,20 +84,14 @@ class TestBinanceConnector:
 
     def test_initialization(self):
         """测试初始化"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         assert connector._api_key == "test_api_key"
         assert connector._secret_key == "test_secret_key"
 
     def test_order_handler_registration(self):
         """测试订单处理器注册"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(update: RawOrderUpdate):
             pass
@@ -103,10 +102,7 @@ class TestBinanceConnector:
 
     def test_fill_handler_registration(self):
         """测试成交处理器注册"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(update: RawFillUpdate):
             pass
@@ -117,10 +113,7 @@ class TestBinanceConnector:
 
     def test_market_handler_registration(self):
         """测试市场事件处理器注册"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(event: MarketEvent):
             pass
@@ -131,10 +124,7 @@ class TestBinanceConnector:
 
     def test_snapshot_handler_registration(self):
         """测试快照处理器注册"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(snapshot: RestAlignmentSnapshot):
             pass
@@ -145,10 +135,7 @@ class TestBinanceConnector:
 
     def test_health_handler_registration(self):
         """测试健康状态处理器注册"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         def handler(report: AdapterHealthReport):
             pass
@@ -161,19 +148,14 @@ class TestBinanceConnector:
     async def test_start_stop(self):
         """测试启动停止（不实际连接）"""
         connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key",
-            streams=["btcusdt@trade"]
+            api_key="test_api_key", secret_key="test_secret_key", streams=["btcusdt@trade"]
         )
 
         assert connector._running is False
 
     def test_get_health(self):
         """测试获取健康状态"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         health = connector.get_health()
 
@@ -182,28 +164,19 @@ class TestBinanceConnector:
 
     def test_public_stream_property(self):
         """测试获取公有流管理器"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         assert connector.public_stream is not None
 
     def test_private_stream_property(self):
         """测试获取私有流管理器"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         assert connector.private_stream is not None
 
     def test_rest_coordinator_property(self):
         """测试获取 REST 协调器"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         assert connector.rest_coordinator is not None
 
@@ -213,10 +186,7 @@ class TestConnectorIntegration:
 
     def test_handler_chain(self):
         """测试处理器链"""
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         order_updates = []
         fill_updates = []
@@ -237,7 +207,7 @@ class TestConnectorIntegration:
             filled_qty=1.0,
             avg_price=50000.0,
             exchange_ts_ms=1609459200000,
-            local_receive_ts_ms=1609459200000
+            local_receive_ts_ms=1609459200000,
         )
 
         connector._on_order_update(test_order)
@@ -250,10 +220,7 @@ class TestBinanceConnectorStartupDegrade:
 
     @pytest.mark.asyncio
     async def test_start_degrades_when_listen_key_endpoint_gone(self):
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
 
         connector._rest_coordinator.start = AsyncMock(return_value=None)
         connector._public_manager.start = AsyncMock(return_value=None)
@@ -270,10 +237,7 @@ class TestBinanceConnectorStartupDegrade:
         await connector.stop()
 
     def test_get_health_degraded_when_private_stream_disabled(self):
-        connector = BinanceConnector(
-            api_key="test_api_key",
-            secret_key="test_secret_key"
-        )
+        connector = BinanceConnector(api_key="test_api_key", secret_key="test_secret_key")
         connector._private_stream_disabled_reason = "listenkey gone"
         connector._public_manager._set_state(StreamState.CONNECTED)
         connector._private_manager._set_state(StreamState.DISCONNECTED)

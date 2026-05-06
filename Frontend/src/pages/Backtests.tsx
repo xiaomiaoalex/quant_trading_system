@@ -4,6 +4,7 @@ import { LoadingState, ErrorState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
 import { strategiesAPI } from '@/api'
 import { formatAPIError } from '@/api/client'
+import { buildDeploymentId, type DeploymentMode } from '@/types/strategies'
 
 const DEFAULT_STRATEGY_CODE = `from __future__ import annotations
 
@@ -110,6 +111,15 @@ export function Backtests() {
     start_ts_ms: Date.now() - 30 * 24 * 60 * 60 * 1000,
     end_ts_ms: Date.now(),
     venue: 'BINANCE',
+    account_id: 'binance_demo',
+    mode: 'paper' as DeploymentMode,
+    deployment_id: '',
+    feature_version: 'dev_smoke',
+    initial_capital: 100000,
+    fee_bps: 10,
+    slippage_bps: 5,
+    benchmark: 'BTCUSDT',
+    data_mode: 'dev_smoke' as const,
     requested_by: 'console_user',
   })
   const [strategyCode, setStrategyCode] = useState(DEFAULT_STRATEGY_CODE)
@@ -124,8 +134,22 @@ export function Backtests() {
   const [isStoppingStrategy, setIsStoppingStrategy] = useState(false)
 
   const runtimeInfo = useMemo(() => {
-    return (loadedStrategies ?? []).find(item => item.strategy_id === labForm.strategy_id) ?? null
-  }, [loadedStrategies, labForm.strategy_id])
+    return (loadedStrategies ?? []).find(item => {
+      if (labForm.deployment_id) return item.deployment_id === labForm.deployment_id
+      return item.strategy_id === labForm.strategy_id
+    }) ?? null
+  }, [loadedStrategies, labForm.deployment_id, labForm.strategy_id])
+
+  const labSymbols = useMemo(
+    () => labForm.symbols.split(',').map(s => s.trim()).filter(Boolean),
+    [labForm.symbols],
+  )
+
+  const resolvedDeploymentId = useMemo(() => {
+    if (labForm.deployment_id.trim()) return labForm.deployment_id.trim()
+    const primarySymbol = labSymbols[0] ?? 'BTCUSDT'
+    return buildDeploymentId(labForm.strategy_id, primarySymbol, labForm.mode, labForm.account_id)
+  }, [labForm.account_id, labForm.deployment_id, labForm.mode, labForm.strategy_id, labSymbols])
 
   const handleDebug = async () => {
     setLabError(null)
@@ -180,10 +204,16 @@ export function Backtests() {
       strategy_id: labForm.strategy_id,
       version: Number(labForm.version),
       strategy_code_version: savedCodeVersion ?? undefined,
-      symbols: labForm.symbols.split(',').map(s => s.trim()).filter(Boolean),
+      symbols: labSymbols,
       start_ts_ms: labForm.start_ts_ms,
       end_ts_ms: labForm.end_ts_ms,
       venue: labForm.venue,
+      feature_version: labForm.feature_version,
+      initial_capital: labForm.initial_capital,
+      fee_bps: labForm.fee_bps,
+      slippage_bps: labForm.slippage_bps,
+      benchmark: labForm.benchmark,
+      data_mode: labForm.data_mode,
       requested_by: labForm.requested_by,
     })
     if (result) {
@@ -199,12 +229,27 @@ export function Backtests() {
     setLabMessage(null)
     setIsLoadingStrategy(true)
     try {
-      await strategiesAPI.loadStrategy(labForm.strategy_id, {
+      const result = await strategiesAPI.loadStrategy(labForm.strategy_id, {
+        deployment_id: resolvedDeploymentId,
         version: `v${labForm.version}`,
         code_version: savedCodeVersion ?? undefined,
+        symbols: labSymbols,
+        account_id: labForm.account_id,
+        venue: labForm.venue,
+        mode: labForm.mode,
+        config: {
+          symbols: labSymbols,
+          feature_version: labForm.feature_version,
+          initial_capital: labForm.initial_capital,
+          fee_bps: labForm.fee_bps,
+          slippage_bps: labForm.slippage_bps,
+          benchmark: labForm.benchmark,
+          data_mode: labForm.data_mode,
+        },
       })
+      setLabForm(current => ({ ...current, deployment_id: result.deployment_id }))
       await refetchLoaded()
-      setLabMessage('Strategy loaded.')
+      setLabMessage(`Strategy loaded as deployment ${result.deployment_id}.`)
     } catch (e) {
       setLabError(formatAPIError(e))
     } finally {
@@ -217,9 +262,9 @@ export function Backtests() {
     setLabMessage(null)
     setIsRunningStrategy(true)
     try {
-      await strategiesAPI.startStrategy(labForm.strategy_id)
+      await strategiesAPI.startStrategy(resolvedDeploymentId)
       await refetchLoaded()
-      setLabMessage('Strategy running.')
+      setLabMessage(`Deployment ${resolvedDeploymentId} running.`)
     } catch (e) {
       setLabError(formatAPIError(e))
     } finally {
@@ -232,9 +277,9 @@ export function Backtests() {
     setLabMessage(null)
     setIsStoppingStrategy(true)
     try {
-      await strategiesAPI.stopStrategy(labForm.strategy_id)
+      await strategiesAPI.stopStrategy(resolvedDeploymentId)
       await refetchLoaded()
-      setLabMessage('Strategy stopped.')
+      setLabMessage(`Deployment ${resolvedDeploymentId} stopped.`)
     } catch (e) {
       setLabError(formatAPIError(e))
     } finally {
@@ -274,6 +319,8 @@ export function Backtests() {
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-semibold text-white">Strategy Lab</h2>
             <div className="text-xs text-gray-400">
+              deployment: <span className="text-gray-200">{runtimeInfo?.deployment_id ?? resolvedDeploymentId}</span>
+              <span className="mx-2 text-gray-600">/</span>
               runtime: <span className="text-gray-200">{runtimeInfo?.status ?? 'NOT_LOADED'}</span>
             </div>
           </div>
@@ -311,6 +358,51 @@ export function Backtests() {
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="BTCUSDT,ETHUSDT"
             />
+            <input
+              type="text"
+              value={labForm.account_id}
+              onChange={(e) => setLabForm({ ...labForm, account_id: e.target.value })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder="account_id"
+            />
+            <input
+              type="text"
+              value={labForm.deployment_id}
+              onChange={(e) => setLabForm({ ...labForm, deployment_id: e.target.value })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder={resolvedDeploymentId}
+            />
+            <select
+              value={labForm.mode}
+              onChange={(e) => setLabForm({ ...labForm, mode: e.target.value as DeploymentMode })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+            >
+              <option value="paper">paper</option>
+              <option value="shadow">shadow</option>
+              <option value="demo">demo</option>
+              <option value="live">live</option>
+            </select>
+            <input
+              type="text"
+              value={labForm.feature_version}
+              onChange={(e) => setLabForm({ ...labForm, feature_version: e.target.value })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder="feature_version"
+            />
+            <input
+              type="number"
+              value={labForm.initial_capital}
+              onChange={(e) => setLabForm({ ...labForm, initial_capital: Number(e.target.value) })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder="initial capital"
+            />
+            <input
+              type="text"
+              value={labForm.benchmark}
+              onChange={(e) => setLabForm({ ...labForm, benchmark: e.target.value })}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder="benchmark"
+            />
           </div>
 
           <textarea
@@ -333,7 +425,7 @@ export function Backtests() {
               disabled={isRegistering}
               className="rounded bg-blue-900/40 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900/60 disabled:opacity-60"
             >
-              {isRegistering ? 'Registering...' : '2) Register Code'}
+              {isRegistering ? 'Saving...' : '2) Save Version'}
             </button>
             <button
               onClick={handleCreateBacktest}
@@ -347,14 +439,14 @@ export function Backtests() {
               disabled={isLoadingStrategy}
               className="rounded bg-emerald-900/40 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-60"
             >
-              {isLoadingStrategy ? 'Loading...' : '4) Load'}
+              {isLoadingStrategy ? 'Loading...' : '4) Promote / Load Deployment'}
             </button>
             <button
               onClick={handleStartStrategy}
               disabled={isRunningStrategy}
               className="rounded bg-green-900/40 px-3 py-1.5 text-xs text-green-200 hover:bg-green-900/60 disabled:opacity-60"
             >
-              {isRunningStrategy ? 'Starting...' : '5) Run'}
+              {isRunningStrategy ? 'Starting...' : '5) Start Paper/Shadow'}
             </button>
             <button
               onClick={handleStopStrategy}

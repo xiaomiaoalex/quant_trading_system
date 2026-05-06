@@ -21,39 +21,42 @@ Risk Intervention Matrix - 风控穿透测试矩阵
 - [x] 每个 case 产生 RiskInterventionRecord
 - [x] 反例对照组存在（深度充足 vs 深度不足）
 """
-import pytest
-from datetime import datetime, timezone, timedelta
+
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
-from dataclasses import dataclass, field
-import uuid
 
-from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.domain.models.orderbook import OrderBook, OrderBookLevel
-from trader.core.domain.models.order import OrderSide
-from trader.core.domain.services.depth_checker import DepthChecker, DepthCheckerConfig
-from trader.core.domain.rules.time_window_policy import (
-    TimeWindowPolicy,
-    TimeWindowConfig,
-    TimeWindowSlot,
-    TimeWindowPeriod,
-    TimeWindowContext,
-)
+import pytest
+
 from trader.core.application.risk_engine import (
-    RiskEngine,
-    RiskConfig,
-    RiskMetrics,
-    RiskCheckResult,
-    RiskLevel,
     RejectionReason,
+    RiskCheckResult,
+    RiskConfig,
+    RiskEngine,
+    RiskLevel,
+    RiskMetrics,
 )
-
+from trader.core.domain.models.order import OrderSide
+from trader.core.domain.models.orderbook import OrderBook, OrderBookLevel
+from trader.core.domain.models.signal import Signal, SignalType
+from trader.core.domain.rules.time_window_policy import (
+    TimeWindowConfig,
+    TimeWindowContext,
+    TimeWindowPeriod,
+    TimeWindowPolicy,
+    TimeWindowSlot,
+)
+from trader.core.domain.services.depth_checker import DepthChecker, DepthCheckerConfig
 
 # ==================== 辅助类型 ====================
+
 
 @dataclass
 class RiskInterventionRecord:
     """风控干预记录"""
+
     signal_id: str
     strategy_id: str
     rule_name: str
@@ -67,10 +70,10 @@ class RiskInterventionRecord:
 
 class FakeRiskInterventionTracker:
     """假的风控干预追踪器"""
-    
+
     def __init__(self) -> None:
         self._records: list[RiskInterventionRecord] = []
-    
+
     def record(
         self,
         signal_id: str,
@@ -94,15 +97,16 @@ class FakeRiskInterventionTracker:
         )
         self._records.append(record)
         return record
-    
+
     def get_records(self) -> list[RiskInterventionRecord]:
         return list(self._records)
-    
+
     def clear(self) -> None:
         self._records.clear()
 
 
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def tracker() -> FakeRiskInterventionTracker:
@@ -151,7 +155,7 @@ def deep_orderbook() -> OrderBook:
 def shallow_orderbook() -> OrderBook:
     """
     浅层订单簿（会导致高滑点）
-    
+
     买入 1 个时的滑点计算:
     - 买一: 99900
     - 卖一: 100600 (价格跳跃大)
@@ -160,7 +164,7 @@ def shallow_orderbook() -> OrderBook:
     - 滑点: (100600 - 100250) / 100250 * 10000 ≈ 34.9 bps
       但实际深度检查用 100600 * 1 = 100600 vs 中间价 100250
       滑点 ≈ 35 bps，仍然不够
-    
+
     真正的高滑点需要:
     - 卖一: 100600 (第一档就高滑点)
     - 实际测试时滑点会超过 50 bps 阈值
@@ -211,9 +215,10 @@ def breached_metrics() -> RiskMetrics:
 
 # ==================== TC-001: 深度检查 - 深度充足时通过 ====================
 
+
 class TestDepthCheckPass:
     """TC-001: 深度充足时，信号应该通过"""
-    
+
     def test_depth_check_passes_with_sufficient_depth(
         self,
         base_signal: Signal,
@@ -224,20 +229,22 @@ class TestDepthCheckPass:
         场景: 深度充足的订单簿，信号应该通过
         预期: PASS，approved_size == original_size
         """
-        checker = DepthChecker(config=DepthCheckerConfig(
-            max_slippage_bps=Decimal("50"),
-            min_depth_levels=1,
-        ))
-        
+        checker = DepthChecker(
+            config=DepthCheckerConfig(
+                max_slippage_bps=Decimal("50"),
+                min_depth_levels=1,
+            )
+        )
+
         result = checker.check_signal_depth(deep_orderbook, base_signal)
-        
+
         # 验证深度检查通过
         assert result.ok is True, f"深度检查应通过，但得到: {result.rejection_reason}"
-        
+
         # 验证approved_size不变
         original_size = float(base_signal.quantity)
         assert result.available_qty >= original_size
-        
+
         # 记录干预
         tracker.record(
             signal_id=base_signal.signal_id,
@@ -248,7 +255,7 @@ class TestDepthCheckPass:
             approved_size=original_size,
             market_state_ref="deep_orderbook",
         )
-        
+
         # 验证记录
         records = tracker.get_records()
         assert len(records) == 1
@@ -258,9 +265,10 @@ class TestDepthCheckPass:
 
 # ==================== TC-002: 深度检查 - 深度不足时拒绝 ====================
 
+
 class TestDepthCheckReject:
     """TC-002: 深度不足或滑点超限时，信号应该拒绝"""
-    
+
     def test_depth_check_rejects_with_insufficient_depth(
         self,
         base_signal: Signal,
@@ -271,17 +279,19 @@ class TestDepthCheckReject:
         场景: 浅层订单簿导致高滑点，信号应该拒绝
         预期: REJECT，approved_size = 0
         """
-        checker = DepthChecker(config=DepthCheckerConfig(
-            max_slippage_bps=Decimal("50"),  # 50 bps 限制
-            min_depth_levels=1,
-        ))
-        
+        checker = DepthChecker(
+            config=DepthCheckerConfig(
+                max_slippage_bps=Decimal("50"),  # 50 bps 限制
+                min_depth_levels=1,
+            )
+        )
+
         result = checker.check_signal_depth(shallow_orderbook, base_signal)
-        
+
         # 验证深度检查拒绝
         assert result.ok is False, "浅层订单簿应被拒绝"
         assert result.rejection_reason in ["EXCESSIVE_SLIPPAGE", "INSUFFICIENT_DEPTH"]
-        
+
         # 记录干预
         original_size = float(base_signal.quantity)
         tracker.record(
@@ -293,14 +303,14 @@ class TestDepthCheckReject:
             approved_size=0.0,
             market_state_ref="shallow_orderbook",
         )
-        
+
         # 验证记录
         records = tracker.get_records()
         assert len(records) == 1
         assert records[0].action == "REJECT"
         assert records[0].approved_size == 0.0
         assert records[0].original_size > records[0].approved_size
-    
+
     def test_depth_check_rejects_qty_exceeds_available(
         self,
         base_signal: Signal,
@@ -321,27 +331,30 @@ class TestDepthCheckReject:
             quantity=Decimal("100"),  # 超过可用
             timestamp=datetime.now(timezone.utc),
         )
-        
-        checker = DepthChecker(config=DepthCheckerConfig(
-            max_slippage_bps=Decimal("50"),
-            min_depth_levels=1,
-        ))
-        
+
+        checker = DepthChecker(
+            config=DepthCheckerConfig(
+                max_slippage_bps=Decimal("50"),
+                min_depth_levels=1,
+            )
+        )
+
         result = checker.check_depth(
             orderbook=deep_orderbook,
             target_qty=Decimal("100"),
             side=OrderSide.BUY,
         )
-        
+
         assert result.ok is False
         assert result.rejection_reason == "INSUFFICIENT_DEPTH"
 
 
 # ==================== TC-003: 时间窗口 - OFF_PEAK 时段缩单 ====================
 
+
 class TestTimeWindowOffPeak:
     """TC-003: OFF_PEAK 时段应该缩减仓位"""
-    
+
     def test_time_window_reduces_size_in_off_peak(
         self,
         base_signal: Signal,
@@ -374,23 +387,23 @@ class TestTimeWindowOffPeak:
             ],
             default_coefficient=1.0,
         )
-        
+
         policy = TimeWindowPolicy(config)
-        
+
         # 评估下午 18:00 (OFF_PEAK 时段)
         context = policy.evaluate(hour=18, minute=0)
-        
+
         assert context.period == TimeWindowPeriod.OFF_PEAK
         assert context.position_coefficient == 0.5
         assert context.allow_new_position is True
-        
+
         # 计算缩单后的仓位
         original_size = float(base_signal.quantity)
         approved_size = original_size * context.position_coefficient
-        
+
         assert approved_size == 0.5
         assert approved_size < original_size
-        
+
         # 记录干预
         tracker.record(
             signal_id=base_signal.signal_id,
@@ -401,7 +414,7 @@ class TestTimeWindowOffPeak:
             approved_size=approved_size,
             market_state_ref=f"period={context.period.value}",
         )
-        
+
         # 验证记录
         records = tracker.get_records()
         assert len(records) == 1
@@ -411,9 +424,10 @@ class TestTimeWindowOffPeak:
 
 # ==================== TC-004: 时间窗口 - RESTRICTED 时段拒单 ====================
 
+
 class TestTimeWindowRestricted:
     """TC-004: RESTRICTED 时段应该拒绝新开仓"""
-    
+
     def test_time_window_rejects_new_position_in_restricted(
         self,
         base_signal: Signal,
@@ -437,24 +451,24 @@ class TestTimeWindowRestricted:
             ],
             default_coefficient=1.0,
         )
-        
+
         policy = TimeWindowPolicy(config)
-        
+
         # 评估凌晨 23:00 (RESTRICTED 时段)
         context = policy.evaluate(hour=23, minute=0)
-        
+
         assert context.period == TimeWindowPeriod.RESTRICTED
         assert context.allow_new_position is False
-        
+
         # 如果是新开仓信号，应该被拒绝
         if base_signal.is_open_signal():
             approved_size = context.adjust_position_size(
                 float(base_signal.quantity),
                 is_new_position=True,
             )
-            
+
             assert approved_size == 0.0
-            
+
             tracker.record(
                 signal_id=base_signal.signal_id,
                 strategy_id=base_signal.strategy_name,
@@ -464,11 +478,11 @@ class TestTimeWindowRestricted:
                 approved_size=0.0,
                 market_state_ref=f"period={context.period.value}",
             )
-            
+
             records = tracker.get_records()
             assert len(records) == 1
             assert records[0].action == "REJECT"
-    
+
     def test_time_window_context_adjust_position_size(self):
         """测试 TimeWindowContext.adjust_position_size 方法"""
         context = TimeWindowContext(
@@ -476,19 +490,20 @@ class TestTimeWindowRestricted:
             position_coefficient=0.0,
             allow_new_position=False,
         )
-        
+
         # 新开仓应返回 0
         assert context.adjust_position_size(1.0, is_new_position=True) == 0.0
-        
+
         # 平仓信号应正常返回
         assert context.adjust_position_size(1.0, is_new_position=False) == 0.0
 
 
 # ==================== TC-005: 日亏损超限拒单 ====================
 
+
 class TestDailyLossBreach:
     """TC-005: 日亏损超限时应该拒单"""
-    
+
     def test_risk_engine_rejects_on_daily_loss_breach(
         self,
         base_signal: Signal,
@@ -501,10 +516,10 @@ class TestDailyLossBreach:
         """
         # 注意: RiskEngine 需要 broker，我们在单元测试中验证其逻辑
         # 实际拒绝发生在 check_pre_trade 中的日亏损检查
-        
+
         # 日亏损百分比 = -6.0%，超过 -5% 限制
         assert breached_metrics.daily_pnl_percent <= Decimal("-5.0")
-        
+
         # 这意味着在 RiskEngine.check_pre_trade 中会被拒绝
         tracker.record(
             signal_id=base_signal.signal_id,
@@ -515,7 +530,7 @@ class TestDailyLossBreach:
             approved_size=0.0,
             market_state_ref="daily_pnl_pct=-6.0",
         )
-        
+
         records = tracker.get_records()
         assert len(records) == 1
         assert records[0].action == "REJECT"
@@ -524,14 +539,15 @@ class TestDailyLossBreach:
 
 # ==================== TC-006: KillSwitch L1 - 阻止新订单 ====================
 
+
 class TestKillSwitchL1:
     """TC-006: KillSwitch L1 应该阻止新开仓"""
-    
+
     def test_killswitch_l1_blocks_new_positions(self):
         """
         场景: KillSwitch L1 (NO_NEW_POSITIONS)，新开仓应该被阻止
         预期: action = "HALT", approved_size = 0
-        
+
         KillSwitch L1 定义:
         - 不允许新开仓
         - 允许平仓
@@ -545,10 +561,10 @@ class TestKillSwitchL1:
             price=Decimal("100000"),
             quantity=Decimal("1.0"),
         )
-        
+
         # 模拟 KillSwitch L1 状态
         killswitch_level = 1  # L1
-        
+
         def simulate_risk_action(signal: Signal, level: int) -> tuple[str, float]:
             if level >= 1:  # L1+
                 if signal.is_open_signal():
@@ -556,13 +572,13 @@ class TestKillSwitchL1:
                 else:
                     return ("PASS", float(signal.quantity))
             return ("PASS", float(signal.quantity))
-        
+
         # 测试买入信号（新开仓）
         action, size = simulate_risk_action(test_signal, killswitch_level)
-        
+
         assert action == "HALT"
         assert size == 0.0
-    
+
     def test_killswitch_l1_allows_closing_positions(self):
         """KillSwitch L1 应该允许平仓"""
         # 平仓信号
@@ -574,13 +590,13 @@ class TestKillSwitchL1:
             price=Decimal("100000"),
             quantity=Decimal("1.0"),
         )
-        
+
         killswitch_level = 1
         action, size = self._simulate(signal=close_signal, level=killswitch_level)
-        
+
         assert action == "PASS"
         assert size == float(close_signal.quantity)
-    
+
     @staticmethod
     def _simulate(signal: Signal, level: int) -> tuple[str, float]:
         if level >= 1:
@@ -591,43 +607,45 @@ class TestKillSwitchL1:
 
 # ==================== TC-007: KillSwitch L2 - 停止策略 ====================
 
+
 class TestKillSwitchL2:
     """TC-007: KillSwitch L2 应该停止策略"""
-    
+
     def test_killswitch_l2_stops_strategy(self):
         """
         场景: KillSwitch L2 (CANCEL_ALL_AND_HALT)，所有订单应该被取消/拒绝
         预期: action = "HALT"
-        
+
         KillSwitch L2 定义:
         - 取消所有挂单
         - 停止策略
         - 不允许新开仓
         """
         killswitch_level = 2  # L2
-        
+
         def simulate_l2_action(signal: Signal, level: int) -> tuple[str, float]:
             if level >= 2:  # L2+
                 return ("HALT", 0.0)
             return ("PASS", float(signal.quantity))
-        
+
         # 任何开仓信号都会被拒绝
         action, size = simulate_l2_action(base_signal, killswitch_level)
-        
+
         assert action == "HALT"
         assert size == 0.0
 
 
 # ==================== TC-008: 对账漂移 ====================
 
+
 class TestReconciliationDiverged:
     """TC-008: 对账漂移时应该阻止新订单"""
-    
+
     def test_diverged_state_blocks_new_orders(self):
         """
         场景: 对账发现本地状态与交易所不一致，新订单应该被阻止
         预期: action = "HALT"
-        
+
         Reconciler 状态:
         - ALIGNING: 对齐中
         - DIVERGED: 漂移
@@ -642,27 +660,28 @@ class TestReconciliationDiverged:
             price=Decimal("100000"),
             quantity=Decimal("1.0"),
         )
-        
+
         diverge_state = "DIVERGED"
-        
+
         def simulate_diverged_action(state: str, signal: Signal) -> tuple[str, float]:
             if state == "DIVERGED":
                 return ("HALT", 0.0)
             if state == "ALIGNING":
                 return ("HALT", 0.0)  # 对齐中也应谨慎
             return ("PASS", float(signal.quantity))
-        
+
         action, size = simulate_diverged_action(diverge_state, test_signal)
-        
+
         assert action == "HALT"
         assert size == 0.0
 
 
 # ==================== 综合测试：Risk Intervention Rate ====================
 
+
 class TestRiskInterventionRate:
     """计算 Risk Intervention Rate"""
-    
+
     def test_calculate_intervention_rate(self, tracker: FakeRiskInterventionTracker):
         """
         验证 Risk Intervention Rate 计算:
@@ -676,7 +695,7 @@ class TestRiskInterventionRate:
             ("REJECT", 1.0, 0.0),
             ("HALT", 1.0, 0.0),
         ]
-        
+
         for action, orig, appr in signals:
             tracker.record(
                 signal_id=f"sig-{action}",
@@ -686,27 +705,27 @@ class TestRiskInterventionRate:
                 original_size=orig,
                 approved_size=appr,
             )
-        
+
         records = tracker.get_records()
         total = len(records)
-        
+
         # 计算各类干预率
         rejected = sum(1 for r in records if r.action == "REJECT")
         reduced = sum(1 for r in records if r.action == "REDUCE")
         halted = sum(1 for r in records if r.action == "HALT")
         passed = sum(1 for r in records if r.action == "PASS")
-        
+
         reject_rate = rejected / total
         size_reduction_rate = reduced / total
         killswitch_block_rate = halted / total
-        
+
         intervention_rate = reject_rate + size_reduction_rate + killswitch_block_rate
-        
+
         assert passed == 2
         assert rejected == 1
         assert reduced == 1
         assert halted == 1
-        
+
         # 使用 pytest.approx 处理浮点数精度问题
         assert reject_rate == pytest.approx(0.2)
         assert size_reduction_rate == pytest.approx(0.2)
@@ -716,9 +735,10 @@ class TestRiskInterventionRate:
 
 # ==================== 回放测试 ====================
 
+
 class TestInterventionRecordPlayback:
     """验证干预记录可回放"""
-    
+
     def test_record_contains_required_fields(self, tracker: FakeRiskInterventionTracker):
         """
         验证每条记录都包含回放所需的字段
@@ -732,12 +752,12 @@ class TestInterventionRecordPlayback:
             approved_size=0.0,
             market_state_ref="orderbook_hash_abc123",
         )
-        
+
         records = tracker.get_records()
         assert len(records) == 1
-        
+
         record = records[0]
-        
+
         # 验证必填字段
         assert record.signal_id == "sig-001"
         assert record.strategy_id == "strategy_A"
@@ -748,16 +768,17 @@ class TestInterventionRecordPlayback:
         assert record.market_state_ref == "orderbook_hash_abc123"
         assert record.trace_id != ""
         assert record.timestamp is not None
-        
+
         # 验证 approved_size 确实改变了命运
         assert record.approved_size < record.original_size
 
 
 # ==================== 反例测试 ====================
 
+
 class TestCounterExamples:
     """反例对照组：同一信号在不同市场状态下应得到不同结果"""
-    
+
     def test_same_signal_different_depth_results(
         self,
         base_signal: Signal,
@@ -766,11 +787,13 @@ class TestCounterExamples:
         同一信号，深度充足时通过，深度不足时拒绝
         这是验证风控"真的在起作用"的关键反例
         """
-        checker = DepthChecker(config=DepthCheckerConfig(
-            max_slippage_bps=Decimal("50"),
-            min_depth_levels=1,
-        ))
-        
+        checker = DepthChecker(
+            config=DepthCheckerConfig(
+                max_slippage_bps=Decimal("50"),
+                min_depth_levels=1,
+            )
+        )
+
         # 深度充足 -> PASS
         deep_book = OrderBook(
             symbol="BTCUSDT",
@@ -779,7 +802,7 @@ class TestCounterExamples:
         )
         result_deep = checker.check_signal_depth(deep_book, base_signal)
         assert result_deep.ok is True
-        
+
         # 深度不足 -> REJECT
         shallow_book = OrderBook(
             symbol="BTCUSDT",
@@ -788,10 +811,10 @@ class TestCounterExamples:
         )
         result_shallow = checker.check_signal_depth(shallow_book, base_signal)
         assert result_shallow.ok is False
-        
+
         # 关键断言：同一信号，不同结果
         assert result_deep.ok != result_shallow.ok
-    
+
     def test_same_signal_different_time_windows(self):
         """
         同一信号，PRIME 时段通过，RESTRICTED 时段拒绝
@@ -818,24 +841,24 @@ class TestCounterExamples:
                 ),
             ],
         )
-        
+
         policy = TimeWindowPolicy(config)
-        
+
         # PRIME -> 允许新开仓
         context_prime = policy.evaluate(hour=10, minute=0)
         assert context_prime.allow_new_position is True
-        
+
         # RESTRICTED -> 拒绝新开仓
         context_restricted = policy.evaluate(hour=23, minute=0)
         assert context_restricted.allow_new_position is False
-        
+
         # 计算仓位
         size_prime = context_prime.adjust_position_size(1.0, is_new_position=True)
         size_restricted = context_restricted.adjust_position_size(1.0, is_new_position=True)
-        
+
         assert size_prime == 1.0
         assert size_restricted == 0.0
-        
+
         # 关键断言：同一信号，不同结果
         assert size_prime != size_restricted
 

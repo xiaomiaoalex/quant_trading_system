@@ -13,23 +13,26 @@ StrategyPositionProjector - 策略级持仓投影器
 - strategy_positions_proj: aggregate_id = {strategy_id}:{symbol}
 - position_lots: 一笔买入 = 一条记录
 """
+
 import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from trader.adapters.persistence.postgres.projectors.base import Projectable
 
 if TYPE_CHECKING:
     import asyncpg
-    from trader.core.domain.models.events import DomainEvent
+
     from trader.adapters.persistence.postgres.event_store import StreamEvent
+    from trader.core.domain.models.events import DomainEvent
 
 logger = logging.getLogger(__name__)
 
 
 # ==================== 辅助函数 ====================
+
 
 def _dec(val: Any) -> Decimal:
     if isinstance(val, Decimal):
@@ -40,6 +43,7 @@ def _dec(val: Any) -> Decimal:
 
 
 # ==================== StrategyPositionProjector ====================
+
 
 class StrategyPositionProjector(Projectable):
     """
@@ -324,11 +328,13 @@ class StrategyPositionProjector(Projectable):
             state = row["state"]
             if isinstance(state, str):
                 state = json.loads(state)
-            results.append({
-                "aggregate_id": row["aggregate_id"],
-                "state": state,
-                "version": row["version"],
-                "last_event_seq": row["last_event_seq"],
-                "updated_at": row["updated_at"],
-            })
+            results.append(
+                {
+                    "aggregate_id": row["aggregate_id"],
+                    "state": state,
+                    "version": row["version"],
+                    "last_event_seq": row["last_event_seq"],
+                    "updated_at": row["updated_at"],
+                }
+            )
         return results

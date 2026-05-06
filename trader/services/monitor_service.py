@@ -12,20 +12,20 @@ Monitor Service - 系统监控与告警服务
 - Fail-Closed：监控服务故障不得影响交易执行
 - 所有异常必须被捕获并记录，不向上抛出
 """
+
 import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, List, Any, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from trader.api.models.schemas import (
-    MonitorSnapshot,
-    Alert,
     AdapterHealthStatus,
+    Alert,
     AlertRule,
     AlertSeverity,
+    MonitorSnapshot,
 )
-
 
 # Re-export AlertRule from schemas for backwards compatibility
 # AlertRule is now defined in schemas.py to avoid duplication
@@ -38,11 +38,11 @@ logger = logging.getLogger(__name__)
 def _safe_float(value: str, default: float = 0.0) -> float:
     """
     安全地将字符串转换为浮点数。
-    
+
     Args:
         value: 待转换的字符串值
         default: 转换失败时的默认值
-        
+
     Returns:
         转换后的浮点数，失败时返回默认值
     """
@@ -57,6 +57,7 @@ def _safe_float(value: str, default: float = 0.0) -> float:
 @dataclass
 class TriggeredAlert:
     """已触发的告警（带去重信息）"""
+
     alert: Alert
     triggered_at: datetime
     cooldown_until: datetime
@@ -65,7 +66,7 @@ class TriggeredAlert:
 class MonitorService:
     """
     系统监控服务
-    
+
     采集系统指标并根据告警规则进行检测。
     采用Fail-Closed设计：任何异常都被捕获，不影响交易执行。
     """
@@ -213,16 +214,16 @@ class MonitorService:
                 threshold=rule.threshold,
                 triggered_at=now.isoformat(),
             )
-            
+
             # 记录触发状态
             self._triggered_alerts[rule.rule_name] = TriggeredAlert(
                 alert=alert,
                 triggered_at=now,
                 cooldown_until=now + timedelta(seconds=rule.cooldown_seconds),
             )
-            
+
             return alert
-        
+
         return None
 
     def _format_alert_message(self, rule: AlertRule, metric_value: float) -> str:
@@ -247,7 +248,7 @@ class MonitorService:
     ) -> List[Alert]:
         """检查所有告警规则"""
         alerts: List[Alert] = []
-        
+
         # 构建指标映射
         metrics: Dict[str, float] = {
             "daily_pnl": _safe_float(snapshot.daily_pnl),
@@ -258,15 +259,13 @@ class MonitorService:
             "adapter_degraded_count": sum(
                 1 for a in snapshot.adapters.values() if a.status == "DEGRADED"
             ),
-            "adapter_down_count": sum(
-                1 for a in snapshot.adapters.values() if a.status == "DOWN"
-            ),
+            "adapter_down_count": sum(1 for a in snapshot.adapters.values() if a.status == "DOWN"),
         }
 
         for rule in self._alert_rules.values():
             if rule.metric_key not in metrics:
                 continue
-            
+
             alert = self._evaluate_rule(rule, metrics[rule.metric_key], now)
             if alert:
                 alerts.append(alert)
@@ -316,7 +315,7 @@ class MonitorService:
     ) -> MonitorSnapshot:
         """
         获取系统监控快照
-        
+
         Args:
             positions: 持仓列表
             open_orders_count: 未成交订单数
@@ -327,19 +326,19 @@ class MonitorService:
             unrealized_pnl: 未实现盈亏
             killswitch_level: KillSwitch级别
             killswitch_scope: KillSwitch范围
-            
+
         Returns:
             MonitorSnapshot: 系统监控快照
         """
         try:
             now = datetime.now(timezone.utc)
-            
+
             # 计算总敞口
             total_exposure = "0"
             if positions:
                 exposure = sum(
-                    float(getattr(p, "quantity", 0) or 0) * 
-                    float(getattr(p, "current_price", 0) or 0)
+                    float(getattr(p, "quantity", 0) or 0)
+                    * float(getattr(p, "current_price", 0) or 0)
                     for p in positions
                 )
                 total_exposure = str(exposure)
@@ -365,7 +364,7 @@ class MonitorService:
             # 检查告警规则
             alerts = self._check_rules(snapshot, now)
             snapshot.active_alerts = alerts
-            
+
             # 统计各严重程度告警数
             severity_counts: Dict[str, int] = {}
             for alert in alerts:
@@ -391,7 +390,8 @@ class MonitorService:
     def _cleanup_expired_alerts(self, now: datetime) -> None:
         """清理已过期且未触发的告警，防止内存无限增长"""
         expired = [
-            name for name, triggered in self._triggered_alerts.items()
+            name
+            for name, triggered in self._triggered_alerts.items()
             if now >= triggered.cooldown_until
         ]
         for name in expired:
@@ -400,15 +400,15 @@ class MonitorService:
     def get_active_alerts(self) -> List[Alert]:
         """获取当前活跃告警列表"""
         now = datetime.now(timezone.utc)
-        
+
         # 清理过期告警
         self._cleanup_expired_alerts(now)
-        
+
         active = []
         for triggered in self._triggered_alerts.values():
             if now < triggered.cooldown_until:
                 active.append(triggered.alert)
-        
+
         return active
 
     def clear_alert(self, rule_name: str) -> bool:

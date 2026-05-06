@@ -17,18 +17,19 @@ PostgreSQL Projectors - 投影层实现
 - asyncpg 包
 - event_store 作为数据源
 """
+
 from trader.adapters.persistence.postgres.projectors.base import (
     Projectable,
-    ProjectorSnapshot,
     ProjectionVersion,
-)
-from trader.adapters.persistence.postgres.projectors.position_projector import (
-    PositionProjector,
-    PositionProjection,
+    ProjectorSnapshot,
 )
 from trader.adapters.persistence.postgres.projectors.order_projector import (
-    OrderProjector,
     OrderProjection,
+    OrderProjector,
+)
+from trader.adapters.persistence.postgres.projectors.position_projector import (
+    PositionProjection,
+    PositionProjector,
 )
 from trader.adapters.persistence.postgres.projectors.risk_projector import (
     RiskProjector,

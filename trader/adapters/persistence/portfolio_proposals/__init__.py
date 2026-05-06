@@ -29,19 +29,14 @@ store: PortfolioProposalStore = PostgresPortfolioProposalStore(
 ```
 """
 
-from trader.adapters.persistence.portfolio_proposals.models import (
-    ProposalModel,
-    ProposalStatus,
-)
-from trader.adapters.persistence.portfolio_proposals.store_protocol import (
-    PortfolioProposalStore,
-)
 from trader.adapters.persistence.portfolio_proposals.memory_store import (
     InMemoryPortfolioProposalStore,
 )
+from trader.adapters.persistence.portfolio_proposals.models import ProposalModel, ProposalStatus
 from trader.adapters.persistence.portfolio_proposals.postgres_store import (
     PostgresPortfolioProposalStore,
 )
+from trader.adapters.persistence.portfolio_proposals.store_protocol import PortfolioProposalStore
 
 __all__ = [
     # Models

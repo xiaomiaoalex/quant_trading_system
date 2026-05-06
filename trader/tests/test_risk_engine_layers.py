@@ -3,16 +3,17 @@ RiskEngine 分层风控测试
 ======================
 验证 Pre/In/Post 插件接口与 Fail-Closed 行为。
 """
+
 from decimal import Decimal
 
 import pytest
 
 from trader.adapters.broker.testing.fake_broker import FakeBroker
 from trader.core.application.risk_engine import (
-    RiskEngine,
-    RiskCheckResult,
-    RiskLevel,
     RejectionReason,
+    RiskCheckResult,
+    RiskEngine,
+    RiskLevel,
 )
 from trader.core.domain.models.signal import Signal, SignalType
 
@@ -24,7 +25,7 @@ class BlockPreTradePlugin:
             risk_level=RiskLevel.HIGH,
             rejection_reason=RejectionReason.MAX_POSITIONS,
             message="blocked by pre-trade plugin",
-            details={"plugin": "pre"}
+            details={"plugin": "pre"},
         )
 
 
@@ -40,7 +41,7 @@ class BlockInTradePlugin:
             risk_level=RiskLevel.HIGH,
             rejection_reason=RejectionReason.CANCEL_RATE,
             message="blocked by in-trade plugin",
-            details={"plugin": "in"}
+            details={"plugin": "in"},
         )
 
 
@@ -51,7 +52,7 @@ class BlockPostTradePlugin:
             risk_level=RiskLevel.CRITICAL,
             rejection_reason=RejectionReason.MAX_DRAWDOWN,
             message="blocked by post-trade plugin",
-            details={"plugin": "post"}
+            details={"plugin": "post"},
         )
 
 
@@ -61,7 +62,7 @@ def _build_buy_signal() -> Signal:
         signal_type=SignalType.BUY,
         symbol="BTCUSDT",
         price=Decimal("50000"),
-        quantity=Decimal("0.1")
+        quantity=Decimal("0.1"),
     )
 
 
@@ -69,7 +70,7 @@ def _build_buy_signal() -> Signal:
 async def test_check_signal_compatibility_uses_pre_trade():
     from trader.core.application.risk_engine import RiskConfig
     from trader.core.domain.rules.time_window_policy import TimeWindowConfig
-    
+
     broker = FakeBroker()
     broker.set_balance(Decimal("10000"), Decimal("10000"))
     await broker.connect()
@@ -93,7 +94,7 @@ async def test_check_signal_compatibility_uses_pre_trade():
 async def test_pre_trade_plugin_block_and_fail_closed():
     from trader.core.application.risk_engine import RiskConfig
     from trader.core.domain.rules.time_window_policy import TimeWindowConfig
-    
+
     broker = FakeBroker()
     broker.set_balance(Decimal("10000"), Decimal("10000"))
     await broker.connect()
@@ -108,7 +109,9 @@ async def test_pre_trade_plugin_block_and_fail_closed():
     assert blocked.rejection_reason == RejectionReason.MAX_POSITIONS
     assert blocked.details["recommended_killswitch_level"] == 1
 
-    fail_closed_engine = RiskEngine(broker, config=config, pre_trade_plugins=[ExplodingPreTradePlugin()])
+    fail_closed_engine = RiskEngine(
+        broker, config=config, pre_trade_plugins=[ExplodingPreTradePlugin()]
+    )
     fail_closed = await fail_closed_engine.check_pre_trade(_build_buy_signal())
     assert fail_closed.passed is False
     assert fail_closed.rejection_reason == RejectionReason.RISK_SYSTEM_ERROR
@@ -142,24 +145,33 @@ def test_killswitch_level_mapping():
     engine = RiskEngine(FakeBroker())
 
     assert engine.recommend_killswitch_level(RiskCheckResult(passed=True)) == 0
-    assert engine.recommend_killswitch_level(
-        RiskCheckResult(
-            passed=False,
-            risk_level=RiskLevel.HIGH,
-            rejection_reason=RejectionReason.MAX_ORDER_RATE,
+    assert (
+        engine.recommend_killswitch_level(
+            RiskCheckResult(
+                passed=False,
+                risk_level=RiskLevel.HIGH,
+                rejection_reason=RejectionReason.MAX_ORDER_RATE,
+            )
         )
-    ) == 1
-    assert engine.recommend_killswitch_level(
-        RiskCheckResult(
-            passed=False,
-            risk_level=RiskLevel.CRITICAL,
-            rejection_reason=RejectionReason.MAX_DRAWDOWN,
+        == 1
+    )
+    assert (
+        engine.recommend_killswitch_level(
+            RiskCheckResult(
+                passed=False,
+                risk_level=RiskLevel.CRITICAL,
+                rejection_reason=RejectionReason.MAX_DRAWDOWN,
+            )
         )
-    ) == 2
-    assert engine.recommend_killswitch_level(
-        RiskCheckResult(
-            passed=False,
-            risk_level=RiskLevel.CRITICAL,
-            rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+        == 2
+    )
+    assert (
+        engine.recommend_killswitch_level(
+            RiskCheckResult(
+                passed=False,
+                risk_level=RiskLevel.CRITICAL,
+                rejection_reason=RejectionReason.RISK_SYSTEM_ERROR,
+            )
         )
-    ) == 3
+        == 3
+    )

@@ -7,18 +7,15 @@ Binance Execution Adapter - Binance 定制执行层
 3. RiskEngine 检查（仓位限制、暴露度）
 4. 方向感知滑点（复用 slippage.py）
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any, Callable, Dict, Optional, Sequence
 
-from trader.services.backtesting.ports import (
-    BacktestConfig,
-    BacktestResult,
-    OptimizationResult,
-)
-from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter
+from trader.services.backtesting.ports import BacktestConfig, BacktestResult, OptimizationResult
 from trader.services.backtesting.slippage import BinanceSlippageConfig
+from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter
 
 
 class BinanceExecutionAdapter:
@@ -81,11 +78,13 @@ class BinanceExecutionAdapter:
         # 4. OMS 成交记录（回测模式下记录到内存）
         if self._oms_callback is not None:
             for trade in result.trades:
-                self._oms_callback({
-                    "type": "backtest_fill",
-                    "symbol": config.symbol,
-                    "trade": trade,
-                })
+                self._oms_callback(
+                    {
+                        "type": "backtest_fill",
+                        "symbol": config.symbol,
+                        "trade": trade,
+                    }
+                )
 
         return result
 

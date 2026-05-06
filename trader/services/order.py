@@ -1,11 +1,8 @@
-from typing import List, Optional
 from datetime import datetime, timezone
+from typing import List, Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
-from trader.api.models.schemas import (
-    OrderView, ExecutionView,
-    ActionResult,
-)
+from trader.api.models.schemas import ActionResult, ExecutionView, OrderView
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 
 class OrderService:

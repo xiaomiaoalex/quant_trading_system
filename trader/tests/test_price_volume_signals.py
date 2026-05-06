@@ -7,20 +7,22 @@ Price Volume Signals Tests - 价量信号单元测试
 - VolatilityCompression: 波动率压缩检测
 """
 
-import pytest
 from decimal import Decimal
+
+import pytest
+
 from trader.core.domain.signals.price_volume_signals import (
-    VolumeDirection,
-    VolumeSample,
     PriceVolumeSample,
-    VolumeExpansion,
-    VolumeExpansionResult,
     VolatilityCompression,
     VolatilityCompressionResult,
+    VolumeDirection,
+    VolumeExpansion,
+    VolumeExpansionResult,
+    VolumeSample,
 )
 
-
 # ==================== 测试数据生成辅助函数 ====================
+
 
 def make_volume_sample(
     ts_ms: int,
@@ -96,6 +98,7 @@ def make_price_volume_samples(
 
 # ==================== TestVolumeExpansion ====================
 
+
 class TestVolumeExpansion:
     """VolumeExpansion 单元测试"""
 
@@ -104,14 +107,14 @@ class TestVolumeExpansion:
         # 正常成交量100，突然放大到300（3倍）
         volumes = [100] * 19 + [300]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         assert result.symbol == "BTCUSDT"
         assert result.is_expansion is True
         assert result.expansion_ratio is not None
@@ -124,14 +127,14 @@ class TestVolumeExpansion:
         # 稳定成交量
         volumes = [100] * 30
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         assert result.is_expansion is False
         assert result.expansion_ratio == Decimal("1.0")
         assert result.intensity == Decimal("0")
@@ -142,14 +145,14 @@ class TestVolumeExpansion:
         # 正常成交量100，突然缩小到20（20%）
         volumes = [100] * 19 + [20]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         assert result.is_expansion is False  # 不是扩张
         assert result.expansion_ratio < Decimal("1.0")
         assert result.direction == VolumeDirection.CONTRACTION
@@ -159,14 +162,14 @@ class TestVolumeExpansion:
         # 成交量为均值的3倍，阈值为2倍
         volumes = [100] * 19 + [300]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         # 强度 = min(3/2, 1) = 0.5？不对...
         # expansion_ratio = 300/100 = 3.0
         # intensity = min(3.0 / 2.0, 1.0) = 1.0
@@ -176,13 +179,13 @@ class TestVolumeExpansion:
         """测试数据不足"""
         volumes = [100, 200, 300]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
         )
-        
+
         assert result.is_expansion is False
         assert result.mean_volume is None
 
@@ -190,13 +193,13 @@ class TestVolumeExpansion:
         """测试零平均成交量"""
         volumes = [0] * 25
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
         )
-        
+
         assert result.is_expansion is False
 
     def test_custom_threshold(self):
@@ -204,14 +207,14 @@ class TestVolumeExpansion:
         # 成交量为均值的1.5倍
         volumes = [100] * 19 + [150]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),  # 阈值2倍，不会触发
         )
-        
+
         assert result.is_expansion is False
 
         # 用1.0阈值测试
@@ -221,11 +224,12 @@ class TestVolumeExpansion:
             lookback_periods=20,
             threshold=Decimal("1.0"),  # 阈值1倍，1.5倍会触发
         )
-        
+
         assert result2.is_expansion is True
 
 
 # ==================== TestVolatilityCompression ====================
+
 
 class TestVolatilityCompression:
     """VolatilityCompression 单元测试"""
@@ -236,22 +240,22 @@ class TestVolatilityCompression:
         # 高波动时期
         prices_high_vol = [100, 110, 90, 105, 95, 115, 85, 120, 80, 125, 75, 130, 70, 135, 65]
         volumes = [1000] * 15
-        
+
         # 低波动时期
         prices_low_vol = [100, 101, 100, 101, 100, 101, 100, 101, 100, 101, 100, 101, 100, 101, 100]
-        
+
         samples = make_price_volume_samples(
             prices=prices_high_vol + prices_low_vol,
             volumes=volumes * 2,
         )
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.5"),
         )
-        
+
         assert result.symbol == "BTCUSDT"
         assert result.is_compression is True
         assert result.compression_ratio is not None
@@ -260,18 +264,39 @@ class TestVolatilityCompression:
     def test_no_compression(self):
         """测试无压缩情况"""
         # 持续高波动
-        prices = [100, 110, 90, 105, 95, 115, 85, 120, 80, 125, 75, 130, 70, 135, 65, 140, 60, 145, 55, 150]
+        prices = [
+            100,
+            110,
+            90,
+            105,
+            95,
+            115,
+            85,
+            120,
+            80,
+            125,
+            75,
+            130,
+            70,
+            135,
+            65,
+            140,
+            60,
+            145,
+            55,
+            150,
+        ]
         volumes = [1000] * 20
-        
+
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.5"),
         )
-        
+
         # 高波动环境下不应该触发压缩
         assert result.compression_ratio is not None
         assert result.compression_ratio >= Decimal("0.5") or result.is_compression is False
@@ -283,19 +308,19 @@ class TestVolatilityCompression:
         prices_high_vol = [100, 120, 80, 115, 85, 125, 75, 130, 70, 135, 65, 140, 60, 145, 55]
         # 低波动 + 价格上涨
         prices_low_vol = [55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69]
-        
+
         samples = make_price_volume_samples(
             prices=prices_high_vol + prices_low_vol,
             volumes=[1000] * 30,
         )
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.8"),  # 使用更宽松的阈值
         )
-        
+
         assert result.is_compression is True
         assert result.breakout_direction == VolumeDirection.EXPANSION
 
@@ -305,19 +330,19 @@ class TestVolatilityCompression:
         prices_high_vol = [100, 120, 80, 115, 85, 125, 75, 130, 70, 135, 65, 140, 60, 145, 55]
         # 低波动 + 价格下跌
         prices_low_vol = [55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41]
-        
+
         samples = make_price_volume_samples(
             prices=prices_high_vol + prices_low_vol,
             volumes=[1000] * 30,
         )
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.8"),  # 使用更宽松的阈值
         )
-        
+
         assert result.is_compression is True
         assert result.breakout_direction == VolumeDirection.CONTRACTION
 
@@ -325,15 +350,15 @@ class TestVolatilityCompression:
         """测试数据不足"""
         prices = [100, 110, 90, 105, 95]
         volumes = [1000] * 5
-        
+
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
         )
-        
+
         assert result.is_compression is False
         assert result.current_atr is None
 
@@ -342,15 +367,15 @@ class TestVolatilityCompression:
         # 固定价格时，由于high=close*1.01, low=close*0.99，所以TR = high - low = 2
         prices = [100] * 30
         volumes = [1000] * 30
-        
+
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
         )
-        
+
         assert result.current_atr is not None
         # 由于我们的测试数据 high=101, low=99（假设价格100时），TR=2
         assert result.current_atr == Decimal("2.00000000")
@@ -358,22 +383,54 @@ class TestVolatilityCompression:
     def test_high_volatility_reference(self):
         """测试高波动参考值"""
         # 剧烈波动的市场
-        prices = [100, 150, 50, 140, 60, 130, 70, 120, 80, 110, 90, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]
+        prices = [
+            100,
+            150,
+            50,
+            140,
+            60,
+            130,
+            70,
+            120,
+            80,
+            110,
+            90,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+            100,
+        ]
         volumes = [1000] * 30
-        
+
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
         )
-        
+
         # 当前ATR应该小于历史均值
         assert result.mean_atr is not None
 
 
 # ==================== TestDataClassImmutability ====================
+
 
 class TestPriceVolumeSignalDataClassImmutability:
     """验证价量信号数据类的不可变性"""
@@ -409,6 +466,7 @@ class TestPriceVolumeSignalDataClassImmutability:
 
 # ==================== TestEdgeCases ====================
 
+
 class TestPriceVolumeSignalEdgeCases:
     """边界条件和错误处理测试"""
 
@@ -436,13 +494,17 @@ class TestPriceVolumeSignalEdgeCases:
     def test_negative_threshold(self):
         """测试负阈值"""
         samples = make_volume_samples([100] * 25)
-        result = VolumeExpansion.compute("BTCUSDT", samples, lookback_periods=20, threshold=Decimal("-1.0"))
+        result = VolumeExpansion.compute(
+            "BTCUSDT", samples, lookback_periods=20, threshold=Decimal("-1.0")
+        )
         assert result.is_expansion is False
 
     def test_zero_threshold(self):
         """测试零阈值"""
         samples = make_volume_samples([100] * 25)
-        result = VolumeExpansion.compute("BTCUSDT", samples, lookback_periods=20, threshold=Decimal("0"))
+        result = VolumeExpansion.compute(
+            "BTCUSDT", samples, lookback_periods=20, threshold=Decimal("0")
+        )
         assert result.is_expansion is False
 
     def test_custom_ts_ms(self):
@@ -465,6 +527,7 @@ class TestPriceVolumeSignalEdgeCases:
 
 # ==================== TestVolumeExpansionIntegration ====================
 
+
 class TestVolumeExpansionIntegration:
     """成交量扩张集成测试"""
 
@@ -473,14 +536,14 @@ class TestVolumeExpansionIntegration:
         # 成交量从50逐渐增加到200
         volumes = [50 + i * 10 for i in range(25)]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         # 最后一天成交量是200，历史均值约125，比例为1.6
         assert result.expansion_ratio is not None
         assert result.expansion_ratio > Decimal("1.0")
@@ -490,14 +553,14 @@ class TestVolumeExpansionIntegration:
         # 大部分时间成交量低，最后突然放大
         volumes = [50] * 24 + [500]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         assert result.is_expansion is True
         assert result.expansion_ratio >= Decimal("5.0")  # 500/50 = 10倍
         assert result.intensity == Decimal("1.0")  # 达到最大强度
@@ -507,22 +570,49 @@ class TestVolumeExpansionIntegration:
         # 交替放量缩量，但最后一天是真实放量
         # 前20天（indices 5-24）：100出现10次，300出现10次，均值=200
         # 最后一天：500，远超阈值
-        volumes = [100, 300, 100, 300, 100, 100, 300, 100, 300, 100, 300, 100, 300, 100, 300, 100, 300, 100, 300, 100, 300, 100, 300, 100, 500]
+        volumes = [
+            100,
+            300,
+            100,
+            300,
+            100,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            300,
+            100,
+            500,
+        ]
         samples = make_volume_samples(volumes)
-        
+
         result = VolumeExpansion.compute(
             symbol="BTCUSDT",
             volume_samples=samples,
             lookback_periods=20,
             threshold=Decimal("2.0"),
         )
-        
+
         # 最后一天成交量是500，前20天均值约200，比例2.5 > 2.0
         assert result.is_expansion is True
         assert result.expansion_ratio >= Decimal("2.0")
 
 
 # ==================== TestVolatilityCompressionIntegration ====================
+
 
 class TestVolatilityCompressionIntegration:
     """波动率压缩集成测试"""
@@ -539,17 +629,17 @@ class TestVolatilityCompressionIntegration:
             else:
                 # 低波动
                 prices.append(100 + (i - 15) * 0.1)
-        
+
         volumes = [1000] * 30
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.5"),
         )
-        
+
         assert result.is_compression is True
         assert result.compression_ratio is not None
 
@@ -558,15 +648,15 @@ class TestVolatilityCompressionIntegration:
         # 稳定波动
         prices = [100, 105, 95, 104, 96, 103, 97, 102, 98, 101, 99, 100] * 3
         volumes = [1000] * 36
-        
+
         samples = make_price_volume_samples(prices, volumes)
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
         )
-        
+
         # 恒定波动率时，compression_ratio应该接近1.0
         assert result.compression_ratio is not None
         assert Decimal("0.8") <= result.compression_ratio <= Decimal("1.2")
@@ -576,18 +666,18 @@ class TestVolatilityCompressionIntegration:
         # 低波动后突然放大
         prices_low = [100] * 15
         prices_high = [100, 130, 70, 125, 75, 120, 80, 115, 85, 110, 90, 105, 95, 100, 100]
-        
+
         samples = make_price_volume_samples(
             prices=prices_low + prices_high,
             volumes=[1000] * 30,
         )
-        
+
         result = VolatilityCompression.compute(
             symbol="BTCUSDT",
             price_volume_samples=samples,
             lookback_periods=14,
             compression_threshold=Decimal("0.5"),
         )
-        
+
         # 当前是高波动，不应该触发压缩
         assert result.is_compression is False

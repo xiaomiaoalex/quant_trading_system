@@ -1,5 +1,3 @@
-// Target path: Frontend/src/pages/Strategies.tsx
-
 import { useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
@@ -29,10 +27,11 @@ import {
   deriveStrategySummary,
   groupRuntimeByStrategy,
 } from '@/types'
-import { LoadingState, ErrorState, EmptyState } from '@/components/ui'
+import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { MetricCard } from '@/components/monitor'
 import { StrategyDetailModal } from '@/components/strategies'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 import { strategyKeys } from '@/hooks/useStrategies'
 
@@ -44,6 +43,42 @@ function normalizeStatus(status: string): StrategyRuntimeInfo['status'] {
   if (lower === 'stopped') return 'stopped'
   if (lower === 'error') return 'error'
   return 'stopped'
+}
+
+const ACTION_CONFIG: Record<
+  string,
+  { label: string; variant: 'danger' | 'warning'; description: string; footnote: string }
+> = {
+  start: {
+    label: 'Start',
+    variant: 'warning',
+    description: 'This may activate live strategy execution.',
+    footnote: 'Verify mode (demo/paper/live) before confirming.',
+  },
+  stop: {
+    label: 'Stop',
+    variant: 'danger',
+    description: 'This will halt the strategy immediately.',
+    footnote: 'Any open orders may remain active.',
+  },
+  pause: {
+    label: 'Pause',
+    variant: 'warning',
+    description: 'This will suspend new runtime actions until resumed.',
+    footnote: 'Existing positions remain unchanged.',
+  },
+  resume: {
+    label: 'Resume',
+    variant: 'warning',
+    description: 'This will restart runtime activity from the current state.',
+    footnote: 'Strategy resumes with existing positions and parameters.',
+  },
+  unload: {
+    label: 'Unload',
+    variant: 'danger',
+    description: 'This will remove the deployment from runtime control.',
+    footnote: 'Deployment state will be lost and must be recreated to restart.',
+  },
 }
 
 function RuntimeActions(props: {
@@ -58,7 +93,17 @@ function RuntimeActions(props: {
   const resumeMutation = useResumeStrategy(runtime.deployment_id)
   const unloadMutation = useUnloadStrategy(runtime.deployment_id)
 
+  const [confirmAction, setConfirmAction] = useState<string | null>(null)
+
   const handle = async (action: 'start' | 'stop' | 'pause' | 'resume' | 'unload') => {
+    setConfirmAction(action)
+  }
+
+  const executeConfirmed = async () => {
+    const action = confirmAction
+    if (!action) return
+    setConfirmAction(null)
+
     let ok = false
     if (action === 'start') ok = await startMutation.mutateAsync()
     if (action === 'stop') ok = await stopMutation.mutateAsync()
@@ -89,63 +134,88 @@ function RuntimeActions(props: {
     resumeMutation.isPending ||
     unloadMutation.isPending
 
+  const confirmConfig = confirmAction ? ACTION_CONFIG[confirmAction] : null
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {(runtime.status === 'loaded' || runtime.status === 'stopped') && (
-        <button
-          disabled={isPending}
-          onClick={() => handle('start')}
-          className="rounded bg-green-900/30 px-2 py-1 text-xs text-green-300 hover:bg-green-900/50 disabled:opacity-50"
-        >
-          Start
-        </button>
-      )}
-      {runtime.status === 'running' && (
-        <>
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        {(runtime.status === 'loaded' || runtime.status === 'stopped') && (
           <button
             disabled={isPending}
-            onClick={() => handle('pause')}
-            className="rounded bg-yellow-900/30 px-2 py-1 text-xs text-yellow-300 hover:bg-yellow-900/50 disabled:opacity-50"
-          >
-            Pause
-          </button>
-          <button
-            disabled={isPending}
-            onClick={() => handle('stop')}
-            className="rounded bg-red-900/30 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50 disabled:opacity-50"
-          >
-            Stop
-          </button>
-        </>
-      )}
-      {runtime.status === 'paused' && (
-        <>
-          <button
-            disabled={isPending}
-            onClick={() => handle('resume')}
+            onClick={() => handle('start')}
             className="rounded bg-green-900/30 px-2 py-1 text-xs text-green-300 hover:bg-green-900/50 disabled:opacity-50"
           >
-            Resume
+            Start
           </button>
+        )}
+        {runtime.status === 'running' && (
+          <>
+            <button
+              disabled={isPending}
+              onClick={() => handle('pause')}
+              className="rounded bg-yellow-900/30 px-2 py-1 text-xs text-yellow-300 hover:bg-yellow-900/50 disabled:opacity-50"
+            >
+              Pause
+            </button>
+            <button
+              disabled={isPending}
+              onClick={() => handle('stop')}
+              className="rounded bg-red-900/30 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          </>
+        )}
+        {runtime.status === 'paused' && (
+          <>
+            <button
+              disabled={isPending}
+              onClick={() => handle('resume')}
+              className="rounded bg-green-900/30 px-2 py-1 text-xs text-green-300 hover:bg-green-900/50 disabled:opacity-50"
+            >
+              Resume
+            </button>
+            <button
+              disabled={isPending}
+              onClick={() => handle('stop')}
+              className="rounded bg-red-900/30 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          </>
+        )}
+        {(runtime.status === 'loaded' || runtime.status === 'stopped' || runtime.status === 'error') && (
           <button
             disabled={isPending}
-            onClick={() => handle('stop')}
-            className="rounded bg-red-900/30 px-2 py-1 text-xs text-red-300 hover:bg-red-900/50 disabled:opacity-50"
+            onClick={() => handle('unload')}
+            className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600 disabled:opacity-50"
           >
-            Stop
+            Unload
           </button>
-        </>
+        )}
+      </div>
+
+      {confirmConfig && (
+        <ConfirmDialog
+          isOpen={true}
+          title={`${confirmConfig.label} Strategy`}
+          message={
+            <div className="space-y-2">
+              <p>Deployment: <span className="font-mono text-white">{runtime.deployment_id}</span></p>
+              <p>Status: <span className="font-medium">{runtime.status}</span></p>
+              <p>{confirmConfig.description}</p>
+              <p className="text-xs text-accent-3">{confirmConfig.footnote}</p>
+            </div>
+          }
+          confirmLabel={confirmConfig.label}
+          cancelLabel="Cancel"
+          variant={confirmConfig.variant}
+          isLoading={isPending}
+          onConfirm={executeConfirmed}
+          onCancel={() => setConfirmAction(null)}
+        />
       )}
-      {(runtime.status === 'loaded' || runtime.status === 'stopped' || runtime.status === 'error') && (
-        <button
-          disabled={isPending}
-          onClick={() => handle('unload')}
-          className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-200 hover:bg-gray-600 disabled:opacity-50"
-        >
-          Unload
-        </button>
-      )}
-    </div>
+    </>
   )
 }
 
@@ -322,17 +392,14 @@ export function Strategies() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="sticky top-0 z-10 border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between px-6 py-4">
-          <h1 className="text-xl font-semibold text-white">Strategy Management</h1>
-          <button
-            onClick={() => refetch()}
-            className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Strategy Management">
+        <button
+          onClick={() => refetch()}
+          className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
+        >
+          Refresh
+        </button>
+      </PageHeader>
 
       <div className="space-y-6 p-6">
         {successMsg && (
@@ -354,15 +421,15 @@ export function Strategies() {
           <MetricCard title="Stopped/Error" value={summary.stopped + summary.error} />
         </div>
 
-        <div className="rounded-lg border border-gray-700 bg-gray-800/50 overflow-hidden">
+        <div className="rounded-lg border border-gray-700 bg-surface-3/40 overflow-hidden">
           <table className="min-w-full divide-y divide-gray-700">
             <thead className="bg-gray-800">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-400">Name</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-400">Template ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-400">Description</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-400">Deployments</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-400">Actions</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Name</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Template ID</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Description</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Deployments</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
@@ -396,7 +463,8 @@ export function Strategies() {
                                       {runtime.symbols.join(', ') || '—'} · {runtime.mode} · {runtime.account_id}
                                     </div>
                                     <div className="mt-1 text-xs text-gray-500">
-                                      ticks {runtime.tick_count} · signals {runtime.signal_count} · errors {runtime.error_count}
+                                      ticks {runtime.tick_count} · signals{' '}
+                                      {runtime.signal_count} · errors {runtime.error_count}
                                     </div>
                                     {runtime.blocked_reason && (
                                       <div className="mt-1 text-xs text-red-400">Blocked: {runtime.blocked_reason}</div>
@@ -581,12 +649,14 @@ export function Strategies() {
         </div>
       )}
 
-      <StrategyDetailModal
-        strategy={detailStrategy!}
-        runtime={detailStrategy ? (deploymentsByStrategy.get(detailStrategy.strategy_id)?.[0] ?? null) : null}
-        isOpen={!!detailStrategy}
-        onClose={() => setDetailStrategy(null)}
-      />
+      {detailStrategy && (
+        <StrategyDetailModal
+          strategy={detailStrategy}
+          runtime={deploymentsByStrategy.get(detailStrategy.strategy_id)?.[0] ?? null}
+          isOpen={true}
+          onClose={() => setDetailStrategy(null)}
+        />
+      )}
 
       {fillsDeployment && <FillsDialog deployment={fillsDeployment} onClose={() => setFillsDeployment(null)} />}
     </div>

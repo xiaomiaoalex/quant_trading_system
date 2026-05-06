@@ -3,9 +3,11 @@ Unit Tests - Portfolio Research API Endpoints
 =============================================
 Tests for Portfolio Research API endpoints using TestClient.
 """
-import pytest
+
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 from trader.api.main import app
@@ -13,6 +15,7 @@ from trader.api.main import app
 
 class MockCommitteeRun:
     """Mock CommitteeRun for testing"""
+
     def __init__(
         self,
         run_id: str = "run-001",
@@ -42,6 +45,7 @@ class MockCommitteeRun:
 
 class MockWorkflowResult:
     """Mock WorkflowResult for testing"""
+
     def __init__(
         self,
         success: bool = True,
@@ -57,6 +61,7 @@ class MockWorkflowResult:
 
 class MockPortfolioProposal:
     """Mock PortfolioProposal for testing"""
+
     def __init__(
         self,
         proposal_id: str = "proposal-001",
@@ -93,14 +98,13 @@ class TestPortfolioResearchEndpoints:
         self.mock_workflow.run.return_value = mock_result
 
         with patch(
-            "trader.api.routes.portfolio_research.get_workflow",
-            return_value=self.mock_workflow
+            "trader.api.routes.portfolio_research.get_workflow", return_value=self.mock_workflow
         ):
             response = self.client.post(
                 "/api/portfolio-research/run",
                 json={
                     "research_request": "Test request",
-                }
+                },
             )
 
         assert response.status_code == 200
@@ -116,14 +120,13 @@ class TestPortfolioResearchEndpoints:
         self.mock_workflow.run.return_value = mock_result
 
         with patch(
-            "trader.api.routes.portfolio_research.get_workflow",
-            return_value=self.mock_workflow
+            "trader.api.routes.portfolio_research.get_workflow", return_value=self.mock_workflow
         ):
             response = self.client.post(
                 "/api/portfolio-research/run",
                 json={
                     "research_request": "Test request",
-                }
+                },
             )
 
         assert response.status_code == 200
@@ -136,14 +139,13 @@ class TestPortfolioResearchEndpoints:
         self.mock_workflow.run.side_effect = Exception("Unexpected error")
 
         with patch(
-            "trader.api.routes.portfolio_research.get_workflow",
-            return_value=self.mock_workflow
+            "trader.api.routes.portfolio_research.get_workflow", return_value=self.mock_workflow
         ):
             response = self.client.post(
                 "/api/portfolio-research/run",
                 json={
                     "research_request": "Test request",
-                }
+                },
             )
 
         assert response.status_code == 500
@@ -172,7 +174,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get("/api/portfolio-research/runs")
 
@@ -198,11 +200,10 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get(
-                "/api/portfolio-research/runs",
-                params={"status": "completed"}
+                "/api/portfolio-research/runs", params={"status": "completed"}
             )
 
         assert response.status_code == 200
@@ -215,11 +216,10 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get(
-                "/api/portfolio-research/runs",
-                params={"limit": 50, "offset": 10}
+                "/api/portfolio-research/runs", params={"limit": 50, "offset": 10}
             )
 
         assert response.status_code == 200
@@ -231,7 +231,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get("/api/portfolio-research/runs")
 
@@ -249,7 +249,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get("/api/portfolio-research/runs/run-001")
 
@@ -263,7 +263,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get("/api/portfolio-research/runs/nonexistent")
 
@@ -275,7 +275,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.get("/api/portfolio-research/runs/run-001")
 
@@ -294,14 +294,16 @@ class TestPortfolioResearchEndpoints:
         self.mock_store.get_committee_run.return_value = mock_run_data
 
         mock_adapter = MagicMock()
-        mock_adapter.submit_for_approval = AsyncMock(return_value={"success": True, "message": "Submitted"})
+        mock_adapter.submit_for_approval = AsyncMock(
+            return_value={"success": True, "message": "Submitted"}
+        )
 
-        with patch(
-            "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
-        ), patch(
-            "trader.api.routes.portfolio_research.get_adapter",
-            return_value=mock_adapter
+        with (
+            patch(
+                "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
+                return_value=self.mock_store,
+            ),
+            patch("trader.api.routes.portfolio_research.get_adapter", return_value=mock_adapter),
         ):
             response = self.client.post("/api/portfolio-research/runs/run-001/submit")
 
@@ -315,7 +317,7 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.post("/api/portfolio-research/runs/nonexistent/submit")
 
@@ -334,22 +336,23 @@ class TestPortfolioResearchEndpoints:
         self.mock_store.get_committee_run.return_value = mock_run_data
 
         mock_adapter = MagicMock()
-        mock_adapter.approve_and_create_backtest = AsyncMock(return_value={
-            "success": True,
-            "strategy_draft_id": "draft-001",
-            "backtest_job_id": "job-001",
-        })
+        mock_adapter.approve_and_create_backtest = AsyncMock(
+            return_value={
+                "success": True,
+                "strategy_draft_id": "draft-001",
+                "backtest_job_id": "job-001",
+            }
+        )
 
-        with patch(
-            "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
-        ), patch(
-            "trader.api.routes.portfolio_research.get_adapter",
-            return_value=mock_adapter
+        with (
+            patch(
+                "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
+                return_value=self.mock_store,
+            ),
+            patch("trader.api.routes.portfolio_research.get_adapter", return_value=mock_adapter),
         ):
             response = self.client.post(
-                "/api/portfolio-research/runs/run-001/approve",
-                params={"approver": "user-001"}
+                "/api/portfolio-research/runs/run-001/approve", params={"approver": "user-001"}
             )
 
         assert response.status_code == 200
@@ -362,11 +365,10 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.post(
-                "/api/portfolio-research/runs/nonexistent/approve",
-                params={"approver": "user-001"}
+                "/api/portfolio-research/runs/nonexistent/approve", params={"approver": "user-001"}
             )
 
         assert response.status_code == 404
@@ -386,16 +388,16 @@ class TestPortfolioResearchEndpoints:
         mock_adapter = MagicMock()
         mock_adapter.reject = AsyncMock(return_value={"success": True})
 
-        with patch(
-            "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
-        ), patch(
-            "trader.api.routes.portfolio_research.get_adapter",
-            return_value=mock_adapter
+        with (
+            patch(
+                "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
+                return_value=self.mock_store,
+            ),
+            patch("trader.api.routes.portfolio_research.get_adapter", return_value=mock_adapter),
         ):
             response = self.client.post(
                 "/api/portfolio-research/runs/run-001/reject",
-                params={"rejector": "user-001", "reason": "Risk too high"}
+                params={"rejector": "user-001", "reason": "Risk too high"},
             )
 
         assert response.status_code == 200
@@ -408,11 +410,11 @@ class TestPortfolioResearchEndpoints:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=self.mock_store
+            return_value=self.mock_store,
         ):
             response = self.client.post(
                 "/api/portfolio-research/runs/nonexistent/reject",
-                params={"rejector": "user-001", "reason": "Test reason"}
+                params={"rejector": "user-001", "reason": "Test reason"},
             )
 
         assert response.status_code == 404
@@ -431,12 +433,9 @@ class TestPortfolioResearchEndpointsValidation:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=mock_store
+            return_value=mock_store,
         ):
-            response = self.client.get(
-                "/api/portfolio-research/runs",
-                params={"limit": 10000}
-            )
+            response = self.client.get("/api/portfolio-research/runs", params={"limit": 10000})
 
         assert response.status_code == 422
 
@@ -446,12 +445,9 @@ class TestPortfolioResearchEndpointsValidation:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=mock_store
+            return_value=mock_store,
         ):
-            response = self.client.get(
-                "/api/portfolio-research/runs",
-                params={"offset": -1}
-            )
+            response = self.client.get("/api/portfolio-research/runs", params={"offset": -1})
 
         assert response.status_code == 422
 
@@ -462,7 +458,7 @@ class TestPortfolioResearchEndpointsValidation:
 
         with patch(
             "trader.adapters.persistence.portfolio_proposal_store.PortfolioProposalStore",
-            return_value=mock_store
+            return_value=mock_store,
         ):
             response = self.client.post("/api/portfolio-research/runs/run-001/approve")
 

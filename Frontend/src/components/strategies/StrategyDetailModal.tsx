@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import type { RegisteredStrategy, StrategyRuntimeInfo, StrategyEventEnvelope } from '@/types'
 import { STRATEGY_STATUS_DISPLAY } from '@/types'
 import type { StrategyStatus } from '@/types'
-import { useStrategySignals, useStrategyErrors, useStrategyEvents } from '@/hooks'
+import { useStrategyCodeView, useStrategySignals, useStrategyErrors, useStrategyEvents } from '@/hooks'
 
 interface StrategyDetailModalProps {
   strategy: RegisteredStrategy
@@ -194,6 +194,11 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
   const { data: signals } = useStrategySignals(runtime?.deployment_id ?? '')
   const { data: errors } = useStrategyErrors(runtime?.deployment_id ?? '')
   const { data: allEvents } = useStrategyEvents(runtime?.deployment_id ?? '')
+  const {
+    data: codeView,
+    isLoading: isLoadingCode,
+    isError: isCodeError,
+  } = useStrategyCodeView(strategy.strategy_id)
 
   const orders = allEvents?.filter(e =>
     e.event_type.startsWith('strategy.order.')
@@ -287,6 +292,48 @@ export function StrategyDetailModal({ strategy, runtime, isOpen, onClose }: Stra
                     <div className="sm:col-span-2 rounded bg-gray-900/50 p-3">
                       <p className="text-xs text-gray-500">Description</p>
                       <p className="text-sm text-white">{strategy.description}</p>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="mb-6">
+                <h3 className="mb-3 text-sm font-medium text-gray-400 uppercase">Strategy Code</h3>
+                <div className="rounded bg-gray-900/50 p-3">
+                  {isLoadingCode ? (
+                    <p className="text-sm text-gray-400">Loading strategy code...</p>
+                  ) : codeView ? (
+                    <>
+                      <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                        <span>
+                          source:{' '}
+                          <span className="text-gray-200">
+                            {codeView.source_type === 'saved_code' ? 'saved code' : 'module entrypoint'}
+                          </span>
+                        </span>
+                        {codeView.code_version && (
+                          <span>code version: <span className="text-gray-200">#{codeView.code_version}</span></span>
+                        )}
+                        {codeView.module_path && (
+                          <span>module: <span className="font-mono text-gray-300">{codeView.module_path}</span></span>
+                        )}
+                        {codeView.checksum && (
+                          <span>checksum: <span className="font-mono text-gray-300">{codeView.checksum.slice(0, 12)}</span></span>
+                        )}
+                        {codeView.created_at && <span>created: <span className="text-gray-200">{formatTimestamp(codeView.created_at)}</span></span>}
+                      </div>
+                      <pre className="max-h-96 overflow-auto rounded border border-gray-700 bg-gray-950 p-3 text-xs text-gray-200 font-mono">
+                        {codeView.code}
+                      </pre>
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-400">
+                        {isCodeError ? 'Strategy source code is not available for this strategy.' : 'No strategy code found.'}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Saved code and trader.* module entrypoint source are both supported.
+                      </p>
                     </div>
                   )}
                 </div>

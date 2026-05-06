@@ -11,19 +11,18 @@ Tests:
 """
 
 import os
+
 import pytest
 
+from trader.adapters.broker.binance_spot_demo_broker import BinanceSpotDemoBrokerConfig
 from trader.api.env_config import (
+    BINANCE_ENV_DEMO,
+    BINANCE_ENV_TESTNET,
+    BINANCE_ENV_URL_CONFIGS,
+    VALID_BINANCE_ENVS,
     get_binance_env,
     get_binance_env_config,
     is_valid_binance_env,
-    BINANCE_ENV_DEMO,
-    BINANCE_ENV_TESTNET,
-    VALID_BINANCE_ENVS,
-    BINANCE_ENV_URL_CONFIGS,
-)
-from trader.adapters.broker.binance_spot_demo_broker import (
-    BinanceSpotDemoBrokerConfig,
 )
 
 
@@ -73,7 +72,7 @@ class TestBinanceEnvConfig:
         """get_binance_env_config for demo should return correct URLs."""
         os.environ["BINANCE_ENV"] = "demo"
         config = get_binance_env_config()
-        
+
         assert config["env"] == "demo"
         assert config["rest_base"] == "https://demo-api.binance.com/api"
         assert config["public_ws_base"] == "wss://demo-stream.binance.com/ws"
@@ -84,7 +83,7 @@ class TestBinanceEnvConfig:
         """get_binance_env_config for testnet should return correct URLs."""
         os.environ["BINANCE_ENV"] = "testnet"
         config = get_binance_env_config()
-        
+
         assert config["env"] == "testnet"
         assert config["rest_base"] == "https://testnet.binance.vision/api"
         assert config["public_ws_base"] == "wss://stream.testnet.binance.vision/ws"
@@ -93,11 +92,19 @@ class TestBinanceEnvConfig:
 
     def test_get_binance_env_config_contains_all_required_fields(self):
         """get_binance_env_config should return all required URL fields."""
-        required_fields = {"env", "rest_base", "public_ws_base", "private_ws_base", "listenkey_rest_base"}
-        
+        required_fields = {
+            "env",
+            "rest_base",
+            "public_ws_base",
+            "private_ws_base",
+            "listenkey_rest_base",
+        }
+
         os.environ["BINANCE_ENV"] = "demo"
         config = get_binance_env_config()
-        assert required_fields.issubset(config.keys()), f"Missing fields: {required_fields - config.keys()}"
+        assert required_fields.issubset(
+            config.keys()
+        ), f"Missing fields: {required_fields - config.keys()}"
 
     def test_is_valid_binance_env(self):
         """is_valid_binance_env should correctly validate environments."""
@@ -133,7 +140,7 @@ class TestBinanceSpotDemoBrokerConfigForEnv:
             secret_key="test_secret",
             env="demo",
         )
-        
+
         assert config.broker_name == "binance_spot_demo"
         assert config.base_url == "https://demo-api.binance.com/api"
 
@@ -144,7 +151,7 @@ class TestBinanceSpotDemoBrokerConfigForEnv:
             secret_key="test_secret",
             env="testnet",
         )
-        
+
         assert config.broker_name == "binance_spot_testnet"
         assert config.base_url == "https://testnet.binance.vision/api"
 
@@ -185,7 +192,7 @@ class TestBinanceSpotDemoBrokerConfigForEnv:
             proxy_url="http://proxy:8080",
             verify_ssl=False,
         )
-        
+
         assert config.timeout == 30.0
         assert config.max_retries == 5
         assert config.recv_window == 10000
@@ -213,11 +220,11 @@ class TestBinanceEnvConsistency:
         """Demo environment should have consistent URLs across all endpoints."""
         os.environ["BINANCE_ENV"] = "demo"
         config = get_binance_env_config()
-        
+
         # All REST URLs should be demo-api.binance.com
         assert config["rest_base"].startswith("https://demo-api.binance.com")
         assert config["listenkey_rest_base"].startswith("https://demo-api.binance.com")
-        
+
         # All WS URLs should be demo-stream.binance.com
         assert config["public_ws_base"].startswith("wss://demo-stream.binance.com")
         assert config["private_ws_base"].startswith("wss://demo-stream.binance.com")
@@ -226,11 +233,11 @@ class TestBinanceEnvConsistency:
         """Testnet environment should have consistent URLs across all endpoints."""
         os.environ["BINANCE_ENV"] = "testnet"
         config = get_binance_env_config()
-        
+
         # All REST URLs should be testnet.binance.vision
         assert config["rest_base"].startswith("https://testnet.binance.vision")
         assert config["listenkey_rest_base"].startswith("https://testnet.binance.vision")
-        
+
         # All WS URLs should be stream.testnet.binance.vision
         assert config["public_ws_base"].startswith("wss://stream.testnet.binance.vision")
         assert config["private_ws_base"].startswith("wss://stream.testnet.binance.vision")
@@ -239,14 +246,14 @@ class TestBinanceEnvConsistency:
         """REST and WS URLs should not be mixed across environments."""
         os.environ["BINANCE_ENV"] = "demo"
         demo_config = get_binance_env_config()
-        
+
         # Public WS should not be testnet when REST is demo
         assert "testnet" not in demo_config["public_ws_base"]
         assert "testnet" not in demo_config["private_ws_base"]
-        
+
         os.environ["BINANCE_ENV"] = "testnet"
         testnet_config = get_binance_env_config()
-        
+
         # Public WS should not be demo when REST is testnet
         assert "demo" not in testnet_config["public_ws_base"]
         assert "demo" not in testnet_config["private_ws_base"]
@@ -258,7 +265,7 @@ class TestBinanceEnvURLConfigs:
     def test_demo_urls_are_valid(self):
         """Demo URLs should be well-formed and use correct domain."""
         demo_urls = BINANCE_ENV_URL_CONFIGS[BINANCE_ENV_DEMO]
-        
+
         assert demo_urls["rest_base"] == "https://demo-api.binance.com/api"
         assert demo_urls["public_ws_base"] == "wss://demo-stream.binance.com/ws"
         assert demo_urls["private_ws_base"] == "wss://demo-stream.binance.com/ws"
@@ -267,7 +274,7 @@ class TestBinanceEnvURLConfigs:
     def test_testnet_urls_are_valid(self):
         """Testnet URLs should be well-formed and use correct domain."""
         testnet_urls = BINANCE_ENV_URL_CONFIGS[BINANCE_ENV_TESTNET]
-        
+
         assert testnet_urls["rest_base"] == "https://testnet.binance.vision/api"
         assert testnet_urls["public_ws_base"] == "wss://stream.testnet.binance.vision/ws"
         assert testnet_urls["private_ws_base"] == "wss://stream.testnet.binance.vision/ws"

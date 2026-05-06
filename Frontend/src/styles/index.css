@@ -28,9 +28,27 @@ body {
   @apply bg-gray-900 text-gray-100 antialiased;
 }
 
-/* Focus styles */
+/* Density tokens */
+:root {
+  --row-h-compact: 2rem;
+  --row-h-normal: 2.5rem;
+  --row-h-comfortable: 3rem;
+  --panel-p-sm: 0.75rem;
+  --panel-p-md: 1rem;
+  --panel-p-lg: 1.25rem;
+}
+
+/* Surface utility classes */
+.surface-1 { background-color: #0b0f19; }
+.surface-2 { background-color: #111827; }
+.surface-3 { background-color: #1a2234; }
+.surface-4 { background-color: #1e293b; }
+.surface-5 { background-color: #243447; }
+
+/* Focus ring — tighter control-room feel */
 *:focus-visible {
-  @apply outline-none ring-2 ring-blue-500 ring-offset-2 ring-offset-gray-900;
+  @apply outline-none;
+  box-shadow: 0 0 0 2px #111827, 0 0 0 4px #3b82f6;
 }
 
 /* Status indicator pulse animation */

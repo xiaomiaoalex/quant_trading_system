@@ -47,7 +47,6 @@ export function useMonitorSnapshot(
       // Runtime contract validation — fails fast on field drift
       const parsed = MonitorSnapshotSchema.safeParse(raw)
       if (!parsed.success) {
-        // eslint-disable-next-line no-console
         console.error('MonitorSnapshot validation failed:', parsed.error.flatten())
         throw new Error(
           `Monitor snapshot schema mismatch: ${parsed.error.errors.map((e) => e.message).join(', ')}`
@@ -94,7 +93,6 @@ export function useMonitorAlerts(): UseMonitorAlertsResult {
       const raw = await monitorAPI.getAlerts()
       const parsed = MonitorAlertsResponseSchema.safeParse(raw)
       if (!parsed.success) {
-        // eslint-disable-next-line no-console
         console.error('MonitorAlertsResponse validation failed:', parsed.error.flatten())
         throw new Error(
           `Alerts response schema mismatch: ${parsed.error.errors.map((e) => e.message).join(', ')}`

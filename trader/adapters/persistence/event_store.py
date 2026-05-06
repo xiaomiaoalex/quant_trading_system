@@ -8,15 +8,15 @@ Event Store with Fallback - 事件存储自动降级
 - 当PG不可用时自动切换到内存存储
 - 保持幂等性
 """
+
 import asyncio
 import logging
 import uuid
-from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from trader.adapters.persistence.memory.event_store import InMemoryEventStore
 from trader.adapters.persistence.postgres.event_store import PostgresEventStore, StreamEvent
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 class EventStoreWithFallback:
     """
     Event Store with automatic PostgreSQL to Memory fallback
-    
+
     当PostgreSQL不可用时，自动降级到内存存储。
     适用于需要高可用的场景。
-    
+
     注意：
     - 内存存储在进程重启后会丢失
     - 生产环境应监控PG健康状态并及时告警
@@ -51,7 +51,7 @@ class EventStoreWithFallback:
     def _get_store(self):
         """
         获取当前使用的存储。
-        
+
         FIX: 现在会检查 _use_pg 标志，如果 PG 已被禁用则返回内存存储。
         注意：如果 _use_pg 为 True 但 PG 连接实际已断开，调用方应捕获异常
         并调用 disable_postgres() 来正确切换到内存存储。
@@ -76,7 +76,7 @@ class EventStoreWithFallback:
     ) -> str:
         """
         幂等追加事件（带自动降级）
-        
+
         如果PG可用，优先使用PG；否则使用内存存储。
         """
         try:
@@ -108,7 +108,7 @@ class EventStoreWithFallback:
 
         # Fallback to memory - need to create DomainEvent from fields
         from trader.core.domain.models.events import DomainEvent, EventType
-        
+
         # Create a domain event from the fields
         # Safely convert event_type string to EventType enum, fall back to string if invalid
         try:
@@ -123,7 +123,7 @@ class EventStoreWithFallback:
                 },
             )
             event_type_enum = event_type
-        
+
         domain_event = DomainEvent(
             event_id=event_id or str(uuid.uuid4()),
             event_type=event_type_enum,
@@ -133,7 +133,7 @@ class EventStoreWithFallback:
             data=data,
             metadata=metadata or {},
         )
-        
+
         return await self._memory.append(domain_event)
 
     async def read_stream(
@@ -144,12 +144,12 @@ class EventStoreWithFallback:
     ) -> List[StreamEvent]:
         """
         读取事件流。
-        
+
         WARNING: 当使用内存回退时，存在以下语义差异：
         - 内存存储按 aggregate_id 组织事件，而非 stream_key
         - 因此 stream_key 参数在内存回退时被忽略
         - 返回的是所有事件的子集（按插入顺序），seq 使用内存中的索引位置
-        
+
         调用方需要注意：如果必须按 stream_key 严格过滤，请确保 PostgreSQL 可用。
         """
         try:
@@ -186,7 +186,7 @@ class EventStoreWithFallback:
             since=None,
             limit=limit,
         )
-        
+
         # Convert memory events to StreamEvent format
         # Note: Memory store doesn't have stream_key, so we filter differently
         return [
@@ -210,7 +210,7 @@ class EventStoreWithFallback:
     async def get_latest_seq(self, stream_key: str) -> Optional[int]:
         """
         获取流中最新的序列号。
-        
+
         Returns:
             Optional[int]: 最新序列号，如果流为空则返回-1。
             如果使用内存回退且无法追踪stream_key的seq，则返回None。
@@ -300,9 +300,13 @@ class EventStoreWithFallback:
                             limit=10000,
                         )
                         seq = len(memory_events)
-        
-        event_type = domain_event.event_type.value if hasattr(domain_event.event_type, 'value') else str(domain_event.event_type)
-        
+
+        event_type = (
+            domain_event.event_type.value
+            if hasattr(domain_event.event_type, "value")
+            else str(domain_event.event_type)
+        )
+
         return await self.append(
             stream_key=stream_key,
             seq=seq,

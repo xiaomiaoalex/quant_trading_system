@@ -14,34 +14,43 @@ Binance Connector - Unified Coordinator
 - 共享限流器和退避器
 - 统一的健康状态监控
 """
+
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Callable, Awaitable
 from enum import Enum
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from trader.adapters.binance.rate_limit import RestRateBudget, Priority, RateBudgetConfig
-from trader.adapters.binance.backoff import BackoffController, BackoffConfig
-from trader.adapters.binance.stream_base import StreamState
-from trader.adapters.binance.public_stream import (
-    PublicStreamManager, PublicStreamConfig, MarketEvent
-)
+from trader.adapters.binance.backoff import BackoffConfig, BackoffController
 from trader.adapters.binance.private_stream import (
-    PrivateStreamManager, PrivateStreamConfig,
-    BinanceCredentials, RawOrderUpdate, RawFillUpdate, ListenKeyEndpointGoneError
+    BinanceCredentials,
+    ListenKeyEndpointGoneError,
+    PrivateStreamConfig,
+    PrivateStreamManager,
+    RawFillUpdate,
+    RawOrderUpdate,
 )
 from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
-from trader.adapters.binance.rest_alignment import (
-    RESTAlignmentCoordinator, AlignmentConfig, RestAlignmentSnapshot
+from trader.adapters.binance.public_stream import (
+    MarketEvent,
+    PublicStreamConfig,
+    PublicStreamManager,
 )
-
+from trader.adapters.binance.rate_limit import Priority, RateBudgetConfig, RestRateBudget
+from trader.adapters.binance.rest_alignment import (
+    AlignmentConfig,
+    RESTAlignmentCoordinator,
+    RestAlignmentSnapshot,
+)
+from trader.adapters.binance.stream_base import StreamState
 
 logger = logging.getLogger(__name__)
 
 
 class AdapterHealth(Enum):
     """适配器健康状态"""
+
     HEALTHY = "HEALTHY"
     DEGRADED = "DEGRADED"
     UNHEALTHY = "UNHEALTHY"
@@ -51,6 +60,7 @@ class AdapterHealth(Enum):
 @dataclass
 class AdapterHealthReport:
     """适配器健康报告"""
+
     public_stream_state: StreamState
     private_stream_state: StreamState
     public_stream_healthy: bool
@@ -66,6 +76,7 @@ class AdapterHealthReport:
 @dataclass
 class BinanceConnectorConfig:
     """连接器配置"""
+
     testnet: bool = True
 
     public_stream_config: Optional[PublicStreamConfig] = None
@@ -115,16 +126,14 @@ class BinanceConnector:
         api_key: str,
         secret_key: str,
         streams: Optional[List[str]] = None,
-        config: Optional[BinanceConnectorConfig] = None
+        config: Optional[BinanceConnectorConfig] = None,
     ):
         self._api_key = api_key
         self._secret_key = secret_key
         self._config = config or BinanceConnectorConfig()
 
         self._credentials = BinanceCredentials(
-            api_key=api_key,
-            secret_key=secret_key,
-            testnet=self._config.testnet
+            api_key=api_key, secret_key=secret_key, testnet=self._config.testnet
         )
 
         self._rate_budget = RestRateBudget(self._config.rate_budget_config)
@@ -151,30 +160,37 @@ class BinanceConnector:
                     rest_url="https://api.binance.com/api",
                 )
         self._private_manager = PrivateStreamManager(
-            credentials=self._credentials,
-            config=private_config
+            credentials=self._credentials, config=private_config
         )
 
         alignment_config = self._config.alignment_config or AlignmentConfig(
-            base_url="https://testnet.binance.vision/api" if self._config.testnet else "https://api.binance.com/api"
+            base_url=(
+                "https://testnet.binance.vision/api"
+                if self._config.testnet
+                else "https://api.binance.com/api"
+            )
         )
         self._rest_coordinator = RESTAlignmentCoordinator(
             api_key=api_key,
             secret_key=secret_key,
             rate_budget=self._rate_budget,
             backoff=self._backoff,
-            config=alignment_config
+            config=alignment_config,
         )
 
         self._running = False
         self._public_manager.register_market_handler(self._on_public_data)
         self._private_manager.register_order_handler(self._on_order_update)
         self._private_manager.register_fill_handler(self._on_fill_update)
+        self._private_manager.register_account_update_handler(self._on_account_update)
+        self._private_manager.register_balance_update_handler(self._on_balance_update)
         self._private_manager.set_force_resync_callback(self._on_force_resync)
         self._rest_coordinator.register_snapshot_handler(self._on_rest_snapshot)
 
         self._order_update_handlers: List[Callable[[RawOrderUpdate], None]] = []
         self._fill_update_handlers: List[Callable[[RawFillUpdate], None]] = []
+        self._account_update_handlers: List[Callable[[dict], None]] = []
+        self._balance_update_handlers: List[Callable[[dict], None]] = []
         self._market_event_handlers: List[Callable[[MarketEvent], None]] = []
         self._snapshot_handlers: List[Callable[[RestAlignmentSnapshot], None]] = []
         self._health_handlers: List[Callable[[AdapterHealthReport], None]] = []
@@ -191,6 +207,14 @@ class BinanceConnector:
         """注册成交更新处理器"""
         self._fill_update_handlers.append(handler)
 
+    def register_account_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册账户余额更新处理器（outboundAccountPosition）"""
+        self._account_update_handlers.append(handler)
+
+    def register_balance_update_handler(self, handler: Callable[[dict], None]) -> None:
+        """注册余额变动处理器（balanceUpdate）"""
+        self._balance_update_handlers.append(handler)
+
     def register_market_handler(self, handler: Callable[[MarketEvent], None]) -> None:
         """注册市场事件处理器"""
         self._market_event_handlers.append(handler)
@@ -202,6 +226,13 @@ class BinanceConnector:
     def register_health_handler(self, handler: Callable[[AdapterHealthReport], None]) -> None:
         """注册健康状态处理器"""
         self._health_handlers.append(handler)
+
+    @property
+    def broker_name(self) -> str:
+        """Broker 名称（与 BrokerService 保持一致）。"""
+        if self._config.testnet:
+            return "binance_spot_testnet"
+        return "binance_spot"
 
     async def start(self) -> None:
         """启动连接器"""
@@ -312,6 +343,16 @@ class BinanceConnector:
         for handler in self._fill_update_handlers:
             self._dispatch_handler(handler, update)
 
+    def _on_account_update(self, data: dict) -> None:
+        """处理账户余额更新（outboundAccountPosition）"""
+        for handler in self._account_update_handlers:
+            self._dispatch_handler(handler, data)
+
+    def _on_balance_update(self, data: dict) -> None:
+        """处理余额变动（balanceUpdate）"""
+        for handler in self._balance_update_handlers:
+            self._dispatch_handler(handler, data)
+
     def _on_rest_snapshot(self, snapshot: RestAlignmentSnapshot) -> None:
         """处理 REST 对齐快照"""
         logger.info(
@@ -399,7 +440,7 @@ class BinanceConnector:
                 "rest": rest_metrics,
                 "proxy_failover": self._proxy_failover.get_state(),
                 "private_stream_disabled_reason": self._private_stream_disabled_reason,
-            }
+            },
         )
 
     @property

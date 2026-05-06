@@ -23,73 +23,14 @@ Backtesting - 回测框架集成模块
     report = BacktestReport(report_id="1", strategy_name="MyStrategy", config=config, result=result)
     await reporter.save_report(report)
 """
-from trader.services.backtesting.ports import (
-    BacktestEnginePort,
-    BacktestConfig,
-    BacktestResult,
-    BacktestReport,
-    BacktestFeature,
-    OptimizationMethod,
-    OptimizationResult,
-    DataProviderPort,
-    OHLCV,
-    ResultReporterPort,
-    StrategyAdapterPort,
-    FrameworkType,
-)
+
 from trader.core.domain.models.signal import Signal
 
-# Report formatter exports
-from trader.services.backtesting.report_formatter import (
-    ReportFormatter,
-    StandardizedBacktestReport,
-    ReturnMetrics,
-    RiskMetrics,
-    RiskAdjustedMetrics,
-    TradeStatistics,
-    BenchmarkComparison,
-    MetaInfo,
-)
+# Binance data provider exports
+from trader.services.backtesting.binance_data_provider import BinanceDataConfig, BinanceDataProvider
 
-# Visualizer exports
-from trader.services.backtesting.visualizer import (
-    BacktestVisualizer,
-    PlotConfig,
-    plot_equity_curve,
-    plot_drawdown,
-    plot_monthly_heatmap,
-    plot_trade_markers,
-    plot_returns_distribution,
-    plot_combined,
-)
-
-# Validation exports
-from trader.services.backtesting.validation import (
-    ValidationStatus,
-    WalkForwardAnalyzer,
-    WalkForwardReport,
-    WalkForwardSplit,
-    KFoldValidator,
-    KFoldReport,
-    KFoldSplit,
-    SensitivityAnalyzer,
-    SensitivityReport,
-    SensitivityResult,
-    OverfittingDetector,
-    OverfittingReport,
-)
-
-# Lifecycle integration exports
-from trader.services.backtesting.lifecycle_integration import (
-    AutoApprovalRules,
-    BacktestLifecycleIntegration,
-    BacktestJob,
-    BacktestLifecycleStatus,
-    calculate_scorecard,
-    is_valid_transition,
-    ParameterSweepResult,
-    StrategyComparison,
-)
+# Binance execution adapter exports
+from trader.services.backtesting.binance_execution_adapter import BinanceExecutionAdapter
 
 # Data pipeline exports
 from trader.services.backtesting.data_pipeline import (
@@ -106,30 +47,51 @@ from trader.services.backtesting.data_pipeline import (
     create_pipeline,
 )
 
+# Lifecycle integration exports
+from trader.services.backtesting.lifecycle_integration import (
+    AutoApprovalRules,
+    BacktestJob,
+    BacktestLifecycleIntegration,
+    BacktestLifecycleStatus,
+    ParameterSweepResult,
+    StrategyComparison,
+    calculate_scorecard,
+    is_valid_transition,
+)
+
 # Performance benchmark exports
 from trader.services.backtesting.performance_benchmark import (
+    BenchmarkReport,
+    BenchmarkResult,
+    BenchmarkRunner,
     PerformanceBenchmark,
     PerformanceTargets,
-    BenchmarkResult,
-    BenchmarkReport,
-    BenchmarkRunner,
+)
+from trader.services.backtesting.ports import (
+    OHLCV,
+    BacktestConfig,
+    BacktestEnginePort,
+    BacktestFeature,
+    BacktestReport,
+    BacktestResult,
+    DataProviderPort,
+    FrameworkType,
+    OptimizationMethod,
+    OptimizationResult,
+    ResultReporterPort,
+    StrategyAdapterPort,
 )
 
-# VectorBT adapter exports
-from trader.services.backtesting.vectorbt_adapter import (
-    VectorBTAdapter,
-    VectorBTConfig,
-)
-
-# Binance data provider exports
-from trader.services.backtesting.binance_data_provider import (
-    BinanceDataProvider,
-    BinanceDataConfig,
-)
-
-# Binance execution adapter exports
-from trader.services.backtesting.binance_execution_adapter import (
-    BinanceExecutionAdapter,
+# Report formatter exports
+from trader.services.backtesting.report_formatter import (
+    BenchmarkComparison,
+    MetaInfo,
+    ReportFormatter,
+    ReturnMetrics,
+    RiskAdjustedMetrics,
+    RiskMetrics,
+    StandardizedBacktestReport,
+    TradeStatistics,
 )
 
 # Slippage model exports
@@ -137,6 +99,37 @@ from trader.services.backtesting.slippage import (
     BinanceSlippageConfig,
     SlippageModel,
     calculate_slippage,
+)
+
+# Validation exports
+from trader.services.backtesting.validation import (
+    KFoldReport,
+    KFoldSplit,
+    KFoldValidator,
+    OverfittingDetector,
+    OverfittingReport,
+    SensitivityAnalyzer,
+    SensitivityReport,
+    SensitivityResult,
+    ValidationStatus,
+    WalkForwardAnalyzer,
+    WalkForwardReport,
+    WalkForwardSplit,
+)
+
+# VectorBT adapter exports
+from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
+
+# Visualizer exports
+from trader.services.backtesting.visualizer import (
+    BacktestVisualizer,
+    PlotConfig,
+    plot_combined,
+    plot_drawdown,
+    plot_equity_curve,
+    plot_monthly_heatmap,
+    plot_returns_distribution,
+    plot_trade_markers,
 )
 
 __all__ = [

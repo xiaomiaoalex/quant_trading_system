@@ -2,12 +2,10 @@
 Public Stream Manager Unit Tests
 ================================
 """
+
 import pytest
 
-from trader.adapters.binance.public_stream import (
-    PublicStreamManager,
-    PublicStreamConfig,
-)
+from trader.adapters.binance.public_stream import PublicStreamConfig, PublicStreamManager
 
 
 def test_build_stream_url_single_stream():
@@ -17,10 +15,7 @@ def test_build_stream_url_single_stream():
             streams=["btcusdt@trade"],
         )
     )
-    assert (
-        manager._build_stream_url()
-        == "wss://demo-stream.binance.com/ws/btcusdt@trade"
-    )
+    assert manager._build_stream_url() == "wss://demo-stream.binance.com/ws/btcusdt@trade"
 
 
 def test_build_stream_url_multi_stream():

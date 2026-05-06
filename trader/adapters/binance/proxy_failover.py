@@ -8,6 +8,7 @@ Proxy Failover Controller
 - 冷却期后自动恢复主代理优先
 - 对调用方保持最小侵入（select + report_success + report_failure）
 """
+
 from __future__ import annotations
 
 import os
@@ -185,7 +186,9 @@ class ProxyFailoverController:
                     "total_failures": st.total_failures,
                     "total_successes": st.total_successes,
                     "last_failure_ts": st.last_failure_ts if st.last_failure_ts > 0 else None,
-                    "cooldown_until_ts": st.cooldown_until_ts if st.cooldown_until_ts > now else None,
+                    "cooldown_until_ts": (
+                        st.cooldown_until_ts if st.cooldown_until_ts > now else None
+                    ),
                     "in_cooldown": st.cooldown_until_ts > now,
                 }
 

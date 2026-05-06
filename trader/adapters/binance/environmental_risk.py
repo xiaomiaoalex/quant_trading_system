@@ -6,19 +6,21 @@ Environmental Risk Events - 环境风险事件模型
 当底层网络崩溃导致无法向 Control Plane 上报时，
 系统在本地记录此事件并触发自保机制。
 """
+
+import hashlib
 import time
 import uuid
-import hashlib
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict, Optional, Any, List
 from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 DEDUP_WINDOW_MS = 60000
 
 
 class RiskSeverity(Enum):
     """风险严重等级"""
+
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
@@ -27,6 +29,7 @@ class RiskSeverity(Enum):
 
 class RiskScope(Enum):
     """风险范围"""
+
     GLOBAL = "GLOBAL"
     ACCOUNT = "ACCOUNT"
     VENUE = "VENUE"
@@ -35,10 +38,11 @@ class RiskScope(Enum):
 
 class RecommendedLevel(Enum):
     """建议的风控等级"""
-    L0_NORMAL = 0    # 正常运行
+
+    L0_NORMAL = 0  # 正常运行
     L1_NO_NEW_POS = 1  # 禁止新开仓
     L2_CLOSE_ONLY = 2  # 只允许平仓
-    L3_FULL_STOP = 3   # 完全停止
+    L3_FULL_STOP = 3  # 完全停止
 
 
 @dataclass
@@ -49,6 +53,7 @@ class EnvironmentalRiskEvent:
     当检测到适配器进入 DEGRADED_MODE 且无法向 Control Plane 上报时，
     本地记录此事件作为审计日志。
     """
+
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     dedup_key: str = ""
 
@@ -72,10 +77,7 @@ class EnvironmentalRiskEvent:
 
     @staticmethod
     def generate_dedup_key(
-        reason: str,
-        window_start_ms: int,
-        account_id: str = "",
-        venue: str = ""
+        reason: str, window_start_ms: int, account_id: str = "", venue: str = ""
     ) -> str:
         """
         生成幂等去重键
@@ -94,9 +96,7 @@ class EnvironmentalRiskEvent:
 
     @staticmethod
     def create_from_adapter_health(
-        adapter_name: str,
-        health_data: Dict[str, Any],
-        scope: RiskScope = RiskScope.GLOBAL
+        adapter_name: str, health_data: Dict[str, Any], scope: RiskScope = RiskScope.GLOBAL
     ) -> "EnvironmentalRiskEvent":
         """
         从适配器健康状态创建风险事件
@@ -126,7 +126,9 @@ class EnvironmentalRiskEvent:
             "private_stream_state": health_data.get("private_stream_state", "UNKNOWN"),
             "rate_budget": health_data.get("rate_budget_state", {}),
             "backoff": health_data.get("backoff_state", {}),
-            "consecutive_failures": health_data.get("metrics", {}).get("private", {}).get("consecutive_failures", 0),
+            "consecutive_failures": health_data.get("metrics", {})
+            .get("private", {})
+            .get("consecutive_failures", 0),
         }
 
         return EnvironmentalRiskEvent(
@@ -134,7 +136,7 @@ class EnvironmentalRiskEvent:
                 reason=reason,
                 window_start_ms=window_start_ms,
                 account_id=health_data.get("account_id", ""),
-                venue=health_data.get("venue", "")
+                venue=health_data.get("venue", ""),
             ),
             severity=severity,
             reason=reason,
@@ -189,6 +191,7 @@ class LocalEventLog:
 
     存储无法上报到 Control Plane 的环境风险事件。
     """
+
     events: List[EnvironmentalRiskEvent] = field(default_factory=list)
     max_size: int = 1000
 

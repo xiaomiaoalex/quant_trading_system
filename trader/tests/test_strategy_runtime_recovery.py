@@ -11,15 +11,16 @@ Tests for strategy runtime state persistence and recovery:
 
 import asyncio
 import time
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.strategy_runner import StrategyRunner, StrategyStatus
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
-from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.application.strategy_protocol import MarketData, MarketDataType
 
 
 class FakeRuntimeStateStorage:
@@ -132,7 +133,9 @@ class TestStrategyRuntimePersistence:
         assert state["status"] == "STOPPED"
 
     @pytest.mark.asyncio
-    async def test_runtime_state_saved_periodically_on_tick(self, runner, fake_storage, fake_plugin_module):
+    async def test_runtime_state_saved_periodically_on_tick(
+        self, runner, fake_storage, fake_plugin_module
+    ):
         """Test that runtime state is saved every 60 ticks."""
         strategy_id = "test_strategy"
 
@@ -171,7 +174,9 @@ class TestStrategyRuntimePersistence:
             assert state_after["env"] == "demo"
 
     @pytest.mark.asyncio
-    async def test_runtime_state_with_symbols_and_env(self, runner, fake_storage, fake_plugin_module):
+    async def test_runtime_state_with_symbols_and_env(
+        self, runner, fake_storage, fake_plugin_module
+    ):
         """Test that symbols and env are persisted correctly."""
         strategy_id = "test_strategy"
         symbols = ["BTCUSDT", "ETHUSDT"]
@@ -221,7 +226,9 @@ class TestStrategyRuntimePersistence:
         assert len(running_states) == 2
 
     @pytest.mark.asyncio
-    async def test_stopped_strategy_not_in_running_list(self, runner, fake_storage, fake_plugin_module):
+    async def test_stopped_strategy_not_in_running_list(
+        self, runner, fake_storage, fake_plugin_module
+    ):
         """Test that stopped strategies are not in running list."""
         strategy_id = "test_strategy"
 
@@ -344,9 +351,11 @@ class TestStrategyRuntimeRecovery:
         )
 
         mock_module = MagicMock()
+
         # Configure ALL possible factory methods to return a new plugin
         def create_new_plugin(**kwargs):
             return mock_plugin
+
         mock_module.create_plugin.side_effect = create_new_plugin
         mock_module.build_plugin.side_effect = create_new_plugin
         mock_module.get_plugin.side_effect = create_new_plugin

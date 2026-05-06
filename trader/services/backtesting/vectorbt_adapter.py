@@ -3,6 +3,7 @@ VectorBT Adapter - 实现 BacktestEnginePort
 ==========================================
 将 VectorBT 向量化回测引擎包装为标准接口。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from trader.services.backtesting.ports import (
     BacktestEnginePort,
     BacktestFeature,
     BacktestResult,
+    DataProviderPort,
     FrameworkType,
     OptimizationResult,
 )
@@ -30,8 +32,13 @@ class VectorBTConfig:
 class VectorBTAdapter:
     """VectorBT 回测引擎适配器，实现 BacktestEnginePort。"""
 
-    def __init__(self, config: Optional[VectorBTConfig] = None):
+    def __init__(
+        self,
+        config: Optional[VectorBTConfig] = None,
+        data_provider: DataProviderPort | None = None,
+    ):
         self._config = config or VectorBTConfig()
+        self._data_provider = data_provider
 
     @property
     def framework_type(self) -> FrameworkType:
@@ -52,10 +59,7 @@ class VectorBTAdapter:
         import numpy as np
         import vectorbt as vbt
 
-        from trader.services.backtesting.binance_data_provider import BinanceDataProvider
-        data_provider = BinanceDataProvider()
-
-        klines = await data_provider.get_klines(
+        klines = await self._get_data_provider().get_klines(
             symbol=config.symbol,
             interval=config.interval,
             start_date=config.start_date,
@@ -112,14 +116,20 @@ class VectorBTAdapter:
         trades = []
         for i, trade in enumerate(pf.trades):
             if trade is not None:
-                trades.append({
-                    "trade_id": i,
-                    "entry_idx": int(trade.entry_idx),
-                    "exit_idx": int(trade.exit_idx),
-                    "pnl": float(trade.pnl),
-                    "return": float(trade.return_),
-                    "status": trade.status.value if hasattr(trade.status, "value") else str(trade.status),
-                })
+                trades.append(
+                    {
+                        "trade_id": i,
+                        "entry_idx": int(trade.entry_idx),
+                        "exit_idx": int(trade.exit_idx),
+                        "pnl": float(trade.pnl),
+                        "return": float(trade.return_),
+                        "status": (
+                            trade.status.value
+                            if hasattr(trade.status, "value")
+                            else str(trade.status)
+                        ),
+                    }
+                )
         return trades
 
     async def run_optimization(
@@ -131,10 +141,8 @@ class VectorBTAdapter:
         import itertools
 
         import numpy as np
-        from trader.services.backtesting.binance_data_provider import BinanceDataProvider
-        data_provider = BinanceDataProvider()
 
-        klines = await data_provider.get_klines(
+        klines = await self._get_data_provider().get_klines(
             symbol=config.symbol,
             interval=config.interval,
             start_date=config.start_date,
@@ -157,6 +165,7 @@ class VectorBTAdapter:
             exits = signals < 0
 
             import vectorbt as vbt
+
             pf = vbt.Portfolio.from_signals(
                 close=close_prices,
                 entries=entries,
@@ -193,3 +202,10 @@ class VectorBTAdapter:
             all_results=results,
             optimization_time=0.0,
         )
+
+    def _get_data_provider(self) -> DataProviderPort:
+        if self._data_provider is None:
+            from trader.services.backtesting.binance_data_provider import BinanceDataProvider
+
+            self._data_provider = BinanceDataProvider()
+        return self._data_provider

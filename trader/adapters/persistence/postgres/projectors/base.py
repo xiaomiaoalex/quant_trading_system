@@ -20,17 +20,19 @@ Projector Base - 投影层基类
                               v
                         snapshots_proj (可选，用于加速重建)
 """
-import logging
+
 import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Optional, Any, TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 if TYPE_CHECKING:
     import asyncpg
+
     from trader.adapters.persistence.postgres.event_store import StreamEvent
 
 logger = logging.getLogger(__name__)
@@ -38,13 +40,15 @@ logger = logging.getLogger(__name__)
 
 # ==================== 数据类型定义 ====================
 
+
 @dataclass(frozen=True)
 class ProjectionVersion:
     """投影版本号（用于乐观锁）"""
+
     aggregate_id: str
     version: int
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    
+
     def is_newer_than(self, other: "ProjectionVersion") -> bool:
         """检查是否比另一个版本更新"""
         return self.version > other.version
@@ -54,9 +58,10 @@ class ProjectionVersion:
 class ProjectorSnapshot:
     """
     投影快照
-    
+
     用于加速投影重建，记录投影状态和版本信息。
     """
+
     aggregate_id: str
     projection_type: str
     state: Dict[str, Any]
@@ -68,18 +73,19 @@ class ProjectorSnapshot:
 
 # ==================== Projectable 接口 ====================
 
+
 class Projectable(ABC):
     """
     投影接口（抽象基类）
-    
+
     所有投影都必须实现此接口。
-    
+
     职责：
     1. 定义投影的事件类型过滤器
     2. 实现事件到投影状态的转换逻辑
     3. 提供幂等的 upsert 操作
     4. 支持投影重建（从快照或从头）
-    
+
     幂等更新保证：
     - 使用 aggregate_id 作为主键
     - 使用 version 进行乐观锁
@@ -101,9 +107,9 @@ class Projectable(ABC):
             event_types: 该投影处理的事件类型列表
         """
         self._pool = pool
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table_name):
             raise ValueError(f"Invalid table_name: {table_name}")
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', snapshot_table_name):
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", snapshot_table_name):
             raise ValueError(f"Invalid snapshot_table_name: {snapshot_table_name}")
         self._table_name = table_name
         self._snapshot_table_name = snapshot_table_name
@@ -133,10 +139,10 @@ class Projectable(ABC):
     def extract_aggregate_id(self, event: "StreamEvent") -> str:
         """
         从事件中提取聚合根 ID
-        
+
         Args:
             event: 事件对象
-            
+
         Returns:
             聚合根 ID
         """
@@ -150,13 +156,13 @@ class Projectable(ABC):
     ) -> Dict[str, Any]:
         """
         计算投影状态
-        
+
         从事件列表计算最新的投影状态。
-        
+
         Args:
             aggregate_id: 聚合根 ID
             events: 该聚合根的事件列表（按时间顺序）
-            
+
         Returns:
             投影状态字典
         """
@@ -170,7 +176,7 @@ class Projectable(ABC):
     def _serialize_value(self, value: Any) -> Any:
         """
         序列化值（处理特殊类型）
-        
+
         处理 Decimal, datetime, Enum 等特殊类型。
         """
         if isinstance(value, Decimal):
@@ -186,21 +192,21 @@ class Projectable(ABC):
     def _deserialize_value(self, value: Any, target_type: Optional[type] = None) -> Any:
         """
         反序列化值
-        
+
         Args:
             value: 待反序列化的值
             target_type: 目标类型（可选）
         """
         if value is None:
             return None
-        
+
         if target_type == Decimal:
             return Decimal(str(value))
         elif target_type == datetime:
             if isinstance(value, datetime):
                 return value
             return datetime.fromisoformat(value)
-        
+
         return value
 
     async def upsert_projection(
@@ -213,35 +219,32 @@ class Projectable(ABC):
     ) -> bool:
         """
         幂等 Upsert 投影状态
-        
+
         使用 ON CONFLICT 实现幂等更新。
         只有当新版本大于当前版本时才更新。
-        
+
         Args:
             aggregate_id: 聚合根 ID
             projection_state: 投影状态
             version: 版本号
             last_event_seq: 最后处理的事件序列号
             metadata: 额外的元数据
-            
+
         Returns:
             True if updated, False if skipped (version not newer)
         """
         if metadata is None:
             metadata = {}
-        
+
         # 序列化所有值
-        serialized_state = {
-            k: self._serialize_value(v) 
-            for k, v in projection_state.items()
-        }
+        serialized_state = {k: self._serialize_value(v) for k, v in projection_state.items()}
         serialized_state["_version"] = version
         serialized_state["_last_event_seq"] = last_event_seq
         serialized_state["_updated_at"] = datetime.now(timezone.utc).isoformat()
-        
+
         if metadata:
             serialized_state["_metadata"] = json.dumps(metadata, default=str)
-        
+
         async with self._pool.acquire() as conn:
             try:
                 result = await conn.execute(
@@ -261,11 +264,11 @@ class Projectable(ABC):
                     version,
                     last_event_seq,
                 )
-                
+
                 # PostgreSQL 的 execute 返回命令结果
                 # INSERT ... ON CONFLICT ... DO UPDATE 返回 'INSERT 0 N' 或 'UPDATE N'
                 updated = result.startswith("UPDATE")
-                
+
                 if updated:
                     self._logger.debug(
                         "PROJECTION_UPDATED",
@@ -284,9 +287,9 @@ class Projectable(ABC):
                             "reason": "version_not_newer",
                         },
                     )
-                    
+
                 return updated
-                
+
             except Exception as e:
                 self._logger.error(
                     "PROJECTION_UPSERT_ERROR",
@@ -304,10 +307,10 @@ class Projectable(ABC):
     ) -> Optional[Dict[str, Any]]:
         """
         获取投影状态
-        
+
         Args:
             aggregate_id: 聚合根 ID
-            
+
         Returns:
             投影状态字典，如果不存在则返回 None
         """
@@ -320,10 +323,10 @@ class Projectable(ABC):
                 """,
                 aggregate_id,
             )
-        
+
         if row is None:
             return None
-        
+
         state = json.loads(row["state"]) if isinstance(row["state"], str) else row["state"]
         return {
             "aggregate_id": row["aggregate_id"],
@@ -340,11 +343,11 @@ class Projectable(ABC):
     ) -> List[Dict[str, Any]]:
         """
         列出投影（支持分页）
-        
+
         Args:
             limit: 最大返回数量
             offset: 偏移量
-            
+
         Returns:
             投影列表
         """
@@ -359,27 +362,29 @@ class Projectable(ABC):
                 limit,
                 offset,
             )
-        
+
         results = []
         for row in rows:
             state = json.loads(row["state"]) if isinstance(row["state"], str) else row["state"]
-            results.append({
-                "aggregate_id": row["aggregate_id"],
-                "state": state,
-                "version": row["version"],
-                "last_event_seq": row["last_event_seq"],
-                "updated_at": row["updated_at"],
-            })
-        
+            results.append(
+                {
+                    "aggregate_id": row["aggregate_id"],
+                    "state": state,
+                    "version": row["version"],
+                    "last_event_seq": row["last_event_seq"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+
         return results
 
     async def delete_projection(self, aggregate_id: str) -> bool:
         """
         删除投影
-        
+
         Args:
             aggregate_id: 聚合根 ID
-            
+
         Returns:
             True if deleted, False if not found
         """
@@ -391,7 +396,7 @@ class Projectable(ABC):
                 """,
                 aggregate_id,
             )
-        
+
         return result != "DELETE 0"
 
     async def save_snapshot(
@@ -404,7 +409,7 @@ class Projectable(ABC):
     ) -> None:
         """
         保存投影快照
-        
+
         Args:
             aggregate_id: 聚合根 ID
             projection_type: 投影类型
@@ -438,11 +443,11 @@ class Projectable(ABC):
     ) -> Optional[ProjectorSnapshot]:
         """
         获取投影快照
-        
+
         Args:
             aggregate_id: 聚合根 ID
             projection_type: 投影类型
-            
+
         Returns:
             投影快照，如果不存在则返回 None
         """
@@ -456,10 +461,10 @@ class Projectable(ABC):
                 aggregate_id,
                 projection_type,
             )
-        
+
         if row is None:
             return None
-        
+
         state = json.loads(row["state"]) if isinstance(row["state"], str) else row["state"]
         return ProjectorSnapshot(
             aggregate_id=row["aggregate_id"],
@@ -478,19 +483,19 @@ class Projectable(ABC):
     ) -> bool:
         """
         处理单个事件并更新投影
-        
+
         这是事件驱动更新的入口方法。
-        
+
         Args:
             event: 事件对象
             event_store: 事件存储（可选，默认内部创建）
-            
+
         Returns:
             True if projection was updated, False otherwise
         """
         if not self.can_handle(event.event_type):
             return False
-        
+
         aggregate_id = self.extract_aggregate_id(event)
         if not aggregate_id:
             self._logger.warning(
@@ -498,12 +503,12 @@ class Projectable(ABC):
                 extra={"event_type": event.event_type, "event_id": event.event_id},
             )
             return False
-        
+
         # 获取当前投影版本
         current = await self.get_projection(aggregate_id)
         current_version = current["version"] if current else 0
         current_seq = current["last_event_seq"] if current else -1
-        
+
         # 检查事件是否已处理（幂等保证）
         if event.seq <= current_seq:
             self._logger.debug(
@@ -515,24 +520,25 @@ class Projectable(ABC):
                 },
             )
             return False
-        
+
         # 获取该聚合根的所有事件（从当前seq之后）
         # 注意：这里需要从 event_store 读取，而不是直接使用 event
         # 因为 project_event 可能被调用时只传入了单个事件
         if event_store is None:
             from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+
             event_store = PostgresEventStore(self._pool)
         events = await event_store.read_stream(
             stream_key=event.stream_key,
             from_seq=current_seq,
             limit=10000,  # 足够大的限制
         )
-        
+
         # 计算新投影
         new_state = self.compute_projection(aggregate_id, events)
         new_version = current_version + 1
         new_seq = max(e.seq for e in events)
-        
+
         # 更新投影
         return await self.upsert_projection(
             aggregate_id=aggregate_id,
@@ -549,14 +555,14 @@ class Projectable(ABC):
     ) -> Dict[str, Any]:
         """
         从头重建投影
-        
+
         从 event_log 读取所有事件并重新计算投影。
-        
+
         Args:
             aggregate_id: 聚合根 ID
             stream_key: 事件流键
             event_store: 事件存储（可选，默认内部创建）
-            
+
         Returns:
             重建后的投影状态
         """
@@ -564,30 +570,31 @@ class Projectable(ABC):
             "PROJECTION_REBUILD_START",
             extra={"aggregate_id": aggregate_id, "stream_key": stream_key},
         )
-        
+
         if event_store is None:
             from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+
             event_store = PostgresEventStore(self._pool)
-        
+
         # 读取所有事件
         events = await event_store.read_stream(
             stream_key=stream_key,
             from_seq=0,
             limit=100000,  # 足够大的限制
         )
-        
+
         if not events:
             self._logger.info(
                 "PROJECTION_REBUILD_NO_EVENTS",
                 extra={"aggregate_id": aggregate_id, "stream_key": stream_key},
             )
             return {}
-        
+
         # 计算投影
         new_state = self.compute_projection(aggregate_id, events)
         new_version = 1
         new_seq = max(e.seq for e in events)
-        
+
         # 更新投影
         await self.upsert_projection(
             aggregate_id=aggregate_id,
@@ -595,7 +602,7 @@ class Projectable(ABC):
             version=new_version,
             last_event_seq=new_seq,
         )
-        
+
         self._logger.info(
             "PROJECTION_REBUILD_COMPLETE",
             extra={
@@ -605,7 +612,7 @@ class Projectable(ABC):
                 "final_seq": new_seq,
             },
         )
-        
+
         return new_state
 
     async def get_projection_at(
@@ -616,35 +623,36 @@ class Projectable(ABC):
     ) -> Optional[Dict[str, Any]]:
         """
         获取特定时间点的投影快照
-        
+
         通过重建该时间点之前的投影状态来实现。
-        
+
         Args:
             aggregate_id: 聚合根 ID
             at_seq: 目标序列号
             event_store: 事件存储（可选，默认内部创建）
-            
+
         Returns:
             投影状态（如果存在）
         """
         if event_store is None:
             from trader.adapters.persistence.postgres.event_store import PostgresEventStore
+
             event_store = PostgresEventStore(self._pool)
         stream_key = f"{self.__class__.__name__.replace('Projector', '')}-{aggregate_id}"
-        
+
         # 读取截止到 at_seq 的所有事件
         events = await event_store.read_stream(
             stream_key=stream_key,
             from_seq=0,
             limit=at_seq + 1,
         )
-        
+
         # 过滤到 at_seq
         events = [e for e in events if e.seq <= at_seq]
-        
+
         if not events:
             return None
-        
+
         state = self.compute_projection(aggregate_id, events)
         return {
             "aggregate_id": aggregate_id,
@@ -655,17 +663,17 @@ class Projectable(ABC):
     async def check_consistency(self, aggregate_id: str) -> Dict[str, Any]:
         """
         检查投影的一致性
-        
+
         对比投影表和事件日志，检测数据不一致。
-        
+
         Args:
             aggregate_id: 聚合根 ID
-            
+
         Returns:
             一致性检查结果
         """
         projection = await self.get_projection(aggregate_id)
-        
+
         if projection is None:
             return {
                 "aggregate_id": aggregate_id,
@@ -673,12 +681,12 @@ class Projectable(ABC):
                 "consistent": True,
                 "issues": [],
             }
-        
+
         issues = []
         proj_seq = projection["last_event_seq"]
-        
+
         # TODO: 可以进一步验证事件数量和状态正确性
-        
+
         return {
             "aggregate_id": aggregate_id,
             "exists": True,
@@ -691,12 +699,13 @@ class Projectable(ABC):
 
 # ==================== 辅助函数 ====================
 
+
 def make_stream_key(aggregate_type: str, aggregate_id: str) -> str:
     """
     创建事件流键
-    
+
     格式: {aggregate_type}-{aggregate_id}
-    
+
     Examples:
         >>> make_stream_key("Order", "123")
         'Order-123'
@@ -709,10 +718,10 @@ def make_stream_key(aggregate_type: str, aggregate_id: str) -> str:
 def parse_stream_key(stream_key: str) -> tuple[str, str]:
     """
     解析事件流键
-    
+
     Returns:
         (aggregate_type, aggregate_id)
-        
+
     Raises:
         ValueError: 如果格式不正确
     """

@@ -1,24 +1,24 @@
 import asyncio
+import hashlib
+import logging
 import math
 import statistics
 import threading
-import hashlib
-import logging
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from trader.storage.in_memory import get_storage, InMemoryStorage
-from trader.storage.artifact_storage import get_artifact_storage
 from trader.api.models.schemas import (
-    Deployment, DeploymentCreateRequest,
-    BacktestRequest, BacktestRun,
     ActionResult,
+    BacktestRequest,
+    BacktestRun,
+    Deployment,
+    DeploymentCreateRequest,
 )
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.services.strategy_runner import StrategyRunner
-from trader.services.backtesting.binance_execution_adapter import BinanceExecutionAdapter
-from trader.services.backtesting.ports import BacktestConfig
+from trader.storage.artifact_storage import get_artifact_storage
+from trader.storage.in_memory import InMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
@@ -143,10 +143,14 @@ class BacktestService:
         limit: int = 100,
     ) -> List[BacktestRun]:
         """List backtest runs with filters (Task 9.4)"""
-        backtests = self._storage.list_backtests(status=status, strategy_id=strategy_id, limit=limit)
+        backtests = self._storage.list_backtests(
+            status=status, strategy_id=strategy_id, limit=limit
+        )
         return [BacktestRun(**b) for b in backtests]
 
-    def complete_backtest(self, run_id: str, metrics: Dict[str, Any], artifact_ref: str) -> Optional[BacktestRun]:
+    def complete_backtest(
+        self, run_id: str, metrics: Dict[str, Any], artifact_ref: str
+    ) -> Optional[BacktestRun]:
         """Mark backtest as completed"""
         updates = {
             "status": "COMPLETED",
@@ -219,72 +223,24 @@ class BacktestService:
 
             await runner.start(runtime_strategy_id)
 
-            # Build BacktestConfig for VectorBT
-            params = request.params or {}
-            initial_capital = _to_decimal(params.get("initial_capital"), Decimal("100000"))
-            commission_rate = _to_decimal(params.get("commission_rate"), Decimal("0.001"))
-            interval = params.get("interval", "1h")
-
-            config = BacktestConfig(
-                start_date=datetime.fromtimestamp(request.start_ts_ms / 1000, tz=timezone.utc),
-                end_date=datetime.fromtimestamp(request.end_ts_ms / 1000, tz=timezone.utc),
-                initial_capital=initial_capital,
-                symbol=request.symbols[0] if request.symbols else "BTCUSDT",
-                interval=interval,
-                commission_rate=commission_rate,
+            bars = self._build_market_data_series(request)
+            simulation = await self._simulate_backtest(
+                runner=runner,
+                runtime_strategy_id=runtime_strategy_id,
+                run_id=run_id,
+                request=request,
+                bars=bars,
             )
-
-            # Get strategy plugin from runner
-            strategy = runner._plugins[runtime_strategy_id]
-
-            # Run backtest via BinanceExecutionAdapter (VectorBT)
-            adapter = BinanceExecutionAdapter(
-                killswitch_callback=None,
-                risk_callback=None,
-                oms_callback=None,
-            )
-            result = await adapter.run_backtest(config, strategy)
-
-            # Convert BacktestResult to report dict format expected by save_report
-            returns = {
-                "total_return": float(result.total_return),
-                "total_return_pct": float(result.total_return) * 100,
-                "annualized_return": float(result.total_return) * 365,
-                "sharpe_ratio": float(result.sharpe_ratio),
-            }
-            risk = {
-                "max_drawdown": float(result.max_drawdown),
-                "max_drawdown_pct": float(result.max_drawdown) / float(initial_capital) * 100 if initial_capital > 0 else 0,
-                "volatility": 0.0,
-                "var_95": 0.0,
-            }
-            report_metrics = {
-                "total_return": float(result.total_return),
-                "total_return_pct": returns["total_return_pct"],
-                "annualized_return": returns["annualized_return"],
-                "sharpe_ratio": float(result.sharpe_ratio),
-                "max_drawdown": float(result.max_drawdown),
-                "max_drawdown_pct": risk["max_drawdown_pct"],
-                "volatility": risk["volatility"],
-                "var_95": risk["var_95"],
-                "trade_count": result.num_trades,
-                "winning_trades": 0,
-                "losing_trades": 0,
-                "win_rate": float(result.win_rate) * 100 if result.win_rate else 0,
-                "initial_capital": float(initial_capital),
-                "final_equity": float(result.final_capital),
-                "returns": returns,
-                "risk": risk,
-                "trades": list(result.trades) if result.trades else [],
-                "equity_curve": list(result.equity_curve) if result.equity_curve else [],
-            }
+            returns = simulation["returns"]
+            risk = simulation["risk"]
+            report_metrics = simulation["metrics"]
 
             artifact_ref = get_artifact_storage().save_report(
                 run_id=run_id,
                 returns=returns,
                 risk=risk,
-                trades=list(result.trades) if result.trades else [],
-                equity_curve=list(result.equity_curve) if result.equity_curve else [],
+                trades=simulation["trades"],
+                equity_curve=simulation["equity_curve"],
                 metadata={
                     "strategy_id": request.strategy_id,
                     "version": request.version,
@@ -412,7 +368,11 @@ class BacktestService:
             latest_prices[bar.symbol] = bar.price
             signal = await runner.tick(runtime_strategy_id, bar)
             if signal is not None:
-                signal_type = signal.signal_type.value if hasattr(signal.signal_type, "value") else str(signal.signal_type)
+                signal_type = (
+                    signal.signal_type.value
+                    if hasattr(signal.signal_type, "value")
+                    else str(signal.signal_type)
+                )
                 quantity = _to_decimal(getattr(signal, "quantity", None), default_order_size)
                 if quantity <= 0:
                     quantity = default_order_size
@@ -427,7 +387,8 @@ class BacktestService:
                         if new_qty > 0:
                             avg_cost[bar.symbol] = (
                                 (avg_cost[bar.symbol] * old_qty + cost) / new_qty
-                                if old_qty > 0 else bar.price
+                                if old_qty > 0
+                                else bar.price
                             )
                         positions[bar.symbol] = new_qty
                         cash -= cost
@@ -479,11 +440,15 @@ class BacktestService:
 
         final_equity = Decimal(str(equity_curve[-1]["equity"])) if equity_curve else initial_capital
         total_return = final_equity - initial_capital
-        total_return_pct = float((total_return / initial_capital) * Decimal("100")) if initial_capital > 0 else 0.0
+        total_return_pct = (
+            float((total_return / initial_capital) * Decimal("100")) if initial_capital > 0 else 0.0
+        )
         days = max(1.0, (request.end_ts_ms - request.start_ts_ms) / (1000 * 60 * 60 * 24))
         annualized_return = 0.0
         if initial_capital > 0:
-            annualized_return = (pow(float(final_equity / initial_capital), 365.0 / days) - 1.0) * 100.0
+            annualized_return = (
+                pow(float(final_equity / initial_capital), 365.0 / days) - 1.0
+            ) * 100.0
 
         eq_values = [float(p["equity"]) for p in equity_curve]
         period_returns: List[float] = []
@@ -554,6 +519,15 @@ class BacktestService:
             "risk": risk,
             "trades": trades,
             "equity_curve": equity_curve,
+            "backtest_data_mode": request.data_mode,
+            "feature_version": request.feature_version,
+            "fee_bps": request.fee_bps,
+            "slippage_bps": request.slippage_bps,
+            "benchmark": request.benchmark,
+            "data_quality_summary": {
+                "quality_score": 0.0 if request.data_mode == "dev_smoke" else 1.0,
+                "missing_data": request.data_mode == "dev_smoke",
+            },
         }
 
         return {

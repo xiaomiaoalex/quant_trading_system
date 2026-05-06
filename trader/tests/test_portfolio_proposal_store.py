@@ -10,17 +10,15 @@ PostgreSQL 测试（需要环境变量配置）：
     python -m pytest trader/tests/test_portfolio_proposal_store.py -v
 """
 
-import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from trader.adapters.persistence.portfolio_proposal_store import (
-    DecimalEncoder,
-    decimal_decoder,
-)
+import pytest
 
+from trader.adapters.persistence.portfolio_proposal_store import DecimalEncoder, decimal_decoder
 
 # ==================== Decimal 处理测试 ====================
+
 
 class TestDecimalEncoding:
     """Decimal 编码测试"""
@@ -28,15 +26,15 @@ class TestDecimalEncoding:
     def test_decimal_encoder(self):
         """测试 Decimal 编码器"""
         import json
-        
+
         data = {
             "capital_cap": Decimal("1000.50"),
             "weight": 0.5,
         }
-        
+
         encoded = json.dumps(data, cls=DecimalEncoder)
         decoded = json.loads(encoded)
-        
+
         assert decoded["capital_cap"] == "1000.50"
         assert decoded["weight"] == 0.5
 
@@ -45,13 +43,11 @@ class TestDecimalEncoding:
         data = {
             "capital_cap": "1000.50",
             "max_position_size": "500.25",
-            "nested": {
-                "total_capital_estimate": "2000.00"
-            }
+            "nested": {"total_capital_estimate": "2000.00"},
         }
-        
+
         decoded = decimal_decoder(data)
-        
+
         assert isinstance(decoded["capital_cap"], Decimal)
         assert decoded["capital_cap"] == Decimal("1000.50")
         assert isinstance(decoded["max_position_size"], Decimal)
@@ -64,9 +60,9 @@ class TestDecimalEncoding:
             "count": 42,
             "ratio": 0.75,
         }
-        
+
         decoded = decimal_decoder(data)
-        
+
         assert decoded["name"] == "test"
         assert decoded["count"] == 42
         assert decoded["ratio"] == 0.75
@@ -79,6 +75,7 @@ class TestDecimalEncoding:
 
 # ==================== 内存存储测试 ====================
 
+
 class TestMemoryStorage:
     """内存存储测试（无需 PostgreSQL）"""
 
@@ -86,6 +83,7 @@ class TestMemoryStorage:
     def store(self):
         """创建 store 实例（使用内存存储）"""
         from trader.adapters.persistence.portfolio_proposal_store import PortfolioProposalStore
+
         return PortfolioProposalStore()
 
     @pytest.fixture
@@ -112,7 +110,7 @@ class TestMemoryStorage:
         """测试内存存储保存和获取"""
         saved_id = await store.save_committee_run(sample_run)
         assert saved_id == "run_memory_test"
-        
+
         retrieved = await store.get_committee_run("run_memory_test")
         assert retrieved is not None
         assert retrieved["research_request"] == "内存测试"
@@ -121,7 +119,7 @@ class TestMemoryStorage:
     async def test_memory_list(self, store, sample_run):
         """测试内存存储列表"""
         await store.save_committee_run(sample_run)
-        
+
         runs = await store.list_committee_runs(limit=10)
         assert len(runs) >= 1
 
@@ -148,10 +146,10 @@ class TestMemoryStorage:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         saved_id = await store.save_sleeve_proposal(proposal)
         assert saved_id == "prop_memory_test"
-        
+
         retrieved = await store.get_sleeve_proposal(saved_id)
         assert retrieved is not None
         assert retrieved["specialist_type"] == "trend"
@@ -174,12 +172,13 @@ class TestMemoryStorage:
             "trace_id": "trace_report",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         saved_id = await store.save_review_report(report)
         assert saved_id == "report_memory_test"
 
 
 # ==================== Schema 验证测试 ====================
+
 
 class TestSchemaValidation:
     """Schema 验证测试"""
@@ -187,15 +186,15 @@ class TestSchemaValidation:
     def test_committee_run_to_dict(self):
         """测试 CommitteeRun 序列化"""
         from insight.committee.schemas import CommitteeRun, CommitteeRunStatus
-        
+
         run = CommitteeRun(
             run_id="run_123",
             research_request="研究趋势",
             trace_id="trace_456",
         )
-        
+
         run_dict = run.to_dict()
-        
+
         assert run_dict["run_id"] == "run_123"
         assert run_dict["trace_id"] == "trace_456"
         assert "sleeve_proposals" in run_dict
@@ -203,12 +202,8 @@ class TestSchemaValidation:
 
     def test_sleeve_proposal_to_dict(self):
         """测试 SleeveProposal 序列化"""
-        from insight.committee.schemas import (
-            SleeveProposal, 
-            SpecialistType,
-            CostAssumptions,
-        )
-        
+        from insight.committee.schemas import CostAssumptions, SleeveProposal, SpecialistType
+
         proposal = SleeveProposal(
             specialist_type=SpecialistType.TREND,
             hypothesis="测试假设",
@@ -217,9 +212,9 @@ class TestSchemaValidation:
             failure_modes=["横盘"],
             cost_assumptions=CostAssumptions(),
         )
-        
+
         proposal_dict = proposal.to_dict()
-        
+
         assert proposal_dict["specialist_type"] == "trend"
         assert proposal_dict["hypothesis"] == "测试假设"
         assert "content_hash" in proposal_dict
@@ -227,7 +222,7 @@ class TestSchemaValidation:
     def test_proposal_content_hash(self):
         """测试 Proposal 内容哈希"""
         from insight.committee.schemas import SleeveProposal, SpecialistType
-        
+
         proposal1 = SleeveProposal(
             specialist_type=SpecialistType.TREND,
             hypothesis="测试假设",
@@ -238,6 +233,6 @@ class TestSchemaValidation:
             hypothesis="测试假设",
             required_features=["ema_fast"],
         )
-        
+
         # 相同内容应该有相同哈希
         assert proposal1.content_hash() == proposal2.content_hash()
