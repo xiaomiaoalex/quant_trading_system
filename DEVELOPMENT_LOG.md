@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-06 13:15 - Crypto Risk P3.3c Fail-Closed 负向演练自动化
+
+- 背景: 正常 Binance demo 只读 probe 已通过，但坏 symbol / 缺关键市场数据时仍缺少可重复的负向演练脚本，无法自动证明失败 probe 有审计且没有订单副作用。
+- 决策: 新增只读演练脚本，不触发策略、不下单、不撤单；通过 runtime、probe、events、orders 四个只读入口验证 fail-closed 证据链。
+- 改动: 新增 `scripts/rehearse_crypto_risk_demo_fail_closed.py` 与 `trader/tests/test_crypto_risk_fail_closed_rehearsal.py`；runbook 增加脚本化 Fail-Closed 演练步骤；同步项目状态与经验总结。
+- 验证: 单测 10 passed；真实本地后端演练 PASS，`QTSFAILCLOSEDUSDT` 触发 `ok=false/read_only=true`，failed checks 为 `instrument_specs, leverage_brackets, mark_prices`；匹配 `risk:crypto / crypto_risk.probe_run` 审计事件；`/v1/orders` 前后一致；P0 回归 99 passed；isort/black/py_compile/git diff check passed。
+- 风险/遗留: 负向演练仍基于控制面内存事件流；下一步需要 PG 级风控审计持久化，并把 pre-trade rejection 也纳入长期可追溯证据。
+- 关联文档: `docs/CRYPTO_RISK_DEMO_RUNBOOK.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 2026-05-06 11:41 - Crypto Risk P3.3b Binance demo 真实只读 Probe 验证
 
 - 背景: P3.3a 已提供 demo preflight 与 runbook；用户确认继续后，需要用本地真实 demo 凭证启动后端并触发 `/v1/risk/crypto/probe`。

@@ -4,9 +4,34 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-06 11:41 (北京时间)
+2026-05-06 13:15 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Crypto Risk P3.3c Fail-Closed 负向演练自动化
+- 完成时间: 2026-05-06 13:15 (北京时间)
+- 分支: 当前工作区未切换（沿用现有任务分支）
+- 状态: ✅ 已完成 P3.3c
+- 开发前状态:
+  - 正常 demo 只读 probe 已通过，但坏 symbol / 缺关键市场数据时的失败证据仍依赖人工操作
+  - runbook 只描述负向演练思路，没有可复用脚本验证失败 probe 审计和无订单动作
+- 开发后状态:
+  - 新增 `scripts/rehearse_crypto_risk_demo_fail_closed.py`，只调用 runtime、probe、events、orders 的只读接口
+  - 脚本使用不存在 symbol 触发负向 probe，要求 `ok=false`、`read_only=true`、存在失败检查项、审计事件匹配且订单列表不变
+  - `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` 新增脚本化 Fail-Closed 演练步骤
+- 验证结果:
+  - 真实本地后端演练：`QTSFAILCLOSEDUSDT` → `ok=false`，failed checks=`instrument_specs, leverage_brackets, mark_prices` ✅
+  - `risk:crypto / crypto_risk.probe_run` 失败审计事件匹配 ✅
+  - `/v1/orders` 演练前后内容一致 ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_fail_closed_rehearsal.py --tb=short` → 4 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_demo_env_check.py --tb=short` → 10 passed ✅
+  - P0 回归集（Binance connector/private stream/degraded cascade/deterministic/hard properties）→ 99 passed ✅
+  - `python -m isort --check-only --profile black trader/ scripts/check_crypto_risk_demo_env.py scripts/rehearse_crypto_risk_demo_fail_closed.py` → passed ✅
+  - `python -m black --check --line-length 100 trader/ scripts/check_crypto_risk_demo_env.py scripts/rehearse_crypto_risk_demo_fail_closed.py` → passed ✅
+  - `python -m py_compile scripts\rehearse_crypto_risk_demo_fail_closed.py scripts\check_crypto_risk_demo_env.py` → passed ✅
+- 注意事项:
+  - 本演练验证的是只读 probe 失败闭环，不会触发策略信号或真实下单
+  - 下一步应将 probe/budget/pre-trade rejection 审计从控制面内存事件流推进到 PG 持久化
 
 ### 本次任务：Crypto Risk P3.3b Binance demo 真实只读 Probe 验证
 - 完成时间: 2026-05-06 11:41 (北京时间)

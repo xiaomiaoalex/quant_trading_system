@@ -34,6 +34,20 @@
 - “URL 看起来像 demo”不够，endpoint 家族必须匹配市场类型；Spot Demo 和 USD-M Demo 是两个 base URL。
 - preflight 不应只用字符串包含 `demo` 放行，应识别已知错误组合。
 
+### 30.3 设计模式：负向 Probe 要同时验证失败证据和无订单动作
+
+**问题描述**：
+只证明正常 probe 能通还不够。风控系统必须证明关键数据缺失、symbol 不存在或 source 失败时会产生可追踪失败证据，并且不会顺手触发订单动作。
+
+**解决方案**：
+- 新增 `scripts/rehearse_crypto_risk_demo_fail_closed.py`，用不存在 symbol 触发 `ok=false` 的只读 probe。
+- 脚本检查 `read_only=true`、失败检查项、匹配的 `crypto_risk.probe_run` 审计事件，以及 `/v1/orders` 演练前后内容一致。
+- 负向演练只调用只读 API，不调用下单、撤单、调整杠杆或策略启动入口。
+
+**经验**：
+- Fail-Closed 演练的验收不只是“请求失败”，还要证明失败被审计、且系统没有产生副作用。
+- 负向演练脚本应可反复运行，requested_by 独立标识每次演练，方便从事件流中定位证据。
+
 ---
 
 ## 二十九、isort 固定与格式化范围控制经验（2026-05-05）

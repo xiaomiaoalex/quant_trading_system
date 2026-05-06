@@ -43,6 +43,7 @@
 | **数字货币独立风控 P3.2c** | `api/routes/risk.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-04 完成：Binance demo 执行环境可观测、USD-M 风控 source 只读 readiness probe、Crypto Risk 前端运维页与审计流** |
 | **数字货币独立风控 P3.3a** | `scripts/check_crypto_risk_demo_env.py`, `docs/CRYPTO_RISK_DEMO_RUNBOOK.md` | **2026-05-05 完成：Binance demo 联调前静态自检、只读 probe 运行手册、demo 默认 `.env.example`** |
 | **数字货币独立风控 P3.3b** | `scripts/check_crypto_risk_demo_env.py`, `/v1/risk/crypto/probe` | **2026-05-06 完成：真实 Binance demo 凭证只读 probe 通过，USD-M demo source 固定为 `https://demo-fapi.binance.com`，审计事件已写入 `risk:crypto`** |
+| **数字货币独立风控 P3.3c** | `scripts/rehearse_crypto_risk_demo_fail_closed.py` | **2026-05-06 完成：不存在 symbol 负向 probe 自动演练，验证 `ok=false/read_only=true`、失败审计事件和订单列表不变** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 

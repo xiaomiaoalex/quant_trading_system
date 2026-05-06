@@ -134,6 +134,23 @@ Invoke-RestMethod "http://127.0.0.1:8080/v1/events?stream_key=risk:crypto&limit=
 - 临时移除一个 base symbol 的 cluster 映射，确认自检失败。
 - 使用不存在 symbol 发起 probe，确认该 symbol 的 mark/spec/bracket 检查失败且无订单动作。
 
+只读负向 probe 可以用脚本自动验证：
+
+```powershell
+python scripts/rehearse_crypto_risk_demo_fail_closed.py `
+  --base-url http://127.0.0.1:8080 `
+  --symbol QTSFAILCLOSEDUSDT `
+  --requested-by ops-fail-closed-rehearsal
+```
+
+通过条件：
+
+- runtime 为 `enabled=true`、`wired=true`、`fail_closed=false`
+- probe 返回 `ok=false`、`read_only=true`
+- 至少一个检查项失败，通常是 `mark_prices`、`instrument_specs` 或 `leverage_brackets`
+- `risk:crypto / crypto_risk.probe_run` 写入匹配的失败审计事件
+- `/v1/orders` 演练前后返回内容一致
+
 演练结束后恢复 `.env`，重新运行自检和 probe。
 
 ## 8. 前端入口
