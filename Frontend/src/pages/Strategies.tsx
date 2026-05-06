@@ -47,13 +47,38 @@ function normalizeStatus(status: string): StrategyRuntimeInfo['status'] {
 
 const ACTION_CONFIG: Record<
   string,
-  { label: string; variant: 'danger' | 'warning'; description: string }
+  { label: string; variant: 'danger' | 'warning'; description: string; footnote: string }
 > = {
-  start: { label: 'Start', variant: 'warning', description: 'This will start the strategy execution.' },
-  stop: { label: 'Stop', variant: 'danger', description: 'This will halt the strategy immediately. Any open orders may remain active.' },
-  pause: { label: 'Pause', variant: 'warning', description: 'This will pause the strategy. Existing positions remain.' },
-  resume: { label: 'Resume', variant: 'warning', description: 'This will resume the strategy from paused state.' },
-  unload: { label: 'Unload', variant: 'danger', description: 'This will unload the strategy deployment and release all associated resources.' },
+  start: {
+    label: 'Start',
+    variant: 'warning',
+    description: 'This may activate live strategy execution.',
+    footnote: 'Verify mode (demo/paper/live) before confirming.',
+  },
+  stop: {
+    label: 'Stop',
+    variant: 'danger',
+    description: 'This will halt the strategy immediately.',
+    footnote: 'Any open orders may remain active.',
+  },
+  pause: {
+    label: 'Pause',
+    variant: 'warning',
+    description: 'This will suspend new runtime actions until resumed.',
+    footnote: 'Existing positions remain unchanged.',
+  },
+  resume: {
+    label: 'Resume',
+    variant: 'warning',
+    description: 'This will restart runtime activity from the current state.',
+    footnote: 'Strategy resumes with existing positions and parameters.',
+  },
+  unload: {
+    label: 'Unload',
+    variant: 'danger',
+    description: 'This will remove the deployment from runtime control.',
+    footnote: 'Deployment state will be lost and must be recreated to restart.',
+  },
 }
 
 function RuntimeActions(props: {
@@ -179,7 +204,7 @@ function RuntimeActions(props: {
               <p>Deployment: <span className="font-mono text-white">{runtime.deployment_id}</span></p>
               <p>Status: <span className="font-medium">{runtime.status}</span></p>
               <p>{confirmConfig.description}</p>
-              <p className="text-xs text-accent-3">This action cannot be undone.</p>
+              <p className="text-xs text-accent-3">{confirmConfig.footnote}</p>
             </div>
           }
           confirmLabel={confirmConfig.label}
