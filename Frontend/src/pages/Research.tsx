@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { clsx } from 'clsx'
 import { researchAPI } from '@/api'
-import { ErrorState, LoadingState } from '@/components/ui'
+import { ErrorState, LoadingState, EmptyState } from '@/components/ui'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 import type { StrategyCandidate } from '@/types'
 
@@ -69,67 +71,84 @@ export function Research() {
   if (error && candidates.length === 0) return <div className="p-6"><ErrorState title="Failed to load candidates" message={error} onRetry={loadCandidates} /></div>
 
   return (
-    <div className="min-h-screen bg-gray-900 p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-white">Research</h1>
-        <button onClick={loadCandidates} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700">
+    <div className="min-h-screen bg-gray-900">
+      <PageHeader title="Research">
+        <button onClick={loadCandidates} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">
           Refresh
         </button>
-      </div>
+      </PageHeader>
 
-      {(error || message) && (
-        <div className={`mb-4 rounded p-2 text-sm ${error ? 'bg-red-950/20 text-red-400' : 'bg-green-950/20 text-green-400'}`}>
-          {error ?? message}
-        </div>
-      )}
-
-      <div className="mb-6 rounded-lg border border-gray-700 bg-gray-800/50 p-4">
-        <div className="mb-3 grid gap-3 md:grid-cols-2">
-          <input
-            value={strategyId}
-            onChange={(e) => setStrategyId(e.target.value)}
-            className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
-            placeholder="strategy_id"
-          />
-          <button onClick={createCandidate} className="rounded bg-blue-900/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-900/60">
-            Create Candidate
-          </button>
-        </div>
-        <textarea
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          className="h-32 w-full rounded bg-gray-950 border border-gray-700 p-3 text-xs text-gray-200 font-mono"
-          spellCheck={false}
-        />
-      </div>
-
-      <div className="space-y-3">
-        {candidates.map(candidate => (
-          <div key={candidate.candidate_id} className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-white">{candidate.strategy_id}</h2>
-                <p className="text-xs text-gray-400">{candidate.candidate_id}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded bg-gray-900 px-2 py-1 text-xs text-gray-300">{candidate.status}</span>
-                <button
-                  onClick={() => void deleteCandidate(candidate)}
-                  disabled={deletingCandidateId === candidate.candidate_id || ['APPROVED_FOR_PAPER', 'PAPER_RUNNING', 'PAUSED_BY_RISK'].includes(candidate.status)}
-                  className="rounded bg-red-900/40 px-2 py-1 text-xs text-red-200 hover:bg-red-900/60 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {deletingCandidateId === candidate.candidate_id ? 'Deleting...' : 'Delete'}
-                </button>
-              </div>
-            </div>
-            <div className="mt-3 grid gap-2 text-xs text-gray-400 md:grid-cols-4">
-              <span>code: {candidate.code_version ?? '-'}</span>
-              <span>backtest: {candidate.backtest_run_id ?? '-'}</span>
-              <span>feature: {candidate.feature_version}</span>
-              <span>deployment: {candidate.deployment_id ?? '-'}</span>
-            </div>
+      <div className="p-6 space-y-6">
+        {(error || message) && (
+          <div className={`rounded p-2 text-sm ${error ? 'bg-red-950/20 text-red-400' : 'bg-green-950/20 text-green-400'}`}>
+            {error ?? message}
           </div>
-        ))}
+        )}
+
+        <div className="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+          <div className="mb-3 grid gap-3 md:grid-cols-2">
+            <input
+              value={strategyId}
+              onChange={(e) => setStrategyId(e.target.value)}
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+              placeholder="strategy_id"
+            />
+            <button onClick={createCandidate} className="rounded bg-blue-900/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-900/60 transition-colors">
+              Create Candidate
+            </button>
+          </div>
+          <textarea
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            className="h-32 w-full rounded bg-gray-950 border border-gray-700 p-3 text-xs text-gray-200 font-mono"
+            spellCheck={false}
+          />
+        </div>
+
+        {candidates.length === 0 ? (
+          <EmptyState
+            title="No Research Candidates"
+            message="No candidates found. Create one to begin research."
+            action={{ label: 'Refresh', onClick: loadCandidates }}
+          />
+        ) : (
+          <div className="space-y-3">
+            {candidates.map(candidate => (
+              <div key={candidate.candidate_id} className="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold text-white">{candidate.strategy_id}</h2>
+                    <p className="text-xs font-mono text-accent-3">{candidate.candidate_id}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={clsx(
+                      'rounded px-2 py-1 text-xs font-medium',
+                      candidate.status === 'APPROVED_FOR_PAPER' ? 'bg-emerald-950/40 text-emerald-300' :
+                      candidate.status === 'PAPER_RUNNING' ? 'bg-blue-950/40 text-blue-300' :
+                      candidate.status === 'PAUSED_BY_RISK' ? 'bg-yellow-950/40 text-yellow-300' :
+                      'bg-gray-700 text-gray-400'
+                    )}>
+                      {candidate.status}
+                    </span>
+                    <button
+                      onClick={() => void deleteCandidate(candidate)}
+                      disabled={deletingCandidateId === candidate.candidate_id || ['APPROVED_FOR_PAPER', 'PAPER_RUNNING', 'PAUSED_BY_RISK'].includes(candidate.status)}
+                      className="rounded bg-red-900/40 px-2 py-1 text-xs text-red-200 hover:bg-red-900/60 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      {deletingCandidateId === candidate.candidate_id ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs text-accent-3 md:grid-cols-4">
+                  <div>code: <span className="text-gray-200">{candidate.code_version ?? '-'}</span></div>
+                  <div>backtest: <span className="text-gray-200">{candidate.backtest_run_id ?? '-'}</span></div>
+                  <div>feature: <span className="text-gray-200">{candidate.feature_version}</span></div>
+                  <div>deployment: <span className="text-gray-200">{candidate.deployment_id ?? '-'}</span></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

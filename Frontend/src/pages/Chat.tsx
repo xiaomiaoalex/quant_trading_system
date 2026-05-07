@@ -189,34 +189,32 @@ export function Chat() {
           </div>
         ) : (
           <>
-            <header className="px-6 py-4 border-b border-gray-800 bg-gray-900/80">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">AI Strategy Chat</h2>
-                  <p className="text-xs text-gray-500">
-                    Session: {selectedSessionId.slice(0, 8)}... · {messages?.length ?? 0} messages
-                  </p>
-                </div>
-                {isWaitingApproval && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleApprove}
-                      disabled={isApproving}
-                      className="rounded-md bg-green-900/30 px-3 py-1.5 text-sm font-medium text-green-300 hover:bg-green-900/50 disabled:opacity-50"
-                    >
-                      {isApproving ? 'Approving...' : 'Approve Strategy'}
-                    </button>
-                    <button
-                      onClick={handleReject}
-                      disabled={isRejecting}
-                      className="rounded-md bg-red-900/30 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-900/50 disabled:opacity-50"
-                    >
-                      {isRejecting ? 'Rejecting...' : 'Reject'}
-                    </button>
-                  </div>
-                )}
+            <div className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-white">AI Strategy Chat</h2>
+                <p className="text-xs text-accent-3">
+                  Session: <span className="font-mono text-gray-300">{selectedSessionId.slice(0, 8)}</span> · {messages?.length ?? 0} messages
+                </p>
               </div>
-            </header>
+              {isWaitingApproval && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleApprove}
+                    disabled={isApproving}
+                    className="rounded-md bg-green-900/30 px-3 py-1.5 text-sm font-medium text-green-300 hover:bg-green-900/50 disabled:opacity-50 transition-colors"
+                  >
+                    {isApproving ? 'Approving...' : 'Approve Strategy'}
+                  </button>
+                  <button
+                    onClick={handleReject}
+                    disabled={isRejecting}
+                    className="rounded-md bg-red-900/30 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-900/50 disabled:opacity-50 transition-colors"
+                  >
+                    {isRejecting ? 'Rejecting...' : 'Reject'}
+                  </button>
+                </div>
+              )}
+            </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               {successMsg && (
