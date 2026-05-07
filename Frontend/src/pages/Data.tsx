@@ -5,6 +5,7 @@ import { ErrorState, LoadingState, EmptyState } from '@/components/ui'
 import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 import type { DataCatalogResponse } from '@/types'
+import { DATA_SOURCE_STATUS_DISPLAY, type DataSourceStatusValue } from '@/types/research'
 
 export function Data() {
   const [catalog, setCatalog] = useState<DataCatalogResponse | null>(null)
@@ -53,14 +54,14 @@ export function Data() {
               <div key={source.source} className="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-white">{source.source}</h2>
-                  <span className={clsx(
-                    'rounded px-2 py-1 text-xs font-medium',
-                    source.status === 'available'
-                      ? 'bg-emerald-950/40 text-emerald-300'
-                      : 'bg-gray-700 text-gray-400'
-                  )}>
-                    {source.status}
-                  </span>
+                  {(() => {
+                    const cfg = DATA_SOURCE_STATUS_DISPLAY[source.status as DataSourceStatusValue] ?? { label: source.status, bgClass: 'bg-gray-700', textClass: 'text-gray-400' }
+                    return (
+                      <span className={clsx('rounded px-2 py-1 text-xs font-medium', cfg.bgClass, cfg.textClass)}>
+                        {cfg.label}
+                      </span>
+                    )
+                  })()}
                 </div>
                 <div className="space-y-2 text-xs text-accent-3">
                   <div>symbols: <span className="text-gray-200">{source.symbols.join(', ') || '-'}</span></div>

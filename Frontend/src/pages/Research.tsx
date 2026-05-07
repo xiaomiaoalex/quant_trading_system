@@ -5,6 +5,7 @@ import { ErrorState, LoadingState, EmptyState } from '@/components/ui'
 import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 import type { StrategyCandidate } from '@/types'
+import { CANDIDATE_STATUS_DISPLAY } from '@/types/research'
 
 const DEFAULT_CODE = `def get_plugin():
     return None
@@ -121,15 +122,14 @@ export function Research() {
                     <p className="text-xs font-mono text-accent-3">{candidate.candidate_id}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={clsx(
-                      'rounded px-2 py-1 text-xs font-medium',
-                      candidate.status === 'APPROVED_FOR_PAPER' ? 'bg-emerald-950/40 text-emerald-300' :
-                      candidate.status === 'PAPER_RUNNING' ? 'bg-blue-950/40 text-blue-300' :
-                      candidate.status === 'PAUSED_BY_RISK' ? 'bg-yellow-950/40 text-yellow-300' :
-                      'bg-gray-700 text-gray-400'
-                    )}>
-                      {candidate.status}
-                    </span>
+                    {(() => {
+                      const cfg = CANDIDATE_STATUS_DISPLAY[candidate.status] ?? { label: candidate.status, bgClass: 'bg-gray-700', textClass: 'text-gray-400' }
+                      return (
+                        <span className={clsx('rounded px-2 py-1 text-xs font-medium', cfg.bgClass, cfg.textClass)}>
+                          {cfg.label}
+                        </span>
+                      )
+                    })()}
                     <button
                       onClick={() => void deleteCandidate(candidate)}
                       disabled={deletingCandidateId === candidate.candidate_id || ['APPROVED_FOR_PAPER', 'PAPER_RUNNING', 'PAUSED_BY_RISK'].includes(candidate.status)}

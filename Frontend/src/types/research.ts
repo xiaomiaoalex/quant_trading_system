@@ -12,6 +12,27 @@ export type StrategyCandidateStatus =
   | 'STOPPED'
   | 'REJECTED'
 
+export const CANDIDATE_STATUS_DISPLAY: Record<StrategyCandidateStatus, { label: string; bgClass: string; textClass: string }> = {
+  DRAFT:             { label: 'Draft',             bgClass: 'bg-gray-700',       textClass: 'text-gray-400' },
+  DEBUG_PASSED:      { label: 'Debug Passed',      bgClass: 'bg-gray-700',       textClass: 'text-gray-400' },
+  BACKTEST_RUNNING:  { label: 'Backtest Running',  bgClass: 'bg-blue-950/40',    textClass: 'text-blue-300' },
+  BACKTEST_PASSED:   { label: 'Backtest Passed',    bgClass: 'bg-blue-950/40',    textClass: 'text-blue-300' },
+  VALIDATION_PASSED: { label: 'Validated',        bgClass: 'bg-blue-950/40',    textClass: 'text-blue-300' },
+  APPROVED_FOR_PAPER:{ label: 'Approved',          bgClass: 'bg-emerald-950/40', textClass: 'text-emerald-300' },
+  PAPER_RUNNING:     { label: 'Paper Running',      bgClass: 'bg-blue-950/40',    textClass: 'text-blue-300' },
+  PAUSED_BY_RISK:    { label: 'Paused by Risk',    bgClass: 'bg-yellow-950/40',  textClass: 'text-yellow-300' },
+  STOPPED:           { label: 'Stopped',           bgClass: 'bg-gray-700',       textClass: 'text-gray-400' },
+  REJECTED:          { label: 'Rejected',          bgClass: 'bg-red-950/40',     textClass: 'text-red-300' },
+}
+
+export type DataSourceStatusValue = 'available' | 'stub' | 'missing'
+
+export const DATA_SOURCE_STATUS_DISPLAY: Record<DataSourceStatusValue, { label: string; bgClass: string; textClass: string }> = {
+  available: { label: 'Available', bgClass: 'bg-emerald-950/40', textClass: 'text-emerald-300' },
+  stub:     { label: 'Stub',      bgClass: 'bg-gray-700',       textClass: 'text-gray-400' },
+  missing:  { label: 'Missing',  bgClass: 'bg-red-950/40',     textClass: 'text-red-300' },
+}
+
 export interface BacktestDatasetSpec {
   symbols: string[]
   start_ts_ms: number
