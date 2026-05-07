@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useBacktestList, useBacktestReport, useCreateBacktest, useLoadedStrategies } from '@/hooks'
 import { LoadingState, ErrorState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
+import { PageHeader } from '@/components/layout'
 import { strategiesAPI } from '@/api'
 import { formatAPIError } from '@/api/client'
 import { buildDeploymentId, type DeploymentMode } from '@/types/strategies'
@@ -292,27 +293,22 @@ export function Backtests() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold text-white">Backtests</h1>
-            {isFetching && <span className="text-xs text-gray-500">Refreshing...</span>}
-          </div>
-          <div className="flex items-center gap-3">
-            <select
-              value={statusFilter ?? ''}
-              onChange={(e) => setStatusFilter(e.target.value || undefined)}
-              className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 border border-gray-700"
-            >
-              <option value="">All Status</option>
-              <option value="RUNNING">Running</option>
-              <option value="COMPLETED">Completed</option>
-              <option value="FAILED">Failed</option>
-            </select>
-            <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
-          </div>
+      <PageHeader title="Backtests">
+        {isFetching && <span className="text-xs text-accent-3">Refreshing...</span>}
+        <div className="flex items-center gap-3">
+          <select
+            value={statusFilter ?? ''}
+            onChange={(e) => setStatusFilter(e.target.value || undefined)}
+            className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 border border-gray-700"
+          >
+            <option value="">All Status</option>
+            <option value="RUNNING">Running</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="FAILED">Failed</option>
+          </select>
+          <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
         </div>
-      </div>
+      </PageHeader>
 
       <div className="p-6">
         <div className="mb-6 rounded-lg border border-gray-700 bg-gray-800/50 p-4">

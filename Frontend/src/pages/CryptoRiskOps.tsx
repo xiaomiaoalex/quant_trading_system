@@ -7,6 +7,7 @@ import {
   useCryptoRiskRuntime,
   useUpdateCryptoRiskBudget,
 } from '@/hooks'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 import type { CryptoRiskBudgetUpdateRequest, CryptoRiskProbeResponse } from '@/types'
 import { formatKeyValueMap, parseKeyValueMapInput, parseSymbolListInput } from '@/utils'
@@ -238,28 +239,23 @@ export function CryptoRiskOps() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="sticky top-0 z-10 border-b border-gray-800 bg-gray-900/90 backdrop-blur-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
-          <div>
-            <h1 className="text-xl font-semibold text-white">Crypto Risk</h1>
-            <div className="mt-1 text-xs text-gray-500">
-              Updated {formatDateTime(runtime.updated_at)} by {runtime.updated_by ?? '-'}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              void refetch()
-              void refetchEvents()
-            }}
-            className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
-          >
-            {isFetching || isEventsFetching ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Crypto Risk">
+        <button
+          type="button"
+          onClick={() => {
+            void refetch()
+            void refetchEvents()
+          }}
+          className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
+        >
+          {isFetching || isEventsFetching ? 'Refreshing...' : 'Refresh'}
+        </button>
+      </PageHeader>
 
       <div className="space-y-5 p-6">
+        <div className="text-xs text-accent-3">
+          Updated {formatDateTime(runtime.updated_at)} by {runtime.updated_by ?? '-'}
+        </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <MetricTile label="Execution Env" value={runtime.execution_env} tone="ok" />
           <MetricTile label="Runtime" value={runtime.wired ? 'wired' : 'not wired'} tone={runtimeTone} />

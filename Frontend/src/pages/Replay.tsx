@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LoadingState, ErrorState } from '@/components/ui'
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui'
 import { useReplayJob, useReplayJobs, useTriggerReplay } from '@/hooks'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 
 function formatTime(value?: string | null): string {
@@ -98,20 +99,15 @@ export function Replay() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold text-white">Replay</h1>
-            {isFetching && <span className="text-xs text-gray-500">Refreshing...</span>}
-          </div>
-          <button
-            onClick={() => refetch()}
-            className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Replay">
+        {isFetching && <span className="text-xs text-accent-3">Refreshing...</span>}
+        <button
+          onClick={() => refetch()}
+          className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700"
+        >
+          Refresh
+        </button>
+      </PageHeader>
 
       <div className="space-y-4 p-6">
         <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
@@ -172,7 +168,11 @@ export function Replay() {
               <h2 className="text-sm font-semibold text-gray-200">Jobs ({jobs?.length ?? 0})</h2>
             </div>
             {!jobs || jobs.length === 0 ? (
-              <div className="p-6 text-sm text-gray-400">No replay jobs found.</div>
+              <EmptyState
+                title="No Replay Jobs"
+                message="No replay jobs match the current filters."
+                action={{ label: 'Clear Filters', onClick: () => { setStatusFilter(''); setStreamKey('orders'); } }}
+              />
             ) : (
               <div className="max-h-[560px] overflow-auto">
                 <table className="w-full text-sm">

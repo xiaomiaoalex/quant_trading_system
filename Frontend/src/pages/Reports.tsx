@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useBacktestList, useBacktestReport } from '@/hooks'
-import { LoadingState, ErrorState } from '@/components/ui'
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
+import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
 
 export function Reports() {
@@ -16,24 +17,20 @@ export function Reports() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <div className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-semibold text-white">Reports</h1>
-            {isFetching && <span className="text-xs text-gray-500">Refreshing...</span>}
-          </div>
-          <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
-        </div>
-      </div>
+      <PageHeader title="Reports">
+        {isFetching && <span className="text-xs text-accent-3">Refreshing...</span>}
+        <button onClick={() => refetch()} className="rounded-md bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-300 hover:bg-gray-700">Refresh</button>
+      </PageHeader>
 
       <div className="p-6">
         <div className="grid gap-6 lg:grid-cols-2">
           <div>
             {completedReports.length === 0 ? (
-              <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-6 text-center">
-                <p className="text-sm text-gray-400">No completed backtest reports found.</p>
-                <p className="text-xs text-gray-500 mt-1">Run a backtest first to generate reports.</p>
-              </div>
+              <EmptyState
+                title="No Reports"
+                message="No completed backtest reports found. Run a backtest first to generate reports."
+                action={{ label: 'Refresh', onClick: () => refetch() }}
+              />
             ) : (
               <BacktestList
                 backtests={completedReports}
