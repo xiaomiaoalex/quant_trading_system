@@ -114,7 +114,7 @@ export function Audit() {
                       >
                         <td className="px-3 py-2 text-gray-200">
                           <div>{entry.strategy_id}</div>
-                          <div className="text-xs text-gray-500">{entry.entry_id.slice(0, 8)}...</div>
+                          <div title={entry.entry_id}>{entry.entry_id.slice(0, 8)}...</div>
                         </td>
                         <td className="px-3 py-2 text-gray-300">{entry.status}</td>
                         <td className="px-3 py-2 text-gray-300">{entry.event_type}</td>

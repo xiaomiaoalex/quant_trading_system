@@ -193,7 +193,8 @@ export function Chat() {
               <div>
                 <h2 className="text-lg font-semibold text-white">AI Strategy Chat</h2>
                 <p className="text-xs text-accent-3">
-                  Session: <span className="font-mono text-gray-300">{selectedSessionId.slice(0, 8)}</span> · {messages?.length ?? 0} messages
+                  Session: <span className="font-mono text-gray-300" title={selectedSessionId ?? ''}>{selectedSessionId?.slice(0, 8)}</span>
+                  · {messages?.length ?? 0} messages
                 </p>
               </div>
               {isWaitingApproval && (
