@@ -422,21 +422,22 @@ export function Strategies() {
         </div>
 
         <div className="rounded-lg border border-gray-700 bg-surface-3/40 overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-700">
-            <thead className="bg-gray-800">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Name</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Template ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Description</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Deployments</th>
-                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-700">
-              {registeredStrategies.map((strategy) => {
-                const runtimes = deploymentsByStrategy.get(strategy.strategy_id) ?? []
-                return (
-                  <tr key={strategy.strategy_id} className="align-top hover:bg-gray-700/20">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-700">
+              <thead className="bg-gray-800">
+                <tr>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Name</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Template ID</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Description</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Deployments</th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase text-accent-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {registeredStrategies.map((strategy) => {
+                  const runtimes = deploymentsByStrategy.get(strategy.strategy_id) ?? []
+                  return (
+                    <tr key={strategy.strategy_id} className="align-top table-row-hover">
                     <td className="px-4 py-3">
                       <button
                         onClick={() => setDetailStrategy(strategy)}
@@ -509,6 +510,7 @@ export function Strategies() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 

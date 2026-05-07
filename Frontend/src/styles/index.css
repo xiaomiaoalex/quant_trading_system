@@ -28,27 +28,111 @@ body {
   @apply bg-gray-900 text-gray-100 antialiased;
 }
 
-/* Density tokens */
+/* Design tokens — CSS Custom Properties */
 :root {
+  /* Density */
   --row-h-compact: 2rem;
   --row-h-normal: 2.5rem;
   --row-h-comfortable: 3rem;
   --panel-p-sm: 0.75rem;
   --panel-p-md: 1rem;
   --panel-p-lg: 1.25rem;
+
+  /* Surface — panel/background density scale */
+  --surface-1: #0b0f19;
+  --surface-2: #111827;
+  --surface-3: #1a2234;
+  --surface-4: #1e293b;
+  --surface-5: #243447;
+
+  /* Accent — border/text neutral scale */
+  --accent-1: #334155;
+  --accent-2: #475569;
+  --accent-3: #64748b;
+  --accent-4: #94a3b8;
+  --accent-5: #cbd5e1;
+
+  /* Status — locked by contract */
+  --status-healthy: #22c55e;
+  --status-degraded: #f59e0b;
+  --status-down: #ef4444;
+  --status-stale: #6b7280;
+  --status-blocked: #dc2626;
+
+  /* Severity — locked by contract */
+  --severity-low: #3b82f6;
+  --severity-medium: #f59e0b;
+  --severity-high: #f97316;
+  --severity-critical: #ef4444;
+
+  /* Semantic backgrounds */
+  --bg-page: #111827;
+  --bg-panel: #1f2937;
+  --bg-card: rgba(31, 41, 55, 0.4);
+  --bg-input: #111827;
+  --bg-code: #030712;
+
+  /* Semantic text */
+  --text-primary: #f3f4f6;
+  --text-secondary: #e5e7eb;
+  --text-muted: #9ca3af;
+  --text-disabled: #6b7280;
+
+  /* Semantic borders */
+  --border-default: #374151;
+  --border-subtle: #1f2937;
+
+  /* Focus ring */
+  --focus-ring-color: #3b82f6;
+
+  /* Animation timings */
+  --transition-fast: 75ms;
+  --transition-normal: 150ms;
+  --transition-slow: 200ms;
+}
+
+/* Light theme foundation — for future use */
+[data-theme="light"] {
+  --surface-1: #f8fafc;
+  --surface-2: #f1f5f9;
+  --surface-3: #e2e8f0;
+  --surface-4: #cbd5e1;
+  --surface-5: #94a3b8;
+
+  --accent-1: #cbd5e1;
+  --accent-2: #94a3b8;
+  --accent-3: #64748b;
+  --accent-4: #475569;
+  --accent-5: #334155;
+
+  --bg-page: #f1f5f9;
+  --bg-panel: #e2e8f0;
+  --bg-card: rgba(255, 255, 255, 0.6);
+  --bg-input: #ffffff;
+  --bg-code: #f8fafc;
+
+  --text-primary: #0f172a;
+  --text-secondary: #1e293b;
+  --text-muted: #64748b;
+  --text-disabled: #94a3b8;
+
+  --border-default: #cbd5e1;
+  --border-subtle: #e2e8f0;
+
+  --focus-ring-color: #2563eb;
 }
 
 /* Surface utility classes */
-.surface-1 { background-color: #0b0f19; }
-.surface-2 { background-color: #111827; }
-.surface-3 { background-color: #1a2234; }
-.surface-4 { background-color: #1e293b; }
-.surface-5 { background-color: #243447; }
+.surface-1 { background-color: var(--surface-1); }
+.surface-2 { background-color: var(--surface-2); }
+.surface-3 { background-color: var(--surface-3); }
+.surface-4 { background-color: var(--surface-4); }
+.surface-5 { background-color: var(--surface-5); }
 
 /* Focus ring — tighter control-room feel */
 *:focus-visible {
   @apply outline-none;
-  box-shadow: 0 0 0 2px #111827, 0 0 0 4px #3b82f6;
+  box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 4px var(--focus-ring-color);
 }
 
 /* Status indicator pulse animation */
@@ -88,4 +172,60 @@ body {
 /* Dialog panel */
 .dialog-panel {
   @apply fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-gray-800 p-6 shadow-xl;
+}
+
+/* Page transition animation */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-page-enter {
+  animation: page-enter var(--transition-normal) ease-out both;
+}
+
+/* Dialog enter animation */
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.animate-dialog-enter {
+  animation: dialog-enter var(--transition-fast) ease-out both;
+}
+
+/* Button press micro-interaction */
+.btn-press:active {
+  transform: scale(0.98);
+  filter: brightness(1.1);
+}
+
+/* Sidebar backdrop for mobile drawer */
+.sidebar-backdrop {
+  @apply fixed inset-0 z-30 bg-black/50 backdrop-blur-sm;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-enter,
+  .animate-dialog-enter,
+  .status-pulse,
+  .card-hover,
+  .table-row-hover {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
 }

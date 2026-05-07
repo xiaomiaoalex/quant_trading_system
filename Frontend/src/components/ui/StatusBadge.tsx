@@ -1,4 +1,5 @@
 import { clsx } from 'clsx'
+import { memo } from 'react'
 import type {
   SystemHealthState,
   AdapterHealthStatus,
@@ -56,7 +57,7 @@ const healthDotClasses = {
   lg: 'h-2.5 w-2.5',
 }
 
-export function HealthBadge({ state, showLabel = true, size = 'md' }: HealthBadgeProps) {
+export const HealthBadge = memo(function HealthBadge({ state, showLabel = true, size = 'md' }: HealthBadgeProps) {
   const config = HEALTH_CONFIG[state]
 
   return (
@@ -72,14 +73,14 @@ export function HealthBadge({ state, showLabel = true, size = 'md' }: HealthBadg
       {showLabel && config.label}
     </span>
   )
-}
+})
 
 // Adapter health status badge
 interface AdapterStatusBadgeProps {
   status: AdapterHealthStatus
 }
 
-export function AdapterStatusBadge({ status }: AdapterStatusBadgeProps) {
+export const AdapterStatusBadge = memo(function AdapterStatusBadge({ status }: AdapterStatusBadgeProps) {
   const config = ADAPTER_HEALTH_DISPLAY[status]
 
   return (
@@ -94,14 +95,14 @@ export function AdapterStatusBadge({ status }: AdapterStatusBadgeProps) {
       {config.label}
     </span>
   )
-}
+})
 
 // Alert severity badge
 interface SeverityBadgeProps {
   severity: AlertSeverity
 }
 
-export function SeverityBadge({ severity }: SeverityBadgeProps) {
+export const SeverityBadge = memo(function SeverityBadge({ severity }: SeverityBadgeProps) {
   const config = ALERT_SEVERITY_DISPLAY[severity]
 
   return (
@@ -115,14 +116,14 @@ export function SeverityBadge({ severity }: SeverityBadgeProps) {
       {config.label}
     </span>
   )
-}
+})
 
 // KillSwitch level badge
 interface KillSwitchBadgeProps {
   level: KillSwitchLevel
 }
 
-export function KillSwitchBadge({ level }: KillSwitchBadgeProps) {
+export const KillSwitchBadge = memo(function KillSwitchBadge({ level }: KillSwitchBadgeProps) {
   const config = KILLSWITCH_DISPLAY[level]
 
   return (
@@ -135,4 +136,4 @@ export function KillSwitchBadge({ level }: KillSwitchBadgeProps) {
       {config.label}
     </span>
   )
-}
+})

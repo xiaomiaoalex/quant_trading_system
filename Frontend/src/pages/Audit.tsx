@@ -91,14 +91,14 @@ export function Audit() {
                 action={{ label: 'Clear Filters', onClick: () => { setStrategyId(''); setStatus(''); setEventType(''); } }}
               />
             ) : (
-              <div className="max-h-[560px] overflow-auto">
+              <div className="max-h-[560px] overflow-auto overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-900/95">
                     <tr className="text-left text-xs uppercase tracking-wide text-gray-400">
-                      <th className="px-3 py-2">Strategy</th>
-                      <th className="px-3 py-2">Status</th>
-                      <th className="px-3 py-2">Event</th>
-                      <th className="px-3 py-2">Created</th>
+                      <th scope="col" className="px-3 py-2">Strategy</th>
+                      <th scope="col" className="px-3 py-2">Status</th>
+                      <th scope="col" className="px-3 py-2">Event</th>
+                      <th scope="col" className="px-3 py-2">Created</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -107,7 +107,7 @@ export function Audit() {
                         key={entry.entry_id}
                         onClick={() => setSelectedEntryId(entry.entry_id)}
                         className={
-                          `cursor-pointer border-t border-gray-800 hover:bg-gray-800/60 ${
+                          `cursor-pointer border-t border-gray-800 table-row-hover ${
                             selectedEntryId === entry.entry_id ? 'bg-gray-800/80' : ''
                           }`
                         }

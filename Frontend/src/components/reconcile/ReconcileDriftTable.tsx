@@ -34,16 +34,17 @@ export function ReconcileDriftTable({ drifts }: ReconcileDriftTableProps) {
       <div className="px-4 py-3 border-b border-gray-700">
         <h3 className="text-sm font-medium text-gray-300">Drift Details ({drifts.length})</h3>
       </div>
+      <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-gray-700">
         <thead className="bg-gray-800">
           <tr>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Order ID</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Type</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Severity</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Local Status</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Exchange Status</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Grace Remaining</th>
-            <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Detected</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Order ID</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Type</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Severity</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Local Status</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Exchange Status</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Grace Remaining</th>
+            <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Detected</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-700">
@@ -51,9 +52,9 @@ export function ReconcileDriftTable({ drifts }: ReconcileDriftTableProps) {
             const severityConfig = getSeverityInfo(drift.drift_type)
             const typeConfig = DRIFT_TYPE_DISPLAY[drift.drift_type] || { label: drift.drift_type, color: 'text-gray-400' }
             return (
-              <tr key={drift.cl_ord_id} className="hover:bg-gray-700/30">
+              <tr key={drift.cl_ord_id} className="table-row-hover">
                 <td className="px-4 py-2 text-sm text-gray-300 font-mono">{drift.cl_ord_id}</td>
-                <td className="px-4 py-2 text-sm" style={{ color: typeConfig.color }}>{typeConfig.label}</td>
+                <td className={clsx('px-4 py-2 text-sm', typeConfig.color)}>{typeConfig.label}</td>
                 <td className="px-4 py-2">
                   <span className={clsx('inline-flex rounded-full px-2 py-0.5 text-xs font-medium', severityConfig.color, severityConfig.bgColor)}>
                     {severityConfig.label}
@@ -70,6 +71,7 @@ export function ReconcileDriftTable({ drifts }: ReconcileDriftTableProps) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

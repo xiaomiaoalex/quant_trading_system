@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import React, { useState, useCallback } from 'react'
 import {
   useMonitorSnapshot,
   useMonitorAlerts,
@@ -28,7 +28,9 @@ export function Monitor() {
   useSSE(
     ['monitor'],
     () => {
-      console.log('[Monitor] SSE update received, invalidating queries')
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Monitor] SSE update received, invalidating queries')
+      }
       queryClient.invalidateQueries({ queryKey: monitorKeys.snapshot() })
       queryClient.invalidateQueries({ queryKey: monitorKeys.alerts() })
     },
@@ -172,21 +174,20 @@ export function Monitor() {
               <table className="min-w-full divide-y divide-gray-700">
                 <thead>
                   <tr>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase w-4"></th>
-                    <th className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase">Symbol</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Quantity</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Avg Cost</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Current Price</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Exposure</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Unrealized P&L</th>
+                    <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase w-4"></th>
+                    <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-accent-3 uppercase">Symbol</th>
+                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Quantity</th>
+                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Avg Cost</th>
+                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Current Price</th>
+                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Exposure</th>
+                    <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-accent-3 uppercase">Unrealized P&L</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
                   {snapshot.positions.map((pos) => (
-                    <>
+                    <React.Fragment key={pos.symbol}>
                       <tr
-                        key={pos.symbol}
-                        className="hover:bg-gray-700/30 cursor-pointer"
+                        className="table-row-hover cursor-pointer"
                         onClick={() => setExpandedSymbol(expandedSymbol === pos.symbol ? null : pos.symbol)}
                       >
                         <td className="px-3 py-2 text-accent-3 text-right">
@@ -202,9 +203,9 @@ export function Monitor() {
                         </td>
                       </tr>
                       {expandedSymbol === pos.symbol && (
-                        <StrategyPositionRow key={`${pos.symbol}-detail`} symbol={pos.symbol} />
+                        <StrategyPositionRow symbol={pos.symbol} />
                       )}
-                    </>
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

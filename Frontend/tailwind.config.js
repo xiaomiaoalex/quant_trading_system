@@ -6,34 +6,34 @@ export default {
       colors: {
         // Surface colors — panel/background density scale
         surface: {
-          1: '#0b0f19',
-          2: '#111827',
-          3: '#1a2234',
-          4: '#1e293b',
-          5: '#243447',
+          1: 'var(--surface-1)',
+          2: 'var(--surface-2)',
+          3: 'var(--surface-3)',
+          4: 'var(--surface-4)',
+          5: 'var(--surface-5)',
         },
         // Accent colors — border/text neutral scale
         accent: {
-          1: '#334155',
-          2: '#475569',
-          3: '#64748b',
-          4: '#94a3b8',
-          5: '#cbd5e1',
+          1: 'var(--accent-1)',
+          2: 'var(--accent-2)',
+          3: 'var(--accent-3)',
+          4: 'var(--accent-4)',
+          5: 'var(--accent-5)',
         },
         // Status colors — DO NOT MODIFY (locked by contract)
         status: {
-          healthy: '#22c55e',
-          degraded: '#f59e0b',
-          down: '#ef4444',
-          stale: '#6b7280',
-          blocked: '#dc2626',
+          healthy: 'var(--status-healthy)',
+          degraded: 'var(--status-degraded)',
+          down: 'var(--status-down)',
+          stale: 'var(--status-stale)',
+          blocked: 'var(--status-blocked)',
         },
         // Severity colors — DO NOT MODIFY (locked by contract)
         severity: {
-          low: '#3b82f6',
-          medium: '#f59e0b',
-          high: '#f97316',
-          critical: '#ef4444',
+          low: 'var(--severity-low)',
+          medium: 'var(--severity-medium)',
+          high: 'var(--severity-high)',
+          critical: 'var(--severity-critical)',
         },
       },
       animation: {

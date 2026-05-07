@@ -58,11 +58,11 @@ export function PortfolioAutopilot() {
 
         <div className="grid gap-3 rounded-lg border border-gray-700 bg-gray-800/50 p-4 md:grid-cols-4">
           <label className="flex items-center gap-2 text-sm text-gray-300">
-            <input type="checkbox" checked={dataStale} onChange={(e) => setDataStale(e.target.checked)} />
+            <input type="checkbox" checked={dataStale} onChange={(e) => setDataStale(e.target.checked)} aria-label="Data stale flag" />
             data stale
           </label>
-          <input type="number" value={portfolioExposure} onChange={(e) => setPortfolioExposure(Number(e.target.value))} className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200" placeholder="portfolio_exposure" />
-          <input type="number" value={maxPortfolioExposure} onChange={(e) => setMaxPortfolioExposure(Number(e.target.value))} className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200" placeholder="max_portfolio_exposure" />
+          <input type="number" value={portfolioExposure} onChange={(e) => setPortfolioExposure(Number(e.target.value))} aria-label="Current portfolio exposure" className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200" placeholder="portfolio_exposure" />
+          <input type="number" value={maxPortfolioExposure} onChange={(e) => setMaxPortfolioExposure(Number(e.target.value))} aria-label="Maximum portfolio exposure" className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200" placeholder="max_portfolio_exposure" />
           <button onClick={runTick} className="rounded bg-purple-900/40 px-3 py-2 text-sm text-purple-200 hover:bg-purple-900/60">
             Run Tick
           </button>

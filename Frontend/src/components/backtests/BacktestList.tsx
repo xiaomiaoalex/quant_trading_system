@@ -19,15 +19,16 @@ export function BacktestList({ backtests, onSelect, selectedRunId }: BacktestLis
 
   return (
     <div className="rounded-lg border border-gray-700 bg-gray-800/50 overflow-hidden">
+      <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-gray-700">
         <thead className="bg-gray-800">
           <tr>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Run ID</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Progress</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Created</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Actions</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Run ID</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Progress</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Created</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-700">
@@ -35,7 +36,7 @@ export function BacktestList({ backtests, onSelect, selectedRunId }: BacktestLis
             <tr
               key={backtest.run_id}
               className={clsx(
-                'hover:bg-gray-700/30 cursor-pointer',
+                'table-row-hover cursor-pointer',
                 selectedRunId === backtest.run_id && 'bg-gray-700/50'
               )}
               onClick={() => onSelect(backtest.run_id)}
@@ -78,6 +79,7 @@ export function BacktestList({ backtests, onSelect, selectedRunId }: BacktestLis
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

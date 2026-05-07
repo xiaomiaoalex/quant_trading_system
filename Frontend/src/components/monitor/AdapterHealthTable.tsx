@@ -37,16 +37,17 @@ export function AdapterHealthTable({ adapters, isLoading }: AdapterHealthTablePr
           <p>No adapters configured</p>
         </div>
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
             <tr
               className="border-b border-gray-700/50 text-left text-xs text-gray-500
               uppercase"
             >
-              <th className="px-4 py-2 font-medium">Adapter</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Last Heartbeat</th>
-              <th className="px-4 py-2 font-medium">Errors</th>
+              <th scope="col" className="px-4 py-2 font-medium">Adapter</th>
+              <th scope="col" className="px-4 py-2 font-medium">Status</th>
+              <th scope="col" className="px-4 py-2 font-medium">Last Heartbeat</th>
+              <th scope="col" className="px-4 py-2 font-medium">Errors</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-700/30">
@@ -75,6 +76,7 @@ export function AdapterHealthTable({ adapters, isLoading }: AdapterHealthTablePr
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )

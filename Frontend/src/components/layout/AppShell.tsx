@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from 'react'
+import { useState, useCallback, useEffect, type ReactNode } from 'react'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
 import { GlobalStatusRibbon } from './GlobalStatusRibbon'
@@ -16,10 +16,30 @@ function getInitialCollapsed(): boolean {
   }
 }
 
+function useMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  )
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  return isMobile
+}
+
 export function AppShell({ children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(getInitialCollapsed)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const isMobile = useMobile()
 
   const toggleSidebar = useCallback(() => {
+    if (isMobile) {
+      setMobileOpen(prev => !prev)
+      return
+    }
     setSidebarCollapsed(prev => {
       const next = !prev
       try {
@@ -29,14 +49,24 @@ export function AppShell({ children }: AppShellProps) {
       }
       return next
     })
-  }, [])
+  }, [isMobile])
+
+  const closeMobile = useCallback(() => setMobileOpen(false), [])
 
   return (
     <div className="min-h-screen bg-gray-900">
-      <Topbar sidebarCollapsed={sidebarCollapsed} onToggleSidebar={toggleSidebar} />
+      <Topbar sidebarCollapsed={isMobile ? true : sidebarCollapsed} onToggleSidebar={toggleSidebar} />
       <GlobalStatusRibbon />
-      <Sidebar collapsed={sidebarCollapsed} />
-      <main className={`pt-16 transition-all duration-200 ${sidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
+      <Sidebar
+        collapsed={isMobile ? false : sidebarCollapsed}
+        mobileOpen={isMobile ? mobileOpen : undefined}
+        onCloseMobile={isMobile ? closeMobile : undefined}
+      />
+      <main
+        className={`pt-16 transition-[margin] duration-200 ${
+          isMobile ? 'ml-0' : sidebarCollapsed ? 'ml-16' : 'ml-64'
+        }`}
+      >
         <ErrorBoundary>
           {children}
         </ErrorBoundary>

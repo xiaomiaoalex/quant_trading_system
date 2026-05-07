@@ -151,50 +151,66 @@ const phaseColor: Record<NavItem['phase'], string> = {
 
 interface SidebarProps {
   collapsed?: boolean
+  mobileOpen?: boolean
+  onCloseMobile?: () => void
 }
 
-export function Sidebar({ collapsed = false }: SidebarProps) {
+export function Sidebar({ collapsed = false, mobileOpen, onCloseMobile }: SidebarProps) {
   const location = useLocation()
 
   return (
-    <aside
-      className={clsx(
-        'fixed left-0 top-16 h-[calc(100vh-4rem)] bg-gray-800 border-r border-gray-700 transition-all duration-200 z-20 flex flex-col',
-        collapsed ? 'w-16' : 'w-64'
+    <>
+      {/* Mobile overlay backdrop */}
+      {mobileOpen && onCloseMobile && (
+        <div
+          className="sidebar-backdrop md:hidden"
+          onClick={onCloseMobile}
+          aria-hidden="true"
+        />
       )}
-    >
-      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-        {navItems.map(item => {
-          const isActive = location.pathname === item.path
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={clsx(
-                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-gray-700 text-white'
-                  : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-200'
-              )}
-              title={item.label}
-            >
-              {item.icon}
-              {!collapsed && (
-                <span className="flex-1 truncate">{item.label}</span>
-              )}
-              {!collapsed && (
-                <span
-                  className={clsx(
-                    'h-1.5 w-1.5 rounded-full flex-shrink-0',
-                    phaseColor[item.phase]
-                  )}
-                  title={`Phase ${item.phase}`}
-                />
-              )}
-            </NavLink>
-          )
-        })}
-      </nav>
-    </aside>
+      <aside
+        className={clsx(
+          'fixed left-0 top-16 h-[calc(100vh-4rem)] bg-gray-800 border-r border-gray-700 transition-[width] duration-200 z-20 flex flex-col',
+          collapsed ? 'w-16' : 'w-64',
+          mobileOpen !== undefined && 'md:translate-x-0',
+          mobileOpen === false && '-translate-x-full md:translate-x-0'
+        )}
+      >
+        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+          {navItems.map(item => {
+            const isActive = location.pathname === item.path
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                onClick={onCloseMobile}
+                className={clsx(
+                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  isActive
+                    ? 'bg-gray-700 text-white'
+                    : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-200'
+                )}
+                title={item.label}
+                aria-current={isActive ? 'page' : undefined}
+              >
+                {item.icon}
+                {!collapsed && (
+                  <span className="flex-1 truncate">{item.label}</span>
+                )}
+                {!collapsed && (
+                  <span
+                    className={clsx(
+                      'h-1.5 w-1.5 rounded-full flex-shrink-0',
+                      phaseColor[item.phase]
+                    )}
+                    title={`Phase ${item.phase}`}
+                  />
+                )}
+              </NavLink>
+            )
+          })}
+        </nav>
+      </aside>
+    </>
   )
 }
