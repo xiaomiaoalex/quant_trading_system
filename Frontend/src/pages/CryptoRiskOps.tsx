@@ -289,6 +289,7 @@ export function CryptoRiskOps() {
               <input
                 value={probeSymbols}
                 onChange={event => setProbeSymbols(event.target.value)}
+                aria-label="Probe symbols"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -297,6 +298,7 @@ export function CryptoRiskOps() {
               <input
                 value={requestedBy}
                 onChange={event => setRequestedBy(event.target.value)}
+                aria-label="Requested by"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -320,10 +322,10 @@ export function CryptoRiskOps() {
             <table className="min-w-full text-sm">
               <thead className="bg-gray-900/80 text-left text-xs uppercase text-gray-500">
                 <tr>
-                  <th className="px-4 py-2">Check</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Latency</th>
-                  <th className="px-4 py-2">Message</th>
+                  <th scope="col" className="px-4 py-2">Check</th>
+                  <th scope="col" className="px-4 py-2">Status</th>
+                  <th scope="col" className="px-4 py-2">Latency</th>
+                  <th scope="col" className="px-4 py-2">Message</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
@@ -389,6 +391,7 @@ export function CryptoRiskOps() {
               <input
                 value={totalCap}
                 onChange={event => markDirty(setTotalCap)(event.target.value)}
+                aria-label="Total Cap"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -397,6 +400,7 @@ export function CryptoRiskOps() {
               <input
                 value={maxMarginRatio}
                 onChange={event => markDirty(setMaxMarginRatio)(event.target.value)}
+                aria-label="Max margin ratio"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -405,6 +409,7 @@ export function CryptoRiskOps() {
               <input
                 value={minLiquidationBufferRatio}
                 onChange={event => markDirty(setMinLiquidationBufferRatio)(event.target.value)}
+                aria-label="Minimum liquidation buffer ratio"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -413,6 +418,7 @@ export function CryptoRiskOps() {
               <input
                 value={updatedBy}
                 onChange={event => setUpdatedBy(event.target.value)}
+                aria-label="Updated by"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -452,6 +458,7 @@ export function CryptoRiskOps() {
               <input
                 value={auditTraceId}
                 onChange={event => setAuditTraceId(event.target.value)}
+                aria-label="Audit trace ID"
                 className="h-10 w-full rounded-md border border-gray-700 bg-gray-950 px-3 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -460,6 +467,7 @@ export function CryptoRiskOps() {
               <input
                 value={auditSignalId}
                 onChange={event => setAuditSignalId(event.target.value)}
+                aria-label="Audit signal ID"
                 className="h-10 w-full rounded-md border border-gray-700 bg-gray-950 px-3 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
               />
             </label>
@@ -477,14 +485,14 @@ export function CryptoRiskOps() {
               </button>
             </div>
           </div>
-          <div className="max-h-[420px] overflow-auto">
+          <div className="max-h-[420px] overflow-auto overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="sticky top-0 bg-gray-900/95 text-left text-xs uppercase text-gray-500">
                 <tr>
-                  <th className="px-4 py-2">Time</th>
-                  <th className="px-4 py-2">Event</th>
-                  <th className="px-4 py-2">Trace</th>
-                  <th className="px-4 py-2">Payload</th>
+                  <th scope="col" className="px-4 py-2">Time</th>
+                  <th scope="col" className="px-4 py-2">Event</th>
+                  <th scope="col" className="px-4 py-2">Trace</th>
+                  <th scope="col" className="px-4 py-2">Payload</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">

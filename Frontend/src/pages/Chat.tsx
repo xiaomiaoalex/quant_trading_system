@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, memo } from 'react'
 import { clsx } from 'clsx'
 import { LoadingState, ErrorState, EmptyState, ConfirmDialog } from '@/components/ui'
 import { useChatSessions, useChatHistory, useChatSession, useSendMessage, useCreateSession, useDeleteSession, useApproveStrategy, useRejectStrategy } from '@/hooks'
@@ -6,7 +6,7 @@ import { formatAPIError } from '@/api/client'
 import type { ChatSession, ChatMessage, SessionStatus } from '@/types'
 import { SESSION_STATUS_DISPLAY, MESSAGE_ROLE_DISPLAY } from '@/types'
 
-function SessionListItem({ session, isSelected, onSelect, onDelete }: {
+const SessionListItem = memo(function SessionListItem({ session, isSelected, onSelect, onDelete }: {
   session: ChatSession
   isSelected: boolean
   onSelect: () => void
@@ -42,9 +42,9 @@ function SessionListItem({ session, isSelected, onSelect, onDelete }: {
       </button>
     </div>
   )
-}
+})
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessage }) {
   const roleConfig = MESSAGE_ROLE_DISPLAY[message.role] ?? { label: message.role, color: 'text-gray-400' }
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -75,7 +75,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </div>
   )
-}
+})
 
 export function Chat() {
   const { data: sessions, isLoading, isError, error, refetch } = useChatSessions()
@@ -85,6 +85,7 @@ export function Chat() {
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false)
   const [inputMessage, setInputMessage] = useState('')
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [showSidebar, setShowSidebar] = useState(false)
 
   const { data: messages, refetch: refetchMessages } = useChatHistory(selectedSessionId ?? '')
   const { data: currentSession } = useChatSession(selectedSessionId ?? '')
@@ -149,9 +150,28 @@ export function Chat() {
   if (isLoading) return <div className="p-6"><LoadingState message="Loading chat sessions..." /></div>
   if (isError) return <div className="p-6"><ErrorState title="Failed to load chat sessions" message={formatAPIError(error)} onRetry={refetch} /></div>
 
+  const handleSelectSession = (sessionId: string) => {
+    setSelectedSessionId(sessionId)
+    setShowSidebar(false)
+  }
+
   return (
     <div className="min-h-screen bg-gray-900 flex">
-      <aside className="w-72 border-r border-gray-800 flex flex-col">
+      {/* Mobile sidebar backdrop */}
+      {showSidebar && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 backdrop-blur-sm md:hidden"
+          onClick={() => setShowSidebar(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={clsx(
+          'border-r border-gray-800 flex flex-col bg-gray-900 z-40 transition-transform duration-200',
+          'fixed inset-y-0 left-0 w-72 md:static md:translate-x-0',
+          showSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        )}
+      >
         <div className="p-4 border-b border-gray-800">
           <button
             onClick={() => setShowNewSessionConfirm(true)}
@@ -170,7 +190,7 @@ export function Chat() {
                 key={session.session_id}
                 session={session}
                 isSelected={selectedSessionId === session.session_id}
-                onSelect={() => setSelectedSessionId(session.session_id)}
+                onSelect={() => handleSelectSession(session.session_id)}
                 onDelete={() => handleDeleteSession(session.session_id)}
               />
             ))
@@ -178,7 +198,7 @@ export function Chat() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col">
+      <main className="flex-1 flex flex-col min-w-0">
         {!selectedSessionId ? (
           <div className="flex-1 flex items-center justify-center">
             <EmptyState
@@ -189,13 +209,25 @@ export function Chat() {
           </div>
         ) : (
           <>
-            <div className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-white">AI Strategy Chat</h2>
-                <p className="text-xs text-accent-3">
-                  Session: <span className="font-mono text-gray-300" title={selectedSessionId ?? ''}>{selectedSessionId?.slice(0, 8)}</span>
-                  · {messages?.length ?? 0} messages
-                </p>
+            <div className="border-b border-gray-800 px-4 py-3 md:px-6 md:py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setShowSidebar(true)}
+                  className="md:hidden rounded-md p-1.5 text-gray-400 hover:text-white hover:bg-gray-700/50 transition-colors"
+                  aria-label="Show sessions"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-white truncate">AI Strategy Chat</h2>
+                  <p className="text-xs text-accent-3 truncate">
+                    Session: <span className="font-mono text-gray-300" title={selectedSessionId ?? ''}>{selectedSessionId?.slice(0, 8)}</span>
+                    · {messages?.length ?? 0} messages
+                  </p>
+                </div>
               </div>
               {isWaitingApproval && (
                 <div className="flex gap-2">
@@ -243,6 +275,7 @@ export function Chat() {
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
                   placeholder="Describe your trading strategy..."
                   disabled={isSending}
+                  aria-label="Chat message input"
                   className="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                 />
                 <button

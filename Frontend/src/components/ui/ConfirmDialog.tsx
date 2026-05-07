@@ -122,7 +122,7 @@ export function ConfirmDialog({
   return (
     <div className="dialog-backdrop" onClick={onCancel}>
       <div
-        className="dialog-panel max-w-md"
+        className="dialog-panel max-w-md animate-dialog-enter"
         onClick={e => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

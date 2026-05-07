@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { researchAPI } from '@/api'
 import { ErrorState, LoadingState, EmptyState } from '@/components/ui'
 import { PageHeader } from '@/components/layout'
@@ -13,7 +13,7 @@ export function PortfolioAllocation() {
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  const loadProfiles = async () => {
+  const loadProfiles = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
@@ -23,11 +23,11 @@ export function PortfolioAllocation() {
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     void loadProfiles()
-  }, [])
+  }, [loadProfiles])
 
   const saveProfile = async () => {
     setError(null)
@@ -78,29 +78,31 @@ export function PortfolioAllocation() {
           />
         ) : (
           <div className="overflow-hidden rounded-lg border border-gray-700">
-            <table className="min-w-full divide-y divide-gray-700">
-              <thead className="bg-gray-800">
-                <tr>
-                  {['Deployment', 'Strategy', 'Max', 'Remaining', 'Priority', 'Enabled'].map(header => (
-                    <th key={header} className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-400">{header}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800 bg-gray-900">
-                {profiles.map(profile => (
-                  <tr key={profile.deployment_id} className="hover:bg-gray-800/40">
-                    <td className="px-4 py-3 text-xs font-mono text-gray-200">{profile.deployment_id}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300">{profile.strategy_id}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300">{profile.max_notional}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300">{profile.remaining_notional}</td>
-                    <td className="px-4 py-3 text-xs text-gray-300">{profile.priority}</td>
-                    <td className="px-4 py-3 text-xs">
-                      <span className={profile.enabled ? 'text-emerald-400' : 'text-gray-500'}>{profile.enabled ? 'yes' : 'no'}</span>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-700">
+                <thead className="bg-gray-800">
+                  <tr>
+                    {['Deployment', 'Strategy', 'Max', 'Remaining', 'Priority', 'Enabled'].map(header => (
+                      <th key={header} scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-gray-400">{header}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-800 bg-gray-900">
+                  {profiles.map(profile => (
+                    <tr key={profile.deployment_id} className="table-row-hover">
+                      <td className="px-4 py-3 text-xs font-mono text-gray-200">{profile.deployment_id}</td>
+                      <td className="px-4 py-3 text-xs text-gray-300">{profile.strategy_id}</td>
+                      <td className="px-4 py-3 text-xs text-gray-300">{profile.max_notional}</td>
+                      <td className="px-4 py-3 text-xs text-gray-300">{profile.remaining_notional}</td>
+                      <td className="px-4 py-3 text-xs text-gray-300">{profile.priority}</td>
+                      <td className="px-4 py-3 text-xs">
+                        <span className={profile.enabled ? 'text-emerald-400' : 'text-gray-500'}>{profile.enabled ? 'yes' : 'no'}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

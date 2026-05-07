@@ -299,6 +299,7 @@ export function Backtests() {
           <select
             value={statusFilter ?? ''}
             onChange={(e) => setStatusFilter(e.target.value || undefined)}
+            aria-label="Filter by status"
             className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 border border-gray-700"
           >
             <option value="">All Status</option>
@@ -337,6 +338,7 @@ export function Backtests() {
               type="text"
               value={labForm.strategy_id}
               onChange={(e) => setLabForm({ ...labForm, strategy_id: e.target.value })}
+              aria-label="Strategy ID"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="strategy_id"
             />
@@ -344,6 +346,7 @@ export function Backtests() {
               type="text"
               value={labForm.name}
               onChange={(e) => setLabForm({ ...labForm, name: e.target.value })}
+              aria-label="Backtest name"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="name"
             />
@@ -351,6 +354,7 @@ export function Backtests() {
               type="text"
               value={labForm.symbols}
               onChange={(e) => setLabForm({ ...labForm, symbols: e.target.value })}
+              aria-label="Trading symbols"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="BTCUSDT,ETHUSDT"
             />
@@ -358,6 +362,7 @@ export function Backtests() {
               type="text"
               value={labForm.account_id}
               onChange={(e) => setLabForm({ ...labForm, account_id: e.target.value })}
+              aria-label="Account ID"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="account_id"
             />
@@ -365,12 +370,14 @@ export function Backtests() {
               type="text"
               value={labForm.deployment_id}
               onChange={(e) => setLabForm({ ...labForm, deployment_id: e.target.value })}
+              aria-label="Deployment ID"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder={resolvedDeploymentId}
             />
             <select
               value={labForm.mode}
               onChange={(e) => setLabForm({ ...labForm, mode: e.target.value as DeploymentMode })}
+              aria-label="Deployment mode"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
             >
               <option value="paper">paper</option>
@@ -382,6 +389,7 @@ export function Backtests() {
               type="text"
               value={labForm.feature_version}
               onChange={(e) => setLabForm({ ...labForm, feature_version: e.target.value })}
+              aria-label="Feature version"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="feature_version"
             />
@@ -389,6 +397,7 @@ export function Backtests() {
               type="number"
               value={labForm.initial_capital}
               onChange={(e) => setLabForm({ ...labForm, initial_capital: Number(e.target.value) })}
+              aria-label="Initial capital"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="initial capital"
             />
@@ -396,6 +405,7 @@ export function Backtests() {
               type="text"
               value={labForm.benchmark}
               onChange={(e) => setLabForm({ ...labForm, benchmark: e.target.value })}
+              aria-label="Benchmark symbol"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="benchmark"
             />
@@ -404,6 +414,7 @@ export function Backtests() {
           <textarea
             value={strategyCode}
             onChange={(e) => setStrategyCode(e.target.value)}
+            aria-label="Strategy code"
             className="mb-4 h-72 w-full rounded bg-gray-950 border border-gray-700 p-3 text-xs text-gray-200 font-mono"
             spellCheck={false}
           />

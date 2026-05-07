@@ -117,19 +117,20 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
           <div className="px-4 py-3 border-b border-gray-700">
             <h4 className="text-sm font-medium text-gray-300">Trades ({report.trades.length})</h4>
           </div>
+          <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-700">
             <thead className="bg-gray-800">
               <tr>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-400">Symbol</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-400">Side</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-400">Price</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-400">Quantity</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-gray-400">Time</th>
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400">Symbol</th>
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400">Side</th>
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400">Price</th>
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400">Quantity</th>
+                <th scope="col" className="px-4 py-2 text-left text-xs font-medium text-gray-400">Time</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
               {report.trades.slice(0, 20).map((trade, i) => (
-                <tr key={i} className="hover:bg-gray-700/30">
+                <tr key={i} className="table-row-hover">
                   <td className="px-4 py-2 text-sm text-gray-300">{trade.symbol}</td>
                   <td className="px-4 py-2 text-sm">
                     <span className={trade.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
@@ -143,6 +144,7 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
               ))}
             </tbody>
           </table>
+          </div>
           {report.trades.length > 20 && (
             <div className="px-4 py-2 text-xs text-gray-500 text-center">
               Showing 20 of {report.trades.length} trades

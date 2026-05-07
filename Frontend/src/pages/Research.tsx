@@ -91,6 +91,7 @@ export function Research() {
             <input
               value={strategyId}
               onChange={(e) => setStrategyId(e.target.value)}
+              aria-label="Strategy ID"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="strategy_id"
             />
@@ -101,6 +102,7 @@ export function Research() {
           <textarea
             value={code}
             onChange={(e) => setCode(e.target.value)}
+            aria-label="Strategy code"
             className="h-32 w-full rounded bg-gray-950 border border-gray-700 p-3 text-xs text-gray-200 font-mono"
             spellCheck={false}
           />
