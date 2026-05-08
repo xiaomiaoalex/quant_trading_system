@@ -25,7 +25,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 
@@ -41,6 +41,8 @@ from trader.api.crypto_risk_runtime import (
 )
 from trader.api.models.schemas import (
     ActionResult,
+    CryptoRiskAuditSummaryItem,
+    CryptoRiskAuditSummaryResponse,
     CryptoRiskBudgetUpdateRequest,
     CryptoRiskProbeRequest,
     CryptoRiskProbeResponse,
@@ -329,6 +331,102 @@ async def list_crypto_risk_budget_audit(
         limit=limit,
     )
     return [EventEnvelope(**_to_event_envelope_dict(event)) for event in events]
+
+
+@router.get("/v1/risk/crypto/audit/summary", response_model=CryptoRiskAuditSummaryResponse)
+async def get_crypto_risk_audit_summary(
+    group_by: Literal["reason", "symbol", "strategy", "risk_level"] = Query(
+        ..., description="分组维度: rejection reason | symbol | strategy | risk_level"
+    ),
+    since_ts_ms: Optional[int] = Query(None, description="过滤起始时间戳（Unix ms）"),
+    limit: int = Query(50, ge=1, le=200, description="最多返回分组数"),
+    event_type: Optional[str] = Query(
+        "crypto_risk.pre_trade_rejected",
+        description="事件类型，默认 crypto_risk.pre_trade_rejected",
+    ),
+):
+    """
+    聚合统计数字货币风控审计事件。
+
+    支持四个分组维度：
+    - reason: 按 rejection_reason 分组
+    - symbol: 按 payload.symbol 分组
+    - strategy: 按 payload.strategy_id 分组
+    - risk_level: 按 payload.risk_level 分组
+
+    每条记录返回 key（分组值）、count（该组事件总数）、
+    latest_ts_ms（最新事件时间戳）、sample_event_id（最新事件ID）。
+    """
+    key_field_map = {
+        "reason": "rejection_reason",
+        "symbol": "symbol",
+        "strategy": "strategy_id",
+        "risk_level": "risk_level",
+    }
+
+    events = await get_market_risk_audit_repository().list_events(
+        stream_key=CRYPTO_RISK_STREAM_KEY,
+        event_type=event_type,
+        trace_id=None,
+        since_ts_ms=since_ts_ms,
+        limit=5000,
+    )
+
+    if not events:
+        return CryptoRiskAuditSummaryResponse(
+            items=[],
+            total=0,
+            since_ts_ms=since_ts_ms or 0,
+        )
+
+    field = key_field_map[group_by]
+
+    def _normalize_key(payload: dict[str, Any], field_name: str) -> str:
+        """Extract and normalize a key field: strategy gets fallback, all others normalize None/empty."""
+        raw: Any
+        if field_name == "strategy_id":
+            # strategy_id may be absent/None; fall back to strategy_name then "unknown"
+            raw = payload.get("strategy_id")
+            if not raw:
+                raw = payload.get("strategy_name")
+        else:
+            raw = payload.get(field_name)
+        normalized = str(raw).strip() if raw else ""
+        return normalized if normalized else "unknown"
+
+    # Aggregate
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        payload = event.get("payload", {})
+        key = _normalize_key(payload, field)
+        if key not in buckets:
+            buckets[key] = []
+        buckets[key].append(event)
+
+    total_count = sum(len(v) for v in buckets.values())
+
+    items = []
+    for key, bucket in buckets.items():
+        bucket.sort(key=lambda e: e.get("ts_ms", 0), reverse=True)
+        latest = bucket[0]
+        sample_id = str(latest.get("event_id")) if latest.get("event_id") is not None else None
+        items.append(
+            CryptoRiskAuditSummaryItem(
+                key=key,
+                count=len(bucket),
+                latest_ts_ms=latest.get("ts_ms", 0),
+                sample_event_id=sample_id,
+            )
+        )
+
+    items.sort(key=lambda x: x.count, reverse=True)
+    items = items[:limit]
+
+    return CryptoRiskAuditSummaryResponse(
+        items=items,
+        total=total_count,
+        since_ts_ms=since_ts_ms or 0,
+    )
 
 
 @router.get("/v1/risk/crypto/audit", response_model=list[EventEnvelope])

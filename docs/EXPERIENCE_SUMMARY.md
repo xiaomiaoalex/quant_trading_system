@@ -90,6 +90,19 @@ Crypto 风控先落地后，`CryptoRiskSnapshot`、`CryptoInstrumentSpec`、`mar
 - 业务 trace 和存储 trace 可以共用值，但命名责任要清楚：`decision_trace_id` 解释业务链路，`trace_id` 服务索引和通用事件接口。
 - 先用 API 层 payload 过滤能快速闭环；当 rejection 事件量上来后，再把高频字段升为独立列或 JSONB expression index。
 
+### 31.7 设计模式：API 层内存聚合适合低基数，PG SQL 聚合适合高基数
+
+**问题描述**：
+P4.5 拒绝原因聚合统计用 Python 字典在 API 层做聚合，简单且够用。但当 rejection 事件量达到数万条时，O(n) 全扫描会有延迟。
+
+**解决方案**：
+- 当前用 `list_events(limit=5000)` + Python `dict` 聚合，`items` 按 `count` 降序后截断。
+- 高基数场景可在 `risk_audit_events` 表上建 JSONB expression index（`rejection_reason`、`symbol`、`strategy_id`、`risk_level`），并在 `MarketRiskAuditRepository` 增加专用 `list_event_summary()` 方法走 `GROUP BY` SQL。
+
+**经验**：
+- 先用最简单方案快速闭环，性能问题来了再优化；过早优化是浪费，但要知道哪里是瓶颈。
+- JSONB 字段的 PG 聚合比 Python 层过滤更靠近数据源，高基数场景优先用 SQL。
+
 ---
 
 ## 三十、Crypto Risk demo 联调自检经验（2026-05-05）

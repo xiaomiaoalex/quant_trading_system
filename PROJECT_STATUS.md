@@ -4,9 +4,49 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-07 03:30 (北京时间)
+2026-05-07 09:15 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P4.5 拒绝原因聚合统计审计 API
+- 完成时间: 2026-05-07 09:15 (北京时间)
+- 分支: main（worktree `.claude/worktrees/feat-visual-polish-phase3`）
+- 状态: ✅ 已完成 P4.5
+- 开发前状态:
+  - `/v1/risk/crypto/audit` 支持按 event/trace/signal 过滤查询单个审计事件
+  - 运维侧无法快速概览”哪种拒绝原因最频繁、哪个 symbol 被拒绝最多”
+- 开发后状态:
+  - 新增 `GET /v1/risk/crypto/audit/summary`，支持 `group_by`（reason/symbol/strategy/risk_level）、`since_ts_ms`、`limit`、`event_type`（默认 `crypto_risk.pre_trade_rejected`）
+  - strategy 分组：`strategy_id` → `strategy_name` fallback → `”unknown”`
+  - 所有字段：None / 空字符串 → `”unknown”`
+  - 返回格式：`{ items: [{ key, count, latest_ts_ms, sample_event_id }], total, since_ts_ms }`，按 count 降序
+  - 新增 `CryptoRiskAuditSummaryItem` 和 `CryptoRiskAuditSummaryResponse` Pydantic 模型
+  - 接口契约已更新到 `docs/INTERFACE_CONTRACTS.md`（Section 8.5，含 fallback/归一化行为）
+- Issue 状态迁移:
+  - 拒绝原因聚合统计无 API：`待确认` → `已验证（/v1/risk/crypto/audit/summary）`
+- 验证结果:
+  - 12 个测试用例先失败（404）后全部通过 ✅
+  - P4.5 专项 12 passed ✅；相关回归 30 passed ✅
+  - 格式门禁：`black --check` ✅、`isort --check-only` ✅
+- 注意事项:
+  - 聚合在 API 层从内存事件流读取，非 PG SQL 聚合（高基数时可考虑 PG JSONB index + SQL GROUP BY）
+  - 下一步可继续 Funding/OI 风险系数（P4.6）或前端接入该 API 在 CryptoRiskOps Audit Summary 面板展示
+
+### 本次任务：后续 Crypto Risk 开发计划加入审计停顿要求
+- 完成时间: 2026-05-07 08:37 (北京时间)
+- 分支: main（worktree）
+- 状态: ✅ 已完成计划治理更新
+- 开发前状态:
+  - P4.5-P9 后续计划已有阶段顺序，但没有明确要求 AI 每完成一段必须停下来等待审计
+  - 若连续推进多个阶段，主审难以及时对照代码库变动审计边界、接口和风险行为
+- 开发后状态:
+  - `docs/PLAN.md` 新增”后续 Crypto Risk 开发停顿与审计交接要求”
+  - 自 P4.5 起，每完成 P4.5、P4.6、P4.7、P5、P6、P7、P8、P9 任一独立开发段落，AI 必须停下并输出审计交接包
+  - 审计交接包必须覆盖目标范围、文件清单、接口契约、架构边界、风控行为、测试验证、风险遗留和 Git 状态
+- 验证结果:
+  - 文档计划治理变更，无代码测试
+- 注意事项:
+  - 审计通过前，AI 只能回答问题、补充审计材料或修复审计指出的问题，不得自行开始下一段计划
 
 ### 本次任务：P4.3 DecisionTrace 审计查询闭环
 - 完成时间: 2026-05-07 03:30 (北京时间)

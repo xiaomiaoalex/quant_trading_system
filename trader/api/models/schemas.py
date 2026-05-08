@@ -1048,6 +1048,25 @@ class ReconciliationLogEntry(BaseModel):
     created_at: str = Field(description="对账时间")
 
 
+class CryptoRiskAuditSummaryItem(BaseModel):
+    """单个聚合分组的统计项。"""
+
+    key: str = Field(
+        ..., description="聚合键值，如 rejection reason、symbol、strategy_id、risk_level"
+    )
+    count: int = Field(..., ge=0, description="该键值出现的事件总数")
+    latest_ts_ms: int = Field(..., description="该键值最新事件的 Unix 毫秒时间戳")
+    sample_event_id: Optional[str] = Field(None, description="该键值最新事件的 event_id 样例")
+
+
+class CryptoRiskAuditSummaryResponse(BaseModel):
+    """数字货币风控审计聚合统计响应。"""
+
+    items: list[CryptoRiskAuditSummaryItem] = Field(default_factory=list)
+    total: int = Field(0, ge=0, description="符合过滤条件的事件总数（分组前）")
+    since_ts_ms: int = Field(description="查询起始时间戳（Unix ms）")
+
+
 class ReconciliationResult(BaseModel):
     """手动触发对账的返回结果"""
 
