@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-07 09:15 - P4.5 拒绝原因聚合统计 API
+
+- 背景: P4.3 已支持按 event/trace/signal 过滤查询单个审计事件，但运维侧无法快速概览“哪种拒绝原因最频繁、哪个 symbol 被拒绝最多”。
+- 决策: 新增 `GET /v1/risk/crypto/audit/summary` 端点，API 层内存聚合，不改 repository；聚合在内存做，PG SQL 聚合留作高基数优化项。
+- 改动: `schemas.py` 新增 `CryptoRiskAuditSummaryItem` 和 `CryptoRiskAuditSummaryResponse`；`risk.py` 新增端点（含 Literal 导入），支持 `group_by`（reason/symbol/strategy/risk_level）、`since_ts_ms`、`limit`（默认50）、`event_type`（默认 `crypto_risk.pre_trade_rejected`）；strategy 分组含 `strategy_id → strategy_name → unknown` fallback；所有字段含 None/空字符串 → `unknown` 归一化；新增 12 个测试用例（含 strategy fallback 和 None→unknown 行为覆盖）；接口契约已更新。
+- 验证: 12 个红测先失败于 404（端点不存在），实现后全部通过；P4.5 专项 12 passed；相关回归 30 passed；格式门禁 `black --check` ✅、`isort --check-only` ✅。
+- 风险/遗留: 聚合在 API 层 O(n) 扫描，>5000 条事件时考虑 PG JSONB expression index + SQL `GROUP BY`；前端 CryptoRiskOps Audit Summary 面板尚未接入该 API，下一步可在 P4.6 或 P4.7 接入。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-07 03:30 - P4.3 DecisionTrace 审计查询闭环
 
 - 背景: P4.2 已把 pre-trade rejection 写入 `risk_audit_events`，但 trace 语义还停留在事件字段，前端也只能通过通用 `/v1/events` 粗看 `risk:crypto`。
@@ -303,3 +312,12 @@
 - 验证: 文档变更，无代码测试。
 - 风险/遗留: 需要在协作规范中同步要求，避免后续遗漏。
 - 关联文档: `AGENTS.md`、`PROJECT_STATUS.md`
+
+### 2026-05-07 08:37 - 后续 Crypto Risk 计划加入审计停顿要求
+
+- 背景: 用户要求后续每完成一段开发计划必须停下来输出必要信息，便于主审对照代码库变动审计代码，避免 AI 连续推进多个阶段导致漂移。
+- 决策: 将停顿要求写入当前计划入口 `docs/PLAN.md`，自 P4.5 起作为硬性执行规则。
+- 改动: `docs/PLAN.md` 新增“后续 Crypto Risk 开发停顿与审计交接要求”；`PROJECT_STATUS.md` 增加计划治理记录。
+- 验证: 文档计划治理变更，无代码测试。
+- 风险/遗留: 后续执行 P4.5-P9 时，必须在每段结束后等待审计通过，不能自行进入下一段。
+- 关联文档: `docs/PLAN.md`、`PROJECT_STATUS.md`
