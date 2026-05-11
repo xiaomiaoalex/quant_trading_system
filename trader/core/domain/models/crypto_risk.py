@@ -249,6 +249,56 @@ class OpenOrderRisk:
 
 
 @dataclass(slots=True)
+class CryptoFundingOIRiskMetrics:
+    symbol: str
+    current_funding_rate: Optional[Decimal] = None
+    funding_rate_z_score: Optional[float] = None
+    funding_rate_mean: float = 0.0
+    funding_rate_std: float = 0.0
+    funding_history_count: int = 0
+    current_open_interest: Optional[Decimal] = None
+    open_interest_change_rate: Optional[float] = None
+    oi_mean: float = 0.0
+    oi_std: float = 0.0
+    oi_history_count: int = 0
+    funding_data_stale: bool = False
+    oi_data_stale: bool = False
+    data_age_ms: int = 0
+    funding_window_insufficient: bool = False
+    oi_window_insufficient: bool = False
+    funding_current_missing: bool = False
+    oi_current_missing: bool = False
+    latest_funding_ts_ms: int = 0
+    latest_oi_ts_ms: int = 0
+
+    def __post_init__(self) -> None:
+        if self.current_funding_rate is not None:
+            self.current_funding_rate = _decimal(self.current_funding_rate)
+        if self.current_open_interest is not None:
+            self.current_open_interest = _decimal(self.current_open_interest)
+
+    @property
+    def data_stale(self) -> bool:
+        return self.funding_data_stale or self.oi_data_stale
+
+    @property
+    def window_insufficient(self) -> bool:
+        return self.funding_window_insufficient or self.oi_window_insufficient
+
+    @property
+    def any_funding_missing(self) -> bool:
+        return (
+            self.funding_current_missing
+            or self.funding_window_insufficient
+            or self.funding_data_stale
+        )
+
+    @property
+    def any_oi_missing(self) -> bool:
+        return self.oi_current_missing or self.oi_window_insufficient or self.oi_data_stale
+
+
+@dataclass(slots=True)
 class CryptoRiskBudget:
     symbol_notional_caps: dict[str, Decimal] = field(default_factory=dict)
     symbol_clusters: dict[str, str] = field(default_factory=dict)
@@ -256,6 +306,13 @@ class CryptoRiskBudget:
     total_notional_cap: Decimal = Decimal("0")
     max_margin_ratio: Decimal = Decimal("0.80")
     min_liquidation_buffer_ratio: Decimal = Decimal("0")
+    max_abs_funding_rate_z_score: Decimal = Decimal("0")
+    max_abs_open_interest_change_rate: Decimal = Decimal("0")
+    funding_history_window: int = 20
+    oi_history_window: int = 20
+    funding_min_periods: int = 10
+    oi_min_periods: int = 10
+    max_data_age_seconds: int = 24 * 3600
 
     def __post_init__(self) -> None:
         self.symbol_notional_caps = {
@@ -270,6 +327,8 @@ class CryptoRiskBudget:
         self.total_notional_cap = _decimal(self.total_notional_cap)
         self.max_margin_ratio = _decimal(self.max_margin_ratio)
         self.min_liquidation_buffer_ratio = _decimal(self.min_liquidation_buffer_ratio)
+        self.max_abs_funding_rate_z_score = _decimal(self.max_abs_funding_rate_z_score)
+        self.max_abs_open_interest_change_rate = _decimal(self.max_abs_open_interest_change_rate)
 
     def to_market_budget(self) -> MarketRiskBudget:
         return MarketRiskBudget(
@@ -280,8 +339,18 @@ class CryptoRiskBudget:
             metadata={
                 "max_margin_ratio": self.max_margin_ratio,
                 "min_liquidation_buffer_ratio": self.min_liquidation_buffer_ratio,
+                "max_abs_funding_rate_z_score": self.max_abs_funding_rate_z_score,
+                "max_abs_open_interest_change_rate": self.max_abs_open_interest_change_rate,
             },
         )
+
+    @property
+    def funding_z_score_enabled(self) -> bool:
+        return self.max_abs_funding_rate_z_score > 0
+
+    @property
+    def oi_change_rate_enabled(self) -> bool:
+        return self.max_abs_open_interest_change_rate > 0
 
 
 @dataclass(slots=True)
@@ -294,6 +363,7 @@ class CryptoRiskSnapshot:
     mark_prices: dict[str, Decimal] = field(default_factory=dict)
     risk_budget: CryptoRiskBudget = field(default_factory=CryptoRiskBudget)
     venue_health: str = "HEALTHY"
+    funding_oi_metrics: dict[str, CryptoFundingOIRiskMetrics] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.mark_prices = _decimal_dict(self.mark_prices)

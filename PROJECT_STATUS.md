@@ -4,9 +4,38 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-07 09:15 (北京时间)
+2026-05-08 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P4.6 Funding/OI 历史窗口派生
+- 完成时间: 2026-05-08 (北京时间)
+- 分支: main
+- 状态: ✅ 已完成 P4.6（含审计修复）
+- 审计修复内容（2026-05-08 第二轮）:
+  - 问题1修复：当前值缺失时改为返回 `None`，不转成 `0.0`，避免制造虚假 z-score
+  - 问题2修复：`compute_oi_change_rate` 改为真正的百分比变化率 `(current - mean) / mean * 100`
+  - 问题3修复：`data_stale` 和 `window_insufficient` 拆分为 `funding_*` 和 `oi_*` 独立标志
+  - 问题4修复：环境变量声明改为"后续计划接入"，不在本轮实现
+- 开发后状态:
+  - 新增 `CryptoFundingOIRiskMetrics` DTO，包含 funding rate Z-Score、OI change rate、独立缺失/过期/窗口标志
+  - `current_funding_rate` 和 `current_open_interest` 改为 `Optional[Decimal]`，缺失时为 `None`
+  - 新增 `funding_data_stale`、`oi_data_stale`、`funding_window_insufficient`、`oi_window_insufficient`、`funding_current_missing`、`oi_current_missing`
+  - 新增 `any_funding_missing`、`any_oi_missing` 属性，便于风控插件判断
+  - 扩展 `CryptoRiskBudget` 添加新字段
+  - 扩展 `CryptoRiskSnapshot` 添加可选 `funding_oi_metrics` 字段
+  - 新增 Core 层纯计算服务 `funding_oi_window_calculator.py`
+  - 新增 Service 层 Provider `funding_oi_metrics_provider.py`
+  - 更新 `docs/INTERFACE_CONTRACTS.md`（环境变量标记为后续计划）
+- 验证结果:
+  - `python -m pytest trader/tests/test_funding_oi_window_calculator.py` → 25 passed ✅
+  - `python -m pytest trader/tests/test_funding_oi_metrics_provider.py` → 11 passed ✅
+  - 相关回归测试 → 21 passed ✅
+  - black/isort/py_compile → passed ✅
+- 注意事项:
+  - 本段是 Funding/OI 历史窗口派生基础，尚未把 Funding/OI 阈值检查接入 `CryptoPreTradeRiskPlugin`
+  - Core 层 `FundingOIWindowCalculator` 完全无 IO，可独立测试
+  - 下一步应将 Funding/OI 指标检查接入 `CryptoPreTradeRiskPlugin`
 
 ### 本次任务：P4.5 拒绝原因聚合统计审计 API
 - 完成时间: 2026-05-07 09:15 (北京时间)

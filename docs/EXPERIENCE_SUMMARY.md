@@ -4,6 +4,76 @@
 
 ---
 
+## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）
+
+### 32.1 设计模式：Core 纯计算与 Service 层 IO 解耦
+
+**问题描述**：
+Funding Rate Z-Score 和 OI 变化率需要：
+1. 从 FeatureStore 读取历史数据（IO）
+2. 基于历史窗口计算派生指标（纯计算）
+
+如果把 IO 直接放进 Core，会破坏"无 IO"的 Core Plane 约束。
+
+**解决方案**：
+- Core 层 `FundingOIWindowCalculator` 只做纯计算，输入是标准化的数据列表，输出是 DTO。
+- Service 层 `FundingOIMetricsProvider` 负责从 FeatureStore 读取历史数据，调用 Core 计算器，返回结果。
+- 通过 Protocol 解耦：`FundingOIHistoryPort` 和 `CurrentFundingOIPort`。
+
+**经验**：
+- 纯计算服务可以被多个 Consumer 复用：测试可以用 FakeAdapter，生产可以用 FeatureStoreAdapter。
+- 计算逻辑和 IO 边界清晰后，Core 测试不需要 mock 网络或数据库。
+
+### 32.2 设计模式：窗口不足 fail-closed，数据过期 fail-closed
+
+**问题描述**：
+历史窗口不足时，Z-Score 返回 `None`；数据过期时，`funding_data_stale=True` 或 `oi_data_stale=True`。风控检查如果遇到这些情况，应该：
+- 直接拒绝（fail-closed）
+- 还是跳过检查继续其他检查？
+
+**解决方案**：
+- 计算器返回 `None` 表示窗口不足，不抛异常。
+- Provider 返回独立标志：`funding_data_stale`、`oi_data_stale`、`funding_window_insufficient`、`oi_window_insufficient`、`funding_current_missing`、`oi_current_missing`。
+- 同时保留兼容聚合属性：`data_stale`、`window_insufficient`、`any_funding_missing`、`any_oi_missing`。
+- 风控插件在启用对应阈值时，检查独立标志并 fail-closed。
+
+**经验**：
+- "缺失数据"和"计算失败"要区分：`None` 表示计算不适用，不表示错误。
+- 独立标志让风控插件可以精确判断是 funding 不足还是 OI 不足，避免过度拒绝。
+- fail-closed 是默认值，但可以通过配置显式允许跳过（如预算未启用对应阈值时）。
+
+### 32.3 设计模式：缺 funding 不影响 OI，缺 OI 不影响 funding
+
+**问题描述**：
+同一个 `CryptoFundingOIRiskMetrics` 可能同时包含 funding 和 OI 数据，但两者可能独立缺失。
+
+**解决方案**：
+- 允许 funding 和 OI 独立计算，互不影响。
+- `current_funding_rate` 和 `current_open_interest` 可为 `null`。
+- `funding_rate_z_score` 和 `open_interest_change_rate` 可以独立为 `None`。
+- 通过独立标志判断：`funding_current_missing`、`funding_data_stale`、`funding_window_insufficient`、`oi_current_missing`、`oi_data_stale`、`oi_window_insufficient`。
+- 风控检查也独立：启用 `max_abs_funding_rate_z_score` 时才检查 funding，启用 `max_abs_open_interest_change_rate` 时才检查 OI。
+
+**经验**：
+- 解耦的指标比复合指标更灵活：可以只启用 OI 检查而不启用 funding 检查。
+- Provider 返回的结果包含足够的元信息（`_count`、`_stale`、`_insufficient`、`_missing`），调用方可以决定如何处理。
+
+### 32.4 测试经验：时间戳相关的测试要使用动态时间
+
+**问题描述**：
+如果测试使用硬编码的时间戳（如 `1700000000000`），在 Provider 中使用 `int(time.time() * 1000)` 获取当前时间会导致时间戳不匹配，进而导致历史数据读取范围计算错误。
+
+**解决方案**：
+- 测试中统一使用 `int(time_module.time() * 1000)` 获取当前时间。
+- 历史数据的时间戳基于当前时间动态计算：`history_start = now_ms - (history_days * 24 * 3600 * 1000)`。
+- Provider 的读取范围逻辑与测试数据生成逻辑保持一致。
+
+**经验**：
+- 涉及时间戳的测试尽量使用动态时间，避免时间偏移导致的不稳定。
+- 如果必须使用固定时间戳，需要确保 Provider 的时间计算逻辑与测试数据生成逻辑完全匹配。
+
+---
+
 ## 三十一、市场无关风险契约抽象经验（2026-05-06）
 
 ### 31.1 踩坑记录：不要把第一个市场 specialization 当成平台契约

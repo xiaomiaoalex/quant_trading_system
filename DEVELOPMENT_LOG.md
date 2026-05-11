@@ -25,6 +25,16 @@
 
 ## 最近记录
 
+### 2026-05-08 - P4.6 Funding/OI 历史窗口派生
+
+- 背景: P4.4/P4.5 的 Funding/OI 风险系数只能外部注入，无法基于历史窗口计算 Z-Score 和变化率。
+- 决策: 在 Core 层新增纯计算服务 `FundingOIWindowCalculator` 计算 Z-Score 和 OI 变化率；在 Service 层新增 `FundingOIMetricsProvider` 从 FeatureStore 读取历史数据；扩展 `CryptoRiskBudget` 和 `CryptoRiskSnapshot` 添加 Funding/OI 指标支持。
+- 改动: 新增 `trader/core/domain/services/funding_oi_window_calculator.py`（Core 纯计算）；新增 `trader/services/funding_oi_metrics_provider.py`（Service 层 Provider）；扩展 `trader/core/domain/models/crypto_risk.py` 添加 `CryptoFundingOIRiskMetrics` DTO 和 `CryptoRiskBudget`/`CryptoRiskSnapshot` 新字段；更新 `docs/INTERFACE_CONTRACTS.md`（8.5.1 节独立标志）；更新 `docs/PROJECT_ARCHITECTURE.md`（Funding/OI 数据流）。
+- 审计修复: 独立标志（`funding_data_stale`/`oi_data_stale`/`funding_window_insufficient`/`oi_window_insufficient`/`funding_current_missing`/`oi_current_missing`）；百分比变化率公式 `(current - mean) / mean * 100`；当前值缺失返回 `None` 不转 `0.0`；环境变量标为"待 P4.8 接入"。
+- 验证: Core 计算测试 25 passed；Service Provider 测试 11 passed；相关回归测试 21 passed；所有测试遵循 fail-closed 语义，窗口不足和数据过期正确处理。
+- 风险/遗留: 本段是 Funding/OI 历史窗口派生基础；下一步应将 Funding/OI 指标检查接入 `CryptoPreTradeRiskPlugin`。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-07 09:15 - P4.5 拒绝原因聚合统计 API
 
 - 背景: P4.3 已支持按 event/trace/signal 过滤查询单个审计事件，但运维侧无法快速概览“哪种拒绝原因最频繁、哪个 symbol 被拒绝最多”。

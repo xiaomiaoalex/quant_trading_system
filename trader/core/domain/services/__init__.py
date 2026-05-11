@@ -45,6 +45,11 @@ from trader.core.domain.services.escape_time_simulator import (
     KillSwitchLevel,
     KillSwitchProviderPort,
 )
+from trader.core.domain.services.funding_oi_window_calculator import (
+    FundingOIWindowCalculator,
+    FundingRateZScoreResult,
+    OIChangeRateResult,
+)
 from trader.core.domain.services.portfolio_exposure_aggregator import (
     ClusterExposure,
     PortfolioExposureAggregator,
@@ -114,4 +119,8 @@ __all__ = [
     # PortfolioExposureAggregator (Crypto Risk P3)
     "ClusterExposure",
     "PortfolioExposureAggregator",
+    # FundingOIWindowCalculator (Crypto Risk P4.6)
+    "FundingOIWindowCalculator",
+    "FundingRateZScoreResult",
+    "OIChangeRateResult",
 ]
