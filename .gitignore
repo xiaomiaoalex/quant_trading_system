@@ -225,3 +225,4 @@ tmp*/
 
 # Claude AI IDE / Kilo CLI
 .claude/
+.kilo/
