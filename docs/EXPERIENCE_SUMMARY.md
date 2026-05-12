@@ -4,6 +4,69 @@
 
 ---
 
+## 三十三、Risk Sizing Decision 经验（2026-05-12）
+
+### 33.1 踩坑记录：sizing 计算异常不得静默吞掉
+
+**问题描述**：
+`RiskSizingEngine.calculate()` 可能在边界条件下抛异常（如 `signal.price <= 0` 导致后续计算错误）。如果用 `except Exception: pass` 静默吞掉，`risk_sizing_decision` 会从 rejection details 中消失，违反"每个 rejection 都能解释"的验收标准。
+
+**解决方案**：
+- 不使用 `except Exception: pass`。
+- 异常时创建 fallback decision：`reason="RISK_SIZING_ERROR"`, `decision="reject"`, `max_allowed_qty="0"`。
+- 同时把异常信息写入 `details["risk_sizing_error"]` 供调试。
+- Core 计算器本身保证确定性，异常只在边界条件（如 snapshot 数据异常）下发生。
+
+**经验**：
+- Fail-Closed 原则不仅适用于风控决策，也适用于风控元数据。
+- 每个 rejection details 必须包含 `risk_sizing_decision`；异常时也要有可解释的 fallback。
+
+### 33.2 踩坑记录：risk sizing 必须用 mark price，不能用 signal.price
+
+**问题描述**：
+`RiskSizingEngine.calculate()` 最初用 `signal.price` 作为主价格源，只在 `signal.price <= 0` 时才 fallback 到 `snapshot.mark_prices`。这样当 snapshot 缺少 mark price 但 signal 有 price 时，sizing 会用 signal.price 继续计算，返回看似合理的 `max_allowed_qty`。这和"Missing mark price, fail-closed"的风控行为冲突。
+
+**解决方案**：
+- Risk sizing 必须使用 snapshot 的 `mark_price`（风控标准价格）。
+- `signal.price` 只作为参考价，不应用于风险计算。
+- 缺 mark price 时，直接返回 `reason="NO_MARK_PRICE"`。
+
+**经验**：
+- 风控计算的一致性很重要：snapshot 中的 mark_price 是标准风险价格，不应被 signal.price 覆盖。
+- 验收标准"缺数据仍返回 `CRYPTO_FUNDING_OI_RISK`"也适用于 mark price。
+
+### 33.3 设计模式：约束计算器取最小值作为 max_allowed_qty
+
+**问题描述**：
+Risk sizing 需要同时考虑多个约束（symbol_cap、total_cap、cluster_cap、margin_limit、exchange_rule），每个约束都会推导出"允许的最大数量"。最终 `max_allowed_qty` 应该是这些约束中最严格的那个。
+
+**解决方案**：
+- 每个约束计算器返回 `ConstraintResult`，包含 `constraint_type`、`max_qty`、`current_value`、`limit_value`、`passed`。
+- 主流程收集所有约束结果，取 `max_qty` 最小且 `passed=False` 的作为 `limiting_factor`。
+- 如果所有约束都 `passed=True`，则 approve。
+- 如果 `max_allowed_qty < requested_qty`，则 clip/reject。
+
+**经验**：
+- 约束取最小值保证安全：最严格的约束优先。
+- 保留所有约束的 `max_qty` 用于可解释性：拒绝时必须能说明"哪个约束最先卡住"。
+- `reduce_only` 订单的 cluster_cap 和 margin_limit 应返回 `passed=True`，不阻塞减仓。
+
+### 33.4 测试经验：边界条件测试必须覆盖 snapshot/mark price 缺失
+
+**问题描述**：
+风控系统的边界条件往往在 snapshot 数据缺失时触发。如果测试只用完整 snapshot 验证正常路径，边界条件（如缺 mark price）不会被测试覆盖。
+
+**解决方案**：
+- 添加专项测试：`test_missing_mark_price_rejection_contains_risk_sizing_decision`。
+- 验证缺 mark price 时，`risk_sizing_decision.reason == "NO_MARK_PRICE"`。
+- 验证插件返回的 details 中包含完整的 sizing decision 信息。
+
+**经验**：
+- 边界条件测试是防止回归的关键。
+- 每次添加新的 rejection reason，都要检查对应的 sizing decision 是否正确生成。
+
+---
+
 ## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）
 
 ### 32.1 设计模式：Core 纯计算与 Service 层 IO 解耦

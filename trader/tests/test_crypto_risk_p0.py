@@ -373,6 +373,12 @@ async def test_crypto_pre_trade_plugin_fails_closed_when_snapshot_unavailable() 
     assert result is not None
     assert result.passed is False
     assert result.rejection_reason == RejectionReason.RISK_SYSTEM_ERROR
+    assert "risk_sizing_decision" in result.details
+    sizing_decision = result.details["risk_sizing_decision"]
+    assert sizing_decision["reason"] == "SNAPSHOT_UNAVAILABLE"
+    assert sizing_decision["decision"] == "reject"
+    assert sizing_decision["max_allowed_qty"] == "0"
+    assert sizing_decision["requested_qty"] == "0.1"
 
 
 @pytest.mark.asyncio
@@ -406,3 +412,37 @@ async def test_crypto_pre_trade_plugin_rejects_non_trade_signal_type() -> None:
     assert result is not None
     assert result.passed is False
     assert result.rejection_reason == RejectionReason.CRYPTO_EXCHANGE_RULE
+
+
+@pytest.mark.asyncio
+async def test_missing_mark_price_rejection_contains_risk_sizing_decision() -> None:
+    snapshot = CryptoRiskSnapshot(
+        account=account(),
+        instrument_specs={"BTCUSDT": btc_spec()},
+        leverage_brackets={"BTCUSDT": [btc_bracket()]},
+        positions=[],
+        open_orders=[],
+        mark_prices={},
+        risk_budget=CryptoRiskBudget(),
+    )
+    plugin = CryptoPreTradeRiskPlugin(StaticSnapshotProvider(snapshot))
+
+    result = await plugin.check(
+        signal=Signal(
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            price=d("50000"),
+            quantity=d("1"),
+        ),
+        metrics=RiskMetrics(),
+        engine=None,
+    )
+
+    assert result is not None
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.RISK_SYSTEM_ERROR
+    assert "risk_sizing_decision" in result.details
+    sizing_decision = result.details["risk_sizing_decision"]
+    assert sizing_decision["reason"] == "NO_MARK_PRICE"
+    assert sizing_decision["decision"] == "reject"
+    assert sizing_decision["max_allowed_qty"] == "0"

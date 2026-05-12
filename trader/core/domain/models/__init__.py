@@ -42,6 +42,11 @@ from trader.core.domain.models.order import (
 )
 from trader.core.domain.models.orderbook import DepthCheckResult, OrderBook, OrderBookLevel
 from trader.core.domain.models.position import BrokerPosition, Position, PositionReconciliation
+from trader.core.domain.models.risk_decision import (
+    ConstraintResult,
+    RiskSizingDecision,
+    RiskSizingDecisionType,
+)
 from trader.core.domain.models.signal import Signal, SignalType
 
 __all__ = [
@@ -79,4 +84,8 @@ __all__ = [
     "OrderBook",
     "OrderBookLevel",
     "DepthCheckResult",
+    # Risk Sizing
+    "ConstraintResult",
+    "RiskSizingDecision",
+    "RiskSizingDecisionType",
 ]
