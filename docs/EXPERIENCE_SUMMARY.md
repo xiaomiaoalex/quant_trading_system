@@ -65,6 +65,50 @@ Risk sizing 需要同时考虑多个约束（symbol_cap、total_cap、cluster_ca
 - 边界条件测试是防止回归的关键。
 - 每次添加新的 rejection reason，都要检查对应的 sizing decision 是否正确生成。
 
+### 33.5 踩坑记录：allows_reduce_only 与 blocks_all_orders 语义冲突
+
+**问题描述**：
+`allows_reduce_only` 在所有模式下返回 `True`，而 `blocks_all_orders` 在 `CANCEL_ALL_AND_HALT` 及以上返回 `True`。这导致一个矛盾：`CANCEL_ALL_AND_HALT` 声称阻止所有订单，但 reduce-only 订单却被允许。
+
+**解决方案**：
+- `allows_reduce_only` 在 `CANCEL_ALL_AND_HALT` 及以上返回 `False`
+- 语义：`blocks_all_orders=True` 意味着包括 reduce-only 在内的所有订单都被阻止
+
+**经验**：
+- 枚举值之间的语义约束需要显式检查，不能假设独立
+- `allows_reduce_only` 和 `blocks_all_orders` 不是独立的布尔值，而是有隐含的依赖关系
+- 审计时不仅要检查枚举定义，还要检查方法实现的语义一致性
+
+### 33.6 设计模式：Risk Mode 状态机单调升级
+
+**问题描述**：
+风险模式需要支持自动升级（基于拒绝次数），但禁止自动降级。唯一允许降级的情况是人工 `manual_release`。
+
+**解决方案**：
+- 状态枚举值必须是单调递增的（0→1→2→3→4）
+- `can_escalate_to(target)` 只允许目标值大于当前值
+- `manual_release` 只能 target 到 `NORMAL`
+- 升级规则通过拒绝计数触发，自动计算目标模式
+
+**经验**：
+- 单调性约束让状态机行为可预测
+- 升级路径和降级路径必须显式分离
+- 人工干预是唯一的降级通道
+
+### 33.7 设计模式：Risk Mode 审计事件
+
+**问题描述**：
+每次状态变更都需要记录审计事件，用于回放和运维追踪。
+
+**解决方案**：
+- `RiskModeAuditEvent` 包含完整的变更上下文：`mode_before`、`mode_after`、`trigger`、`reason`、`triggered_by`
+- `set_audit_callback()` 允许外部注入审计处理器
+- 事件工厂函数 `create_risk_mode_event()` 封装事件创建逻辑
+
+**经验**：
+- 审计事件是 Fail-Closed 的保障：状态变更必须有迹可循
+- `triggered_by` 区分自动触发（system）和人工干预（operator）
+
 ---
 
 ## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）

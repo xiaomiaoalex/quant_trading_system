@@ -67,6 +67,10 @@ from trader.core.domain.services.position_risk_constructor import (
     RegimeProviderPort,
     TotalExposureResult,
 )
+from trader.core.domain.services.risk_mode_controller import (
+    RiskModeController,
+    RiskModeControllerConfig,
+)
 from trader.core.domain.services.risk_sizer import RiskSizer, SizerConfig, SizerInputs, SizerResult
 from trader.core.domain.services.risk_sizing_engine import (
     ClusterExposureInput,
@@ -134,4 +138,7 @@ __all__ = [
     "SymbolExposureInput",
     "ClusterExposureInput",
     "ConstraintInput",
+    # RiskModeController (Crypto Risk P6)
+    "RiskModeController",
+    "RiskModeControllerConfig",
 ]
