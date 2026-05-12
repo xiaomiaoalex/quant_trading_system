@@ -375,3 +375,124 @@ async def test_crypto_risk_audit_filters_by_trace_and_signal(monkeypatch) -> Non
     assert events[0]["trace_id"] == "decision-trace-1"
     assert events[0]["payload"]["decision_trace_id"] == "decision-trace-1"
     assert events[0]["payload"]["signal_id"] == "signal-1"
+
+
+@pytest.mark.asyncio
+async def test_patch_funding_oi_budget_fields() -> None:
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={
+            "max_abs_funding_rate_z_score": "3.0",
+            "max_abs_open_interest_change_rate": "15.0",
+            "funding_history_window": 30,
+            "oi_history_window": 25,
+            "funding_min_periods": 15,
+            "oi_min_periods": 12,
+            "max_data_age_seconds": 7200,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["risk_budget"]["max_abs_funding_rate_z_score"] == "3.0"
+    assert payload["risk_budget"]["max_abs_open_interest_change_rate"] == "15.0"
+    assert payload["risk_budget"]["funding_history_window"] == 30
+    assert payload["risk_budget"]["oi_history_window"] == 25
+    assert payload["risk_budget"]["funding_min_periods"] == 15
+    assert payload["risk_budget"]["oi_min_periods"] == 12
+    assert payload["risk_budget"]["max_data_age_seconds"] == 7200
+
+
+@pytest.mark.asyncio
+async def test_patch_min_periods_validates_against_window() -> None:
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(
+            total_notional_cap=Decimal("10000"),
+            funding_history_window=20,
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={
+            "funding_history_window": 20,
+            "funding_min_periods": 25,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "funding_min_periods" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_window_without_min_periods_rejects_if_exceeds_current() -> None:
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(
+            total_notional_cap=Decimal("10000"),
+            funding_history_window=20,
+            funding_min_periods=10,
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={
+            "funding_history_window": 5,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "funding_min_periods" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_funding_min_periods_zero_rejected() -> None:
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={
+            "funding_min_periods": 0,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "funding_min_periods" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_oi_min_periods_negative_rejected() -> None:
+    manager = get_crypto_risk_runtime_manager()
+    manager.set_runtime_for_tests(
+        risk_budget=CryptoRiskBudget(total_notional_cap=Decimal("10000")),
+    )
+    client = TestClient(app)
+
+    response = client.patch(
+        "/v1/risk/crypto/budget",
+        json={
+            "oi_min_periods": -1,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "oi_min_periods" in response.json()["detail"]

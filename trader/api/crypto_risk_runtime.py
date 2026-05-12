@@ -593,6 +593,13 @@ def crypto_risk_budget_to_dict(budget: CryptoRiskBudget) -> dict[str, Any]:
         "total_notional_cap": str(budget.total_notional_cap),
         "max_margin_ratio": str(budget.max_margin_ratio),
         "min_liquidation_buffer_ratio": str(budget.min_liquidation_buffer_ratio),
+        "max_abs_funding_rate_z_score": str(budget.max_abs_funding_rate_z_score),
+        "max_abs_open_interest_change_rate": str(budget.max_abs_open_interest_change_rate),
+        "funding_history_window": budget.funding_history_window,
+        "oi_history_window": budget.oi_history_window,
+        "funding_min_periods": budget.funding_min_periods,
+        "oi_min_periods": budget.oi_min_periods,
+        "max_data_age_seconds": budget.max_data_age_seconds,
     }
 
 
@@ -605,6 +612,13 @@ def merge_crypto_risk_budget(
     total_notional_cap: str | None = None,
     max_margin_ratio: str | None = None,
     min_liquidation_buffer_ratio: str | None = None,
+    max_abs_funding_rate_z_score: str | None = None,
+    max_abs_open_interest_change_rate: str | None = None,
+    funding_history_window: int | None = None,
+    oi_history_window: int | None = None,
+    funding_min_periods: int | None = None,
+    oi_min_periods: int | None = None,
+    max_data_age_seconds: int | None = None,
 ) -> CryptoRiskBudget:
     return CryptoRiskBudget(
         symbol_notional_caps=(
@@ -646,7 +660,60 @@ def merge_crypto_risk_budget(
             default=current.min_liquidation_buffer_ratio,
             min_value=Decimal("0"),
         ),
+        max_abs_funding_rate_z_score=_parse_decimal(
+            max_abs_funding_rate_z_score,
+            "max_abs_funding_rate_z_score",
+            default=current.max_abs_funding_rate_z_score,
+            min_value=Decimal("0"),
+        ),
+        max_abs_open_interest_change_rate=_parse_decimal(
+            max_abs_open_interest_change_rate,
+            "max_abs_open_interest_change_rate",
+            default=current.max_abs_open_interest_change_rate,
+            min_value=Decimal("0"),
+        ),
+        funding_history_window=_parse_positive_int(
+            funding_history_window,
+            "funding_history_window",
+            default=current.funding_history_window,
+        ),
+        oi_history_window=_parse_positive_int(
+            oi_history_window,
+            "oi_history_window",
+            default=current.oi_history_window,
+        ),
+        max_data_age_seconds=_parse_positive_int(
+            max_data_age_seconds,
+            "max_data_age_seconds",
+            default=current.max_data_age_seconds,
+        ),
+        funding_min_periods=_validate_min_periods_against_final_window(
+            funding_min_periods if funding_min_periods is not None else current.funding_min_periods,
+            (
+                funding_history_window
+                if funding_history_window is not None
+                else current.funding_history_window
+            ),
+            "funding_min_periods",
+        ),
+        oi_min_periods=_validate_min_periods_against_final_window(
+            oi_min_periods if oi_min_periods is not None else current.oi_min_periods,
+            oi_history_window if oi_history_window is not None else current.oi_history_window,
+            "oi_min_periods",
+        ),
     )
+
+
+def _validate_min_periods_against_final_window(
+    final_min_periods: int,
+    final_window: int,
+    field_name: str,
+) -> int:
+    if final_min_periods <= 0:
+        raise ValueError(f"{field_name} must be a positive integer, got {final_min_periods}")
+    if final_min_periods > final_window:
+        raise ValueError(f"{field_name} must be <= {final_window}, got {final_min_periods}")
+    return final_min_periods
 
 
 def _parse_symbol_decimal_map_from_mapping(
@@ -964,6 +1031,19 @@ def _parse_int(
     if min_value is not None and value < min_value:
         raise ValueError(f"{env_name} must be >= {min_value}, got {value}")
     return value
+
+
+def _parse_positive_int(
+    raw: int | None,
+    env_name: str,
+    *,
+    default: int,
+) -> int:
+    if raw is None:
+        return default
+    if not isinstance(raw, int) or raw <= 0:
+        raise ValueError(f"{env_name} must be a positive integer, got {raw}")
+    return raw
 
 
 def _parse_optional_text(raw: str | None) -> str | None:

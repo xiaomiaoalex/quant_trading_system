@@ -25,6 +25,18 @@
 
 ## 最近记录
 
+### 2026-05-11 - P4.7 Funding/OI 运维页面配置暴露
+
+- 背景: P4.6 已完成 Funding/OI 历史窗口派生基础（Core 计算 + Service Provider），但运维侧无法配置和查看这些阈值。
+- 决策: 扩展后端 API Schema 和前端 CryptoRiskOps 页面，支持 Funding/OI 预算字段的 PATCH 热更新和 GET 查看。
+- 改动: 后端扩展 `CryptoRiskBudgetSchema`/`CryptoRiskBudgetUpdateRequest` 添加 7 个 Funding/OI 字段；扩展 `crypto_risk_budget_to_dict()` 输出新字段；扩展 `merge_crypto_risk_budget()` 接收并解析新字段；扩展 `patch_crypto_risk_budget()` 传入新字段；新增 `_parse_positive_int()`/`_validate_min_periods_against_final_window()` 校验函数；前端扩展 `CryptoRiskBudget` 类型和 `CryptoRiskBudgetSchema` Zod 契约；前端 `CryptoRiskOps` 页面新增 Funding/OI 预算编辑区域；新增后端测试。
+- 第一轮审计修复: 修复 `crypto_risk_budget_to_dict()` 输出 7 个新字段；修复 `merge_crypto_risk_budget()` 接收 7 个参数并校验；修复 `patch_crypto_risk_budget()` 传入新字段；前端 discard `tsconfig.tsbuildinfo`。
+- 第二轮审计修复: 修复 window/min_periods 校验逻辑（先解析最终 window 再校验 min_periods）；运行 `black --line-length 100` 格式化；环境变量从"运行时配置"移回"待 P4.8 接入"；新增测试 `test_patch_window_without_min_periods_rejects_if_exceeds_current`。
+- 第三轮审计修复: `_validate_min_periods_against_final_window()` 增加 `> 0` 校验；新增 `test_patch_funding_min_periods_zero_rejected` 和 `test_patch_oi_min_periods_negative_rejected`。
+- 验证: 新增后端测试 5 passed；相关回归测试 23 passed；`npm run typecheck` passed；`npx vite build` passed（227 modules, 486KB）；`black --check` passed。
+- 风险/遗留: 后端风控逻辑（`CryptoPreTradeRiskPlugin` 中的 Funding/OI 阈值检查）待 P4.8 接入；Funding Window/Min 和 OI Window/Min 仅展示不可编辑。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-08 - P4.6 Funding/OI 历史窗口派生
 
 - 背景: P4.4/P4.5 的 Funding/OI 风险系数只能外部注入，无法基于历史窗口计算 Z-Score 和变化率。

@@ -88,6 +88,13 @@ export function CryptoRiskOps() {
   const [totalCap, setTotalCap] = useState('0')
   const [maxMarginRatio, setMaxMarginRatio] = useState('0.80')
   const [minLiquidationBufferRatio, setMinLiquidationBufferRatio] = useState('0')
+  const [maxAbsFundingRateZScore, setMaxAbsFundingRateZScore] = useState('0')
+  const [maxAbsOpenInterestChangeRate, setMaxAbsOpenInterestChangeRate] = useState('0')
+  const [fundingHistoryWindow, setFundingHistoryWindow] = useState('20')
+  const [oiHistoryWindow, setOiHistoryWindow] = useState('20')
+  const [fundingMinPeriods, setFundingMinPeriods] = useState('10')
+  const [oiMinPeriods, setOiMinPeriods] = useState('10')
+  const [maxDataAgeSeconds, setMaxDataAgeSeconds] = useState(String(24 * 3600))
   const [updatedBy, setUpdatedBy] = useState('frontend_operator')
   const [probeSymbols, setProbeSymbols] = useState('BTCUSDT')
   const [requestedBy, setRequestedBy] = useState('frontend_operator')
@@ -134,6 +141,13 @@ export function CryptoRiskOps() {
     setTotalCap(runtime.risk_budget.total_notional_cap)
     setMaxMarginRatio(runtime.risk_budget.max_margin_ratio)
     setMinLiquidationBufferRatio(runtime.risk_budget.min_liquidation_buffer_ratio)
+    setMaxAbsFundingRateZScore(runtime.risk_budget.max_abs_funding_rate_z_score ?? '0')
+    setMaxAbsOpenInterestChangeRate(runtime.risk_budget.max_abs_open_interest_change_rate ?? '0')
+    setFundingHistoryWindow(String(runtime.risk_budget.funding_history_window ?? 20))
+    setOiHistoryWindow(String(runtime.risk_budget.oi_history_window ?? 20))
+    setFundingMinPeriods(String(runtime.risk_budget.funding_min_periods ?? 10))
+    setOiMinPeriods(String(runtime.risk_budget.oi_min_periods ?? 10))
+    setMaxDataAgeSeconds(String(runtime.risk_budget.max_data_age_seconds ?? 24 * 3600))
     setProbeSymbols(current => current || runtime.base_symbols.join(', '))
   }, [runtime, isBudgetDirty])
 
@@ -159,6 +173,13 @@ export function CryptoRiskOps() {
     total_notional_cap: totalCap.trim(),
     max_margin_ratio: maxMarginRatio.trim(),
     min_liquidation_buffer_ratio: minLiquidationBufferRatio.trim(),
+    max_abs_funding_rate_z_score: maxAbsFundingRateZScore.trim(),
+    max_abs_open_interest_change_rate: maxAbsOpenInterestChangeRate.trim(),
+    funding_history_window: parseInt(fundingHistoryWindow, 10) || 20,
+    oi_history_window: parseInt(oiHistoryWindow, 10) || 20,
+    funding_min_periods: parseInt(fundingMinPeriods, 10) || 10,
+    oi_min_periods: parseInt(oiMinPeriods, 10) || 10,
+    max_data_age_seconds: parseInt(maxDataAgeSeconds, 10) || 24 * 3600,
     updated_by: updatedBy.trim(),
   })
 
@@ -420,6 +441,64 @@ export function CryptoRiskOps() {
                 onChange={event => setUpdatedBy(event.target.value)}
                 aria-label="Updated by"
                 className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+          </div>
+          <div className="grid gap-4 border-t border-gray-700 p-4 md:grid-cols-4">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Max Z-Score</span>
+              <input
+                value={maxAbsFundingRateZScore}
+                onChange={event => markDirty(setMaxAbsFundingRateZScore)(event.target.value)}
+                aria-label="Max funding rate Z-Score"
+                className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Max OI Change%</span>
+              <input
+                value={maxAbsOpenInterestChangeRate}
+                onChange={event => markDirty(setMaxAbsOpenInterestChangeRate)(event.target.value)}
+                aria-label="Max open interest change rate"
+                className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Data Age (s)</span>
+              <input
+                value={maxDataAgeSeconds}
+                onChange={event => markDirty(setMaxDataAgeSeconds)(event.target.value)}
+                aria-label="Max data age seconds"
+                className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Updated By</span>
+              <input
+                value={updatedBy}
+                onChange={event => setUpdatedBy(event.target.value)}
+                aria-label="Updated by"
+                className="w-full rounded-md border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              />
+            </label>
+          </div>
+          <div className="grid gap-4 border-t border-gray-700 px-4 py-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">Funding Window/Min</span>
+              <input
+                value={`${fundingHistoryWindow}/${fundingMinPeriods}`}
+                onChange={() => {}}
+                disabled
+                className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-500"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase text-gray-400">OI Window/Min</span>
+              <input
+                value={`${oiHistoryWindow}/${oiMinPeriods}`}
+                onChange={() => {}}
+                disabled
+                className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-500"
               />
             </label>
           </div>
