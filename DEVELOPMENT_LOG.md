@@ -25,6 +25,25 @@
 
 ## 最近记录
 
+### 2026-05-12 - P5 Risk Sizing Decision，支持裁剪而不只是拒绝
+
+- 背景: P4.4-P4.7 的风控只能返回"通过"或"拒绝"，无法告诉 OMS"最多能下多少"；后续OMS需要知道最大安全下单量来自动裁剪。
+- 决策: 新增 `RiskSizingDecision` DTO 和 `RiskSizingEngine` Core domain service；第一阶段只计算不自动裁剪，plugin 仍返回 reject/pass，但 details 中附带 `max_allowed_qty`。
+- 改动:
+  - 新增 `trader/core/domain/models/risk_decision.py`：包含 `RiskSizingDecisionType`（approve/clip/reject/close_only）、`ConstraintResult`、`RiskSizingDecision`
+  - 新增 `trader/core/domain/services/risk_sizing_engine.py`：纯计算无 IO，计算每个约束的最大允许数量（symbol_cap、total_cap、cluster_cap、margin_limit、exchange_rule），取最小值
+  - 扩展 `trader/core/application/plugins/crypto_pre_trade_risk_plugin.py`：集成 `RiskSizingEngine`，所有 `_reject()` 调用附带 `risk_sizing_decision` 到 details
+  - 更新 `docs/INTERFACE_CONTRACTS.md`：新增 8.7 节 Risk Sizing Decision 契约
+  - 更新 `trader/core/domain/models/__init__.py` 和 `trader/core/domain/services/__init__.py`：导出新类型
+- 验证:
+  - `python -m pytest trader/tests/test_risk_sizing_engine.py` → 16 passed
+  - `python -m pytest trader/tests/test_crypto_risk_p0.py` → 9 passed
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_market_risk_audit_repository.py` → 29 passed
+- 风险/遗留:
+  - 本段是 P5 第一阶段，尚未实现 OMS 自动裁剪
+  - 下一步可继续 P6 Risk Mode 状态机，或 P7 回测接入真实风控模块
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-11 - P4.7 Funding/OI 运维页面配置暴露
 
 - 背景: P4.6 已完成 Funding/OI 历史窗口派生基础（Core 计算 + Service Provider），但运维侧无法配置和查看这些阈值。

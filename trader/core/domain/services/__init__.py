@@ -68,6 +68,12 @@ from trader.core.domain.services.position_risk_constructor import (
     TotalExposureResult,
 )
 from trader.core.domain.services.risk_sizer import RiskSizer, SizerConfig, SizerInputs, SizerResult
+from trader.core.domain.services.risk_sizing_engine import (
+    ClusterExposureInput,
+    ConstraintInput,
+    RiskSizingEngine,
+    SymbolExposureInput,
+)
 
 __all__ = [
     # DepthChecker
@@ -123,4 +129,9 @@ __all__ = [
     "FundingOIWindowCalculator",
     "FundingRateZScoreResult",
     "OIChangeRateResult",
+    # RiskSizingEngine (Crypto Risk P5)
+    "RiskSizingEngine",
+    "SymbolExposureInput",
+    "ClusterExposureInput",
+    "ConstraintInput",
 ]

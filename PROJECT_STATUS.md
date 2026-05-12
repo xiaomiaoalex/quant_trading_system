@@ -4,9 +4,34 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-08 (北京时间)
+2026-05-12 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P5 Risk Sizing Decision，支持裁剪而不只是拒绝
+- 完成时间: 2026-05-12 (北京时间)
+- 状态: ✅ 已完成 P5
+- 目标: 把风控从"通过/拒绝"升级为"给出最大安全下单量"
+- 开发后状态:
+  - 新增 `RiskSizingDecision` DTO，包含 `requested_qty`、`normalized_qty`、`max_allowed_qty`、`final_qty`、`decision`（approve/clip/reject/close_only）、`reason`、`limiting_factor`、`constraints`
+  - 新增 `RiskSizingEngine` Core domain service，纯计算无 IO
+  - 计算每个约束的最大允许数量：symbol_cap、total_cap、cluster_cap、margin_limit、exchange_rule
+  - 取所有约束的最小值作为 `max_allowed_qty`
+  - 集成到 `CryptoPreTradeRiskPlugin`，所有拒绝详情中附带 `risk_sizing_decision`
+- 第一阶段执行策略:
+  - 只计算不自动裁剪下单
+  - plugin 仍返回 reject/pass
+  - details 中附带 `max_allowed_qty`，供后续 OMS 使用
+- 验收标准达成:
+  - 每个 rejection 都能解释 `requested qty`、`max_allowed_qty`、`limiting_factor`
+  - 所有 `constraints` 列表及其推导过程
+- 验证结果:
+  - `python -m pytest trader/tests/test_risk_sizing_engine.py` → 16 passed ✅
+  - `python -m pytest trader/tests/test_crypto_risk_p0.py` → 9 passed ✅
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_market_risk_audit_repository.py` → 29 passed ✅
+- 注意事项:
+  - 本段是 P5 第一阶段，尚未实现 OMS 自动裁剪
+  - 下一步可继续 P6 Risk Mode 状态机，或 P7 回测接入真实风控模块
 
 ### 本次任务：P4.7 Funding/OI 运维页面配置暴露
 - 完成时间: 2026-05-11 (北京时间)

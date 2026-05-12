@@ -21,6 +21,7 @@ from trader.core.domain.services.exchange_rule_guard import ExchangeRuleGuard
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
 from trader.core.domain.services.open_order_exposure import OpenOrderExposureCalculator
 from trader.core.domain.services.portfolio_exposure_aggregator import PortfolioExposureAggregator
+from trader.core.domain.services.risk_sizing_engine import RiskSizingEngine
 
 if TYPE_CHECKING:
     from trader.core.application.risk_engine import RiskEngine
@@ -47,6 +48,7 @@ class CryptoPreTradeRiskPlugin:
         self._open_order_exposure = OpenOrderExposureCalculator()
         self._portfolio_exposure = PortfolioExposureAggregator()
         self._margin = MarginRiskCalculator()
+        self._risk_sizing = RiskSizingEngine()
 
     async def check(
         self,
@@ -63,6 +65,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.RISK_SYSTEM_ERROR,
                 message="Crypto risk snapshot unavailable, fail-closed",
                 details={"error": str(exc), "symbol": signal.symbol},
+                snapshot=None,
+                signal=signal,
             )
 
         validation_error = self._validate_snapshot(signal, snapshot)
@@ -91,6 +95,8 @@ class CryptoPreTradeRiskPlugin:
                     "normalized_price": str(rule_result.normalized_price),
                     "notional": str(rule_result.notional),
                 },
+                snapshot=snapshot,
+                signal=signal,
             )
 
         proposed_order = OpenOrderRisk(
@@ -121,6 +127,8 @@ class CryptoPreTradeRiskPlugin:
                         "total_risk_notional": str(exposure_result.total_risk_notional),
                         "pending_open_notional": str(exposure_result.pending_open_notional),
                     },
+                    snapshot=snapshot,
+                    signal=signal,
                 )
 
         total_cap = snapshot.risk_budget.total_notional_cap
@@ -136,6 +144,8 @@ class CryptoPreTradeRiskPlugin:
                     reason=RejectionReason.CRYPTO_OPEN_ORDER_EXPOSURE,
                     message="Total crypto risk notional exceeds cap",
                     details={"total_cap": str(total_cap), "total_risk_notional": str(total_risk)},
+                    snapshot=snapshot,
+                    signal=signal,
                 )
 
         cluster_result = self._evaluate_cluster_exposure(
@@ -168,6 +178,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.RISK_SYSTEM_ERROR,
                 message="Missing instrument spec, fail-closed",
                 details={"symbol": signal.symbol},
+                snapshot=snapshot,
+                signal=signal,
             )
         mark_price = snapshot.mark_prices.get(signal.symbol)
         if mark_price is None or mark_price <= 0:
@@ -176,6 +188,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.RISK_SYSTEM_ERROR,
                 message="Missing mark price, fail-closed",
                 details={"symbol": signal.symbol},
+                snapshot=snapshot,
+                signal=signal,
             )
         if signal.quantity <= 0:
             return self._reject(
@@ -183,6 +197,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.CRYPTO_EXCHANGE_RULE,
                 message="Signal quantity must be positive",
                 details={"symbol": signal.symbol, "qty": str(signal.quantity)},
+                snapshot=snapshot,
+                signal=signal,
             )
         if signal.signal_type == SignalType.NONE:
             return self._reject(
@@ -190,6 +206,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.CRYPTO_EXCHANGE_RULE,
                 message="Signal type NONE is not a trade intent",
                 details={"symbol": signal.symbol, "signal_type": signal.signal_type.value},
+                snapshot=snapshot,
+                signal=signal,
             )
         return None
 
@@ -212,6 +230,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.RISK_SYSTEM_ERROR,
                 message="Missing crypto cluster mapping while cluster budget is enabled",
                 details={"symbol": signal.symbol},
+                snapshot=snapshot,
+                signal=signal,
             )
 
         cluster_exposures = self._portfolio_exposure.calculate_cluster_exposures(
@@ -237,6 +257,8 @@ class CryptoPreTradeRiskPlugin:
                         "cluster_risk_notional": str(exposure.total_risk_notional),
                         "symbols": list(exposure.symbols),
                     },
+                    snapshot=snapshot,
+                    signal=signal,
                 )
         return None
 
@@ -275,6 +297,8 @@ class CryptoPreTradeRiskPlugin:
                 reason=RejectionReason.RISK_SYSTEM_ERROR,
                 message=f"Margin calculation failed: {margin_result.rejection_reason}",
                 details={"margin_reason": margin_result.rejection_reason, "symbol": signal.symbol},
+                snapshot=snapshot,
+                signal=signal,
             )
         if margin_result.initial_margin > snapshot.account.available_balance:
             return self._reject(
@@ -285,6 +309,8 @@ class CryptoPreTradeRiskPlugin:
                     "initial_margin": str(margin_result.initial_margin),
                     "available_balance": str(snapshot.account.available_balance),
                 },
+                snapshot=snapshot,
+                signal=signal,
             )
         if margin_result.margin_ratio > snapshot.risk_budget.max_margin_ratio:
             return self._reject(
@@ -295,6 +321,8 @@ class CryptoPreTradeRiskPlugin:
                     "margin_ratio": str(margin_result.margin_ratio),
                     "max_margin_ratio": str(snapshot.risk_budget.max_margin_ratio),
                 },
+                snapshot=snapshot,
+                signal=signal,
             )
 
         min_buffer = snapshot.risk_budget.min_liquidation_buffer_ratio
@@ -306,6 +334,8 @@ class CryptoPreTradeRiskPlugin:
                     reason=RejectionReason.CRYPTO_LIQUIDATION_BUFFER,
                     message="Liquidation price missing while buffer budget is enabled",
                     details={"min_liquidation_buffer_ratio": str(min_buffer)},
+                    snapshot=snapshot,
+                    signal=signal,
                 )
             if buffer_ratio < min_buffer:
                 return self._reject(
@@ -316,6 +346,8 @@ class CryptoPreTradeRiskPlugin:
                         "liquidation_buffer_ratio": str(buffer_ratio),
                         "min_liquidation_buffer_ratio": str(min_buffer),
                     },
+                    snapshot=snapshot,
+                    signal=signal,
                 )
         return None
 
@@ -348,11 +380,52 @@ class CryptoPreTradeRiskPlugin:
         reason: RejectionReason,
         message: str,
         details: dict[str, object],
+        snapshot: CryptoRiskSnapshot | None = None,
+        signal: Signal | None = None,
     ) -> RiskCheckResult:
+        enriched_details = dict(details)
+
+        from trader.core.domain.models.risk_decision import (
+            RiskSizingDecision,
+            RiskSizingDecisionType,
+        )
+
+        if snapshot is not None and signal is not None:
+            try:
+                sizing_decision = self._risk_sizing.calculate(signal, snapshot)
+                enriched_details["risk_sizing_decision"] = sizing_decision.to_dict()
+            except Exception as exc:
+                fallback_decision = RiskSizingDecision(
+                    requested_qty=signal.quantity,
+                    normalized_qty=Decimal("0"),
+                    max_allowed_qty=Decimal("0"),
+                    final_qty=Decimal("0"),
+                    decision=RiskSizingDecisionType.REJECT,
+                    reason="RISK_SIZING_ERROR",
+                    limiting_factor=None,
+                    constraints=(),
+                    trace_id=getattr(signal, "signal_id", ""),
+                )
+                enriched_details["risk_sizing_decision"] = fallback_decision.to_dict()
+                enriched_details["risk_sizing_error"] = str(exc)
+        elif signal is not None:
+            fallback_decision = RiskSizingDecision(
+                requested_qty=signal.quantity,
+                normalized_qty=Decimal("0"),
+                max_allowed_qty=Decimal("0"),
+                final_qty=Decimal("0"),
+                decision=RiskSizingDecisionType.REJECT,
+                reason="SNAPSHOT_UNAVAILABLE",
+                limiting_factor=None,
+                constraints=(),
+                trace_id=getattr(signal, "signal_id", ""),
+            )
+            enriched_details["risk_sizing_decision"] = fallback_decision.to_dict()
+
         return RiskCheckResult(
             passed=False,
             risk_level=level,
             rejection_reason=reason,
             message=message,
-            details=details,
+            details=enriched_details,
         )
