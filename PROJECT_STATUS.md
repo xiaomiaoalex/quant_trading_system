@@ -33,6 +33,32 @@
   - 本段是 P5 第一阶段，尚未实现 OMS 自动裁剪
   - 下一步可继续 P6 Risk Mode 状态机，或 P7 回测接入真实风控模块
 
+### 本次任务：P6 Risk Mode 状态机
+- 完成时间: 2026-05-12 (北京时间)
+- 状态: ✅ 已完成 P6
+- 目标: 让风控系统能控制账户运行模式，而不是只控制单笔订单
+- 开发后状态:
+  - 新增 `RiskMode` 枚举：NORMAL(0) / NO_NEW_POSITIONS(1) / CLOSE_ONLY(2) / CANCEL_ALL_AND_HALT(3) / LIQUIDATE_AND_DISCONNECT(4)
+  - 新增 `RiskModeState`、`RiskModeTransition`、`RiskModeAuditEvent` DTO
+  - 新增 `RiskModeController` Core domain service，支持单调升级、人工升级/解除、审计回调
+  - 新增 `RiskModeControllerConfig` 配置类
+  - 升级规则：1个拒绝→CLOSE_ONLY，2个拒绝→CANCEL_ALL_AND_HALT，3个拒绝→LIQUIDATE_AND_DISCONNECT
+  - `allows_new_positions`、`allows_open_positions`、`allows_reduce_only`、`blocks_all_orders` 等模式判断方法
+  - 支持 `manual_escalate()` 和 `manual_release()` 人工干预
+  - 审计事件包含 `mode_before`、`mode_after`、`trigger`、`reason`、`trace_id`
+- 验收标准达成:
+  - 状态单调升级（只能升不能降）
+  - 人工解除需要显式 API
+  - close-only 拦截开仓，允许减仓
+  - 审计事件写入
+- 验证结果:
+  - `python -m pytest trader/tests/test_risk_mode_controller.py` → 23 passed ✅
+  - `python -m pytest trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_manager.py` → 49 passed ✅
+  - black/isort/py_compile/mypy → passed ✅
+- 注意事项:
+  - 本段是 P6 状态机基础，尚未集成到 `CryptoPreTradeRiskPlugin`
+  - 下一步可继续 P7 回测接入真实风控模块，或 P8 Demo 生产化联调
+
 ### 本次任务：P4.7 Funding/OI 运维页面配置暴露
 - 完成时间: 2026-05-11 (北京时间)
 - 状态: ✅ 已完成 P4.7（第二轮审计修复后）

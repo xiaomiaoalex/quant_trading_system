@@ -25,6 +25,25 @@
 
 ## 最近记录
 
+### 2026-05-12 - P6 Risk Mode 状态机
+
+- 背景: P5 只能控制单笔订单，无法控制账户运行模式。需要一个状态机来管理整体风险模式，支持单调升级和人工干预。
+- 决策: 新增独立的 `RiskMode` 枚举和 `RiskModeController` 服务，保持 Core 层无 IO 特性，支持审计回调。
+- 改动:
+  - 新增 `trader/core/domain/models/risk_mode.py`：包含 `RiskMode` 枚举（NORMAL/NO_NEW_POSITIONS/CLOSE_ONLY/CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT）、`RiskModeState`、`RiskModeTransition`、`RiskModeAuditEvent`、`create_risk_mode_event()`
+  - 新增 `trader/core/domain/services/risk_mode_controller.py`：包含 `RiskModeController`、`RiskModeControllerConfig`
+  - 新增 `trader/tests/test_risk_mode_controller.py`：23 个测试用例覆盖状态枚举、单调升级、人工干预、审计回调
+  - 更新 `trader/core/domain/models/__init__.py` 和 `trader/core/domain/services/__init__.py`：导出新类型
+- 验证:
+  - `python -m pytest trader/tests/test_risk_mode_controller.py` → 23 passed
+  - `python -m pytest trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py` → 27 passed
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_manager.py` → 22 passed
+  - black/isort/py_compile/mypy → passed
+- 风险/遗留:
+  - 本段是 P6 状态机基础，尚未集成到 `CryptoPreTradeRiskPlugin`
+  - 下一步可继续 P7 回测接入真实风控模块，或 P8 Demo 生产化联调
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-12 - P5 Risk Sizing Decision，支持裁剪而不只是拒绝
 
 - 背景: P4.4-P4.7 的风控只能返回"通过"或"拒绝"，无法告诉 OMS"最多能下多少"；后续OMS需要知道最大安全下单量来自动裁剪。

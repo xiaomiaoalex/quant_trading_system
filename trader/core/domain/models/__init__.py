@@ -47,6 +47,13 @@ from trader.core.domain.models.risk_decision import (
     RiskSizingDecision,
     RiskSizingDecisionType,
 )
+from trader.core.domain.models.risk_mode import (
+    RiskMode,
+    RiskModeAuditEvent,
+    RiskModeState,
+    RiskModeTransition,
+    create_risk_mode_event,
+)
 from trader.core.domain.models.signal import Signal, SignalType
 
 __all__ = [
@@ -88,4 +95,10 @@ __all__ = [
     "ConstraintResult",
     "RiskSizingDecision",
     "RiskSizingDecisionType",
+    # Risk Mode
+    "RiskMode",
+    "RiskModeAuditEvent",
+    "RiskModeState",
+    "RiskModeTransition",
+    "create_risk_mode_event",
 ]
