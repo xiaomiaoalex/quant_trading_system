@@ -9,6 +9,13 @@ export interface CryptoRiskBudget {
   total_notional_cap: string
   max_margin_ratio: string
   min_liquidation_buffer_ratio: string
+  max_abs_funding_rate_z_score: string
+  max_abs_open_interest_change_rate: string
+  funding_history_window: number
+  oi_history_window: number
+  funding_min_periods: number
+  oi_min_periods: number
+  max_data_age_seconds: number
 }
 
 export interface CryptoRiskRuntimeStatus {
@@ -31,6 +38,13 @@ export interface CryptoRiskBudgetUpdateRequest {
   total_notional_cap?: string
   max_margin_ratio?: string
   min_liquidation_buffer_ratio?: string
+  max_abs_funding_rate_z_score?: string
+  max_abs_open_interest_change_rate?: string
+  funding_history_window?: number
+  oi_history_window?: number
+  funding_min_periods?: number
+  oi_min_periods?: number
+  max_data_age_seconds?: number
   updated_by: string
 }
 

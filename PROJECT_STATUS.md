@@ -8,6 +8,32 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：P4.7 Funding/OI 运维页面配置暴露
+- 完成时间: 2026-05-11 (北京时间)
+- 状态: ✅ 已完成 P4.7（第二轮审计修复后）
+- 开发后状态:
+  - 扩展 `CryptoRiskBudgetSchema` 添加 Funding/OI 预算字段（`max_abs_funding_rate_z_score`、`max_abs_open_interest_change_rate`、`funding_history_window`、`oi_history_window`、`funding_min_periods`、`oi_min_periods`、`max_data_age_seconds`）
+  - 扩展 `CryptoRiskBudgetUpdateRequest` 支持热更新 Funding/OI 配置
+  - 扩展 `crypto_risk_budget_to_dict()` 输出新字段
+  - 扩展 `merge_crypto_risk_budget()` 接收并解析新字段
+  - 新增 `_parse_positive_int()` 和 `_validate_min_periods_against_final_window()` 校验函数
+  - `Funding Window/Min` 和 `OI Window/Min` 仅展示（不可编辑），因窗口配置通常固定
+- 第二轮审计修复:
+  - 修复 window/min_periods 校验逻辑：先解析最终 window，再校验 min_periods <= window
+  - 运行 `black --line-length 100` 格式化
+  - 环境变量从"运行时配置"移回"待 P4.8 接入"
+  - 新增测试 `test_patch_window_without_min_periods_rejects_if_exceeds_current`
+- 第三轮审计修复:
+  - `_validate_min_periods_against_final_window()` 增加 `> 0` 校验
+  - 新增测试 `test_patch_funding_min_periods_zero_rejected` 和 `test_patch_oi_min_periods_negative_rejected`
+- 验证结果:
+  - `pytest test_crypto_risk_runtime_api.py + test_crypto_risk_p0.py` → 23 passed ✅
+  - `npm run typecheck` → passed ✅
+  - `npx vite build` → 227 modules, 486KB ✅
+  - `black --check` → passed ✅
+- 注意事项:
+  - 后端风控逻辑（`CryptoPreTradeRiskPlugin` 中的 Funding/OI 阈值检查）待 P4.8 接入
+
 ### 本次任务：P4.6 Funding/OI 历史窗口派生
 - 完成时间: 2026-05-08 (北京时间)
 - 分支: main

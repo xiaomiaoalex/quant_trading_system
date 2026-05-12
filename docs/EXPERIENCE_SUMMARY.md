@@ -72,6 +72,22 @@ Funding Rate Z-Score 和 OI 变化率需要：
 - 涉及时间戳的测试尽量使用动态时间，避免时间偏移导致的不稳定。
 - 如果必须使用固定时间戳，需要确保 Provider 的时间计算逻辑与测试数据生成逻辑完全匹配。
 
+### 32.5 开发经验：API Schema 变更必须同步后端逻辑
+
+**问题描述**：
+在 P4.7 中，后端 `schemas.py` 扩展了 `CryptoRiskBudgetUpdateRequest` 添加 Funding/OI 字段，但 `merge_crypto_risk_budget()` 函数没有接收这些参数，`patch_crypto_risk_budget()` 也没有传入。结果是前端提交的新字段被静默忽略，API 契约和实际行为不一致。
+
+**解决方案**：
+- 扩展 PATCH 请求 schema 时，必须同步更新 `merge_crypto_risk_budget()` 的参数列表。
+- 扩展 GET 响应 schema 时，必须同步更新 `crypto_risk_budget_to_dict()` 的输出字段。
+- 新增字段解析函数（如 `_parse_positive_int`、`_parse_min_periods`）处理类型转换和校验。
+- 添加测试用例验证 PATCH 新字段后 GET 返回同样的值。
+
+**经验**：
+- API Schema 变更只是声明，后端逻辑才是实际行为。
+- 每次 schema 变更都必须有对应的端到端测试验证。
+- 静默忽略字段比直接报错更危险，因为它会产生虚假的成功感。
+
 ---
 
 ## 三十一、市场无关风险契约抽象经验（2026-05-06）

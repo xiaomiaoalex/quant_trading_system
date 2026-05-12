@@ -14,6 +14,13 @@ export const CryptoRiskBudgetSchema = z.object({
   total_notional_cap: z.string(),
   max_margin_ratio: z.string(),
   min_liquidation_buffer_ratio: z.string(),
+  max_abs_funding_rate_z_score: z.string(),
+  max_abs_open_interest_change_rate: z.string(),
+  funding_history_window: z.number().int(),
+  oi_history_window: z.number().int(),
+  funding_min_periods: z.number().int(),
+  oi_min_periods: z.number().int(),
+  max_data_age_seconds: z.number().int(),
 })
 
 export const CryptoRiskRuntimeStatusSchema = z.object({

@@ -177,6 +177,13 @@ class CryptoRiskBudgetSchema(BaseModel):
     total_notional_cap: str = "0"
     max_margin_ratio: str = "0.80"
     min_liquidation_buffer_ratio: str = "0"
+    max_abs_funding_rate_z_score: str = "0"
+    max_abs_open_interest_change_rate: str = "0"
+    funding_history_window: int = 20
+    oi_history_window: int = 20
+    funding_min_periods: int = 10
+    oi_min_periods: int = 10
+    max_data_age_seconds: int = Field(default=24 * 3600)
 
 
 class CryptoRiskRuntimeStatus(BaseModel):
@@ -235,6 +242,13 @@ class CryptoRiskBudgetUpdateRequest(BaseModel):
     total_notional_cap: Optional[str] = None
     max_margin_ratio: Optional[str] = None
     min_liquidation_buffer_ratio: Optional[str] = None
+    max_abs_funding_rate_z_score: Optional[str] = None
+    max_abs_open_interest_change_rate: Optional[str] = None
+    funding_history_window: Optional[int] = None
+    oi_history_window: Optional[int] = None
+    funding_min_periods: Optional[int] = None
+    oi_min_periods: Optional[int] = None
+    max_data_age_seconds: Optional[int] = None
     updated_by: str = Field(..., min_length=1)
 
 

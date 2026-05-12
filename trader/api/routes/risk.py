@@ -283,6 +283,13 @@ async def patch_crypto_risk_budget(request: CryptoRiskBudgetUpdateRequest):
             total_notional_cap=request.total_notional_cap,
             max_margin_ratio=request.max_margin_ratio,
             min_liquidation_buffer_ratio=request.min_liquidation_buffer_ratio,
+            max_abs_funding_rate_z_score=request.max_abs_funding_rate_z_score,
+            max_abs_open_interest_change_rate=request.max_abs_open_interest_change_rate,
+            funding_history_window=request.funding_history_window,
+            oi_history_window=request.oi_history_window,
+            funding_min_periods=request.funding_min_periods,
+            oi_min_periods=request.oi_min_periods,
+            max_data_age_seconds=request.max_data_age_seconds,
         )
         status = await manager.update_budget(budget, updated_by=request.updated_by)
         await _append_crypto_budget_audit_event(before_status, status, request.updated_by)
