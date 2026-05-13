@@ -25,6 +25,26 @@
 
 ## 最近记录
 
+### 2026-05-13 - P7 回测接入真实风控模块
+
+- 背景: P7 要求回测订单经过与实盘一致的 `RiskEngine.check_pre_trade(signal)`，并生成风控前/后表现；前几轮实现存在绕过 RiskEngine、只记录报告不改变成交路径、VectorBT 输入硬编码等问题。
+- 决策: 保留 `BacktestRiskIntegration` 作为唯一回测风控入口；新增 `RiskAwareOrderProcessor` 覆盖事件式执行器入队路径；新增 `VectorBTAdapterWithRisk` 覆盖向量化回测路径，风控结果必须落到 entries/exits/size 序列。
+- 改动:
+  - 新增 `trader/services/backtesting/backtest_risk_integration.py`：定义 `BacktestRiskEnginePort`、`BacktestRiskIntegration`、`BacktestRiskReport`、`BacktestSignalResult`
+  - 新增 `trader/services/backtesting/risk_aware_order_processor.py`：APPROVED/CLIPPED 入 `NextBarOpenExecutor` 队列，REJECTED 跳过；CLIPPED 缺失正数 `max_allowed_qty` 时 fail-closed
+  - 新增 `trader/services/backtesting/vectorbt_risk_adapter.py`：生成 raw plan 与 risk-adjusted plan，CLIPPED 写入裁剪后 size，REJECTED 写入 size=0
+  - 扩展 `trader/services/backtesting/ports.py`：`BacktestResult` 增加风控订单明细、拒绝原因统计、风控前/后最大回撤与风控后权益曲线字段
+  - 更新 `trader/services/backtesting/__init__.py`：导出 P7 新类型
+  - 新增/更新 `trader/tests/test_backtest_risk_integration.py`、`trader/tests/test_risk_aware_order_processor.py`、`trader/tests/test_vectorbt_risk_adapter.py`
+- 验证:
+  - `python -m pytest trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_risk_aware_order_processor.py trader/tests/test_backtest_risk_integration.py trader/tests/test_risk_mode_controller.py trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 86 passed
+  - black/isort/py_compile/git diff check → passed
+  - `python -m mypy ...` 仍失败于仓库既有全局类型债；P7 新增 `vectorbt` 缺桩已局部 ignore
+- 风险/遗留:
+  - P7 完成本段验收；尚未做 P8 Demo 环境 fail-closed 演练
+  - 全仓 mypy 当前不是干净基线，后续若要把类型检查作为 CI 门禁，需要先单独收敛既有类型债
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-12 - P6 Risk Mode 状态机
 
 - 背景: P5 只能控制单笔订单，无法控制账户运行模式。需要一个状态机来管理整体风险模式，支持单调升级和人工干预。

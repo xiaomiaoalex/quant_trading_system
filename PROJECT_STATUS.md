@@ -4,9 +4,36 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-12 (北京时间)
+2026-05-13 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P7 回测接入真实风控模块
+- 完成时间: 2026-05-13 (北京时间)
+- 状态: ✅ P7 完成（P7.1 风控感知订单入队层 + P7.2 VectorBT 风控后权益曲线）
+- 目标: 回测订单经过 `RiskEngine.check_pre_trade(signal)`，生成风控前/后表现
+- 开发后状态:
+  - 新增 `BacktestRiskEnginePort` Protocol：`check_pre_trade(signal) -> RiskCheckResult`
+  - 新增 `BacktestRiskIntegration`：通过 `risk_engine.check_pre_trade(signal)` 获取完整风控结果，区分 APPROVED / CLIPPED / REJECTED
+  - 新增 `RiskAwareOrderProcessor`：APPROVED/CLIPPED 入 `NextBarOpenExecutor` 队列，REJECTED 跳过；CLIPPED 缺少正数 `max_allowed_qty` 时 fail-closed
+  - 新增 `VectorBTAdapterWithRisk`：生成 raw plan 与 risk-adjusted plan，并用 VectorBT 分别计算原始和风控后权益曲线
+  - 扩展 `BacktestResult`：`raw_signals`、`approved_orders`、`clipped_orders`、`rejected_orders`、`rejection_reason_counts`、`max_drawdown_before_risk`、`max_drawdown_after_risk`、`risk_adjusted_equity_curve`、`risk_adjusted_metrics`
+  - `VectorBTAdapterWithRisk` 不硬编码 symbol/price/quantity；信号来自 `BacktestConfig`、K 线和策略输出
+- 验收标准达成:
+  - 回测不绕过 RiskEngine，通过 `check_pre_trade()` 调用完整风控
+  - REJECTED 信号不进入执行器队列，也不进入 VectorBT 成交模拟
+  - CLIPPED 信号使用 `effective_quantity` 写入执行队列和 VectorBT `size`
+  - 回测报告包含风控前/后的最大回撤和权益曲线
+- 验证结果:
+  - `python -m pytest trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_risk_aware_order_processor.py trader/tests/test_backtest_risk_integration.py trader/tests/test_risk_mode_controller.py trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 86 passed ✅
+  - `python -m black --check --line-length 100 ...` → passed ✅
+  - `python -m isort --check-only --profile black ...` → passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `git diff --check` → passed ✅
+  - `python -m mypy ...` 当前仍失败于仓库既有全局类型债（本段不修复）；P7 新增 `vectorbt` import 已加局部 ignore，避免新增缺桩噪音
+- 注意事项:
+  - 本段按计划停下，等待主审对 P7 代码和文档审计
+  - 审计通过后再进入 P8 Demo 生产化联调与 Fail-Closed 演练
 
 ### 本次任务：P5 Risk Sizing Decision，支持裁剪而不只是拒绝
 - 完成时间: 2026-05-12 (北京时间)

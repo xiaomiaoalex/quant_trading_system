@@ -109,6 +109,65 @@ Risk sizing 需要同时考虑多个约束（symbol_cap、total_cap、cluster_ca
 - 审计事件是 Fail-Closed 的保障：状态变更必须有迹可循
 - `triggered_by` 区分自动触发（system）和人工干预（operator）
 
+### 33.8 设计模式：回测必须通过 RiskEngine.check_pre_trade()
+
+**问题描述**：
+回测时不能绕过 RiskEngine 直接调用 CryptoPreTradeRiskPlugin.check()。这会跳过日亏损、回撤、持仓数、订单频率、资金、时间窗口等风控检查，导致回测结果与实盘不一致。
+
+**解决方案**：
+- 通过 `risk_engine.check_pre_trade(signal)` 调用完整风控
+- 使用 `BacktestRiskEnginePort` Protocol 允许注入模拟 RiskEngine（回测）或真实 RiskEngine（生产）
+- 区分 APPROVED / CLIPPED / REJECTED 三种结果
+
+**经验**：
+- 回测和实盘必须使用同一套风控入口，否则会出现"回测盈利实盘亏损"的情况
+- `BacktestRiskEnginePort` 协议让回测可以注入模拟引擎，同时也支持注入真实 RiskEngine
+- 不绕过 RiskEngine 是 P7 的核心约束
+
+### 33.9 踩坑记录：回测风控集成不能绕过 RiskEngine
+
+**问题描述**：
+初始实现的 `backtest_risk_gate.py` 直接调用 `CryptoPreTradeRiskPlugin.check()`，绕过了 RiskEngine 自带的日亏损、回撤、持仓数、订单频率、资金、时间窗口和 killswitch hint 逻辑。
+
+**解决方案**：
+- 删除错误的实现
+- 重写为 `BacktestRiskIntegration`，接收 `BacktestRiskEnginePort`
+- 调用 `risk_engine.check_pre_trade(signal)` 获取完整风控结果
+
+**经验**：
+- 审计时要检查是否真的调用了 `check_pre_trade()`，而不是只看是否有"风控"字样
+- `Protocol` 是实现依赖注入的好方法，可以同时支持模拟和生产
+
+### 33.10 踩坑记录：VectorBT 风控后曲线必须改变 size 序列
+
+**问题描述**：
+只记录 `clipped_orders` / `rejected_orders`，但不修改 VectorBT 的 `entries` / `exits` / `size` 输入序列，会导致报告看起来有风控，权益曲线却仍然是原始回测结果。
+
+**解决方案**：
+- APPROVED：保留原始方向和请求数量。
+- CLIPPED：保留原始方向，但 `size` 使用 `effective_quantity` / `max_allowed_qty`。
+- REJECTED：写入 `entry=False`、`exit=False`、`size=0`，确保不进入成交模拟。
+- `max_drawdown_before_risk` 来自 raw portfolio，`max_drawdown_after_risk` 来自 risk-adjusted portfolio。
+
+**经验**：
+- 回测风控是否生效，最终要看订单命运和权益曲线是否变化，而不是只看报告字段。
+- 对 VectorBT 这类向量化引擎，风控结果必须落到输入矩阵上。
+
+### 33.11 踩坑记录：回测信号构造不得硬编码市场字段
+
+**问题描述**：
+回测风控信号如果硬编码 `BTCUSDT`、`price=0` 或固定数量，会让测试在假数据上通过，却无法代表真实策略、真实 symbol 和真实 K 线价格。
+
+**解决方案**：
+- symbol 来自 `BacktestConfig.symbol` 或策略显式输出的 `Signal`。
+- price 来自当前 K 线 close，作为信号参考价；风控核心仍以 snapshot/mark price 为准。
+- 策略只输出方向时，数量来自 `VectorBTRiskAdapterConfig.default_order_quantity`。
+- 策略直接输出 `Signal` 时，保留该信号的 symbol、price、quantity、strategy 信息。
+
+**经验**：
+- 回测适配层是跨市场边界，不能泄漏 Binance 或单一币种假设。
+- 测试要显式断言没有硬编码 symbol/price/qty，否则这类问题很容易混进“看似可运行”的代码。
+
 ---
 
 ## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）
