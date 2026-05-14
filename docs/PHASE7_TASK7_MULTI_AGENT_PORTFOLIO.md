@@ -5,6 +5,11 @@
 > **创建日期**: 2026-04-04
 > **状态**: 正式发布
 
+> Historical note (2026-05-14): 本文档中的回测框架表述属于早期计划。
+> 当前架构已由 `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`
+> 收敛为 Qlib Research Layer + VectorBT Fast Backtest Layer + future
+> EventDrivenRiskReplay。
+
 ---
 
 ## 1. 项目背景与目标
@@ -20,7 +25,7 @@
 | 项目主线 | crypto-first、单账户、小资金 |
 | 研究主线 | 趋势/量价/资金结构/链上/事件驱动 |
 | AI 限制 | 只能留在 Insight/Research 层，不能穿透到执行 |
-| 回测主引擎 | Lean primary，VectorBT secondary |
+| 回测主引擎 | VectorBT fast backtest active；EventDrivenRiskReplay 为后续目标 |
 | 审批链路 | 必须走现有 AI-clean / HITL / LifecycleManager |
 
 ### 1.3 核心目标
@@ -79,8 +84,8 @@
 
 | 边界 | 说明 |
 |------|------|
-| Lean primary | 主回测引擎使用 QuantConnect Lean |
-| VectorBT secondary | 快速原型验证使用 VectorBT |
+| VectorBT fast backtest | 当前 active 回测路径使用 VectorBT / VectorBTAdapterWithRisk |
+| EventDrivenRiskReplay target | 后续补齐生产级 OMS/account/risk replay |
 | PG-first for risk | 风险相关事件优先写入 PostgreSQL |
 | Event Sourcing | 采用追加式日志，所有操作可审计 |
 

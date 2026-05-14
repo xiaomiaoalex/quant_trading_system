@@ -6,6 +6,22 @@
 
 ## 三十三、Risk Sizing Decision 经验（2026-05-12）
 
+### 33.16 架构经验：研究框架、快速回测框架、生产级回放不能混成一个主引擎
+
+**问题描述**：
+历史文档同时出现 QuantConnect Lean 旧主路径、VectorBT active implementation、Qlib
+研究主线等表述。后续 AI 工程师容易误把研究框架、快速向量化回测框架和生产级事件回放框架都当成“回测主引擎”，导致计划漂移。
+
+**解决方案**：
+- Qlib 固定在 Research/Insight 层，只产出因子、模型、预测和研究报告。
+- VectorBT 固定为当前 active fast backtest layer，用于快速验证和风控后权益曲线。
+- 生产级订单、账户、风控、OMS replay 归入后续 `EventDrivenRiskReplay`。
+- QuantConnect Lean 相关文档和适配器保留为 historical/legacy reference，不再作为当前主路径。
+
+**经验**：
+- 文档里的“主引擎”必须有时间戳和当前/历史状态，否则很容易比代码更误导。
+- 架构收敛优先改 truth source、ADR 和 docstring；旧实现是否删除应单独立任务审计。
+
 ### 33.1 踩坑记录：sizing 计算异常不得静默吞掉
 
 **问题描述**：
@@ -1781,7 +1797,7 @@ async def update_strategy_params(
 ### 12.3 策略"正期望"不看什么
 
 **场景**：
-Phase 5 完成了回测框架升级（QuantConnect Lean、无前瞻偏差、方向感知滑点、止盈止损支持），但还需要验证"扣成本后样本外是否仍为正期望"。
+Phase 5 历史记录曾将回测框架升级描述为 QuantConnect Lean 路线；当前 active 回测路径已收敛为 VectorBT / VectorBTAdapterWithRisk，后续生产级回放归入 EventDrivenRiskReplay。
 
 **问题**：
 - 不要先看年化收益多高、Sharpe 多漂亮、单段行情多惊艳
@@ -2564,7 +2580,7 @@ async def update_strategy_params(
 ### 12.3 策略"正期望"不看什么
 
 **场景**：
-Phase 5 完成了回测框架升级（QuantConnect Lean、无前瞻偏差、方向感知滑点、止盈止损支持），但还需要验证"扣成本后样本外是否仍为正期望"。
+Phase 5 历史记录曾将回测框架升级描述为 QuantConnect Lean 路线；当前 active 回测路径已收敛为 VectorBT / VectorBTAdapterWithRisk，后续生产级回放归入 EventDrivenRiskReplay。
 
 **问题**：
 - 不要先看年化收益多高、Sharpe 多漂亮、单段行情多惊艳
@@ -3326,6 +3342,51 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+### 34.1 踩坑记录：市场无关接口不要承载 A 股字段
+
+**问题描述**：
+P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构。最初尝试在 `MarketRuleIntent` 中新增 `OrderSide`/`OrderType` 枚举，与既有的 `trader.core.domain.models.order.OrderSide`/`OrderType` 冲突。如果两个枚举同时存在，调用方传入 `order.OrderSide.SELL` 与 `market_rules.OrderSide.SELL` 比较会是 `False`，导致 A 股插件判断卖出、T+1、不可做空时漏判。
+
+**解决方案**：
+- 市场无关接口直接复用既有枚举：`OrderSide`/`OrderType` 直接引用 `trader.core.domain.models.order` 中的定义
+- A 股专属字段（如 `sellable_qty`、`limit_up`、`limit_down`、`trading_phase`）只通过 `metadata` 传递，不作为固定字段
+- 市场专用规则由 specialization plugin 实现，不污染通用层
+
+**经验**：
+- 市场无关层只允许概念：intent, snapshot, plugin registry, violation, normalized price/qty, pass/reject, fail-closed details
+- 新增枚举前先检查仓库是否已有同名枚举；复用现有类型比新建兼容类型更安全
+- 审计边界：A 股规则只允许在 `ChinaStockMarketRulePlugin` 中实现，不得进入通用层
+
+### 34.2 踩坑记录：plugin.supports() 异常应 fail-closed，不应 skip
+
+**问题描述**：
+`MarketRuleEngine._find_matching_plugins()` 捕获 `plugin.supports()` 异常后只 log 并跳过该插件。若另一个插件匹配并 approve，整体就会通过；这违反了"插件异常时 fail-closed"的 P9.1 契约。
+
+**解决方案**：
+- `plugin.supports()` 异常直接返回 `MarketRuleCheckResult.fail_closed()`，不再 skip
+- 配置字段重命名为 `fail_closed_on_check_error`，与 `supports()` 异常永远 fail-closed 的语义区分
+- `MarketRuleEngineConfig` 文档明确说明：plugin.supports() 异常永远是 fail-closed，不受 `fail_closed_on_check_error` 控制
+
+**经验**：
+- Fail-closed 语义必须明确边界：哪些异常可以 skip，哪些必须 fail-closed
+- 配置字段命名要精确，避免误导（如 `fail_closed_on_error` 对 `supports()` 不生效）
+- 审计链：异常日志 + fail_closed result + 记录 plugin name/exception 到 details
+
+### 34.3 设计模式：reject 聚合应保留插件 details 用于可解释性
+
+**问题描述**：
+当某个插件返回 reject 时，`MarketRuleEngine` 只保留 `{"rejected_by": ...}`，丢掉了插件自己的 `result.details`。A 股插件会需要解释 `sellable_qty`、`limit_up/down`、`trading_phase` 等细节；丢失会削弱审计可解释性。
+
+**解决方案**：
+- reject 时聚合 `plugin_details`：`reject_details = {"rejected_by": ..., "plugin_details": result.details}`
+- 插件 details 携带 market-specific 解释信息，供审计使用
+- 保持 `rejected_by` 作为第一优先字段，因为它是区分多个插件的核心标识
+
+**经验**：
+- 风控拒绝必须可解释：不仅要说明"哪个插件拒绝"，还要说明"为什么拒绝"
+- 多层聚合：engine 层保留 plugin identity，plugin 层保留 market-specific 原因
+- `details` 字段是插件与 engine 之间的可解释性桥梁，不能在聚合时丢失
 
 
 ---

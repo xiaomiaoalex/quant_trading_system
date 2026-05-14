@@ -82,7 +82,7 @@ Insight 不可以直接：
 - 引入成熟开源框架作为回测引擎，而非自研
 - 自研适配层封装框架差异，统一接口
 - Backtrader 作为首选框架（功能完整、社区活跃）
-- VectorBT 作为备选（适合快速原型验证）
+- VectorBT 作为当前 active fast backtest path（适合快速原型验证和风控后权益曲线）
 
 ---
 
@@ -124,7 +124,7 @@ Insight Plane
 | **StrategyChatInterface AI聊天界面** | **Current** | **自然语言策略开发、HITL集成** |
 | **StrategyLifecycleManager 生命周期管理** | **Current** | **完整策略生命周期闭环** |
 | AI proposal / approve 治理 API | Current | 已通过HITL Governance实现 |
-| 回测框架升级（QuantConnect Lean） | Phase 5 ✅ | 2026-03-31 完成，引入成熟回测框架 |
+| 回测架构收敛 | Phase 5/P7 ✅ | 当前 active path 为 VectorBT / VectorBTAdapterWithRisk；QuantConnect Lean 为历史选型记录 |
 | 风控穿透验证与策略正期望证明 | **Next** | Phase 7 计划，验证风控真的改变下单结果 |
 | Qlib 离线研究引擎接入 | **Next** | 仅用于 Insight 研究域，输出版本化预测信号 |
 | Hermes 研究编排接入 | **Next** | 仅用于研发自动化，不进入生产执行链路 |
@@ -556,7 +556,7 @@ class WalkForwardAnalyzer:
 
 **Phase 5 状态**：✅ 已完成（2026-03-31）
 - Task 5.1-5.9 全部完成
-- QuantConnect Lean 适配层已完成
+- QuantConnect Lean 适配层保留为历史/legacy reference；当前 active path 为 VectorBT
 - 样本外验证框架（WalkForward/KFold/Sensitivity）已完成
 - 性能基准测试已完成
 

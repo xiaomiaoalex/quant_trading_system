@@ -50,6 +50,7 @@ from trader.core.domain.services.funding_oi_window_calculator import (
     FundingRateZScoreResult,
     OIChangeRateResult,
 )
+from trader.core.domain.services.market_rule_engine import MarketRuleEngine, MarketRuleEngineConfig
 from trader.core.domain.services.portfolio_exposure_aggregator import (
     ClusterExposure,
     PortfolioExposureAggregator,
@@ -141,4 +142,7 @@ __all__ = [
     # RiskModeController (Crypto Risk P6)
     "RiskModeController",
     "RiskModeControllerConfig",
+    # MarketRuleEngine (P9)
+    "MarketRuleEngine",
+    "MarketRuleEngineConfig",
 ]

@@ -1,10 +1,17 @@
 # Backtesting Framework Migration Guide
 
-> **Migration from self-developed evaluator to QuantConnect Lean framework**
+> Historical note (2026-05-14): This migration guide records an early Phase 5
+> direction. It is superseded by
+> `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`. The
+> active implemented backtesting path is VectorBT / VectorBTAdapterWithRisk.
 
 ## Overview
 
-Phase 5 replaces the self-developed backtesting module (`strategy_evaluator`) with the QuantConnect Lean framework for production-quality backtesting.
+The original Phase 5 plan replaced the self-developed backtesting module
+(`strategy_evaluator`) with an external production-quality framework. The
+current repository implementation has converged on VectorBT for fast backtesting
+and risk-adjusted equity curves, with a future EventDrivenRiskReplay layer for
+production-like replay.
 
 ## Why Migrate?
 
@@ -37,15 +44,15 @@ engine = BacktestEngine()
 result = await engine.run_backtest(strategy, config)
 ```
 
-### New Code (Recommended)
+### Current Code (Recommended)
 
 ```python
 from trader.services.backtesting import (
-    QuantConnectLeanBacktestEngine,
+    VectorBTAdapter,
     ReportFormatter,
 )
 
-engine = QuantConnectLeanBacktestEngine()
+engine = VectorBTAdapter()
 report = await engine.run_backtest(config, strategy)
 
 # Format to standardized report
@@ -57,7 +64,7 @@ std_report = formatter.format(report, config)
 
 | Old Component | New Component | Notes |
 |--------------|---------------|-------|
-| `BacktestEngine` | `QuantConnectLeanBacktestEngine` | Main backtest engine |
+| `BacktestEngine` | `VectorBTAdapter` / `VectorBTAdapterWithRisk` | Current active fast backtest path |
 | `StrategyMetrics` | `StandardizedBacktestReport` | Contains all metrics |
 | `BacktestReport` | `BacktestReport` | Report structure |
 | `LiveEvaluator` | `StrategyLifecycleManager` | Real-time evaluation |

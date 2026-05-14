@@ -5,11 +5,18 @@
 **Purpose:** Phase 5 backtesting engine selection  
 **Related ADR:** [ADR-001-backtesting-framework-selection.md](./adr/ADR-001-backtesting-framework-selection.md)
 
+> Historical note (2026-05-14): This comparison is retained as the Phase 5
+> selection record. It is superseded by
+> [ADR-002](./adr/ADR-002-backtesting-research-architecture-convergence.md).
+> The current architecture is Qlib Research Layer + VectorBT Fast Backtest Layer
+> + future EventDrivenRiskReplay. Do not treat the recommendation below as the
+> active implementation path.
+
 ---
 
 ## Executive Summary
 
-This report evaluates four major Python-based backtesting frameworks for adoption as the primary backtesting engine. Each framework is assessed against criteria critical to quantitative trading system development, including feature completeness, performance, extensibility, and community support.
+This historical report evaluated four major Python-based backtesting frameworks during Phase 5. Each framework was assessed against criteria critical to quantitative trading system development, including feature completeness, performance, extensibility, and community support.
 
 | Framework | Stars | License | Last Update | Contributors |
 |-----------|-------|---------|-------------|--------------|
@@ -380,7 +387,7 @@ Based on the project's five-plane architecture:
 
 ## 7. Recommendation
 
-### 7.1 Primary Recommendation: **QuantConnect Lean**
+### 7.1 Historical Recommendation: **QuantConnect Lean**
 
 **Rationale:**
 
@@ -458,4 +465,5 @@ While Apache 2.0 licensed and feature-complete, the Quantopian shutdown creates 
 
 | Decision Record | Framework Selected | Status |
 |-----------------|---------------------|--------|
-| [ADR-001-backtesting-framework-selection.md](./adr/ADR-001-backtesting-framework-selection.md) | QuantConnect Lean | Accepted |
+| [ADR-001-backtesting-framework-selection.md](./adr/ADR-001-backtesting-framework-selection.md) | QuantConnect Lean | Superseded |
+| [ADR-002-backtesting-research-architecture-convergence.md](./adr/ADR-002-backtesting-research-architecture-convergence.md) | Qlib + VectorBT + EventDrivenRiskReplay | Accepted |

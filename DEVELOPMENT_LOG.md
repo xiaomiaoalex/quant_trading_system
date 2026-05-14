@@ -25,6 +25,40 @@
 
 ## 最近记录
 
+### 2026-05-14 14:30 - P9.0+P9.1 市场无关规则框架
+
+- 背景: P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构，使 A 股规则和 Crypto 规则可以被插件化而不互相污染。
+- 决策: Core 层只定义 `MarketRuleIntent`/`MarketRuleCheckResult`/`MarketRulePlugin` 契约和 `MarketRuleEngine` 调度引擎；A 股规则放入 `ChinaStockMarketRulePlugin`，Crypto 规则放入 `CryptoMarketRulePlugin`；`OrderSide`/`OrderType` 直接复用 `trader.core.domain.models.order` 中的枚举。
+- 改动:
+  - 新增 `trader/core/domain/models/market_rules.py`：`MarketRuleIntent`、`MarketRuleViolation`、`MarketRuleCheckResult`、`MarketRulePlugin`、导出 `OrderSide`/`OrderType`
+  - 新增 `trader/core/domain/services/market_rule_engine.py`：`MarketRuleEngine`、`MarketRuleEngineConfig`；插件调度、结果聚合、fail-closed 包装
+  - 新增 `trader/tests/test_market_rule_engine.py`：11 个测试覆盖无插件 fail-closed、supports() 异常 fail-closed、check() 异常 fail-closed、一个 reject 阻止整体、多插件 normalized_qty 取最小值、OrderSide 兼容性
+  - 更新 `trader/core/domain/models/__init__.py` 和 `trader/core/domain/services/__init__.py`：导出新类型
+- 审计修复（P9.1 阻断问题）:
+  - [P1] supports() 异常被吞掉 → 改为直接返回 `MarketRuleCheckResult.fail_closed()`，不再 skip
+  - [P1] 新增 `OrderSide` 与既有 `order.OrderSide` 冲突 → 直接引用 `trader.core.domain.models.order` 中的枚举
+  - [P1] `fail_closed_on_error` 对 supports() 不生效 → 重命名为 `fail_closed_on_check_error`，文档说明 supports 异常永远 fail-closed
+  - [P2] reject 聚合丢失插件 details → 保留 `plugin_details` 到 reject details
+  - [P2] docstring 写 Raises 但实际返回 → 修正为"返回 fail_closed 结果，不 raise"
+  - [P1] black/isort 格式门禁失败 → 运行 black/isort 格式化
+- 验证:
+  - `python -m pytest trader/tests/test_market_rule_engine.py -v --tb=short` → 11 passed
+  - `python -m pytest trader/tests/test_architecture.py trader/tests/test_backtesting_vectorbt_adapter.py -v --tb=short` → 24 passed
+  - black/isort/py_compile/git diff check → passed
+- 风险/遗留:
+  - P9.1 框架已建立，尚未连接实际 plugin（P9.2/P9.3 实现）
+  - PLAN.md 已更新 P9.0/P9.1 状态标记为"已完成（含审计修复）"
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11 节、`docs/PROJECT_ARCHITECTURE.md` P9 市场规则插件架构、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-14 10:46 - 回测与研究架构文档收敛
+
+- 背景: 仓库同时存在 QuantConnect Lean 历史选型、VectorBT 当前实现、Qlib 研究主线和 P7 风控回测路径，后续 AI 容易把研究框架、快速回测框架和生产级回放框架混成一个“主引擎”。
+- 决策: 采用三层叙事：Qlib Research Layer、VectorBT Fast Backtest Layer、Future EventDrivenRiskReplay；ADR-001 标记为 superseded，新增 ADR-002 作为当前决策。
+- 改动: 更新 `docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`、`docs/backtesting_framework_comparison.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`，并修正 `trader/services/backtesting` docstring；未改运行时逻辑。
+- 验证: 通过搜索定位并消除当前入口中的 `Lean primary`、`VectorBT alternative`、`LeanBacktestEngine()` 等误导性表述；运行 `git diff --check` 与 P7 回测风险相关轻量回归。
+- 风险/遗留: QuantConnect Lean legacy 文件仍保留；如需删除 `result_converter.py` / `strategy_adapter.py` 等历史模块，必须另立 cleanup 任务审计引用关系。
+- 关联文档: `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`
+
 ### 2026-05-13 - P8 Demo 生产化联调与 Fail-Closed 演练
 
 - 背景: P8 要求验证真实运行坏情况下不会放行订单，并且每个失败场景都有可审计证据；现有 demo fail-closed 脚本只覆盖 HTTP 负向 probe，缺少 runtime pre-trade 层的确定性演练。
