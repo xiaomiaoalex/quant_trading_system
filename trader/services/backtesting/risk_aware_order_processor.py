@@ -90,11 +90,7 @@ class RiskAwareOrderProcessor:
 
     def _handle_result(self, result: BacktestSignalResult) -> ExecutableOrder | None:
         if result.status == "rejected":
-            self._report.rejected_skipped += 1
-            if result.rejection_reason:
-                self._report.rejected_reasons[result.rejection_reason] = (
-                    self._report.rejected_reasons.get(result.rejection_reason, 0) + 1
-                )
+            self._record_rejection(result.rejection_reason)
             return None
 
         effective_qty: Decimal
@@ -102,26 +98,29 @@ class RiskAwareOrderProcessor:
 
         if result.status == "clipped":
             if result.max_allowed_qty is None or result.max_allowed_qty <= 0:
-                self._report.rejected_skipped += 1
-                reason = result.rejection_reason or "MISSING_MAX_ALLOWED_QTY"
-                self._report.rejected_reasons[reason] = (
-                    self._report.rejected_reasons.get(reason, 0) + 1
-                )
+                self._record_rejection(result.rejection_reason or "MISSING_MAX_ALLOWED_QTY")
                 return None
             effective_qty = result.max_allowed_qty
             is_clipped = True
-            self._report.clipped_queued += 1
         else:
             effective_qty = result.signal.quantity
-            self._report.approved_queued += 1
 
-        pending_order = self._create_pending_order(
-            signal=result.signal,
-            quantity=effective_qty,
-            is_clipped=is_clipped,
-            max_allowed=result.max_allowed_qty,
-        )
+        try:
+            pending_order = self._create_pending_order(
+                signal=result.signal,
+                quantity=effective_qty,
+                is_clipped=is_clipped,
+                max_allowed=result.max_allowed_qty,
+            )
+        except ValueError:
+            self._record_rejection("INVALID_SIGNAL_TYPE")
+            return None
+
         self._executor.queue_order(pending_order)
+        if is_clipped:
+            self._report.clipped_queued += 1
+        else:
+            self._report.approved_queued += 1
 
         order_dict = self._order_to_dict(
             signal=result.signal,
@@ -151,15 +150,38 @@ class RiskAwareOrderProcessor:
     ) -> PendingOrder:
         from uuid import uuid4
 
+        from trader.core.domain.models.order import OrderSide
         from trader.services.backtesting.execution_simulator import PendingOrder
+
+        side_by_signal_type = {
+            "BUY": OrderSide.BUY,
+            "LONG": OrderSide.BUY,
+            "CLOSE_SHORT": OrderSide.BUY,
+            "SELL": OrderSide.SELL,
+            "SHORT": OrderSide.SELL,
+            "CLOSE_LONG": OrderSide.SELL,
+        }
+        signal_type_value = (
+            signal.signal_type.value
+            if hasattr(signal.signal_type, "value")
+            else str(signal.signal_type)
+        )
+        side = side_by_signal_type.get(signal_type_value)
+        if side is None:
+            raise ValueError(f"Unsupported signal type for backtest order: {signal_type_value}")
 
         return PendingOrder(
             order_id=str(uuid4()),
             symbol=signal.symbol,
-            side=signal.get_order_side(),
+            side=side,
             quantity=quantity,
             signal_price=signal.price if signal.price > 0 else None,
         )
+
+    def _record_rejection(self, reason: str | None) -> None:
+        self._report.rejected_skipped += 1
+        if reason:
+            self._report.rejected_reasons[reason] = self._report.rejected_reasons.get(reason, 0) + 1
 
     def _order_to_dict(
         self,

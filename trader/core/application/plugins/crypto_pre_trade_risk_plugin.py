@@ -73,6 +73,10 @@ class CryptoPreTradeRiskPlugin:
         if validation_error is not None:
             return validation_error
 
+        funding_oi_error = self._evaluate_funding_oi(signal, snapshot)
+        if funding_oi_error is not None:
+            return funding_oi_error
+
         spec = snapshot.instrument_specs[signal.symbol]
         mark_price = snapshot.mark_prices[signal.symbol]
         side = self._order_side(signal)
@@ -209,6 +213,106 @@ class CryptoPreTradeRiskPlugin:
                 snapshot=snapshot,
                 signal=signal,
             )
+        return None
+
+    def _evaluate_funding_oi(
+        self,
+        signal: Signal,
+        snapshot: CryptoRiskSnapshot,
+    ) -> RiskCheckResult | None:
+        budget = snapshot.risk_budget
+        funding_enabled = budget.funding_z_score_enabled
+        oi_enabled = budget.oi_change_rate_enabled
+        if not funding_enabled and not oi_enabled:
+            return None
+
+        metrics = snapshot.funding_oi_metrics.get(signal.symbol)
+        if metrics is None:
+            return self._reject(
+                level=RiskLevel.HIGH,
+                reason=RejectionReason.CRYPTO_FUNDING_OI_RISK,
+                message="Funding/OI metrics missing while budget threshold is enabled",
+                details={
+                    "symbol": signal.symbol,
+                    "funding_threshold_enabled": funding_enabled,
+                    "oi_threshold_enabled": oi_enabled,
+                },
+                snapshot=snapshot,
+                signal=signal,
+            )
+
+        if funding_enabled:
+            if metrics.any_funding_missing or metrics.funding_rate_z_score is None:
+                return self._reject(
+                    level=RiskLevel.HIGH,
+                    reason=RejectionReason.CRYPTO_FUNDING_OI_RISK,
+                    message="Funding data unavailable or stale while threshold is enabled",
+                    details={
+                        "symbol": signal.symbol,
+                        "max_abs_funding_rate_z_score": str(budget.max_abs_funding_rate_z_score),
+                        "funding_data_stale": metrics.funding_data_stale,
+                        "funding_window_insufficient": metrics.funding_window_insufficient,
+                        "funding_current_missing": metrics.funding_current_missing,
+                        "funding_rate_z_score": metrics.funding_rate_z_score,
+                    },
+                    snapshot=snapshot,
+                    signal=signal,
+                )
+            if (
+                abs(Decimal(str(metrics.funding_rate_z_score)))
+                > budget.max_abs_funding_rate_z_score
+            ):
+                return self._reject(
+                    level=RiskLevel.HIGH,
+                    reason=RejectionReason.CRYPTO_FUNDING_OI_RISK,
+                    message="Funding rate z-score exceeds risk budget",
+                    details={
+                        "symbol": signal.symbol,
+                        "funding_rate_z_score": metrics.funding_rate_z_score,
+                        "max_abs_funding_rate_z_score": str(budget.max_abs_funding_rate_z_score),
+                    },
+                    snapshot=snapshot,
+                    signal=signal,
+                )
+
+        if oi_enabled:
+            if metrics.any_oi_missing or metrics.open_interest_change_rate is None:
+                return self._reject(
+                    level=RiskLevel.HIGH,
+                    reason=RejectionReason.CRYPTO_FUNDING_OI_RISK,
+                    message="Open interest data unavailable or stale while threshold is enabled",
+                    details={
+                        "symbol": signal.symbol,
+                        "max_abs_open_interest_change_rate": str(
+                            budget.max_abs_open_interest_change_rate
+                        ),
+                        "oi_data_stale": metrics.oi_data_stale,
+                        "oi_window_insufficient": metrics.oi_window_insufficient,
+                        "oi_current_missing": metrics.oi_current_missing,
+                        "open_interest_change_rate": metrics.open_interest_change_rate,
+                    },
+                    snapshot=snapshot,
+                    signal=signal,
+                )
+            if (
+                abs(Decimal(str(metrics.open_interest_change_rate)))
+                > budget.max_abs_open_interest_change_rate
+            ):
+                return self._reject(
+                    level=RiskLevel.HIGH,
+                    reason=RejectionReason.CRYPTO_FUNDING_OI_RISK,
+                    message="Open interest change rate exceeds risk budget",
+                    details={
+                        "symbol": signal.symbol,
+                        "open_interest_change_rate": metrics.open_interest_change_rate,
+                        "max_abs_open_interest_change_rate": str(
+                            budget.max_abs_open_interest_change_rate
+                        ),
+                    },
+                    snapshot=snapshot,
+                    signal=signal,
+                )
+
         return None
 
     def _evaluate_cluster_exposure(

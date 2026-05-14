@@ -6,6 +6,7 @@ from trader.core.application.plugins.crypto_pre_trade_risk_plugin import CryptoP
 from trader.core.application.risk_engine import RejectionReason, RiskMetrics
 from trader.core.domain.models.crypto_risk import (
     CryptoAccountRisk,
+    CryptoFundingOIRiskMetrics,
     CryptoInstrumentSpec,
     CryptoMarketType,
     CryptoPositionRisk,
@@ -353,6 +354,85 @@ async def test_crypto_pre_trade_plugin_passes_valid_snapshot() -> None:
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_crypto_pre_trade_plugin_rejects_stale_funding_oi_when_threshold_enabled() -> None:
+    snapshot = CryptoRiskSnapshot(
+        account=account(),
+        instrument_specs={"BTCUSDT": btc_spec()},
+        leverage_brackets={"BTCUSDT": [btc_bracket()]},
+        positions=[],
+        open_orders=[],
+        mark_prices={"BTCUSDT": d("20000")},
+        risk_budget=CryptoRiskBudget(max_abs_funding_rate_z_score=d("2.0")),
+        funding_oi_metrics={
+            "BTCUSDT": CryptoFundingOIRiskMetrics(
+                symbol="BTCUSDT",
+                current_funding_rate=d("0.0001"),
+                funding_rate_z_score=None,
+                funding_data_stale=True,
+                funding_history_count=20,
+            )
+        },
+    )
+    plugin = CryptoPreTradeRiskPlugin(StaticSnapshotProvider(snapshot))
+
+    result = await plugin.check(
+        signal=Signal(
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            price=d("20000"),
+            quantity=d("0.1"),
+        ),
+        metrics=RiskMetrics(),
+        engine=None,
+    )
+
+    assert result is not None
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.CRYPTO_FUNDING_OI_RISK
+    assert result.details["funding_data_stale"] is True
+
+
+@pytest.mark.asyncio
+async def test_crypto_pre_trade_plugin_rejects_extreme_open_interest_when_threshold_enabled() -> (
+    None
+):
+    snapshot = CryptoRiskSnapshot(
+        account=account(),
+        instrument_specs={"BTCUSDT": btc_spec()},
+        leverage_brackets={"BTCUSDT": [btc_bracket()]},
+        positions=[],
+        open_orders=[],
+        mark_prices={"BTCUSDT": d("20000")},
+        risk_budget=CryptoRiskBudget(max_abs_open_interest_change_rate=d("10")),
+        funding_oi_metrics={
+            "BTCUSDT": CryptoFundingOIRiskMetrics(
+                symbol="BTCUSDT",
+                current_open_interest=d("1200"),
+                open_interest_change_rate=25.0,
+                oi_history_count=20,
+            )
+        },
+    )
+    plugin = CryptoPreTradeRiskPlugin(StaticSnapshotProvider(snapshot))
+
+    result = await plugin.check(
+        signal=Signal(
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            price=d("20000"),
+            quantity=d("0.1"),
+        ),
+        metrics=RiskMetrics(),
+        engine=None,
+    )
+
+    assert result is not None
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.CRYPTO_FUNDING_OI_RISK
+    assert result.details["open_interest_change_rate"] == 25.0
 
 
 @pytest.mark.asyncio

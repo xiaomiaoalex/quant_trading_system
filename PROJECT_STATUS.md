@@ -8,6 +8,34 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：P8 Demo 生产化联调与 Fail-Closed 演练
+- 完成时间: 2026-05-13 (北京时间)
+- 状态: ✅ P8 本地确定性 fail-closed 演练完成，等待主审审计
+- 目标: 验证坏数据、坏状态和审计故障下不会放行订单，并提供可重复执行的演练证据
+- 开发后状态:
+  - 新增 `scripts/rehearse_crypto_risk_runtime.py`：本地确定性演练脚本，不访问网络、不连接交易所、不下单
+  - 演练覆盖 mark price 缺失、leverage bracket 缺失、open orders 激增、Funding/OI 数据过期、Binance source 超时、连续重复信号、close-only 开仓信号、PG audit 不可用
+  - 演练脚本使用本地全天允许 `TimeWindowConfig`，避免当前时间窗口抢先触发 `TRADING_HOURS` 干扰目标故障场景
+  - `CryptoPreTradeRiskPlugin` 接入 Funding/OI budget 阈值：启用阈值时，指标缺失、过期、窗口不足或超过阈值返回 `CRYPTO_FUNDING_OI_RISK`
+  - `RejectionReason` 新增 `RISK_MODE_CLOSE_ONLY`，KillSwitch 推荐级别为 `L1_NO_NEW_POSITIONS`
+  - 新增 `trader/tests/test_crypto_risk_runtime_rehearsal.py`，验证所有 P8 场景 fail-closed、无订单尝试、审计证据存在
+  - 审计修复：`RiskAwareOrderProcessor` 对 `SignalType.NONE` 等无效信号类型 fail-closed，不再静默映射为 SELL
+  - 审计修复：PG audit 不可用场景记录 `audit_append_attempts` / `audit_append_failures`，证明确实尝试写审计后失败
+- 验收标准达成:
+  - 所有 P8 场景 `passed=false` 且 `order_attempted=false`
+  - 除 PG audit 不可用场景外，所有拒绝均捕获 pre-trade rejection audit
+  - PG audit append 失败时，风控结果仍保持拒绝，不 fail-open
+  - Funding/OI 数据过期通过真实 `CryptoPreTradeRiskPlugin` 返回 `CRYPTO_FUNDING_OI_RISK`
+- 验证结果:
+  - `python scripts/rehearse_crypto_risk_runtime.py --json` → `ok=true` ✅
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 17 passed ✅
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 58 passed ✅
+  - `python -m pytest trader/tests/test_risk_aware_order_processor.py trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 73 passed ✅
+  - black/isort/py_compile/git diff check → passed ✅
+- 注意事项:
+  - 本段是本地确定性演练，不替代 demo 环境 HTTP probe；demo 启动后的只读 probe 仍使用 `scripts/rehearse_crypto_risk_demo_fail_closed.py`
+  - 本段按计划停下，等待主审对 P8 代码和文档审计
+
 ### 本次任务：P7 回测接入真实风控模块
 - 完成时间: 2026-05-13 (北京时间)
 - 状态: ✅ P7 完成（P7.1 风控感知订单入队层 + P7.2 VectorBT 风控后权益曲线）

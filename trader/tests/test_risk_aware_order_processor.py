@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from trader.core.domain.models.order import OrderSide
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.backtesting.backtest_risk_integration import (
     BacktestRiskEnginePort,
@@ -185,6 +186,59 @@ class TestRiskAwareOrderProcessor:
         assert len(executor.get_pending_orders()) == 0
         assert processor.report.rejected_skipped == 1
         assert processor.report.rejected_reasons == {"CRYPTO_OPEN_ORDER_EXPOSURE": 1}
+
+    @pytest.mark.asyncio
+    async def test_approved_invalid_signal_type_is_not_queued(self, sample_signal, executor):
+        invalid_signal = Signal(
+            signal_id="sig-none",
+            symbol=sample_signal.symbol,
+            signal_type=SignalType.NONE,
+            quantity=sample_signal.quantity,
+            price=sample_signal.price,
+            strategy_name=sample_signal.strategy_name,
+            timestamp=None,
+        )
+        integration = FakeRiskIntegration(
+            BacktestSignalResult(
+                signal=invalid_signal,
+                status=BacktestSignalStatus.APPROVED,
+                effective_quantity=invalid_signal.quantity,
+            )
+        )
+        processor = RiskAwareOrderProcessor(integration, executor)
+
+        result = await processor.process_signal_async(invalid_signal)
+
+        assert result is None
+        assert len(executor.get_pending_orders()) == 0
+        assert processor.report.approved_queued == 0
+        assert processor.report.rejected_skipped == 1
+        assert processor.report.rejected_reasons == {"INVALID_SIGNAL_TYPE": 1}
+
+    @pytest.mark.asyncio
+    async def test_close_short_signal_queues_buy_order(self, sample_signal, executor):
+        close_short_signal = Signal(
+            signal_id="sig-close-short",
+            symbol=sample_signal.symbol,
+            signal_type=SignalType.CLOSE_SHORT,
+            quantity=sample_signal.quantity,
+            price=sample_signal.price,
+            strategy_name=sample_signal.strategy_name,
+            timestamp=None,
+        )
+        integration = FakeRiskIntegration(
+            BacktestSignalResult(
+                signal=close_short_signal,
+                status=BacktestSignalStatus.APPROVED,
+                effective_quantity=close_short_signal.quantity,
+            )
+        )
+        processor = RiskAwareOrderProcessor(integration, executor)
+
+        result = await processor.process_signal_async(close_short_signal)
+
+        assert result is not None
+        assert executor.get_pending_orders()[0].side == OrderSide.BUY
 
     @pytest.mark.asyncio
     async def test_rejected_signal_not_in_any_queue(self, sample_signal, executor):

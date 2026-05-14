@@ -264,6 +264,21 @@ flowchart LR
 - CLIPPED 信号必须把 `effective_quantity` 写入 VectorBT `size`，让风控后权益曲线真实改变
 - `BacktestResult.max_drawdown` 保持原始含义，风控后回撤写入 `max_drawdown_after_risk` 和 `risk_adjusted_metrics`
 
+### P8 Demo Fail-Closed 演练路径
+
+P8 演练由只读脚本验证运行时坏情况，不触发交易所下单：
+
+```mermaid
+flowchart LR
+    Script["scripts/rehearse_crypto_risk_runtime.py"] --> Scenario["Deterministic failure scenarios"]
+    Scenario --> RiskPath["CryptoPreTradeRiskPlugin / RiskEngine.check_pre_trade"]
+    RiskPath --> Reject["RiskCheckResult reject"]
+    Reject --> Audit["crypto_risk.pre_trade_rejected evidence"]
+    Reject --> Proof["order_attempted=false"]
+```
+
+场景覆盖 mark price 缺失、leverage bracket 缺失、open orders 激增、Funding/OI 数据过期、Binance source 超时、连续重复信号、close-only 模式开仓信号和 PG audit 不可用。除 PG audit 不可用场景外，所有拒绝都必须产生审计事件；PG audit 不可用场景用于证明审计写入失败不会导致订单放行。
+
 ---
 
 ## 4. 对账与恢复闭环

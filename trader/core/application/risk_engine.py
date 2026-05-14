@@ -74,6 +74,8 @@ class RejectionReason(Enum):
     CRYPTO_CLUSTER_EXPOSURE = "CRYPTO_CLUSTER_EXPOSURE"
     CRYPTO_MARGIN_LIMIT = "CRYPTO_MARGIN_LIMIT"
     CRYPTO_LIQUIDATION_BUFFER = "CRYPTO_LIQUIDATION_BUFFER"
+    CRYPTO_FUNDING_OI_RISK = "CRYPTO_FUNDING_OI_RISK"
+    RISK_MODE_CLOSE_ONLY = "RISK_MODE_CLOSE_ONLY"
 
 
 @dataclass
@@ -519,6 +521,8 @@ class RiskEngine:
             RejectionReason.CRYPTO_EXCHANGE_RULE,
             RejectionReason.CRYPTO_OPEN_ORDER_EXPOSURE,
             RejectionReason.CRYPTO_CLUSTER_EXPOSURE,
+            RejectionReason.CRYPTO_FUNDING_OI_RISK,
+            RejectionReason.RISK_MODE_CLOSE_ONLY,
         }:
             return int(KillSwitchLevel.L1_NO_NEW_POSITIONS)
 

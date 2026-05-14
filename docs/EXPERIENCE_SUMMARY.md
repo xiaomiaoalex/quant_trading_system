@@ -168,6 +168,48 @@ Risk sizing 需要同时考虑多个约束（symbol_cap、total_cap、cluster_ca
 - 回测适配层是跨市场边界，不能泄漏 Binance 或单一币种假设。
 - 测试要显式断言没有硬编码 symbol/price/qty，否则这类问题很容易混进“看似可运行”的代码。
 
+### 33.12 设计模式：Fail-Closed 演练必须证明“没有订单尝试”
+
+**问题描述**：
+只验证风控返回 reject 还不够。演练脚本如果没有显式记录 `order_attempted=false`，后续代码可能在拒绝后仍错误进入下单路径，而测试不会发现。
+
+**解决方案**：
+- P8 演练结果统一包含 `passed` 与 `order_attempted`。
+- 所有坏场景都要求 `passed=false` 且 `order_attempted=false`。
+- 除 PG audit 不可用场景外，还要求捕获 pre-trade rejection audit event。
+
+**经验**：
+- Fail-Closed 验收要同时检查决策、审计和订单命运。
+- “有拒绝原因”不是终点，“没有任何订单动作”才是 runtime 演练的核心证据。
+
+### 33.13 踩坑记录：Funding/OI 阈值启用后必须由插件消费
+
+**问题描述**：
+P4.6 已经能计算 Funding/OI 历史窗口指标，但如果 `CryptoPreTradeRiskPlugin` 不消费 `CryptoRiskBudget` 中的阈值，P8 的 Funding/OI 数据过期场景会被错误放行。
+
+**解决方案**：
+- 在 `CryptoPreTradeRiskPlugin` 中增加 Funding/OI 前置检查。
+- 启用 funding 阈值时，`any_funding_missing`、`funding_rate_z_score is None` 或超过阈值都返回 `CRYPTO_FUNDING_OI_RISK`。
+- 启用 OI 阈值时，同理检查 `any_oi_missing`、`open_interest_change_rate is None` 和阈值。
+
+**经验**：
+- DTO 和 Provider 完成不等于风控闭环完成；必须检查数据是否真的进入 pre-trade 决策。
+- 演练脚本是发现“指标存在但未接线”这类问题的好工具。
+
+### 33.14 踩坑记录：回测入队层不能把未知信号静默映射为 SELL
+
+**问题描述**：
+`RiskAwareOrderProcessor` 如果用“非 BUY/LONG 全部映射为 SELL”的兜底逻辑，会把 `SignalType.NONE` 或未来新增但未显式支持的信号类型入队成卖单。
+
+**解决方案**：
+- 使用显式 `SignalType -> OrderSide` 映射。
+- 不支持的类型记录 `INVALID_SIGNAL_TYPE`，不进入 `NextBarOpenExecutor` 队列。
+- 计数上归入 `rejected_skipped`，不误计为 approved/clipped。
+
+**经验**：
+- 回测路径也必须 fail-closed；不能为了兼容 futures short 语义牺牲未知类型安全。
+- “默认 else SELL”在交易系统里是高风险写法，尤其是在跨市场信号类型不断扩展时。
+
 ---
 
 ## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）
