@@ -915,14 +915,39 @@ T+1、100 股、涨跌停、停牌、午休或 Binance filter 字段。
 
 A 股规则只允许在 `ChinaStockMarketRulePlugin` 中实现：
 
-| 规则 | 输入来源 |
-|------|----------|
-| 100 股手数 | `metadata.lot_size`，默认 100 |
-| T+1 可卖数量 | `metadata.sellable_qty` |
-| 涨跌停 | `metadata.limit_up` / `metadata.limit_down` |
-| 停牌 | `metadata.is_suspended` |
-| 不可做空 | `metadata.allow_short`，默认 false |
-| 交易阶段 | `metadata.trading_phase` |
+| 规则 | 输入来源 | 缺失行为 |
+|------|----------|----------|
+| 100 股手数 | `metadata.lot_size`，默认 100 | 缺失使用 default_lot_size；非法或 <=0 时 fail-closed |
+| T+1 可卖数量 | `metadata.sellable_qty` | fail-closed（MARKET_STATE_MISSING） |
+| 涨跌停 | `metadata.limit_up` / `metadata.limit_down` | fail-closed（MARKET_STATE_MISSING） |
+| 停牌 | `metadata.is_suspended` | fail-closed（MARKET_STATE_MISSING，required=True） |
+| 不可做空 | `metadata.allow_short`，默认 false | fail-open（使用 default_allow_short） |
+| 交易阶段 | `metadata.trading_phase` | fail-closed（MARKET_STATE_MISSING） |
+
+配置项：
+- `require_market_state=True`：缺失必填市场状态字段时返回 `MARKET_STATE_MISSING`
+- `default_lot_size=100`：默认每手股数
+- `default_allow_short=False`：默认不允许做空（A 股现货）
+
+布尔字段解析规则：
+- 接受 `True/False`、`"true"/"false"`、`"1"/"0"`、`"yes"/"no"`、`"on"/"off"`
+- 必填布尔字段缺失返回 `MARKET_STATE_MISSING`
+- 无法识别的布尔值返回 `INVALID_BOOL`
+
+violation 代码：
+| 代码 | 含义 |
+|------|------|
+| MARKET_STATE_MISSING | 必填市场状态字段缺失 |
+| MARKET_STATE_INVALID | 市场状态格式错误（如非法 trading_phase） |
+| INVALID_BOOL | 布尔字段无法解析 |
+| INVALID_SIDE | 无法识别的 side 参数 |
+| LOT_SIZE | 手数不是 lot_size 整数倍 |
+| T1_SELL_LIMIT | 卖出数量超过 T+1 可卖数量 |
+| NO_SHORT | 不允许做空且无可卖数量 |
+| PRICE_LIMIT_UP | 价格超过涨停价 |
+| PRICE_LIMIT_DOWN | 价格低于跌停价 |
+| SUSPENDED | 股票停牌 |
+| TRADING_PHASE | 非允许交易阶段 |
 
 这些字段不得升级为 `MarketRuleIntent` 或 `MarketRiskSnapshot` 的通用固定字段。
 

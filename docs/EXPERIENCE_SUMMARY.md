@@ -3404,6 +3404,29 @@ P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构。最
 - 历史 ADR 可以保留，但 runtime 入口一旦不再 active，就应避免留在可 import 路径中
 - 删除 legacy 代码后要跑 import gate 同类检查，而不仅是目标单测
 
+### 34.5 踩坑记录：A 股插件必须显式解析布尔值和验证 side 类型
+
+**问题描述**：
+P9.2 审计发现 A 股插件中有三个 fail-open 漏洞：
+1. `allow_short="False"` 字符串在 Python 中是真值，导致 T+1 卖出检查被绕过
+2. 未知 side 参数默认返回 `OrderSide.BUY`，导致卖出规则被跳过
+3. 市场状态字段缺失时默认通过，导致停牌/涨跌停检查被跳过
+
+**解决方案**：
+- `_parse_bool(value, default)`: 显式解析布尔值，支持 `True/False`、`"true"/"false"`、`"1"/"0"`、`"yes"/"no"`、`"on"/"off"`；无法识别时返回 default
+- `_parse_required_bool(value, field_name, required)`: 专用于必填布尔字段，缺失时返回 `MARKET_STATE_MISSING`，无法解析时返回 `INVALID_BOOL`
+- `_validate_side(side)`: 对 OrderSide enum 直接返回；对有 `.value` 的对象尝试转换；对无法识别的类型返回 `INVALID_SIDE` violation 而不是默认 BUY
+- `require_market_state=True`（默认）: 涨跌停、交易阶段、sellable_qty、is_suspended 等字段缺失时返回 `MARKET_STATE_MISSING` violation
+
+**经验**：
+- metadata 中的字符串 "False" 不等于布尔值 False；所有布尔字段都要显式解析
+- 必填布尔字段缺失不能默认成 False（会 fail-open），应返回 `MARKET_STATE_MISSING`
+- 非法布尔值也不能按 default 处理（会 fail-open），应返回 `INVALID_BOOL`
+- 未知枚举值不能默认成安全方向（BUY），应该返回 violation
+- 市场特有插件默认 fail-closed 比 fail-open 更安全：A 股数据缺失时拒绝比放行风险更小
+- `ChinaStockTradingPhase` 应改为 `class ChinaStockTradingPhase(str, Enum)`，避免字符串比较时的类型歧义
+- lot size 违规时仍应返回 normalized_qty，供后续复用（P9.3/P9.4 裁剪场景）
+
 
 ---
 

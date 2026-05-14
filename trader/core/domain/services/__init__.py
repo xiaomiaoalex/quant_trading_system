@@ -21,6 +21,11 @@ from trader.core.domain.services.alternative_data_health_gate import (
     DataReliabilityResult,
     DataSourceType,
 )
+from trader.core.domain.services.china_stock_market_rule_plugin import (
+    ChinaStockMarketRulePlugin,
+    ChinaStockMarketRulePluginConfig,
+    ChinaStockTradingPhase,
+)
 from trader.core.domain.services.depth_checker import (
     DepthChecker,
     DepthCheckerConfig,
@@ -145,4 +150,8 @@ __all__ = [
     # MarketRuleEngine (P9)
     "MarketRuleEngine",
     "MarketRuleEngineConfig",
+    # ChinaStockMarketRulePlugin (P9.2)
+    "ChinaStockMarketRulePlugin",
+    "ChinaStockMarketRulePluginConfig",
+    "ChinaStockTradingPhase",
 ]

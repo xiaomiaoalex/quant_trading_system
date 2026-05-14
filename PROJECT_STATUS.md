@@ -48,6 +48,27 @@
   - P9.1 框架已建立，尚未连接实际 plugin（P9.2/P9.3 实现）
   - 本段按计划停下，等待主审对 P9.0+P9.1 代码审计
 
+### 本次任务：P9.2 A 股市场规则插件
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.2 完成（含审计修复）
+- 目标: 实现 A 股专属规则插件，通过 metadata 读取市场状态，缺失时 fail-closed
+- 开发后状态:
+  - 新增 `trader/core/domain/services/china_stock_market_rule_plugin.py`：`ChinaStockTradingPhase`(str,Enum)、`ChinaStockMarketRulePlugin`、`ChinaStockMarketRulePluginConfig`；实现 lot_size、T+1、涨跌停、停牌、不可做空、交易阶段检查
+  - 新增 `trader/tests/test_china_stock_market_rule_plugin.py`：35 个测试覆盖所有 A 股规则和 fail-closed 边界
+  - 更新 `trader/core/domain/services/__init__.py`：导出新类型
+- 审计修复（P9.2 阻断问题）:
+  - [P1] `allow_short="False"` 字符串被当作 True → `_parse_bool()` 显式解析 "true"/"false"/"1"/"0"/"yes"/"no"/"on"/"off"
+  - [P1] 未知 side 默认 BUY → `_validate_side()` 返回 `INVALID_SIDE` violation
+  - [P1] 市场状态缺失默认放行 → `require_market_state=True` 返回 `MARKET_STATE_MISSING` violation
+  - [P1] 格式门禁失败 → 运行 black/isort
+  - [P2] `ChinaStockTradingPhase` 不是 Enum → 改为 `class ChinaStockTradingPhase(str, Enum)`
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py -v --tb=short` → 46 passed
+  - black/isort/py_compile/git diff check → passed
+- 注意事项:
+  - P9.2 完成，等待审计后进入 P9.3
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.4 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
 ### 本次任务：回测与研究架构文档收敛
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ 文档与 docstring 已收敛，不改变运行时行为
