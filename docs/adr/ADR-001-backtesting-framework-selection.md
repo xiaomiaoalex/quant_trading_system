@@ -1,8 +1,13 @@
 # ADR-001: Backtesting Framework Selection
 
-**Status:** Accepted  
+**Status:** Superseded
 **Date:** 2026-03-31  
 **Deciders:** Quantitative Trading System Architecture Team  
+
+> Superseded on 2026-05-14 by
+> [ADR-002: Backtesting and Research Architecture Convergence](./ADR-002-backtesting-research-architecture-convergence.md).
+> This document is kept as historical selection context. QuantConnect Lean is no
+> longer the current active backtesting path in this repository.
 
 ---
 
@@ -14,7 +19,9 @@ Selection of QuantConnect Lean as Primary Backtesting Framework
 
 ## Status
 
-**Accepted** — This ADR is finalized and approved for implementation.
+**Superseded** — This ADR is kept for historical context. The current architecture
+uses Qlib as the research layer, VectorBT as the implemented fast backtest layer,
+and a future EventDrivenRiskReplay layer for production-like replay.
 
 ---
 
@@ -46,7 +53,7 @@ Four frameworks were evaluated:
 
 **Chosen Alternative:** QuantConnect Lean (Apache 2.0)
 
-The decision is to adopt **QuantConnect Lean** as the primary backtesting framework for the quantitative trading system.
+The historical decision was to adopt **QuantConnect Lean** for the quantitative trading system's Phase 5 backtesting work.
 
 ### Decision Factors
 

@@ -25,6 +25,15 @@
 
 ## 最近记录
 
+### 2026-05-14 10:46 - 回测与研究架构文档收敛
+
+- 背景: 仓库同时存在 QuantConnect Lean 历史选型、VectorBT 当前实现、Qlib 研究主线和 P7 风控回测路径，后续 AI 容易把研究框架、快速回测框架和生产级回放框架混成一个“主引擎”。
+- 决策: 采用三层叙事：Qlib Research Layer、VectorBT Fast Backtest Layer、Future EventDrivenRiskReplay；ADR-001 标记为 superseded，新增 ADR-002 作为当前决策。
+- 改动: 更新 `docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`、`docs/backtesting_framework_comparison.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`，并修正 `trader/services/backtesting` docstring；未改运行时逻辑。
+- 验证: 通过搜索定位并消除当前入口中的 `Lean primary`、`VectorBT alternative`、`LeanBacktestEngine()` 等误导性表述；运行 `git diff --check` 与 P7 回测风险相关轻量回归。
+- 风险/遗留: QuantConnect Lean legacy 文件仍保留；如需删除 `result_converter.py` / `strategy_adapter.py` 等历史模块，必须另立 cleanup 任务审计引用关系。
+- 关联文档: `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`
+
 ### 2026-05-13 - P8 Demo 生产化联调与 Fail-Closed 演练
 
 - 背景: P8 要求验证真实运行坏情况下不会放行订单，并且每个失败场景都有可审计证据；现有 demo fail-closed 脚本只覆盖 HTTP 负向 probe，缺少 runtime pre-trade 层的确定性演练。

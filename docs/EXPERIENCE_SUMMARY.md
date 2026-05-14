@@ -6,6 +6,22 @@
 
 ## 三十三、Risk Sizing Decision 经验（2026-05-12）
 
+### 33.16 架构经验：研究框架、快速回测框架、生产级回放不能混成一个主引擎
+
+**问题描述**：
+历史文档同时出现 QuantConnect Lean 旧主路径、VectorBT active implementation、Qlib
+研究主线等表述。后续 AI 工程师容易误把研究框架、快速向量化回测框架和生产级事件回放框架都当成“回测主引擎”，导致计划漂移。
+
+**解决方案**：
+- Qlib 固定在 Research/Insight 层，只产出因子、模型、预测和研究报告。
+- VectorBT 固定为当前 active fast backtest layer，用于快速验证和风控后权益曲线。
+- 生产级订单、账户、风控、OMS replay 归入后续 `EventDrivenRiskReplay`。
+- QuantConnect Lean 相关文档和适配器保留为 historical/legacy reference，不再作为当前主路径。
+
+**经验**：
+- 文档里的“主引擎”必须有时间戳和当前/历史状态，否则很容易比代码更误导。
+- 架构收敛优先改 truth source、ADR 和 docstring；旧实现是否删除应单独立任务审计。
+
 ### 33.1 踩坑记录：sizing 计算异常不得静默吞掉
 
 **问题描述**：
@@ -1781,7 +1797,7 @@ async def update_strategy_params(
 ### 12.3 策略"正期望"不看什么
 
 **场景**：
-Phase 5 完成了回测框架升级（QuantConnect Lean、无前瞻偏差、方向感知滑点、止盈止损支持），但还需要验证"扣成本后样本外是否仍为正期望"。
+Phase 5 历史记录曾将回测框架升级描述为 QuantConnect Lean 路线；当前 active 回测路径已收敛为 VectorBT / VectorBTAdapterWithRisk，后续生产级回放归入 EventDrivenRiskReplay。
 
 **问题**：
 - 不要先看年化收益多高、Sharpe 多漂亮、单段行情多惊艳
@@ -2564,7 +2580,7 @@ async def update_strategy_params(
 ### 12.3 策略"正期望"不看什么
 
 **场景**：
-Phase 5 完成了回测框架升级（QuantConnect Lean、无前瞻偏差、方向感知滑点、止盈止损支持），但还需要验证"扣成本后样本外是否仍为正期望"。
+Phase 5 历史记录曾将回测框架升级描述为 QuantConnect Lean 路线；当前 active 回测路径已收敛为 VectorBT / VectorBTAdapterWithRisk，后续生产级回放归入 EventDrivenRiskReplay。
 
 **问题**：
 - 不要先看年化收益多高、Sharpe 多漂亮、单段行情多惊艳

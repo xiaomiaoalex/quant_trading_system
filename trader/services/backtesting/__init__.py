@@ -5,7 +5,8 @@ Backtesting - 回测框架集成模块
 
 核心组件：
 - ports: 协议定义（BacktestEnginePort, DataProviderPort, ResultReporterPort, StrategyAdapterPort）
-- adapters: 具体实现（QuantConnect Lean, VectorBT）
+- adapters: 当前 active implementation 为 VectorBT / VectorBTAdapterWithRisk
+- research bridge: Qlib 只输出研究预测，经内部 Signal 和 RiskEngine 后进入回测
 
 使用方式：
 1. 实现 DataProviderPort 获取历史数据
@@ -14,14 +15,16 @@ Backtesting - 回测框架集成模块
 4. 利用 ResultReporterPort 存储和检索报告
 
 示例：
-    # QuantConnect Lean 回测
-    engine = LeanBacktestEngine()
+    # VectorBT 快速回测
+    engine = VectorBTAdapter()
     reporter = PostgresResultReporter()
-    adapter = QuantConnectStrategyAdapter()
-    
+
     result = await engine.run_backtest(config, strategy)
     report = BacktestReport(report_id="1", strategy_name="MyStrategy", config=config, result=result)
     await reporter.save_report(report)
+
+Legacy note:
+    QuantConnect Lean 相关转换器/适配器保留为历史参考，不是当前 active path。
 """
 
 from trader.core.domain.models.signal import Signal

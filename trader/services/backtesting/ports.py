@@ -4,8 +4,9 @@ Backtesting Ports - 回测框架集成接口定义
 定义回测引擎、数据供给、结果汇报和策略适配的抽象接口。
 
 支持框架：
-- QuantConnect Lean (primary): 工业级回测引擎
-- VectorBT (alternative): 快速原型验证
+- VectorBT: 当前已实现的快速向量化回测与风控后权益曲线路径
+- Qlib: 研究/因子/模型/预测输出层，不直接执行回测下单
+- EventDrivenRiskReplay: 后续目标，用于生产级 OMS/account/risk replay
 
 设计原则：
 1. 协议独立于具体实现，可自由切换回测引擎
@@ -252,7 +253,8 @@ class BacktestEnginePort(Protocol):
     回测引擎端口
 
     定义与回测引擎交互的接口。
-    支持 QuantConnect Lean 和 VectorBT 两种引擎。
+    当前 active implementation 是 VectorBTAdapter / VectorBTAdapterWithRisk。
+    QuantConnect Lean 相关适配保留为 legacy reference，不是当前主路径。
 
     实现要求：
     1. run_backtest: 执行单次回测
@@ -260,10 +262,10 @@ class BacktestEnginePort(Protocol):
     3. get_supported_features: 查询支持的特性
 
     示例：
-        class LeanEngineAdapter:
+        class VectorBTEngineAdapter:
             @property
             def framework_type(self) -> FrameworkType:
-                return FrameworkType.QUANTCONNECT_LEAN
+                return FrameworkType.VECTORBT
 
             async def run_backtest(
                 self,
@@ -485,23 +487,6 @@ class StrategyAdapterPort(Protocol):
     1. convert_to_framework_format: 将 StrategyPlugin 转为框架特定格式
     2. convert_signals: 将框架信号转为内部 Signal 格式
 
-    QuantConnect Lean 适配示例：
-        class QuantConnectStrategyAdapter:
-            def convert_to_framework_format(
-                self,
-                strategy: StrategyPlugin,
-                config: Dict[str, Any]
-            ) -> Any:
-                # 转换为 QuantConnect Algorithm class
-                ...
-
-            def convert_signals(
-                self,
-                framework_signals: List[Any]
-            ) -> List[Signal]:
-                # 转换 Lean ExecutionReport 为 Signal
-                ...
-
     VectorBT 适配示例：
         class VectorBTStrategyAdapter:
             def convert_to_framework_format(
@@ -516,8 +501,12 @@ class StrategyAdapterPort(Protocol):
                 self,
                 framework_signals: Dict[str, Any]
             ) -> List[Signal]:
-                # 转换 vbt.Entry谈起为 Signal
+                # 转换 VectorBT signal arrays 为内部 Signal
                 ...
+
+    Legacy note:
+        QuantConnect Lean 转换器和适配器文件仅保留为历史参考；新增实现不得把
+        Lean 描述为当前 active engine。
     """
 
     @property

@@ -2,8 +2,8 @@
 
 **Document Version:** 1.0  
 **Date:** 2026-03-31  
-**Status:** Approved  
-**Framework:** VectorBT (Primary, via BinanceExecutionAdapter)
+**Status:** Current architecture note supersedes earlier Lean selection
+**Framework:** VectorBT fast backtest + future EventDrivenRiskReplay
 
 ---
 
@@ -24,7 +24,9 @@
 
 ### 1.1 Purpose
 
-The backtesting framework provides historical simulation of trading strategies using VectorBT as the primary engine, wrapped with a Binance-specific execution layer that injects direction-aware slippage, KillSwitch checks, and OMS integration. It integrates with the five-plane architecture while maintaining deterministic execution and absolute idempotency.
+The current backtesting framework provides historical simulation of trading strategies using VectorBT as the implemented fast vectorized engine. P7 added a risk-aware VectorBT path that routes signals through `RiskEngine.check_pre_trade()` and produces raw and risk-adjusted equity curves. Qlib belongs to the research layer and only produces versioned predictions/factors that must be converted into internal `Signal` objects before risk checks. A future `EventDrivenRiskReplay` layer is the target for production-like OMS/account/risk replay; it is not implemented yet.
+
+QuantConnect Lean material in older documents and legacy adapters is retained as historical reference. It is no longer the current active backtesting path.
 
 ### 1.2 Design Principles
 
@@ -89,8 +91,8 @@ The backtesting framework provides historical simulation of trading strategies u
 │  Persistence │  Backtest results persisted to PostgreSQL            │
 │  Plane       │  Event logs replayed through backtest engine         │
 ├──────────────┼─────────────────────────────────────────────────────┤
-│  Adapter     │  VectorBT Adapter (Primary)                         │
-│  Plane       │  BinanceExecutionAdapter (KillSwitch/OMS/Risk)      │
+│  Adapter     │  VectorBT Adapter (active fast backtest path)        │
+│  Plane       │  Risk-aware VectorBT wrapper / legacy adapters       │
 │              │  Data transformations at adapter boundaries          │
 ├──────────────┼─────────────────────────────────────────────────────┤
 │  Core        │  StrategyLifecycleManager (Monotonic State Machine)  │
@@ -314,9 +316,9 @@ High-performance vectorized backtest engine implementing `BacktestEnginePort`.
 │         ┌──────────┴──────────┐                                           │
 │         ▼                     ▼                                           │
 │  ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐           │
-│  │ BinanceExec    │   │   VectorBT      │   │                 │           │
-│  │   Adapter       │   │   Adapter       │   │                 │           │
-│  │   (Primary)     │   │ (BacktestEng)   │   │                 │           │
+│  │ Risk-aware     │   │   VectorBT      │   │ Future          │           │
+│  │ VectorBT       │   │   Adapter       │   │ EventReplay     │           │
+│  │ (Active)       │   │ (Fast Engine)   │   │ (Target)        │           │
 │  └─────────────────┘   └─────────────────┘   └─────────────────┘           │
 │                                                                              │
 │  ╔════════════════════════════════════════════════════════════════════════╗  │
@@ -886,8 +888,8 @@ class IResultReporter(Protocol):
 │         │                │         ┌──────┴──────┐                         │
 │         │                │         ▼             ▼                         │
 │         │                │  ┌─────────────┐ ┌─────────────┐                │
-│         │                │  │ Lean CLI    │ │ VectorBT    │                │
-│         │                │  │ Process     │ │ Process     │                │
+│         │                │  │ VectorBT    │ │ Future      │                │
+│         │                │  │ Process     │ │ RiskReplay  │                │
 │         │                │  └─────────────┘ └─────────────┘                │
 │         │                │                                                │
 │         │                └──────────────────────────────────────────────┐  │
@@ -912,8 +914,8 @@ class IResultReporter(Protocol):
    │   Developer      │          │   Production    │
    │   Workstation   │          │   Server        │
    │                  │          │                  │
-   │  • Lean CLI      │          │  • Lean CLI      │
-   │  • VectorBT      │◀────────▶│  • VectorBT      │
+   │  • VectorBT      │          │  • VectorBT      │
+   │  • Qlib tooling  │◀────────▶│  • PG/Redis      │
    │  • Local Redis   │   SSH    │  • Shared Redis  │
    │  • Local PG      │          │  • Shared PG     │
    └──────────────────┘          └──────────────────┘
@@ -1235,7 +1237,7 @@ class FailClosedHandler:
 
 | Component | Minimum | Recommended | Notes |
 |-----------|---------|-------------|-------|
-| **CPU** | 4 cores | 8 cores | Lean CLI is CPU-intensive |
+| **CPU** | 4 cores | 8 cores | VectorBT parameter sweeps are CPU-intensive |
 | **RAM** | 8 GB | 16 GB | Per engine instance |
 | **Disk** | 50 GB SSD | 200 GB NVMe | For data cache |
 | **GPU** | Optional | Optional | Not required |
@@ -1245,7 +1247,7 @@ class FailClosedHandler:
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Python | 3.12+ | Primary language |
-| VectorBT | 0.25+ | Via pip (primary engine) |
+| VectorBT | 0.25+ | Via pip (active fast backtest engine) |
 | Binance Demo API | - | Via demo.binance.com |
 | Redis | 7.0+ | For caching |
 | PostgreSQL | 15+ | Shared with trading system |
@@ -1291,8 +1293,8 @@ class FailClosedHandler:
 
 | Optimization Type | Concurrent Runs | Memory/Runs | CPU/Runs |
 |-------------------|------------------|-------------|----------|
-| Grid Search (Lean) | 4 | 2 GB | 2 cores |
 | Grid Search (VectorBT) | 8 | 1 GB | 1 core |
+| Future RiskReplay sweep | 2 | 4 GB | 4 cores |
 | Genetic Algorithm | 6 | 2 GB | 2 cores |
 | Walk-Forward | 2 | 4 GB | 4 cores |
 
@@ -1311,8 +1313,8 @@ trader/services/backtesting/
 ├── binance_execution_adapter.py  # BinanceExecutionAdapter - KillSwitch/Risk/OMS 包装层
 ├── slippage.py                   # DirectionAwareSlippage: BUY+slip, SELL-slip
 ├── execution_simulator.py        # Legacy ExecutionSimulator (deprecated, kept for reference)
-├── strategy_adapter.py           # QuantConnectStrategyAdapter (strategy signal conversion)
-├── result_converter.py           # BacktestResultConverter (Lean statistics → BacktestResult)
+├── strategy_adapter.py           # Legacy QuantConnect strategy conversion reference
+├── result_converter.py           # Legacy Lean statistics → BacktestResult converter
 └── validation.py                 # SensitivityAnalyzer (参数敏感性分析)
 ```
 
@@ -1366,5 +1368,5 @@ backtesting:
 ---
 
 *Document updated after VectorBT refactor (2026-04-22).*
-*Primary engine: VectorBT via BinanceExecutionAdapter (KillSwitch/OMS/Risk hooks)*
+*Active fast backtest engine: VectorBT via risk-aware adapters*
 *Data source: Binance Spot Demo API (demo.binance.com)*
