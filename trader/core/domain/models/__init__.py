@@ -54,6 +54,14 @@ from trader.core.domain.models.risk_mode import (
     RiskModeTransition,
     create_risk_mode_event,
 )
+from trader.core.domain.models.market_rules import (
+    MarketRuleIntent,
+    MarketRuleCheckResult,
+    MarketRuleViolation,
+    MarketRulePlugin,
+    OrderSide,
+    OrderType,
+)
 from trader.core.domain.models.signal import Signal, SignalType
 
 __all__ = [
@@ -101,4 +109,11 @@ __all__ = [
     "RiskModeState",
     "RiskModeTransition",
     "create_risk_mode_event",
+    # Market Rules (P9)
+    "MarketRuleIntent",
+    "MarketRuleCheckResult",
+    "MarketRuleViolation",
+    "MarketRulePlugin",
+    "OrderSide",
+    "OrderType",
 ]

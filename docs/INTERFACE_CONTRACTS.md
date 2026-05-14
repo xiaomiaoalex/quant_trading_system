@@ -857,3 +857,120 @@ JSON 输出字段：
 - 所有场景都不产生真实下单，也不模拟订单已发送。
 - `funding_oi_data_stale` 必须通过真实 `CryptoPreTradeRiskPlugin` 返回 `CRYPTO_FUNDING_OI_RISK`。
 - `continuous_duplicate_signal` 必须通过 `RiskEngine.check_pre_trade()` 返回 `MAX_ORDER_RATE`。
+
+### 8.11 P9 市场规则与 EventDrivenRiskReplay 契约冻结
+
+P9 采用“市场无关规则接口 + 市场专用规则插件”架构。市场无关层只定义
+pre-trade rule contract、插件接口、结果格式和 fail-closed 语义；市场专属规则
+由 specialization plugin 实现。
+
+#### 8.11.1 MarketRuleIntent
+
+`MarketRuleIntent` 是规则检查输入，不包含任何 A 股或交易所专属固定字段。
+
+| 字段 | 含义 |
+|------|------|
+| `symbol` | 标准化交易标的 |
+| `venue` | 交易场所 |
+| `asset_class` | 资产类别，如 `crypto` / `cn_stock` |
+| `side` | 买卖方向 |
+| `qty` | 请求数量 |
+| `price` | 请求价格或参考价格 |
+| `order_type` | 订单类型 |
+| `timestamp_ms` | 规则检查时间 |
+| `account_id` | 账户标识 |
+| `metadata` | 市场专属字段载体 |
+
+#### 8.11.2 MarketRuleCheckResult
+
+| 字段 | 含义 |
+|------|------|
+| `passed` | 是否通过 |
+| `violations` | 规则违规列表 |
+| `normalized_qty` | 规则归一化后的数量 |
+| `normalized_price` | 规则归一化后的价格 |
+| `details` | 解释信息，不得包含外部原始字段 |
+
+`MarketRuleViolation` 至少包含 `code`、`message`、`field`、`expected`、`actual`。
+插件异常或缺少必要 snapshot 时必须返回 `passed=false`，不得 fail-open。
+
+#### 8.11.3 MarketRulePlugin
+
+`MarketRulePlugin` 接口：
+
+```python
+class MarketRulePlugin(Protocol):
+    def supports(self, asset_class: AssetClass, venue: str) -> bool: ...
+    def check(
+        self,
+        intent: MarketRuleIntent,
+        snapshot: MarketRiskSnapshot,
+    ) -> MarketRuleCheckResult: ...
+```
+
+市场无关 engine 只负责插件选择、结果聚合和 fail-closed 包装，不得硬编码
+T+1、100 股、涨跌停、停牌、午休或 Binance filter 字段。
+
+#### 8.11.4 ChinaStockMarketRulePlugin 边界
+
+A 股规则只允许在 `ChinaStockMarketRulePlugin` 中实现：
+
+| 规则 | 输入来源 |
+|------|----------|
+| 100 股手数 | `metadata.lot_size`，默认 100 |
+| T+1 可卖数量 | `metadata.sellable_qty` |
+| 涨跌停 | `metadata.limit_up` / `metadata.limit_down` |
+| 停牌 | `metadata.is_suspended` |
+| 不可做空 | `metadata.allow_short`，默认 false |
+| 交易阶段 | `metadata.trading_phase` |
+
+这些字段不得升级为 `MarketRuleIntent` 或 `MarketRiskSnapshot` 的通用固定字段。
+
+#### 8.11.5 CryptoMarketRulePlugin 边界
+
+Crypto 规则作为 crypto specialization：
+
+- 可包装现有 `ExchangeRuleGuard` 的 tick / step / minNotional / maxQty 语义。
+- 不读取或要求 `sellable_qty`、`limit_up`、`limit_down`、`trading_phase` 等 A 股字段。
+- 不得引入 T+1、100 股手数、涨跌停、停牌等 A 股语义。
+
+#### 8.11.6 EventDrivenRiskReplay v1 契约
+
+`EventDrivenRiskReplay` 是 service 层回放编排，不属于 Core，不替代现有
+`ReplayRunner`，也不替代 VectorBT fast backtest。
+
+输入：
+
+- 按时间排序的 signal/bar events。
+- 可注入 `RiskEngine`、静态 snapshot provider、fake/static executor。
+
+执行语义：
+
+- 每个 signal 必须调用 `RiskEngine.check_pre_trade()`。
+- `APPROVED` / `CLIPPED` 才能进入模拟执行。
+- `REJECTED` 不进入成交模拟。
+- `CLIPPED` 必须使用 `effective_quantity`。
+- 风控异常必须 fail-closed，并记录到 replay report `errors`。
+
+输出字段：
+
+```text
+raw_signals
+approved_orders
+clipped_orders
+rejected_orders
+rejection_reason_counts
+fills
+equity_curve
+max_drawdown
+risk_decisions
+final_positions
+errors
+```
+
+#### 8.11.7 P9 禁止范围
+
+- 不接真实 A 股行情源、券商或交易接口。
+- 不把 A 股规则塞入通用 MarketRisk DTO 固定字段。
+- 不让 Qlib 直接写入执行队列。
+- 不复制一套回测专用风控逻辑。

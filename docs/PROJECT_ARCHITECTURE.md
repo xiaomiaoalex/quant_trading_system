@@ -234,6 +234,33 @@ flowchart LR
 - `EventDrivenRiskReplay` 是后续目标，用于更接近实盘的订单、账户、风控、OMS 事件回放；该能力尚未实现。
 - QuantConnect Lean 相关文档和适配文件视为历史选型/legacy reference，不再是当前 active engine。
 
+### P9 市场规则插件架构
+
+P9 将跨市场规则拆成“市场无关接口”和“市场专用插件”两层：
+
+```mermaid
+flowchart TB
+    Intent["MarketRuleIntent<br/>symbol / venue / asset_class / side / qty / price"]
+    Snapshot["MarketRiskSnapshot<br/>account / specs / positions / metadata"]
+    Engine["MarketRuleEngine<br/>plugin registry + fail-closed aggregation"]
+    China["ChinaStockMarketRulePlugin<br/>T+1 / lot / price limit / suspension / session"]
+    Crypto["CryptoMarketRulePlugin<br/>tick / step / minNotional / maxQty"]
+    Result["MarketRuleCheckResult<br/>passed / violations / normalized qty-price"]
+
+    Intent --> Engine
+    Snapshot --> Engine
+    Engine --> China
+    Engine --> Crypto
+    China --> Result
+    Crypto --> Result
+```
+
+架构边界：
+- `MarketRuleEngine` 只负责插件调度、结果聚合和异常 fail-closed，不包含任何 A 股或 Binance 专属规则。
+- T+1、100 股、涨跌停、停牌、不可做空、午休/集合竞价只属于 `ChinaStockMarketRulePlugin`。
+- tick、step、minNotional、maxQty 只属于 crypto specialization，可优先包装现有 `ExchangeRuleGuard`。
+- 市场专属输入通过 `metadata` 或 specialization DTO 承载，不反向污染 `MarketRuleIntent` / `MarketRiskSnapshot` 通用字段。
+
 ### P7 回测风控集成路径
 
 回测层通过 `BacktestRiskIntegration` 接入真实风控，分为订单入队路径和 VectorBT 风控后权益曲线路径：

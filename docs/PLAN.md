@@ -90,11 +90,35 @@
 ### 未开始（Target，按优先级推进）
 
 - **Phase 7**: Task 7.3-7.8（5层验证门控、成本压测、影子模式、AIAuditLog持久化、统一DecisionTraceId）
-- **P9**: 跨市场扩展准备 + EventDrivenRiskReplay 设计准备
+- **P9**: 跨市场扩展准备 + EventDrivenRiskReplay 设计准备（P9.0/P9.1 已完成，等待 P9.2 审计）
 - **Crypto Risk P4.4**: 在 PG 审计基础上继续 Funding/OI 风险系数、rejection reason 聚合统计和更细的运维查询视图
 - 策略元数据治理（edge / failure mode / capacity / conflicts）
 
 ## 已完成研究主线：Phase 8 — v3.4.0 Qlib + Hermes 研究编排集成
+
+## 当前执行主线：P9 — 跨市场扩展准备 + EventDrivenRiskReplay
+
+### P9 设计原则
+
+P9 采用“市场无关规则接口 + 市场专用规则插件”架构：
+
+1. 市场无关层只定义 pre-trade rule contract、插件接口、结果格式和 fail-closed 语义。
+2. A 股规则不进入通用层，全部放入 `ChinaStockMarketRulePlugin`。
+3. Crypto 规则作为 crypto specialization，优先包装已有 `ExchangeRuleGuard`。
+4. `EventDrivenRiskReplay` 复用 `RiskEngine.check_pre_trade()`，不复制风控逻辑。
+
+### P9 分段计划
+
+| 阶段 | 目标 | 交付物 | 状态 |
+|------|------|--------|------|
+| P9.0 | 契约与文档冻结 | `MarketRuleIntent` / `MarketRuleCheckResult` / `MarketRulePlugin` / replay 契约 | ✅ 已完成 |
+| P9.1 | 市场无关规则框架 | `market_rules.py` + `market_rule_engine.py`，只做插件调度与 fail-closed 聚合 | ✅ 已完成（含审计修复） |
+| P9.2 | A 股规则插件 | `ChinaStockMarketRulePlugin`，实现 T+1、100 股、涨跌停、停牌、不可做空、交易阶段 | 待开始 |
+| P9.3 | Crypto 规则插件适配 | `CryptoMarketRulePlugin` 包装 tick/step/minNotional/maxQty，不引入 A 股字段 | 待开始 |
+| P9.4 | EventDrivenRiskReplay v1 | service 层 signal/bar replay，调用 `RiskEngine.check_pre_trade()` | 待开始 |
+| P9.5 | 回测市场端口准备 | calendar / cost model / snapshot provider fake/static 端口 | 待开始 |
+
+每个 P9 子阶段完成后必须立即停下，输出审计交接包。审计通过前不得进入下一段。
 
 ### 目标
 

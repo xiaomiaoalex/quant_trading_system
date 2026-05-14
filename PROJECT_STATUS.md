@@ -8,6 +8,30 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：P9.0+P9.1 市场无关规则框架
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.0+P9.1 完成（含审计修复）
+- 目标: 构建"市场无关规则接口 + 市场专用规则插件"架构，Core 层只定义契约不混入 A 股或 Binance 语义
+- 开发后状态:
+  - 新增 `trader/core/domain/models/market_rules.py`：`MarketRuleIntent`、`MarketRuleViolation`、`MarketRuleCheckResult`、`MarketRulePlugin`；`OrderSide`/`OrderType` 直接复用 `trader.core.domain.models.order`
+  - 新增 `trader/core/domain/services/market_rule_engine.py`：`MarketRuleEngine`、`MarketRuleEngineConfig`；插件调度、结果聚合、fail-closed 包装
+  - 新增 `trader/tests/test_market_rule_engine.py`：11 个测试覆盖无插件 fail-closed、supports() 异常 fail-closed、check() 异常 fail-closed、一个 reject 阻止整体、多插件 normalized_qty 取最小值、OrderSide 兼容性
+  - 更新 `trader/core/domain/models/__init__.py` 和 `trader/core/domain/services/__init__.py`
+- 审计修复（P9.1 阻断问题）:
+  - [P1] supports() 异常被吞掉 → 改为直接返回 `MarketRuleCheckResult.fail_closed()`
+  - [P1] 新增 `OrderSide` 与既有 `order.OrderSide` 冲突 → 直接引用 `trader.core.domain.models.order`
+  - [P1] `fail_closed_on_error` 对 supports() 不生效 → 重命名为 `fail_closed_on_check_error`，文档说明 supports 异常永远 fail-closed
+  - [P2] reject 聚合丢失插件 details → 保留 `plugin_details` 到 reject details
+  - [P2] docstring 写 Raises 但实际返回 → 修正为"返回 fail_closed 结果，不 raise"
+  - [P1] black/isort 格式门禁失败 → 运行 black/isort 格式化
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py -v --tb=short` → 11 passed ✅
+  - `python -m pytest trader/tests/test_architecture.py trader/tests/test_backtesting_vectorbt_adapter.py -v --tb=short` → 24 passed ✅
+  - black/isort/py_compile/git diff check → passed ✅
+- 注意事项:
+  - P9.1 框架已建立，尚未连接实际 plugin（P9.2/P9.3 实现）
+  - 本段按计划停下，等待主审对 P9.0+P9.1 代码审计
+
 ### 本次任务：回测与研究架构文档收敛
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ 文档与 docstring 已收敛，不改变运行时行为

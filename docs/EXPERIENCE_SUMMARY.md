@@ -3343,6 +3343,51 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+### 34.1 踩坑记录：市场无关接口不要承载 A 股字段
+
+**问题描述**：
+P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构。最初尝试在 `MarketRuleIntent` 中新增 `OrderSide`/`OrderType` 枚举，与既有的 `trader.core.domain.models.order.OrderSide`/`OrderType` 冲突。如果两个枚举同时存在，调用方传入 `order.OrderSide.SELL` 与 `market_rules.OrderSide.SELL` 比较会是 `False`，导致 A 股插件判断卖出、T+1、不可做空时漏判。
+
+**解决方案**：
+- 市场无关接口直接复用既有枚举：`OrderSide`/`OrderType` 直接引用 `trader.core.domain.models.order` 中的定义
+- A 股专属字段（如 `sellable_qty`、`limit_up`、`limit_down`、`trading_phase`）只通过 `metadata` 传递，不作为固定字段
+- 市场专用规则由 specialization plugin 实现，不污染通用层
+
+**经验**：
+- 市场无关层只允许概念：intent, snapshot, plugin registry, violation, normalized price/qty, pass/reject, fail-closed details
+- 新增枚举前先检查仓库是否已有同名枚举；复用现有类型比新建兼容类型更安全
+- 审计边界：A 股规则只允许在 `ChinaStockMarketRulePlugin` 中实现，不得进入通用层
+
+### 34.2 踩坑记录：plugin.supports() 异常应 fail-closed，不应 skip
+
+**问题描述**：
+`MarketRuleEngine._find_matching_plugins()` 捕获 `plugin.supports()` 异常后只 log 并跳过该插件。若另一个插件匹配并 approve，整体就会通过；这违反了"插件异常时 fail-closed"的 P9.1 契约。
+
+**解决方案**：
+- `plugin.supports()` 异常直接返回 `MarketRuleCheckResult.fail_closed()`，不再 skip
+- 配置字段重命名为 `fail_closed_on_check_error`，与 `supports()` 异常永远 fail-closed 的语义区分
+- `MarketRuleEngineConfig` 文档明确说明：plugin.supports() 异常永远是 fail-closed，不受 `fail_closed_on_check_error` 控制
+
+**经验**：
+- Fail-closed 语义必须明确边界：哪些异常可以 skip，哪些必须 fail-closed
+- 配置字段命名要精确，避免误导（如 `fail_closed_on_error` 对 `supports()` 不生效）
+- 审计链：异常日志 + fail_closed result + 记录 plugin name/exception 到 details
+
+### 34.3 设计模式：reject 聚合应保留插件 details 用于可解释性
+
+**问题描述**：
+当某个插件返回 reject 时，`MarketRuleEngine` 只保留 `{"rejected_by": ...}`，丢掉了插件自己的 `result.details`。A 股插件会需要解释 `sellable_qty`、`limit_up/down`、`trading_phase` 等细节；丢失会削弱审计可解释性。
+
+**解决方案**：
+- reject 时聚合 `plugin_details`：`reject_details = {"rejected_by": ..., "plugin_details": result.details}`
+- 插件 details 携带 market-specific 解释信息，供审计使用
+- 保持 `rejected_by` 作为第一优先字段，因为它是区分多个插件的核心标识
+
+**经验**：
+- 风控拒绝必须可解释：不仅要说明"哪个插件拒绝"，还要说明"为什么拒绝"
+- 多层聚合：engine 层保留 plugin identity，plugin 层保留 market-specific 原因
+- `details` 字段是插件与 engine 之间的可解释性桥梁，不能在聚合时丢失
+
 
 ---
 
