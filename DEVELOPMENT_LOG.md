@@ -25,6 +25,63 @@
 
 ## 最近记录
 
+### 2026-05-13 - P8 Demo 生产化联调与 Fail-Closed 演练
+
+- 背景: P8 要求验证真实运行坏情况下不会放行订单，并且每个失败场景都有可审计证据；现有 demo fail-closed 脚本只覆盖 HTTP 负向 probe，缺少 runtime pre-trade 层的确定性演练。
+- 决策: 新增本地确定性脚本 `scripts/rehearse_crypto_risk_runtime.py`，用真实 `CryptoPreTradeRiskPlugin` / `RiskEngine.check_pre_trade()` 和审计 wrapper 演练失败路径；脚本不访问网络、不连接交易所、不下单。
+- 改动:
+  - 新增 `scripts/rehearse_crypto_risk_runtime.py`：覆盖 mark price 缺失、leverage bracket 缺失、open orders 激增、Funding/OI 数据过期、Binance source 超时、连续重复信号、close-only 开仓信号、PG audit 不可用
+  - 扩展 `CryptoPreTradeRiskPlugin`：消费 Funding/OI budget 阈值，启用阈值时缺失/过期/窗口不足/超阈值返回 `CRYPTO_FUNDING_OI_RISK`
+  - 扩展 `RejectionReason`：新增 `RISK_MODE_CLOSE_ONLY`，KillSwitch 推荐级别为 L1
+  - 新增 `trader/tests/test_crypto_risk_runtime_rehearsal.py`；扩展 `trader/tests/test_crypto_risk_p0.py` 覆盖 Funding/OI 拒绝
+  - 更新 `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/CRYPTO_RISK_DEMO_RUNBOOK.md`
+- 验证:
+  - `python scripts/rehearse_crypto_risk_runtime.py --json` → `ok=true`
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 17 passed
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 58 passed
+  - black/isort/py_compile/git diff check → passed
+- 风险/遗留:
+  - 本段是确定性本地演练，不替代启动 demo 后端后的 HTTP probe 和人工联调
+  - PG audit 不可用场景刻意允许 audit append 失败，但要求风控结果仍拒绝
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/CRYPTO_RISK_DEMO_RUNBOOK.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-14 - P8 审计修复：订单方向与 PG audit 证据
+
+- 背景: P8 审计指出两个问题：回测入队层把所有非 BUY/LONG 信号静默映射为 SELL；PG audit 不可用场景硬编码 `audit_append_failed=true`，不能证明真的尝试过 append。
+- 决策: 回测入队层使用显式 signal type -> order side 映射，未知/无效信号 fail-closed 跳过；PG audit fake repository 记录 append 尝试次数和失败次数。
+- 改动:
+  - `RiskAwareOrderProcessor` 对 `SignalType.NONE` 等无效类型记录 `INVALID_SIGNAL_TYPE`，不入队、不计入 approved/clipped
+  - `scripts/rehearse_crypto_risk_runtime.py` 增加 `audit_append_attempts` / `audit_append_failures` 证据
+  - P8 演练 RiskEngine 使用本地全天允许 `TimeWindowConfig`，避免当前时间窗口影响目标故障场景
+  - 测试补充无效信号不入队、`CLOSE_SHORT` 映射 BUY、PG audit append 尝试/失败计数
+- 验证:
+  - `python -m pytest trader/tests/test_risk_aware_order_processor.py trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 73 passed
+  - `python scripts/rehearse_crypto_risk_runtime.py --json` → `ok=true`
+  - black/isort/py_compile → passed
+- 风险/遗留:
+  - 本段仍是本地确定性演练，不替代 demo 后端启动后的 HTTP probe
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/CRYPTO_RISK_DEMO_RUNBOOK.md`、`PROJECT_STATUS.md`
+
+### 2026-05-13 - P7 回测接入真实风控模块
+
+- 背景: P7 要求回测订单经过与实盘一致的 `RiskEngine.check_pre_trade(signal)`，并生成风控前/后表现；前几轮实现存在绕过 RiskEngine、只记录报告不改变成交路径、VectorBT 输入硬编码等问题。
+- 决策: 保留 `BacktestRiskIntegration` 作为唯一回测风控入口；新增 `RiskAwareOrderProcessor` 覆盖事件式执行器入队路径；新增 `VectorBTAdapterWithRisk` 覆盖向量化回测路径，风控结果必须落到 entries/exits/size 序列。
+- 改动:
+  - 新增 `trader/services/backtesting/backtest_risk_integration.py`：定义 `BacktestRiskEnginePort`、`BacktestRiskIntegration`、`BacktestRiskReport`、`BacktestSignalResult`
+  - 新增 `trader/services/backtesting/risk_aware_order_processor.py`：APPROVED/CLIPPED 入 `NextBarOpenExecutor` 队列，REJECTED 跳过；CLIPPED 缺失正数 `max_allowed_qty` 时 fail-closed
+  - 新增 `trader/services/backtesting/vectorbt_risk_adapter.py`：生成 raw plan 与 risk-adjusted plan，CLIPPED 写入裁剪后 size，REJECTED 写入 size=0
+  - 扩展 `trader/services/backtesting/ports.py`：`BacktestResult` 增加风控订单明细、拒绝原因统计、风控前/后最大回撤与风控后权益曲线字段
+  - 更新 `trader/services/backtesting/__init__.py`：导出 P7 新类型
+  - 新增/更新 `trader/tests/test_backtest_risk_integration.py`、`trader/tests/test_risk_aware_order_processor.py`、`trader/tests/test_vectorbt_risk_adapter.py`
+- 验证:
+  - `python -m pytest trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_risk_aware_order_processor.py trader/tests/test_backtest_risk_integration.py trader/tests/test_risk_mode_controller.py trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 86 passed
+  - black/isort/py_compile/git diff check → passed
+  - `python -m mypy ...` 仍失败于仓库既有全局类型债；P7 新增 `vectorbt` 缺桩已局部 ignore
+- 风险/遗留:
+  - P7 完成本段验收；尚未做 P8 Demo 环境 fail-closed 演练
+  - 全仓 mypy 当前不是干净基线，后续若要把类型检查作为 CI 门禁，需要先单独收敛既有类型债
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-12 - P6 Risk Mode 状态机
 
 - 背景: P5 只能控制单笔订单，无法控制账户运行模式。需要一个状态机来管理整体风险模式，支持单调升级和人工干预。

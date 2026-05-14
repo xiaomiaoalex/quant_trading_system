@@ -109,6 +109,107 @@ Risk sizing 需要同时考虑多个约束（symbol_cap、total_cap、cluster_ca
 - 审计事件是 Fail-Closed 的保障：状态变更必须有迹可循
 - `triggered_by` 区分自动触发（system）和人工干预（operator）
 
+### 33.8 设计模式：回测必须通过 RiskEngine.check_pre_trade()
+
+**问题描述**：
+回测时不能绕过 RiskEngine 直接调用 CryptoPreTradeRiskPlugin.check()。这会跳过日亏损、回撤、持仓数、订单频率、资金、时间窗口等风控检查，导致回测结果与实盘不一致。
+
+**解决方案**：
+- 通过 `risk_engine.check_pre_trade(signal)` 调用完整风控
+- 使用 `BacktestRiskEnginePort` Protocol 允许注入模拟 RiskEngine（回测）或真实 RiskEngine（生产）
+- 区分 APPROVED / CLIPPED / REJECTED 三种结果
+
+**经验**：
+- 回测和实盘必须使用同一套风控入口，否则会出现"回测盈利实盘亏损"的情况
+- `BacktestRiskEnginePort` 协议让回测可以注入模拟引擎，同时也支持注入真实 RiskEngine
+- 不绕过 RiskEngine 是 P7 的核心约束
+
+### 33.9 踩坑记录：回测风控集成不能绕过 RiskEngine
+
+**问题描述**：
+初始实现的 `backtest_risk_gate.py` 直接调用 `CryptoPreTradeRiskPlugin.check()`，绕过了 RiskEngine 自带的日亏损、回撤、持仓数、订单频率、资金、时间窗口和 killswitch hint 逻辑。
+
+**解决方案**：
+- 删除错误的实现
+- 重写为 `BacktestRiskIntegration`，接收 `BacktestRiskEnginePort`
+- 调用 `risk_engine.check_pre_trade(signal)` 获取完整风控结果
+
+**经验**：
+- 审计时要检查是否真的调用了 `check_pre_trade()`，而不是只看是否有"风控"字样
+- `Protocol` 是实现依赖注入的好方法，可以同时支持模拟和生产
+
+### 33.10 踩坑记录：VectorBT 风控后曲线必须改变 size 序列
+
+**问题描述**：
+只记录 `clipped_orders` / `rejected_orders`，但不修改 VectorBT 的 `entries` / `exits` / `size` 输入序列，会导致报告看起来有风控，权益曲线却仍然是原始回测结果。
+
+**解决方案**：
+- APPROVED：保留原始方向和请求数量。
+- CLIPPED：保留原始方向，但 `size` 使用 `effective_quantity` / `max_allowed_qty`。
+- REJECTED：写入 `entry=False`、`exit=False`、`size=0`，确保不进入成交模拟。
+- `max_drawdown_before_risk` 来自 raw portfolio，`max_drawdown_after_risk` 来自 risk-adjusted portfolio。
+
+**经验**：
+- 回测风控是否生效，最终要看订单命运和权益曲线是否变化，而不是只看报告字段。
+- 对 VectorBT 这类向量化引擎，风控结果必须落到输入矩阵上。
+
+### 33.11 踩坑记录：回测信号构造不得硬编码市场字段
+
+**问题描述**：
+回测风控信号如果硬编码 `BTCUSDT`、`price=0` 或固定数量，会让测试在假数据上通过，却无法代表真实策略、真实 symbol 和真实 K 线价格。
+
+**解决方案**：
+- symbol 来自 `BacktestConfig.symbol` 或策略显式输出的 `Signal`。
+- price 来自当前 K 线 close，作为信号参考价；风控核心仍以 snapshot/mark price 为准。
+- 策略只输出方向时，数量来自 `VectorBTRiskAdapterConfig.default_order_quantity`。
+- 策略直接输出 `Signal` 时，保留该信号的 symbol、price、quantity、strategy 信息。
+
+**经验**：
+- 回测适配层是跨市场边界，不能泄漏 Binance 或单一币种假设。
+- 测试要显式断言没有硬编码 symbol/price/qty，否则这类问题很容易混进“看似可运行”的代码。
+
+### 33.12 设计模式：Fail-Closed 演练必须证明“没有订单尝试”
+
+**问题描述**：
+只验证风控返回 reject 还不够。演练脚本如果没有显式记录 `order_attempted=false`，后续代码可能在拒绝后仍错误进入下单路径，而测试不会发现。
+
+**解决方案**：
+- P8 演练结果统一包含 `passed` 与 `order_attempted`。
+- 所有坏场景都要求 `passed=false` 且 `order_attempted=false`。
+- 除 PG audit 不可用场景外，还要求捕获 pre-trade rejection audit event。
+
+**经验**：
+- Fail-Closed 验收要同时检查决策、审计和订单命运。
+- “有拒绝原因”不是终点，“没有任何订单动作”才是 runtime 演练的核心证据。
+
+### 33.13 踩坑记录：Funding/OI 阈值启用后必须由插件消费
+
+**问题描述**：
+P4.6 已经能计算 Funding/OI 历史窗口指标，但如果 `CryptoPreTradeRiskPlugin` 不消费 `CryptoRiskBudget` 中的阈值，P8 的 Funding/OI 数据过期场景会被错误放行。
+
+**解决方案**：
+- 在 `CryptoPreTradeRiskPlugin` 中增加 Funding/OI 前置检查。
+- 启用 funding 阈值时，`any_funding_missing`、`funding_rate_z_score is None` 或超过阈值都返回 `CRYPTO_FUNDING_OI_RISK`。
+- 启用 OI 阈值时，同理检查 `any_oi_missing`、`open_interest_change_rate is None` 和阈值。
+
+**经验**：
+- DTO 和 Provider 完成不等于风控闭环完成；必须检查数据是否真的进入 pre-trade 决策。
+- 演练脚本是发现“指标存在但未接线”这类问题的好工具。
+
+### 33.14 踩坑记录：回测入队层不能把未知信号静默映射为 SELL
+
+**问题描述**：
+`RiskAwareOrderProcessor` 如果用“非 BUY/LONG 全部映射为 SELL”的兜底逻辑，会把 `SignalType.NONE` 或未来新增但未显式支持的信号类型入队成卖单。
+
+**解决方案**：
+- 使用显式 `SignalType -> OrderSide` 映射。
+- 不支持的类型记录 `INVALID_SIGNAL_TYPE`，不进入 `NextBarOpenExecutor` 队列。
+- 计数上归入 `rejected_skipped`，不误计为 approved/clipped。
+
+**经验**：
+- 回测路径也必须 fail-closed；不能为了兼容 futures short 语义牺牲未知类型安全。
+- “默认 else SELL”在交易系统里是高风险写法，尤其是在跨市场信号类型不断扩展时。
+
 ---
 
 ## 三十二、Funding/OI 历史窗口派生经验（2026-05-08）

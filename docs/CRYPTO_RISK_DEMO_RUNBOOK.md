@@ -151,6 +151,32 @@ python scripts/rehearse_crypto_risk_demo_fail_closed.py `
 - `risk:crypto / crypto_risk.probe_run` 写入匹配的失败审计事件
 - `/v1/orders` 演练前后返回内容一致
 
+P8 本地确定性演练用于覆盖 runtime fail-closed 场景，不访问网络、不连接 Binance demo、不下单：
+
+```powershell
+python scripts/rehearse_crypto_risk_runtime.py --json
+```
+
+该脚本覆盖：
+
+| 场景 | 期望 |
+|------|------|
+| mark price 缺失 | `RISK_SYSTEM_ERROR`，有 rejection audit |
+| leverage bracket 缺失 | `RISK_SYSTEM_ERROR`，有 rejection audit |
+| open orders 激增 | `CRYPTO_OPEN_ORDER_EXPOSURE`，有 rejection audit |
+| Funding/OI 数据过期 | `CRYPTO_FUNDING_OI_RISK`，有 rejection audit |
+| Binance source 超时 | `RISK_SYSTEM_ERROR`，有 rejection audit |
+| 连续重复信号 | `MAX_ORDER_RATE`，有 rejection audit |
+| close-only 模式开仓信号 | `RISK_MODE_CLOSE_ONLY`，有 rejection audit |
+| PG audit 不可用 | 证明已尝试 append 且 append 失败，但风控结果仍拒绝 |
+
+通过条件：
+
+- 输出 `ok=true`
+- 每个场景 `passed=false` 且 `order_attempted=false`
+- 除 PG audit 不可用场景外，每个场景 `audit_event_found=true`
+- PG audit 不可用场景包含 `audit_append_attempted=true` 和 `audit_append_failed=true`
+
 演练结束后恢复 `.env`，重新运行自检和 probe。
 
 ## 8. 前端入口

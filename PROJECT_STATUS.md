@@ -4,9 +4,64 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-12 (北京时间)
+2026-05-13 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P8 Demo 生产化联调与 Fail-Closed 演练
+- 完成时间: 2026-05-13 (北京时间)
+- 状态: ✅ P8 本地确定性 fail-closed 演练完成，等待主审审计
+- 目标: 验证坏数据、坏状态和审计故障下不会放行订单，并提供可重复执行的演练证据
+- 开发后状态:
+  - 新增 `scripts/rehearse_crypto_risk_runtime.py`：本地确定性演练脚本，不访问网络、不连接交易所、不下单
+  - 演练覆盖 mark price 缺失、leverage bracket 缺失、open orders 激增、Funding/OI 数据过期、Binance source 超时、连续重复信号、close-only 开仓信号、PG audit 不可用
+  - 演练脚本使用本地全天允许 `TimeWindowConfig`，避免当前时间窗口抢先触发 `TRADING_HOURS` 干扰目标故障场景
+  - `CryptoPreTradeRiskPlugin` 接入 Funding/OI budget 阈值：启用阈值时，指标缺失、过期、窗口不足或超过阈值返回 `CRYPTO_FUNDING_OI_RISK`
+  - `RejectionReason` 新增 `RISK_MODE_CLOSE_ONLY`，KillSwitch 推荐级别为 `L1_NO_NEW_POSITIONS`
+  - 新增 `trader/tests/test_crypto_risk_runtime_rehearsal.py`，验证所有 P8 场景 fail-closed、无订单尝试、审计证据存在
+  - 审计修复：`RiskAwareOrderProcessor` 对 `SignalType.NONE` 等无效信号类型 fail-closed，不再静默映射为 SELL
+  - 审计修复：PG audit 不可用场景记录 `audit_append_attempts` / `audit_append_failures`，证明确实尝试写审计后失败
+- 验收标准达成:
+  - 所有 P8 场景 `passed=false` 且 `order_attempted=false`
+  - 除 PG audit 不可用场景外，所有拒绝均捕获 pre-trade rejection audit
+  - PG audit append 失败时，风控结果仍保持拒绝，不 fail-open
+  - Funding/OI 数据过期通过真实 `CryptoPreTradeRiskPlugin` 返回 `CRYPTO_FUNDING_OI_RISK`
+- 验证结果:
+  - `python scripts/rehearse_crypto_risk_runtime.py --json` → `ok=true` ✅
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 17 passed ✅
+  - `python -m pytest trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 58 passed ✅
+  - `python -m pytest trader/tests/test_risk_aware_order_processor.py trader/tests/test_crypto_risk_runtime_rehearsal.py trader/tests/test_crypto_risk_fail_closed_rehearsal.py trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py trader/tests/test_crypto_risk_runtime_api.py -q --tb=short` → 73 passed ✅
+  - black/isort/py_compile/git diff check → passed ✅
+- 注意事项:
+  - 本段是本地确定性演练，不替代 demo 环境 HTTP probe；demo 启动后的只读 probe 仍使用 `scripts/rehearse_crypto_risk_demo_fail_closed.py`
+  - 本段按计划停下，等待主审对 P8 代码和文档审计
+
+### 本次任务：P7 回测接入真实风控模块
+- 完成时间: 2026-05-13 (北京时间)
+- 状态: ✅ P7 完成（P7.1 风控感知订单入队层 + P7.2 VectorBT 风控后权益曲线）
+- 目标: 回测订单经过 `RiskEngine.check_pre_trade(signal)`，生成风控前/后表现
+- 开发后状态:
+  - 新增 `BacktestRiskEnginePort` Protocol：`check_pre_trade(signal) -> RiskCheckResult`
+  - 新增 `BacktestRiskIntegration`：通过 `risk_engine.check_pre_trade(signal)` 获取完整风控结果，区分 APPROVED / CLIPPED / REJECTED
+  - 新增 `RiskAwareOrderProcessor`：APPROVED/CLIPPED 入 `NextBarOpenExecutor` 队列，REJECTED 跳过；CLIPPED 缺少正数 `max_allowed_qty` 时 fail-closed
+  - 新增 `VectorBTAdapterWithRisk`：生成 raw plan 与 risk-adjusted plan，并用 VectorBT 分别计算原始和风控后权益曲线
+  - 扩展 `BacktestResult`：`raw_signals`、`approved_orders`、`clipped_orders`、`rejected_orders`、`rejection_reason_counts`、`max_drawdown_before_risk`、`max_drawdown_after_risk`、`risk_adjusted_equity_curve`、`risk_adjusted_metrics`
+  - `VectorBTAdapterWithRisk` 不硬编码 symbol/price/quantity；信号来自 `BacktestConfig`、K 线和策略输出
+- 验收标准达成:
+  - 回测不绕过 RiskEngine，通过 `check_pre_trade()` 调用完整风控
+  - REJECTED 信号不进入执行器队列，也不进入 VectorBT 成交模拟
+  - CLIPPED 信号使用 `effective_quantity` 写入执行队列和 VectorBT `size`
+  - 回测报告包含风控前/后的最大回撤和权益曲线
+- 验证结果:
+  - `python -m pytest trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_risk_aware_order_processor.py trader/tests/test_backtest_risk_integration.py trader/tests/test_risk_mode_controller.py trader/tests/test_risk_sizing_engine.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 86 passed ✅
+  - `python -m black --check --line-length 100 ...` → passed ✅
+  - `python -m isort --check-only --profile black ...` → passed ✅
+  - `python -m py_compile ...` → passed ✅
+  - `git diff --check` → passed ✅
+  - `python -m mypy ...` 当前仍失败于仓库既有全局类型债（本段不修复）；P7 新增 `vectorbt` import 已加局部 ignore，避免新增缺桩噪音
+- 注意事项:
+  - 本段按计划停下，等待主审对 P7 代码和文档审计
+  - 审计通过后再进入 P8 Demo 生产化联调与 Fail-Closed 演练
 
 ### 本次任务：P5 Risk Sizing Decision，支持裁剪而不只是拒绝
 - 完成时间: 2026-05-12 (北京时间)

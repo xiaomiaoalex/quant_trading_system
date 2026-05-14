@@ -99,7 +99,7 @@ class BacktestResult:
     属性：
         total_return: 总收益率
         sharpe_ratio: 夏普比率
-        max_drawdown: 最大回撤
+        max_drawdown: 最大回撤（原始回测结果）
         win_rate: 胜率
         profit_factor: 盈亏比
         num_trades: 交易次数
@@ -107,6 +107,15 @@ class BacktestResult:
         equity_curve: 权益曲线数据点
         trades: 交易记录列表
         metrics: 扩展指标字典
+        raw_signals: 原始信号列表（风控前）
+        approved_orders: 风控通过订单列表（含 effective_qty）
+        clipped_orders: 被裁剪的订单列表（含 max_allowed_qty 和 effective_qty）
+        rejected_orders: 被拒绝的订单列表
+        rejection_reason_counts: 拒绝原因计数
+        max_drawdown_before_risk: 风控前最大回撤
+        max_drawdown_after_risk: 风控后最大回撤
+        risk_adjusted_equity_curve: 风控后权益曲线
+        risk_adjusted_metrics: 风控后指标（max_drawdown, sharpe_ratio 等）
     """
 
     total_return: Decimal
@@ -121,6 +130,15 @@ class BacktestResult:
     metrics: Dict[str, Any] = field(default_factory=dict)
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    raw_signals: Sequence[Dict[str, Any]] = field(default_factory=list)
+    approved_orders: Sequence[Dict[str, Any]] = field(default_factory=list)
+    clipped_orders: Sequence[Dict[str, Any]] = field(default_factory=list)
+    rejected_orders: Sequence[Dict[str, Any]] = field(default_factory=list)
+    rejection_reason_counts: Dict[str, int] = field(default_factory=dict)
+    max_drawdown_before_risk: Optional[Decimal] = None
+    max_drawdown_after_risk: Optional[Decimal] = None
+    risk_adjusted_equity_curve: Sequence[Dict[str, Any]] = field(default_factory=list)
+    risk_adjusted_metrics: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """类型安全转换"""
@@ -134,6 +152,14 @@ class BacktestResult:
             object.__setattr__(self, "win_rate", Decimal(str(self.win_rate)))
         if isinstance(self.profit_factor, (int, float)):
             object.__setattr__(self, "profit_factor", Decimal(str(self.profit_factor)))
+        if isinstance(self.max_drawdown_before_risk, (int, float)):
+            object.__setattr__(
+                self, "max_drawdown_before_risk", Decimal(str(self.max_drawdown_before_risk))
+            )
+        if isinstance(self.max_drawdown_after_risk, (int, float)):
+            object.__setattr__(
+                self, "max_drawdown_after_risk", Decimal(str(self.max_drawdown_after_risk))
+            )
 
 
 @dataclass(slots=True)

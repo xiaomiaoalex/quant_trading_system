@@ -210,6 +210,75 @@ sequenceDiagram
 - `VectorBTAdapter` 通过 `DataProviderPort` 获取历史 K 线；Binance 历史数据源只作为默认装配，A 股或其他市场数据源应在 Service/Adapter 层注入。
 - 回测执行成本、交易时段、T+1、涨跌停和 lot 约束不得写死在 engine 内，应通过市场规则或执行模型 specialization 接入。
 
+### P7 回测风控集成路径
+
+回测层通过 `BacktestRiskIntegration` 接入真实风控，分为订单入队路径和 VectorBT 风控后权益曲线路径：
+
+```mermaid
+sequenceDiagram
+    participant Signal as Strategy Signal
+    participant Integration as BacktestRiskIntegration
+    participant Engine as RiskEngine (real or mock)
+    participant Processor as RiskAwareOrderProcessor
+    participant Executor as NextBarOpenExecutor
+
+    Signal->>Integration: evaluate_signal(signal)
+    Integration->>Engine: check_pre_trade(signal)
+    Engine-->>Integration: RiskCheckResult
+    Integration-->>Processor: BacktestSignalResult (APPROVED/CLIPPED/REJECTED)
+
+    alt APPROVED or CLIPPED
+        Processor->>Processor: create PendingOrder with effective_quantity
+        Processor->>Executor: queue_order(pending_order)
+        Executor->>Executor: execute_pending() on next bar
+    else REJECTED
+        Processor->>Processor: skip (not queued)
+    end
+```
+
+关键约束：
+- `BacktestRiskIntegration` 通过 `risk_engine.check_pre_trade()` 调用完整风控，不绕过 RiskEngine
+- `BacktestRiskEnginePort` Protocol 支持注入模拟 RiskEngine（回测）或真实 RiskEngine（生产）
+- `RiskAwareOrderProcessor` 将 APPROVED/CLIPPED 结果转换为 `PendingOrder` 并加入执行器队列
+- REJECTED 信号不进入执行器队列，不进入成交模拟
+- CLIPPED 信号使用 `max_allowed_qty` 作为 `effective_quantity`
+
+VectorBT 路径由 `VectorBTAdapterWithRisk` 负责：
+
+```mermaid
+flowchart LR
+    Klines["DataProviderPort / historical klines"] --> Strategy["Strategy.generate_signals()"]
+    Strategy --> RawPlan["raw entries / exits / sizes"]
+    Strategy --> SignalBuild["BacktestConfig + kline + strategy output -> Signal"]
+    SignalBuild --> RiskEngine["RiskEngine.check_pre_trade(signal)"]
+    RiskEngine --> RiskPlan["risk-adjusted entries / exits / sizes"]
+    RawPlan --> RawPortfolio["VectorBT raw portfolio"]
+    RiskPlan --> RiskPortfolio["VectorBT risk-adjusted portfolio"]
+    RawPortfolio --> Report["BacktestResult"]
+    RiskPortfolio --> Report
+```
+
+关键约束：
+- VectorBT 风控路径不得硬编码 symbol、price 或 quantity；必须使用 `BacktestConfig`、K 线价格和策略显式输出
+- REJECTED 信号在风控后输入序列中写为 `entry=False`、`exit=False`、`size=0`
+- CLIPPED 信号必须把 `effective_quantity` 写入 VectorBT `size`，让风控后权益曲线真实改变
+- `BacktestResult.max_drawdown` 保持原始含义，风控后回撤写入 `max_drawdown_after_risk` 和 `risk_adjusted_metrics`
+
+### P8 Demo Fail-Closed 演练路径
+
+P8 演练由只读脚本验证运行时坏情况，不触发交易所下单：
+
+```mermaid
+flowchart LR
+    Script["scripts/rehearse_crypto_risk_runtime.py"] --> Scenario["Deterministic failure scenarios"]
+    Scenario --> RiskPath["CryptoPreTradeRiskPlugin / RiskEngine.check_pre_trade"]
+    RiskPath --> Reject["RiskCheckResult reject"]
+    Reject --> Audit["crypto_risk.pre_trade_rejected evidence"]
+    Reject --> Proof["order_attempted=false"]
+```
+
+场景覆盖 mark price 缺失、leverage bracket 缺失、open orders 激增、Funding/OI 数据过期、Binance source 超时、连续重复信号、close-only 模式开仓信号和 PG audit 不可用。除 PG audit 不可用场景外，所有拒绝都必须产生审计事件；PG audit 不可用场景用于证明审计写入失败不会导致订单放行。
+
 ---
 
 ## 4. 对账与恢复闭环

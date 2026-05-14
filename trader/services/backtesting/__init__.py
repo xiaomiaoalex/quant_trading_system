@@ -26,6 +26,15 @@ Backtesting - 回测框架集成模块
 
 from trader.core.domain.models.signal import Signal
 
+# Backtest Risk Integration exports
+from trader.services.backtesting.backtest_risk_integration import (
+    BacktestRiskEnginePort,
+    BacktestRiskIntegration,
+    BacktestRiskReport,
+    BacktestSignalResult,
+    BacktestSignalStatus,
+)
+
 # Binance data provider exports
 from trader.services.backtesting.binance_data_provider import BinanceDataConfig, BinanceDataProvider
 
@@ -94,7 +103,14 @@ from trader.services.backtesting.report_formatter import (
     TradeStatistics,
 )
 
-# Slippage model exports
+# Risk Aware Order Processor exports
+from trader.services.backtesting.risk_aware_order_processor import (
+    ExecutableOrder,
+    RiskAwareExecutionReport,
+    RiskAwareOrderProcessor,
+)
+
+# VectorBT adapter exports
 from trader.services.backtesting.slippage import (
     BinanceSlippageConfig,
     SlippageModel,
@@ -119,6 +135,14 @@ from trader.services.backtesting.validation import (
 
 # VectorBT adapter exports
 from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
+
+# VectorBT Risk Adapter exports
+from trader.services.backtesting.vectorbt_risk_adapter import (
+    VectorBTAdapterWithRisk,
+    VectorBTRiskAdapterConfig,
+    VectorBTRiskInputPlan,
+    VectorBTRiskMetrics,
+)
 
 # Visualizer exports
 from trader.services.backtesting.visualizer import (
@@ -208,6 +232,21 @@ __all__ = [
     # VectorBT Adapter
     "VectorBTAdapter",
     "VectorBTConfig",
+    # VectorBT Risk Adapter
+    "VectorBTAdapterWithRisk",
+    "VectorBTRiskAdapterConfig",
+    "VectorBTRiskInputPlan",
+    "VectorBTRiskMetrics",
+    # Backtest Risk Integration
+    "BacktestRiskEnginePort",
+    "BacktestRiskIntegration",
+    "BacktestRiskReport",
+    "BacktestSignalResult",
+    "BacktestSignalStatus",
+    # Risk Aware Order Processor
+    "ExecutableOrder",
+    "RiskAwareExecutionReport",
+    "RiskAwareOrderProcessor",
     # Binance Data Provider
     "BinanceDataProvider",
     "BinanceDataConfig",
