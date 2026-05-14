@@ -26,7 +26,7 @@
 
 The current backtesting framework provides historical simulation of trading strategies using VectorBT as the implemented fast vectorized engine. P7 added a risk-aware VectorBT path that routes signals through `RiskEngine.check_pre_trade()` and produces raw and risk-adjusted equity curves. Qlib belongs to the research layer and only produces versioned predictions/factors that must be converted into internal `Signal` objects before risk checks. A future `EventDrivenRiskReplay` layer is the target for production-like OMS/account/risk replay; it is not implemented yet.
 
-QuantConnect Lean material in older documents and legacy adapters is retained as historical reference. It is no longer the current active backtesting path.
+QuantConnect Lean material in older documents is retained as historical reference. Its runtime adapters/converters have been removed and it is no longer the current active backtesting path.
 
 ### 1.2 Design Principles
 
@@ -92,7 +92,7 @@ QuantConnect Lean material in older documents and legacy adapters is retained as
 │  Plane       │  Event logs replayed through backtest engine         │
 ├──────────────┼─────────────────────────────────────────────────────┤
 │  Adapter     │  VectorBT Adapter (active fast backtest path)        │
-│  Plane       │  Risk-aware VectorBT wrapper / legacy adapters       │
+│  Plane       │  Risk-aware VectorBT wrapper                         │
 │              │  Data transformations at adapter boundaries          │
 ├──────────────┼─────────────────────────────────────────────────────┤
 │  Core        │  StrategyLifecycleManager (Monotonic State Machine)  │
@@ -1313,14 +1313,14 @@ trader/services/backtesting/
 ├── binance_execution_adapter.py  # BinanceExecutionAdapter - KillSwitch/Risk/OMS 包装层
 ├── slippage.py                   # DirectionAwareSlippage: BUY+slip, SELL-slip
 ├── execution_simulator.py        # Legacy ExecutionSimulator (deprecated, kept for reference)
-├── strategy_adapter.py           # Legacy QuantConnect strategy conversion reference
-├── result_converter.py           # Legacy Lean statistics → BacktestResult converter
 └── validation.py                 # SensitivityAnalyzer (参数敏感性分析)
 ```
 
 **Deleted (dead code):**
 - `services/backtesting/` — root-level duplicate (14 files, deleted)
 - `trader/services/backtesting/quantconnect_adapter.py` — 36KB unused QC Lean adapter (deleted)
+- `trader/services/backtesting/strategy_adapter.py` — unused QC Lean strategy adapter (deleted)
+- `trader/services/backtesting/result_converter.py` — unused QC Lean result converter (deleted)
 
 ---
 

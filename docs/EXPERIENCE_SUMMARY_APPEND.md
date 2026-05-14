@@ -174,7 +174,7 @@ rm trader/services/backtesting/quantconnect_adapter.py
 删除文件时未同步更新引用该文件的测试。
 
 **解决方案**：
-删除依赖已删除模块的测试类（`TestQuantConnectDataAdapter`、`TestTimeFrame` 等），保留 `execution_simulator`、`strategy_adapter` 等仍存在模块的测试。
+删除依赖已删除模块的测试类（`TestQuantConnectDataAdapter`、`TestTimeFrame` 等），保留 `execution_simulator` 等仍存在模块的测试。
 
 **教训**：删除任何文件前，先 `grep` 检查引用，删除后同步更新引用方。
 

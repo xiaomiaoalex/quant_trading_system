@@ -25,6 +25,23 @@
 
 ## 最近记录
 
+### 2026-05-14 14:45 - QuantConnect Lean legacy 运行时代码清理
+
+- 背景: 回测架构已收敛为 Qlib research / VectorBT fast backtest / future EventDrivenRiskReplay，`strategy_adapter.py` 与 `result_converter.py` 仍作为 Lean legacy runtime 文件留在 `trader/services/backtesting/`，容易误导后续开发继续接入旧路线。
+- 决策: 删除 Lean 运行时代码，保留 ADR/比较文档中的历史选型背景；不删除历史文档记录，不改变 VectorBT active implementation。
+- 改动:
+  - 删除 `trader/services/backtesting/strategy_adapter.py`
+  - 删除 `trader/services/backtesting/result_converter.py`
+  - 清理 `trader/tests/test_backtesting_adapters.py` 中依赖上述模块的旧 Lean 测试，保留 execution simulator、slippage、SL/TP 与 next-bar 关键测试
+  - 更新 `trader/services/backtesting/__init__.py`、`trader/services/backtesting/ports.py`、`docs/backtesting_architecture.md`、`docs/PROJECT_ARCHITECTURE.md` 和 `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`
+- 验证:
+  - `rg "result_converter|strategy_adapter" trader` → 无 active 代码引用
+  - `python -m pytest trader/tests/test_backtesting_adapters.py trader/tests/test_backtesting_vectorbt_adapter.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_backtest_risk_integration.py -q --tb=short` → passed
+  - black/isort/py_compile/git diff check → passed
+- 风险/遗留:
+  - 历史文档中仍保留 QuantConnect Lean 选型记录，均作为 superseded/historical reference
+  - 后续新增回测能力应走 VectorBT 或 EventDrivenRiskReplay，不得重新引入 Lean runtime 适配层
+
 ### 2026-05-14 14:30 - P9.0+P9.1 市场无关规则框架
 
 - 背景: P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构，使 A 股规则和 Crypto 规则可以被插件化而不互相污染。
@@ -56,7 +73,7 @@
 - 决策: 采用三层叙事：Qlib Research Layer、VectorBT Fast Backtest Layer、Future EventDrivenRiskReplay；ADR-001 标记为 superseded，新增 ADR-002 作为当前决策。
 - 改动: 更新 `docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`、`docs/backtesting_framework_comparison.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`，并修正 `trader/services/backtesting` docstring；未改运行时逻辑。
 - 验证: 通过搜索定位并消除当前入口中的 `Lean primary`、`VectorBT alternative`、`LeanBacktestEngine()` 等误导性表述；运行 `git diff --check` 与 P7 回测风险相关轻量回归。
-- 风险/遗留: QuantConnect Lean legacy 文件仍保留；如需删除 `result_converter.py` / `strategy_adapter.py` 等历史模块，必须另立 cleanup 任务审计引用关系。
+- 风险/遗留: QuantConnect Lean legacy 文件当时仍保留；后续已由 2026-05-14 14:45 cleanup 任务删除 `result_converter.py` / `strategy_adapter.py` 并审计引用关系。
 - 关联文档: `docs/adr/ADR-002-backtesting-research-architecture-convergence.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/backtesting_architecture.md`
 
 ### 2026-05-13 - P8 Demo 生产化联调与 Fail-Closed 演练

@@ -254,7 +254,7 @@ class BacktestEnginePort(Protocol):
 
     定义与回测引擎交互的接口。
     当前 active implementation 是 VectorBTAdapter / VectorBTAdapterWithRisk。
-    QuantConnect Lean 相关适配保留为 legacy reference，不是当前主路径。
+    QuantConnect Lean 运行时代码已清理；历史选型背景仅保留在文档中。
 
     实现要求：
     1. run_backtest: 执行单次回测
@@ -505,7 +505,7 @@ class StrategyAdapterPort(Protocol):
                 ...
 
     Legacy note:
-        QuantConnect Lean 转换器和适配器文件仅保留为历史参考；新增实现不得把
+        QuantConnect Lean 转换器和适配器运行时代码已清理；新增实现不得把
         Lean 描述为当前 active engine。
     """
 

@@ -16,7 +16,7 @@
 - Qlib 固定在 Research/Insight 层，只产出因子、模型、预测和研究报告。
 - VectorBT 固定为当前 active fast backtest layer，用于快速验证和风控后权益曲线。
 - 生产级订单、账户、风控、OMS replay 归入后续 `EventDrivenRiskReplay`。
-- QuantConnect Lean 相关文档和适配器保留为 historical/legacy reference，不再作为当前主路径。
+- QuantConnect Lean 相关文档保留为 historical/legacy reference；运行时适配器已清理，不再作为当前主路径。
 
 **经验**：
 - 文档里的“主引擎”必须有时间戳和当前/历史状态，否则很容易比代码更误导。
@@ -3387,6 +3387,22 @@ P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构。最
 - 风控拒绝必须可解释：不仅要说明"哪个插件拒绝"，还要说明"为什么拒绝"
 - 多层聚合：engine 层保留 plugin identity，plugin 层保留 market-specific 原因
 - `details` 字段是插件与 engine 之间的可解释性桥梁，不能在聚合时丢失
+
+### 34.4 踩坑记录：删除 legacy runtime 前必须先审计测试引用
+
+**问题描述**：
+`strategy_adapter.py` 和 `result_converter.py` 已不属于当前 active 回测路线，但仍被 `test_backtesting_adapters.py` 中的 Lean 专项测试引用。若只删除 runtime 文件，不同步清理旧测试，会导致 import gate 失败。
+
+**解决方案**：
+- 先用 `rg "result_converter|strategy_adapter"` 审计 active 代码和测试引用
+- 删除 Lean runtime 文件时，同步删除依赖它们的测试类和 fixture
+- 保留 execution simulator / slippage / next-bar / SLTP 等仍有价值的回测基础测试
+- 文档只保留 Lean 历史选型背景，不再写“legacy adapters retained”
+
+**经验**：
+- cleanup 任务不是简单删文件；测试、导出、文档和状态记录要一起收敛
+- 历史 ADR 可以保留，但 runtime 入口一旦不再 active，就应避免留在可 import 路径中
+- 删除 legacy 代码后要跑 import gate 同类检查，而不仅是目标单测
 
 
 ---

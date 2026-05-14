@@ -24,7 +24,7 @@ Backtesting - 回测框架集成模块
     await reporter.save_report(report)
 
 Legacy note:
-    QuantConnect Lean 相关转换器/适配器保留为历史参考，不是当前 active path。
+    QuantConnect Lean 相关运行时代码已清理；历史选型背景仅保留在 docs/adr 文档中。
 """
 
 from trader.core.domain.models.signal import Signal

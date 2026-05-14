@@ -8,6 +8,22 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：QuantConnect Lean legacy 运行时代码清理
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 删除已 superseded 的 Lean 运行时代码，避免后续开发继续误用历史适配层
+- 开发后状态:
+  - 删除 `trader/services/backtesting/strategy_adapter.py`
+  - 删除 `trader/services/backtesting/result_converter.py`
+  - 清理 `trader/tests/test_backtesting_adapters.py` 中依赖上述模块的 Lean 专项测试，保留 execution simulator / slippage / SLTP 相关测试
+  - 更新回测架构文档与 backtesting package docstring，明确 Lean 只保留为历史文档背景
+- 验证结果:
+  - `python -m pytest trader/tests/test_backtesting_adapters.py trader/tests/test_backtesting_vectorbt_adapter.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_backtest_risk_integration.py -q --tb=short` → passed
+  - black/isort/py_compile/git diff check → passed
+- 注意事项:
+  - 本次只删除 Lean legacy runtime 文件，不改变 VectorBT / EventDrivenRiskReplay 路线
+  - 旧历史文档中的 Phase 5 Lean 记录保留为历史，不作为当前 active path
+
 ### 本次任务：P9.0+P9.1 市场无关规则框架
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ P9.0+P9.1 完成（含审计修复）
@@ -40,7 +56,7 @@
   - VectorBT / `VectorBTAdapterWithRisk` 是当前 active 快速回测与风控后权益曲线路径
   - Qlib 是 Research/Insight 层，只输出因子、模型、预测和研究报告，不直接下单、不绕过 `RiskEngine`
   - `EventDrivenRiskReplay` 是后续 P9 目标，用于生产级订单、账户、风控、OMS 回放设计
-  - QuantConnect Lean 相关 ADR、比较报告和适配文件保留为 historical / legacy reference，不再作为当前 active engine
+  - QuantConnect Lean 相关 ADR、比较报告保留为 historical / legacy reference；运行时适配文件已清理，不再作为当前 active engine
 - 验证结果:
   - 搜索检查已用于定位并修正 Lean/VectorBT 旧主次关系、旧示例类名等误导性入口
   - 本次为文档/docstring 收敛，不修改运行时代码
