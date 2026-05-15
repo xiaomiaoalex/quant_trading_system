@@ -59,6 +59,16 @@ from trader.services.backtesting.data_pipeline import (
     create_pipeline,
 )
 
+# Event-Driven Risk Replay exports
+from trader.services.backtesting.event_driven_risk_replay import (
+    EventDrivenRiskReplay,
+    EventDrivenRiskReplayResult,
+    OrderDecision,
+    ReplayFill,
+    ReplayOrder,
+    ReplayRiskDecision,
+)
+
 # Lifecycle integration exports
 from trader.services.backtesting.lifecycle_integration import (
     AutoApprovalRules,
@@ -246,6 +256,13 @@ __all__ = [
     "BacktestRiskReport",
     "BacktestSignalResult",
     "BacktestSignalStatus",
+    # Event-Driven Risk Replay
+    "EventDrivenRiskReplay",
+    "EventDrivenRiskReplayResult",
+    "OrderDecision",
+    "ReplayFill",
+    "ReplayOrder",
+    "ReplayRiskDecision",
     # Risk Aware Order Processor
     "ExecutableOrder",
     "RiskAwareExecutionReport",

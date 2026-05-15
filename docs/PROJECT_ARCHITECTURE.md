@@ -231,7 +231,7 @@ flowchart LR
 - Qlib 只属于 Research/Insight 域，用于因子、模型、预测和研究组合输出。
 - Qlib 输出必须先转换为内部 `Signal`，再进入 `RiskEngine.check_pre_trade()`；禁止 Qlib 直接生成订单或绕过风控。
 - VectorBT 是当前已实现的快速向量化回测引擎，负责快速验证和风控后权益曲线，不承担完整实盘撮合回放语义。
-- `EventDrivenRiskReplay` 是后续目标，用于更接近实盘的订单、账户、风控、OMS 事件回放；该能力尚未实现。
+- `EventDrivenRiskReplay` 已实现（P9.4），用于更接近实盘的订单、账户、风控、OMS 事件回放。
 - QuantConnect Lean 相关运行时代码已清理；历史选型背景仅保留在 ADR/比较文档中，不再是当前 active engine。
 
 ### P9 市场规则插件架构

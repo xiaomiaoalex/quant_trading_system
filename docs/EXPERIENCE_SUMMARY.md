@@ -3456,6 +3456,21 @@ P9.3 实现 Crypto 规则插件时，需要明确不读取 A 股字段（sellabl
 - mypy 的类型推断有限，需要显式 assert 来辅助类型收窄
 - assert 不仅用于防御性编程，还可以帮助类型检查器
 
+### 34.8 设计模式：EventDrivenRiskReplay 应复用 BacktestRiskIntegration
+
+**问题描述**：
+P9.4 EventDrivenRiskReplay 不应该自己实现风控检查逻辑，应该复用已有的 `BacktestRiskIntegration`。
+
+**解决方案**：
+- `EventDrivenRiskReplay` 接受 `BacktestRiskIntegration` 作为依赖
+- 使用 `await integration.evaluate_signal(signal)` 获取 APPROVED/CLIPPED/REJECTED
+- CLIPPED 的执行数量来自 `BacktestSignalResult.effective_quantity`
+- 异常时生成 REJECTED 结果，记录 `RISK_ENGINE_EXCEPTION` 原因
+
+**经验**：
+- 不要复制风控逻辑，复用已有集成组件
+- 事件驱动编排器负责协调，不负责风控判断
+
 
 ---
 

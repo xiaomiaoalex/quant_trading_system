@@ -67,7 +67,21 @@
   - black/isort/py_compile/git diff check → passed
 - 注意事项:
   - P9.2 完成，等待审计后进入 P9.3
-- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.4 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
+### 本次任务：P9.4 EventDrivenRiskReplay v1
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.4 完成
+- 目标: 实现 service 层 signal/bar 回放编排，调用 RiskEngine.check_pre_trade() 进行风控检查
+- 开发后状态:
+  - 新增 `trader/services/backtesting/event_driven_risk_replay.py`：`EventDrivenRiskReplay`、`EventDrivenRiskReplayConfig`、相关 DTOs；实现信号回放、风控决策、权益曲线计算、最大回撤计算
+  - 新增 `trader/tests/test_event_driven_risk_replay.py`：11 个测试覆盖 APPROVED/CLIPPED/REJECTED、异常处理、权益曲线、最大回撤
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py trader/tests/test_event_driven_risk_replay.py -q --tb=short` → 99 passed
+  - black/isort/py_compile → passed
+- 注意事项:
+  - P9.4 完成，等待审计后进入 P9.5
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.6 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
 
 ### 本次任务：P9.3 Crypto 市场规则插件
 - 完成时间: 2026-05-14 (北京时间)

@@ -83,6 +83,20 @@
   - P9.3 完成，等待审计
 - 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`PROJECT_STATUS.md`
 
+### 2026-05-14 17:30 - P9.4 EventDrivenRiskReplay v1
+
+- 背景: P9.4 需要实现 service 层 signal/bar 回放编排，调用 RiskEngine.check_pre_trade() 进行风控检查。
+- 决策: `EventDrivenRiskReplay` 是 service 层编排，不属于 Core；按时间顺序回放 signals，调用风控检查，根据结果决定 APPROVED/CLIPPED/REJECTED。
+- 改动:
+  - 新增 `trader/services/backtesting/event_driven_risk_replay.py`：`EventDrivenRiskReplay`、`EventDrivenRiskReplayConfig`、相关 DTOs；实现信号回放、风控决策、权益曲线计算、最大回撤计算
+  - 新增 `trader/tests/test_event_driven_risk_replay.py`：11 个测试覆盖 APPROVED/CLIPPED/REJECTED、异常处理、权益曲线、最大回撤
+- 验证:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py trader/tests/test_event_driven_risk_replay.py -q --tb=short` → 99 passed（11 event + 33 crypto + 44 china + 11 engine）
+  - black/isort/py_compile → passed
+- 风险/遗留:
+  - P9.4 完成，等待审计
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.6 节、`docs/PLAN.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-14 16:30 - P9.2 二次审计修复（is_suspended / 非法 bool / INTERFACE_CONTRACTS）
 
 - 背景: P9.2 一次审计后复核，发现 `is_suspended` 缺失仍默认放行、非法 bool 值按 default 处理、INTERFACE_CONTRACTS.md 未同步新语义。
