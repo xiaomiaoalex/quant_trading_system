@@ -69,6 +69,21 @@
   - P9.2 完成，等待审计后进入 P9.3
 - 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.4 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
 
+### 本次任务：P9.3 Crypto 市场规则插件
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.3 完成
+- 目标: 实现 Crypto 专属规则插件，包装现有 ExchangeRuleGuard 的 tick/step/minNotional/maxQty 语义
+- 开发后状态:
+  - 新增 `trader/core/domain/services/crypto_market_rule_plugin.py`：`CryptoMarketRulePlugin`、`CryptoMarketRulePluginConfig`；实现 price_tick/qty_step 归一化、min_qty/max_qty/min_notional/max_notional 检查
+  - 新增 `trader/tests/test_crypto_market_rule_plugin.py`：33 个测试覆盖所有 Crypto 规则、不读取 A 股字段、缺失市场状态 fail-closed
+  - 更新 `trader/core/domain/services/__init__.py`：导出新类型
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py -q --tb=short` → 88 passed
+  - black/isort/py_compile → passed
+- 注意事项:
+  - P9.3 完成，等待审计后进入 P9.4
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
 ### 本次任务：回测与研究架构文档收敛
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ 文档与 docstring 已收敛，不改变运行时行为

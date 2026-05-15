@@ -26,6 +26,10 @@ from trader.core.domain.services.china_stock_market_rule_plugin import (
     ChinaStockMarketRulePluginConfig,
     ChinaStockTradingPhase,
 )
+from trader.core.domain.services.crypto_market_rule_plugin import (
+    CryptoMarketRulePlugin,
+    CryptoMarketRulePluginConfig,
+)
 from trader.core.domain.services.depth_checker import (
     DepthChecker,
     DepthCheckerConfig,
@@ -154,4 +158,7 @@ __all__ = [
     "ChinaStockMarketRulePlugin",
     "ChinaStockMarketRulePluginConfig",
     "ChinaStockTradingPhase",
+    # CryptoMarketRulePlugin (P9.3)
+    "CryptoMarketRulePlugin",
+    "CryptoMarketRulePluginConfig",
 ]

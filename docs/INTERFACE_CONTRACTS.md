@@ -959,6 +959,34 @@ Crypto 规则作为 crypto specialization：
 - 不读取或要求 `sellable_qty`、`limit_up`、`limit_down`、`trading_phase` 等 A 股字段。
 - 不得引入 T+1、100 股手数、涨跌停、停牌等 A 股语义。
 
+| 规则 | 输入来源 | 缺失行为 |
+|------|----------|----------|
+| price_tick | `metadata.price_tick`，默认 0.01 | require_market_state=True 时 fail-closed；False 时使用默认值 |
+| qty_step | `metadata.qty_step`，默认 0.001 | require_market_state=True 时 fail-closed；False 时使用默认值 |
+| min_qty | `metadata.min_qty`，默认 0 | fail-open（使用默认值 0） |
+| min_notional | `metadata.min_notional`，默认 0 | fail-open（使用默认值 0） |
+| max_qty | `metadata.max_qty`，可选 | fail-open（不检查） |
+| max_notional | `metadata.max_notional`，可选 | fail-open（不检查） |
+
+配置项：
+- `require_market_state=True`：缺失 price_tick/qty_step 时返回 `MARKET_STATE_MISSING`
+- `default_price_tick=0.01`：默认价格步进
+- `default_qty_step=0.001`：默认数量步进
+
+violation 代码：
+| 代码 | 含义 |
+|------|------|
+| MARKET_STATE_MISSING | 必填字段缺失 |
+| INVALID_DECIMAL | 字段格式错误 |
+| INVALID_INSTRUMENT_SPEC | price_tick/qty_step <= 0 |
+| INVALID_QTY | 数量 <= 0 或步进归一化后为 0 |
+| INVALID_PRICE | 价格 <= 0 |
+| MIN_QTY | 数量低于最小值 |
+| MAX_QTY | 数量超过最大值 |
+| MIN_NOTIONAL | 名义金额低于最小值 |
+| MAX_NOTIONAL | 名义金额超过最大值 |
+| INVALID_SIDE | 无法识别的 side 参数 |
+
 #### 8.11.6 EventDrivenRiskReplay v1 契约
 
 `EventDrivenRiskReplay` 是 service 层回放编排，不属于 Core，不替代现有

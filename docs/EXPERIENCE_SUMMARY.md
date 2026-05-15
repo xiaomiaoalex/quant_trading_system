@@ -3427,6 +3427,35 @@ P9.2 审计发现 A 股插件中有三个 fail-open 漏洞：
 - `ChinaStockTradingPhase` 应改为 `class ChinaStockTradingPhase(str, Enum)`，避免字符串比较时的类型歧义
 - lot size 违规时仍应返回 normalized_qty，供后续复用（P9.3/P9.4 裁剪场景）
 
+### 34.6 设计模式：Market Rule Plugin 不应读取其他市场的专属字段
+
+**问题描述**：
+P9.3 实现 Crypto 规则插件时，需要明确不读取 A 股字段（sellable_qty、limit_up、limit_down、trading_phase 等）。如果插件混读其他市场字段，会导致语义混淆和架构污染。
+
+**解决方案**：
+- 每个市场插件只实现自己市场的规则，不读取其他市场的 metadata 字段
+- 通过接口契约（INTERFACE_CONTRACTS.md）明确各插件的输入边界
+- 测试中专门验证插件不读取其他市场字段
+
+**经验**：
+- 市场特有字段应通过 metadata 传递，不通过通用 DTO 固定字段
+- 插件边界清晰后，可以独立演进而不影响其他市场
+- 测试应验证"不读取"行为，而不只是"读取正确"行为
+
+### 34.7 踩坑记录：类型收窄后调用前需要 assert
+
+**问题描述**：
+`_parse_decimal()` 返回 `Decimal | None`，虽然代码在 violations 为空时会提前返回，但 mypy 无法推断这些值一定非空。
+
+**解决方案**：
+- 在调用需要非空值的函数前，使用 `assert price_tick is not None` 显式收窄类型
+- 这样 mypy 可以正确推断类型，同时提供防御性检查
+
+**经验**：
+- 可空返回值的处理应该在调用点显式 assert，而不只是依赖提前返回
+- mypy 的类型推断有限，需要显式 assert 来辅助类型收窄
+- assert 不仅用于防御性编程，还可以帮助类型检查器
+
 
 ---
 

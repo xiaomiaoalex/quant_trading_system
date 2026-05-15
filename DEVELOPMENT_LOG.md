@@ -67,6 +67,22 @@
   - PLAN.md 已更新 P9.0/P9.1 状态标记为"已完成（含审计修复）"
 - 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11 节、`docs/PROJECT_ARCHITECTURE.md` P9 市场规则插件架构、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
 
+### 2026-05-14 17:00 - P9.3 Crypto 市场规则插件
+
+- 背景: P9.3 需要实现 Crypto 专属规则插件，包装现有 ExchangeRuleGuard 的 tick/step/minNotional/maxQty 语义。
+- 决策: `CryptoMarketRulePlugin` 通过 metadata 读取交易所规则字段；不读取 A 股字段；缺失必填字段时 fail-closed。
+- 改动:
+  - 新增 `trader/core/domain/services/crypto_market_rule_plugin.py`：`CryptoMarketRulePlugin`、`CryptoMarketRulePluginConfig`；实现 price_tick/qty_step 归一化、min_qty/max_qty/min_notional/max_notional 检查
+  - 新增 `trader/tests/test_crypto_market_rule_plugin.py`：33 个测试覆盖所有 Crypto 规则、不读取 A 股字段、缺失市场状态 fail-closed
+  - 更新 `trader/core/domain/services/__init__.py`：导出新类型
+  - 更新 `docs/INTERFACE_CONTRACTS.md` 8.11.5：补录 violation code 表格
+- 验证:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py -v --tb=short` → 88 passed（33 crypto + 44 china + 11 engine）
+  - black/isort/py_compile → passed
+- 风险/遗留:
+  - P9.3 完成，等待审计
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-14 16:30 - P9.2 二次审计修复（is_suspended / 非法 bool / INTERFACE_CONTRACTS）
 
 - 背景: P9.2 一次审计后复核，发现 `is_suspended` 缺失仍默认放行、非法 bool 值按 default 处理、INTERFACE_CONTRACTS.md 未同步新语义。
