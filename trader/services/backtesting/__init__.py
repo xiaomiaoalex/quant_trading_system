@@ -24,7 +24,7 @@ Backtesting - 回测框架集成模块
     await reporter.save_report(report)
 
 Legacy note:
-    QuantConnect Lean 相关转换器/适配器保留为历史参考，不是当前 active path。
+    QuantConnect Lean 相关运行时代码已清理；历史选型背景仅保留在 docs/adr 文档中。
 """
 
 from trader.core.domain.models.signal import Signal
@@ -59,6 +59,16 @@ from trader.services.backtesting.data_pipeline import (
     create_pipeline,
 )
 
+# Event-Driven Risk Replay exports
+from trader.services.backtesting.event_driven_risk_replay import (
+    EventDrivenRiskReplay,
+    EventDrivenRiskReplayResult,
+    OrderDecision,
+    ReplayFill,
+    ReplayOrder,
+    ReplayRiskDecision,
+)
+
 # Lifecycle integration exports
 from trader.services.backtesting.lifecycle_integration import (
     AutoApprovalRules,
@@ -69,6 +79,26 @@ from trader.services.backtesting.lifecycle_integration import (
     StrategyComparison,
     calculate_scorecard,
     is_valid_transition,
+)
+
+# Market Ports exports
+from trader.services.backtesting.market_cost_model_port import (
+    ChinaStockCostModel,
+    ChinaStockCostModelConfig,
+    CostBreakdown,
+    CostCalculationRequest,
+    CostCalculationResult,
+    MarketCostModelPort,
+    NoOpCostModel,
+)
+from trader.services.backtesting.market_rule_snapshot_provider_port import (
+    AssetClass,
+    ChinaStockMetadata,
+    ChinaStockSnapshotProvider,
+    FakeMarketRuleSnapshotProvider,
+    MarketRuleSnapshot,
+    MarketRuleSnapshotProviderPort,
+    Venue,
 )
 
 # Performance benchmark exports
@@ -118,6 +148,14 @@ from trader.services.backtesting.slippage import (
     BinanceSlippageConfig,
     SlippageModel,
     calculate_slippage,
+)
+from trader.services.backtesting.trading_calendar_port import (
+    ChinaStockCalendar,
+    FakeTradingCalendar,
+    TradingCalendarPort,
+    TradingCalendarSnapshot,
+    TradingPhase,
+    TradingSession,
 )
 
 # Validation exports
@@ -246,6 +284,13 @@ __all__ = [
     "BacktestRiskReport",
     "BacktestSignalResult",
     "BacktestSignalStatus",
+    # Event-Driven Risk Replay
+    "EventDrivenRiskReplay",
+    "EventDrivenRiskReplayResult",
+    "OrderDecision",
+    "ReplayFill",
+    "ReplayOrder",
+    "ReplayRiskDecision",
     # Risk Aware Order Processor
     "ExecutableOrder",
     "RiskAwareExecutionReport",
@@ -259,4 +304,25 @@ __all__ = [
     "BinanceSlippageConfig",
     "SlippageModel",
     "calculate_slippage",
+    # Market Ports
+    "TradingCalendarPort",
+    "TradingCalendarSnapshot",
+    "TradingPhase",
+    "TradingSession",
+    "FakeTradingCalendar",
+    "ChinaStockCalendar",
+    "MarketCostModelPort",
+    "CostCalculationRequest",
+    "CostCalculationResult",
+    "CostBreakdown",
+    "NoOpCostModel",
+    "ChinaStockCostModel",
+    "ChinaStockCostModelConfig",
+    "MarketRuleSnapshotProviderPort",
+    "MarketRuleSnapshot",
+    "AssetClass",
+    "Venue",
+    "ChinaStockMetadata",
+    "FakeMarketRuleSnapshotProvider",
+    "ChinaStockSnapshotProvider",
 ]

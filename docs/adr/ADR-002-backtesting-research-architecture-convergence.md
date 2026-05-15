@@ -51,6 +51,5 @@ superseded and should not be used as the current implementation guide.
 - Future A-share work should prioritize market-neutral data providers, trading
   calendars, cost models, and an event-driven replay layer rather than forcing
   Qlib or VectorBT to become the execution simulator.
-- Legacy Lean files may remain until a separate cleanup task audits references
+- Legacy Lean runtime files have been removed after a separate cleanup task audited references
   and migration risk.
-

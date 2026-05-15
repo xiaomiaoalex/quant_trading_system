@@ -8,6 +8,22 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：QuantConnect Lean legacy 运行时代码清理
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 删除已 superseded 的 Lean 运行时代码，避免后续开发继续误用历史适配层
+- 开发后状态:
+  - 删除 `trader/services/backtesting/strategy_adapter.py`
+  - 删除 `trader/services/backtesting/result_converter.py`
+  - 清理 `trader/tests/test_backtesting_adapters.py` 中依赖上述模块的 Lean 专项测试，保留 execution simulator / slippage / SLTP 相关测试
+  - 更新回测架构文档与 backtesting package docstring，明确 Lean 只保留为历史文档背景
+- 验证结果:
+  - `python -m pytest trader/tests/test_backtesting_adapters.py trader/tests/test_backtesting_vectorbt_adapter.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_backtest_risk_integration.py -q --tb=short` → passed
+  - black/isort/py_compile/git diff check → passed
+- 注意事项:
+  - 本次只删除 Lean legacy runtime 文件，不改变 VectorBT / EventDrivenRiskReplay 路线
+  - 旧历史文档中的 Phase 5 Lean 记录保留为历史，不作为当前 active path
+
 ### 本次任务：P9.0+P9.1 市场无关规则框架
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ P9.0+P9.1 完成（含审计修复）
@@ -32,6 +48,78 @@
   - P9.1 框架已建立，尚未连接实际 plugin（P9.2/P9.3 实现）
   - 本段按计划停下，等待主审对 P9.0+P9.1 代码审计
 
+### 本次任务：P9.2 A 股市场规则插件
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.2 完成（含审计修复）
+- 目标: 实现 A 股专属规则插件，通过 metadata 读取市场状态，缺失时 fail-closed
+- 开发后状态:
+  - 新增 `trader/core/domain/services/china_stock_market_rule_plugin.py`：`ChinaStockTradingPhase`(str,Enum)、`ChinaStockMarketRulePlugin`、`ChinaStockMarketRulePluginConfig`；实现 lot_size、T+1、涨跌停、停牌、不可做空、交易阶段检查
+  - 新增 `trader/tests/test_china_stock_market_rule_plugin.py`：35 个测试覆盖所有 A 股规则和 fail-closed 边界
+  - 更新 `trader/core/domain/services/__init__.py`：导出新类型
+- 审计修复（P9.2 阻断问题）:
+  - [P1] `allow_short="False"` 字符串被当作 True → `_parse_bool()` 显式解析 "true"/"false"/"1"/"0"/"yes"/"no"/"on"/"off"
+  - [P1] 未知 side 默认 BUY → `_validate_side()` 返回 `INVALID_SIDE` violation
+  - [P1] 市场状态缺失默认放行 → `require_market_state=True` 返回 `MARKET_STATE_MISSING` violation
+  - [P1] 格式门禁失败 → 运行 black/isort
+  - [P2] `ChinaStockTradingPhase` 不是 Enum → 改为 `class ChinaStockTradingPhase(str, Enum)`
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py -v --tb=short` → 46 passed
+  - black/isort/py_compile/git diff check → passed
+- 注意事项:
+  - P9.2 完成，等待审计后进入 P9.3
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
+### 本次任务：P9.4 EventDrivenRiskReplay v1
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.4 完成
+- 目标: 实现 service 层 signal/bar 回放编排，调用 RiskEngine.check_pre_trade() 进行风控检查
+- 开发后状态:
+  - 新增 `trader/services/backtesting/event_driven_risk_replay.py`：`EventDrivenRiskReplay`、`EventDrivenRiskReplayConfig`、相关 DTOs；实现信号回放、风控决策、权益曲线计算、最大回撤计算
+  - 新增 `trader/tests/test_event_driven_risk_replay.py`：15 个测试覆盖 APPROVED/CLIPPED/REJECTED、异常处理、权益曲线、最大回撤、SELL 信号、缺失 effective_quantity
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py trader/tests/test_event_driven_risk_replay.py -q --tb=short` → 126 passed
+  - black/isort/mypy → passed
+- 注意事项:
+  - P9.4 完成，等待审计后进入 P9.5
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.6 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
+### 本次任务：P9.5 回测市场端口准备
+- 完成时间: 2026-05-15 (北京时间)
+- 状态: ✅ P9.5 完成（含架构修正）
+- 目标: 实现回测用市场端口（TradingCalendarPort / MarketCostModelPort / MarketRuleSnapshotProviderPort），不接入真实行情/券商/交易接口
+- 开发后状态:
+  - 新增 `trader/services/backtesting/trading_calendar_port.py`：`TradingCalendarPort`、`FakeTradingCalendar`、`ChinaStockCalendar`；实现交易日查询、交易时段识别（PRE_OPEN/CALL_AUCTION/CONTINUOUS/CLOSED/POST_CLOSE/SUSPENDED）
+  - 新增 `trader/services/backtesting/market_cost_model_port.py`：`MarketCostModelPort`、`NoOpCostModel`、`ChinaStockCostModel`、`ChinaStockCostModelConfig`；实现 A 股成本计算（买入佣金 0.03%、卖出佣金+印花税 0.1%、最低佣金 5 元）
+  - 新增 `trader/services/backtesting/market_rule_snapshot_provider_port.py`：`MarketRuleSnapshotProviderPort`、`FakeMarketRuleSnapshotProvider`、`ChinaStockSnapshotProvider`、`MarketRuleSnapshot`、`ChinaStockMetadata`；实现市场规则快照
+  - 新增 `trader/tests/test_market_ports.py`：24 个测试覆盖成本计算、日历端口、快照提供者
+- 架构修正（P9.5 审计阻断问题修复）:
+  - 复用 `core.domain.models.market_risk.AssetClass`（不新建同名枚举）
+  - `venue` 使用字符串而非枚举（避免与 core 枚举冲突）
+  - A 股专属字段放入 `metadata["china_stock"]`（不污染通用 snapshot）
+  - `limit_up/limit_down` 改为 `limit_up_rate/limit_down_rate`（避免语义冲突）
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_ports.py -v --tb=short` → 24 passed
+  - black/isort/mypy → passed
+  - 文档更新：`docs/INTERFACE_CONTRACTS.md` 8.12 节、`docs/PLAN.md`
+- 注意事项:
+  - P9.5 完成，P9 全部子阶段完成
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.12 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
+### 本次任务：P9.3 Crypto 市场规则插件
+- 完成时间: 2026-05-14 (北京时间)
+- 状态: ✅ P9.3 完成
+- 目标: 实现 Crypto 专属规则插件，包装现有 ExchangeRuleGuard 的 tick/step/minNotional/maxQty 语义
+- 开发后状态:
+  - 新增 `trader/core/domain/services/crypto_market_rule_plugin.py`：`CryptoMarketRulePlugin`、`CryptoMarketRulePluginConfig`；实现 price_tick/qty_step 归一化、min_qty/max_qty/min_notional/max_notional 检查
+  - 新增 `trader/tests/test_crypto_market_rule_plugin.py`：33 个测试覆盖所有 Crypto 规则、不读取 A 股字段、缺失市场状态 fail-closed
+  - 更新 `trader/core/domain/services/__init__.py`：导出新类型
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py -q --tb=short` → 88 passed
+  - black/isort/py_compile → passed
+- 注意事项:
+  - P9.3 完成，等待审计后进入 P9.4
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.5 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
 ### 本次任务：回测与研究架构文档收敛
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ 文档与 docstring 已收敛，不改变运行时行为
@@ -40,7 +128,7 @@
   - VectorBT / `VectorBTAdapterWithRisk` 是当前 active 快速回测与风控后权益曲线路径
   - Qlib 是 Research/Insight 层，只输出因子、模型、预测和研究报告，不直接下单、不绕过 `RiskEngine`
   - `EventDrivenRiskReplay` 是后续 P9 目标，用于生产级订单、账户、风控、OMS 回放设计
-  - QuantConnect Lean 相关 ADR、比较报告和适配文件保留为 historical / legacy reference，不再作为当前 active engine
+  - QuantConnect Lean 相关 ADR、比较报告保留为 historical / legacy reference；运行时适配文件已清理，不再作为当前 active engine
 - 验证结果:
   - 搜索检查已用于定位并修正 Lean/VectorBT 旧主次关系、旧示例类名等误导性入口
   - 本次为文档/docstring 收敛，不修改运行时代码

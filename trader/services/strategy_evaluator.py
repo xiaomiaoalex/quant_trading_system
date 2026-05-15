@@ -7,7 +7,7 @@ StrategyEvaluator - 策略评估器
     请使用新的回测框架，参见 `docs/migration_guide.md`。
 
 迁移指南：
-    1. BacktestEngine -> 使用 QuantConnectLeanBacktestEngine
+    1. BacktestEngine -> 使用 trader.services.backtesting.VectorBTAdapter / VectorBTAdapterWithRisk
     2. StrategyMetrics -> StandardizedBacktestReport
     3. LiveEvaluator -> Integration with StrategyLifecycleManager
 

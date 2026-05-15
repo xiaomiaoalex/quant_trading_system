@@ -16,7 +16,7 @@
 - Qlib 固定在 Research/Insight 层，只产出因子、模型、预测和研究报告。
 - VectorBT 固定为当前 active fast backtest layer，用于快速验证和风控后权益曲线。
 - 生产级订单、账户、风控、OMS replay 归入后续 `EventDrivenRiskReplay`。
-- QuantConnect Lean 相关文档和适配器保留为 historical/legacy reference，不再作为当前主路径。
+- QuantConnect Lean 相关文档保留为 historical/legacy reference；运行时适配器已清理，不再作为当前主路径。
 
 **经验**：
 - 文档里的“主引擎”必须有时间戳和当前/历史状态，否则很容易比代码更误导。
@@ -3343,6 +3343,26 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+### 27. P9 跨市场抽象设计原则
+
+**场景**：
+P9.5 实现回测用市场端口，需要支持 A 股和 Crypto 两个市场，但又不让市场专属字段污染通用抽象。
+
+**问题**：
+- 直接在 `MarketRuleSnapshot` 中添加 `sellable_qty`、`limit_up`、`lot_size` 等 A 股专属字段，会让 Crypto 插件读取到无效字段。
+- 重新定义 `OrderSide`、`AssetClass` 枚举会与 core 层已有枚举冲突，导致类型不一致。
+
+**经验**：
+- 复用 core 层已有枚举（如 `AssetClass` 来自 `trader.core.domain.models.market_risk`），使用 type alias 导入。
+- 市场专属字段放入 `metadata` 或 specialization DTO（如 `ChinaStockMetadata`），不污染通用结构。
+- 命名要语义明确：`limit_up_rate` vs `limit_up`，避免后续接 P9.2 插件时产生语义冲突。
+- 枚举类型在跨层传递时使用 value（如 `Venue.SHANGHAI.value`）而非枚举本身，避免 Protocol 兼容性问题。
+
+**收益**：
+- 跨市场抽象清晰，A 股字段不会泄漏到 Crypto 场景。
+- 类型一致性与 core 层对齐，避免隐式转换错误。
+- 可扩展性强，新增市场只需新增 specialization DTO。
+
 ### 34.1 踩坑记录：市场无关接口不要承载 A 股字段
 
 **问题描述**：
@@ -3387,6 +3407,89 @@ P9 需要构建"市场无关规则接口 + 市场专用规则插件"架构。最
 - 风控拒绝必须可解释：不仅要说明"哪个插件拒绝"，还要说明"为什么拒绝"
 - 多层聚合：engine 层保留 plugin identity，plugin 层保留 market-specific 原因
 - `details` 字段是插件与 engine 之间的可解释性桥梁，不能在聚合时丢失
+
+### 34.4 踩坑记录：删除 legacy runtime 前必须先审计测试引用
+
+**问题描述**：
+`strategy_adapter.py` 和 `result_converter.py` 已不属于当前 active 回测路线，但仍被 `test_backtesting_adapters.py` 中的 Lean 专项测试引用。若只删除 runtime 文件，不同步清理旧测试，会导致 import gate 失败。
+
+**解决方案**：
+- 先用 `rg "result_converter|strategy_adapter"` 审计 active 代码和测试引用
+- 删除 Lean runtime 文件时，同步删除依赖它们的测试类和 fixture
+- 保留 execution simulator / slippage / next-bar / SLTP 等仍有价值的回测基础测试
+- 文档只保留 Lean 历史选型背景，不再写“legacy adapters retained”
+
+**经验**：
+- cleanup 任务不是简单删文件；测试、导出、文档和状态记录要一起收敛
+- 历史 ADR 可以保留，但 runtime 入口一旦不再 active，就应避免留在可 import 路径中
+- 删除 legacy 代码后要跑 import gate 同类检查，而不仅是目标单测
+
+### 34.5 踩坑记录：A 股插件必须显式解析布尔值和验证 side 类型
+
+**问题描述**：
+P9.2 审计发现 A 股插件中有三个 fail-open 漏洞：
+1. `allow_short="False"` 字符串在 Python 中是真值，导致 T+1 卖出检查被绕过
+2. 未知 side 参数默认返回 `OrderSide.BUY`，导致卖出规则被跳过
+3. 市场状态字段缺失时默认通过，导致停牌/涨跌停检查被跳过
+
+**解决方案**：
+- `_parse_bool(value, default)`: 显式解析布尔值，支持 `True/False`、`"true"/"false"`、`"1"/"0"`、`"yes"/"no"`、`"on"/"off"`；无法识别时返回 default
+- `_parse_required_bool(value, field_name, required)`: 专用于必填布尔字段，缺失时返回 `MARKET_STATE_MISSING`，无法解析时返回 `INVALID_BOOL`
+- `_validate_side(side)`: 对 OrderSide enum 直接返回；对有 `.value` 的对象尝试转换；对无法识别的类型返回 `INVALID_SIDE` violation 而不是默认 BUY
+- `require_market_state=True`（默认）: 涨跌停、交易阶段、sellable_qty、is_suspended 等字段缺失时返回 `MARKET_STATE_MISSING` violation
+
+**经验**：
+- metadata 中的字符串 "False" 不等于布尔值 False；所有布尔字段都要显式解析
+- 必填布尔字段缺失不能默认成 False（会 fail-open），应返回 `MARKET_STATE_MISSING`
+- 非法布尔值也不能按 default 处理（会 fail-open），应返回 `INVALID_BOOL`
+- 未知枚举值不能默认成安全方向（BUY），应该返回 violation
+- 市场特有插件默认 fail-closed 比 fail-open 更安全：A 股数据缺失时拒绝比放行风险更小
+- `ChinaStockTradingPhase` 应改为 `class ChinaStockTradingPhase(str, Enum)`，避免字符串比较时的类型歧义
+- lot size 违规时仍应返回 normalized_qty，供后续复用（P9.3/P9.4 裁剪场景）
+
+### 34.6 设计模式：Market Rule Plugin 不应读取其他市场的专属字段
+
+**问题描述**：
+P9.3 实现 Crypto 规则插件时，需要明确不读取 A 股字段（sellable_qty、limit_up、limit_down、trading_phase 等）。如果插件混读其他市场字段，会导致语义混淆和架构污染。
+
+**解决方案**：
+- 每个市场插件只实现自己市场的规则，不读取其他市场的 metadata 字段
+- 通过接口契约（INTERFACE_CONTRACTS.md）明确各插件的输入边界
+- 测试中专门验证插件不读取其他市场字段
+
+**经验**：
+- 市场特有字段应通过 metadata 传递，不通过通用 DTO 固定字段
+- 插件边界清晰后，可以独立演进而不影响其他市场
+- 测试应验证"不读取"行为，而不只是"读取正确"行为
+
+### 34.7 踩坑记录：类型收窄后调用前需要 assert
+
+**问题描述**：
+`_parse_decimal()` 返回 `Decimal | None`，虽然代码在 violations 为空时会提前返回，但 mypy 无法推断这些值一定非空。
+
+**解决方案**：
+- 在调用需要非空值的函数前，使用 `assert price_tick is not None` 显式收窄类型
+- 这样 mypy 可以正确推断类型，同时提供防御性检查
+
+**经验**：
+- 可空返回值的处理应该在调用点显式 assert，而不只是依赖提前返回
+- mypy 的类型推断有限，需要显式 assert 来辅助类型收窄
+- assert 不仅用于防御性编程，还可以帮助类型检查器
+
+### 34.8 设计模式：EventDrivenRiskReplay 应复用 BacktestRiskIntegration
+
+**问题描述**：
+P9.4 EventDrivenRiskReplay 不应该自己实现风控检查逻辑，应该复用已有的 `BacktestRiskIntegration`。
+
+**解决方案**：
+- `EventDrivenRiskReplay` 接受 `BacktestRiskIntegration` 作为依赖
+- 使用 `await integration.evaluate_signal(signal)` 获取 APPROVED/CLIPPED/REJECTED
+- CLIPPED 的执行数量来自 `BacktestSignalResult.effective_quantity`
+- 异常时生成 REJECTED 结果，记录 `RISK_ENGINE_EXCEPTION` 原因
+
+**经验**：
+- 不要复制风控逻辑，复用已有集成组件
+- 事件驱动编排器负责协调，不负责风控判断
 
 
 ---

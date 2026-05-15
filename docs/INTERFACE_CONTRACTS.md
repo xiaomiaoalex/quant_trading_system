@@ -915,14 +915,39 @@ T+1、100 股、涨跌停、停牌、午休或 Binance filter 字段。
 
 A 股规则只允许在 `ChinaStockMarketRulePlugin` 中实现：
 
-| 规则 | 输入来源 |
-|------|----------|
-| 100 股手数 | `metadata.lot_size`，默认 100 |
-| T+1 可卖数量 | `metadata.sellable_qty` |
-| 涨跌停 | `metadata.limit_up` / `metadata.limit_down` |
-| 停牌 | `metadata.is_suspended` |
-| 不可做空 | `metadata.allow_short`，默认 false |
-| 交易阶段 | `metadata.trading_phase` |
+| 规则 | 输入来源 | 缺失行为 |
+|------|----------|----------|
+| 100 股手数 | `metadata.lot_size`，默认 100 | 缺失使用 default_lot_size；非法或 <=0 时 fail-closed |
+| T+1 可卖数量 | `metadata.sellable_qty` | fail-closed（MARKET_STATE_MISSING） |
+| 涨跌停 | `metadata.limit_up` / `metadata.limit_down` | fail-closed（MARKET_STATE_MISSING） |
+| 停牌 | `metadata.is_suspended` | fail-closed（MARKET_STATE_MISSING，required=True） |
+| 不可做空 | `metadata.allow_short`，默认 false | fail-open（使用 default_allow_short） |
+| 交易阶段 | `metadata.trading_phase` | fail-closed（MARKET_STATE_MISSING） |
+
+配置项：
+- `require_market_state=True`：缺失必填市场状态字段时返回 `MARKET_STATE_MISSING`
+- `default_lot_size=100`：默认每手股数
+- `default_allow_short=False`：默认不允许做空（A 股现货）
+
+布尔字段解析规则：
+- 接受 `True/False`、`"true"/"false"`、`"1"/"0"`、`"yes"/"no"`、`"on"/"off"`
+- 必填布尔字段缺失返回 `MARKET_STATE_MISSING`
+- 无法识别的布尔值返回 `INVALID_BOOL`
+
+violation 代码：
+| 代码 | 含义 |
+|------|------|
+| MARKET_STATE_MISSING | 必填市场状态字段缺失 |
+| MARKET_STATE_INVALID | 市场状态格式错误（如非法 trading_phase） |
+| INVALID_BOOL | 布尔字段无法解析 |
+| INVALID_SIDE | 无法识别的 side 参数 |
+| LOT_SIZE | 手数不是 lot_size 整数倍 |
+| T1_SELL_LIMIT | 卖出数量超过 T+1 可卖数量 |
+| NO_SHORT | 不允许做空且无可卖数量 |
+| PRICE_LIMIT_UP | 价格超过涨停价 |
+| PRICE_LIMIT_DOWN | 价格低于跌停价 |
+| SUSPENDED | 股票停牌 |
+| TRADING_PHASE | 非允许交易阶段 |
 
 这些字段不得升级为 `MarketRuleIntent` 或 `MarketRiskSnapshot` 的通用固定字段。
 
@@ -933,6 +958,34 @@ Crypto 规则作为 crypto specialization：
 - 可包装现有 `ExchangeRuleGuard` 的 tick / step / minNotional / maxQty 语义。
 - 不读取或要求 `sellable_qty`、`limit_up`、`limit_down`、`trading_phase` 等 A 股字段。
 - 不得引入 T+1、100 股手数、涨跌停、停牌等 A 股语义。
+
+| 规则 | 输入来源 | 缺失行为 |
+|------|----------|----------|
+| price_tick | `metadata.price_tick`，默认 0.01 | require_market_state=True 时 fail-closed；False 时使用默认值 |
+| qty_step | `metadata.qty_step`，默认 0.001 | require_market_state=True 时 fail-closed；False 时使用默认值 |
+| min_qty | `metadata.min_qty`，默认 0 | fail-open（使用默认值 0） |
+| min_notional | `metadata.min_notional`，默认 0 | fail-open（使用默认值 0） |
+| max_qty | `metadata.max_qty`，可选 | fail-open（不检查） |
+| max_notional | `metadata.max_notional`，可选 | fail-open（不检查） |
+
+配置项：
+- `require_market_state=True`：缺失 price_tick/qty_step 时返回 `MARKET_STATE_MISSING`
+- `default_price_tick=0.01`：默认价格步进
+- `default_qty_step=0.001`：默认数量步进
+
+violation 代码：
+| 代码 | 含义 |
+|------|------|
+| MARKET_STATE_MISSING | 必填字段缺失 |
+| INVALID_DECIMAL | 字段格式错误 |
+| INVALID_INSTRUMENT_SPEC | price_tick/qty_step <= 0 |
+| INVALID_QTY | 数量 <= 0 或步进归一化后为 0 |
+| INVALID_PRICE | 价格 <= 0 |
+| MIN_QTY | 数量低于最小值 |
+| MAX_QTY | 数量超过最大值 |
+| MIN_NOTIONAL | 名义金额低于最小值 |
+| MAX_NOTIONAL | 名义金额超过最大值 |
+| INVALID_SIDE | 无法识别的 side 参数 |
 
 #### 8.11.6 EventDrivenRiskReplay v1 契约
 
@@ -974,3 +1027,74 @@ errors
 - 不把 A 股规则塞入通用 MarketRisk DTO 固定字段。
 - 不让 Qlib 直接写入执行队列。
 - 不复制一套回测专用风控逻辑。
+
+### 8.12 P9.5 回测市场端口契约
+
+P9.5 定义回测用的市场端口，不接入真实行情/券商/交易接口。
+
+#### 8.12.1 TradingCalendarPort
+
+```python
+class TradingCalendarPort(Protocol):
+    async def is_trading_day(self, symbol: str, dt: datetime) -> bool: ...
+    async def get_trading_phase(self, symbol: str, dt: datetime) -> TradingPhase: ...
+    async def get_trading_session(self, symbol: str, date: datetime) -> TradingSession: ...
+    async def get_calendar_snapshot(self, symbol: str, dt: datetime) -> TradingCalendarSnapshot: ...
+```
+
+| 实现 | 用途 |
+|------|------|
+| `FakeTradingCalendar` | Crypto 测试 |
+| `ChinaStockCalendar` | A 股配置化实现 |
+
+A 股时段：`PRE_OPEN` / `CALL_AUCTION` / `CONTINUOUS` / `CLOSED(午休)` / `POST_CLOSE` / `SUSPENDED`。
+
+#### 8.12.2 MarketCostModelPort
+
+```python
+class MarketCostModelPort(Protocol):
+    async def calculate_costs(self, request: CostCalculationRequest) -> CostCalculationResult: ...
+    async def get_effective_price(self, symbol: str, side: str, price: Decimal) -> Decimal: ...
+```
+
+A 股成本模型规则：
+- 买入：佣金 `0.03%`，无印花税
+- 卖出：佣金 `0.03%` + 印花税 `0.1%`
+- 最低佣金：`5` 元
+
+#### 8.12.3 MarketRuleSnapshotProviderPort
+
+```python
+class MarketRuleSnapshotProviderPort(Protocol):
+    async def get_snapshot(self, symbol: str, dt: datetime | None) -> MarketRuleSnapshot: ...
+```
+
+`MarketRuleSnapshot` 只保留市场无关通用字段：
+
+| 字段 | 含义 |
+|------|------|
+| `symbol` | 交易标的 |
+| `asset_class` | 资产类别（复用 `core.domain.models.market_risk.AssetClass`） |
+| `venue` | 交易场所（字符串） |
+| `timestamp` | 时间戳 |
+| `tick_size` | 价格步长 |
+| `min_notional` | 最小名义金额 |
+| `max_qty` | 最大数量 |
+| `metadata` | 市场专属字段载体 |
+
+**A 股专属字段不得进入 snapshot 固定字段**，必须放入 `metadata["china_stock"]`，类型为 `ChinaStockMetadata`：
+
+| 字段 | 含义 |
+|------|------|
+| `sellable_qty` | 可卖数量 |
+| `limit_up_rate` | 涨停幅度（如 `0.10` 表示 10%） |
+| `limit_down_rate` | 跌停幅度（如 `0.10` 表示 10%） |
+| `is_suspended` | 是否停牌 |
+| `trading_phase` | 交易阶段 |
+| `lot_size` | 手数（100 股） |
+| `allow_short` | 是否允许做空 |
+
+设计原则：
+- 复用 core 层已有枚举，不新建同名枚举（`AssetClass` 来自 `market_risk`）
+- `venue` 使用字符串而非枚举，避免与 core 枚举冲突
+- A 股字段放入 metadata，不污染通用 snapshot 结构
