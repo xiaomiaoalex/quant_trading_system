@@ -20,7 +20,7 @@
 
 审计通过前，AI 开发工程师只能回答问题、补充审计材料或修复审计指出的问题；不得开始下一段计划。
 
-当前停顿点（2026-05-14）：P9.4 EventDrivenRiskReplay v1 已完成；下一段入口为 P9.5 回测市场端口准备。
+当前停顿点（2026-05-15）：P9.5 回测市场端口准备已完成（含架构修正：复用 core 枚举、A 股字段放入 metadata、limit_up_rate/limit_down_rate 命名修正）。P9 全部子阶段完成。
 
 ---
 
@@ -116,7 +116,7 @@ P9 采用“市场无关规则接口 + 市场专用规则插件”架构：
 | P9.2 | A 股规则插件 | `ChinaStockMarketRulePlugin`，实现 T+1、100 股、涨跌停、停牌、不可做空、交易阶段 | ✅ 已完成（含审计修复） |
 | P9.3 | Crypto 规则插件适配 | `CryptoMarketRulePlugin` 包装 tick/step/minNotional/maxQty，不引入 A 股字段 | ✅ 已完成 |
 | P9.4 | EventDrivenRiskReplay v1 | service 层 signal/bar replay，调用 `RiskEngine.check_pre_trade()` | ✅ 已完成 |
-| P9.5 | 回测市场端口准备 | calendar / cost model / snapshot provider fake/static 端口 | 待开始 |
+| P9.5 | 回测市场端口准备 | calendar / cost model / snapshot provider fake/static 端口 | ✅ 已完成（含架构修正） |
 
 每个 P9 子阶段完成后必须立即停下，输出审计交接包。审计通过前不得进入下一段。
 

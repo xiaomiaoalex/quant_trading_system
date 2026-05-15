@@ -1027,3 +1027,74 @@ errors
 - 不把 A 股规则塞入通用 MarketRisk DTO 固定字段。
 - 不让 Qlib 直接写入执行队列。
 - 不复制一套回测专用风控逻辑。
+
+### 8.12 P9.5 回测市场端口契约
+
+P9.5 定义回测用的市场端口，不接入真实行情/券商/交易接口。
+
+#### 8.12.1 TradingCalendarPort
+
+```python
+class TradingCalendarPort(Protocol):
+    async def is_trading_day(self, symbol: str, dt: datetime) -> bool: ...
+    async def get_trading_phase(self, symbol: str, dt: datetime) -> TradingPhase: ...
+    async def get_trading_session(self, symbol: str, date: datetime) -> TradingSession: ...
+    async def get_calendar_snapshot(self, symbol: str, dt: datetime) -> TradingCalendarSnapshot: ...
+```
+
+| 实现 | 用途 |
+|------|------|
+| `FakeTradingCalendar` | Crypto 测试 |
+| `ChinaStockCalendar` | A 股配置化实现 |
+
+A 股时段：`PRE_OPEN` / `CALL_AUCTION` / `CONTINUOUS` / `CLOSED(午休)` / `POST_CLOSE` / `SUSPENDED`。
+
+#### 8.12.2 MarketCostModelPort
+
+```python
+class MarketCostModelPort(Protocol):
+    async def calculate_costs(self, request: CostCalculationRequest) -> CostCalculationResult: ...
+    async def get_effective_price(self, symbol: str, side: str, price: Decimal) -> Decimal: ...
+```
+
+A 股成本模型规则：
+- 买入：佣金 `0.03%`，无印花税
+- 卖出：佣金 `0.03%` + 印花税 `0.1%`
+- 最低佣金：`5` 元
+
+#### 8.12.3 MarketRuleSnapshotProviderPort
+
+```python
+class MarketRuleSnapshotProviderPort(Protocol):
+    async def get_snapshot(self, symbol: str, dt: datetime | None) -> MarketRuleSnapshot: ...
+```
+
+`MarketRuleSnapshot` 只保留市场无关通用字段：
+
+| 字段 | 含义 |
+|------|------|
+| `symbol` | 交易标的 |
+| `asset_class` | 资产类别（复用 `core.domain.models.market_risk.AssetClass`） |
+| `venue` | 交易场所（字符串） |
+| `timestamp` | 时间戳 |
+| `tick_size` | 价格步长 |
+| `min_notional` | 最小名义金额 |
+| `max_qty` | 最大数量 |
+| `metadata` | 市场专属字段载体 |
+
+**A 股专属字段不得进入 snapshot 固定字段**，必须放入 `metadata["china_stock"]`，类型为 `ChinaStockMetadata`：
+
+| 字段 | 含义 |
+|------|------|
+| `sellable_qty` | 可卖数量 |
+| `limit_up_rate` | 涨停幅度（如 `0.10` 表示 10%） |
+| `limit_down_rate` | 跌停幅度（如 `0.10` 表示 10%） |
+| `is_suspended` | 是否停牌 |
+| `trading_phase` | 交易阶段 |
+| `lot_size` | 手数（100 股） |
+| `allow_short` | 是否允许做空 |
+
+设计原则：
+- 复用 core 层已有枚举，不新建同名枚举（`AssetClass` 来自 `market_risk`）
+- `venue` 使用字符串而非枚举，避免与 core 枚举冲突
+- A 股字段放入 metadata，不污染通用 snapshot 结构

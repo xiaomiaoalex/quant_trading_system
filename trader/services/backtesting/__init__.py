@@ -81,6 +81,26 @@ from trader.services.backtesting.lifecycle_integration import (
     is_valid_transition,
 )
 
+# Market Ports exports
+from trader.services.backtesting.market_cost_model_port import (
+    ChinaStockCostModel,
+    ChinaStockCostModelConfig,
+    CostBreakdown,
+    CostCalculationRequest,
+    CostCalculationResult,
+    MarketCostModelPort,
+    NoOpCostModel,
+)
+from trader.services.backtesting.market_rule_snapshot_provider_port import (
+    AssetClass,
+    ChinaStockMetadata,
+    ChinaStockSnapshotProvider,
+    FakeMarketRuleSnapshotProvider,
+    MarketRuleSnapshot,
+    MarketRuleSnapshotProviderPort,
+    Venue,
+)
+
 # Performance benchmark exports
 from trader.services.backtesting.performance_benchmark import (
     BenchmarkReport,
@@ -128,6 +148,14 @@ from trader.services.backtesting.slippage import (
     BinanceSlippageConfig,
     SlippageModel,
     calculate_slippage,
+)
+from trader.services.backtesting.trading_calendar_port import (
+    ChinaStockCalendar,
+    FakeTradingCalendar,
+    TradingCalendarPort,
+    TradingCalendarSnapshot,
+    TradingPhase,
+    TradingSession,
 )
 
 # Validation exports
@@ -276,4 +304,25 @@ __all__ = [
     "BinanceSlippageConfig",
     "SlippageModel",
     "calculate_slippage",
+    # Market Ports
+    "TradingCalendarPort",
+    "TradingCalendarSnapshot",
+    "TradingPhase",
+    "TradingSession",
+    "FakeTradingCalendar",
+    "ChinaStockCalendar",
+    "MarketCostModelPort",
+    "CostCalculationRequest",
+    "CostCalculationResult",
+    "CostBreakdown",
+    "NoOpCostModel",
+    "ChinaStockCostModel",
+    "ChinaStockCostModelConfig",
+    "MarketRuleSnapshotProviderPort",
+    "MarketRuleSnapshot",
+    "AssetClass",
+    "Venue",
+    "ChinaStockMetadata",
+    "FakeMarketRuleSnapshotProvider",
+    "ChinaStockSnapshotProvider",
 ]

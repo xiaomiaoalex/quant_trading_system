@@ -75,13 +75,35 @@
 - 目标: 实现 service 层 signal/bar 回放编排，调用 RiskEngine.check_pre_trade() 进行风控检查
 - 开发后状态:
   - 新增 `trader/services/backtesting/event_driven_risk_replay.py`：`EventDrivenRiskReplay`、`EventDrivenRiskReplayConfig`、相关 DTOs；实现信号回放、风控决策、权益曲线计算、最大回撤计算
-  - 新增 `trader/tests/test_event_driven_risk_replay.py`：11 个测试覆盖 APPROVED/CLIPPED/REJECTED、异常处理、权益曲线、最大回撤
+  - 新增 `trader/tests/test_event_driven_risk_replay.py`：15 个测试覆盖 APPROVED/CLIPPED/REJECTED、异常处理、权益曲线、最大回撤、SELL 信号、缺失 effective_quantity
 - 验证结果:
-  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py trader/tests/test_event_driven_risk_replay.py -q --tb=short` → 99 passed
-  - black/isort/py_compile → passed
+  - `python -m pytest trader/tests/test_market_rule_engine.py trader/tests/test_china_stock_market_rule_plugin.py trader/tests/test_crypto_market_rule_plugin.py trader/tests/test_event_driven_risk_replay.py -q --tb=short` → 126 passed
+  - black/isort/mypy → passed
 - 注意事项:
   - P9.4 完成，等待审计后进入 P9.5
 - 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.11.6 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
+
+### 本次任务：P9.5 回测市场端口准备
+- 完成时间: 2026-05-15 (北京时间)
+- 状态: ✅ P9.5 完成（含架构修正）
+- 目标: 实现回测用市场端口（TradingCalendarPort / MarketCostModelPort / MarketRuleSnapshotProviderPort），不接入真实行情/券商/交易接口
+- 开发后状态:
+  - 新增 `trader/services/backtesting/trading_calendar_port.py`：`TradingCalendarPort`、`FakeTradingCalendar`、`ChinaStockCalendar`；实现交易日查询、交易时段识别（PRE_OPEN/CALL_AUCTION/CONTINUOUS/CLOSED/POST_CLOSE/SUSPENDED）
+  - 新增 `trader/services/backtesting/market_cost_model_port.py`：`MarketCostModelPort`、`NoOpCostModel`、`ChinaStockCostModel`、`ChinaStockCostModelConfig`；实现 A 股成本计算（买入佣金 0.03%、卖出佣金+印花税 0.1%、最低佣金 5 元）
+  - 新增 `trader/services/backtesting/market_rule_snapshot_provider_port.py`：`MarketRuleSnapshotProviderPort`、`FakeMarketRuleSnapshotProvider`、`ChinaStockSnapshotProvider`、`MarketRuleSnapshot`、`ChinaStockMetadata`；实现市场规则快照
+  - 新增 `trader/tests/test_market_ports.py`：24 个测试覆盖成本计算、日历端口、快照提供者
+- 架构修正（P9.5 审计阻断问题修复）:
+  - 复用 `core.domain.models.market_risk.AssetClass`（不新建同名枚举）
+  - `venue` 使用字符串而非枚举（避免与 core 枚举冲突）
+  - A 股专属字段放入 `metadata["china_stock"]`（不污染通用 snapshot）
+  - `limit_up/limit_down` 改为 `limit_up_rate/limit_down_rate`（避免语义冲突）
+- 验证结果:
+  - `python -m pytest trader/tests/test_market_ports.py -v --tb=short` → 24 passed
+  - black/isort/mypy → passed
+  - 文档更新：`docs/INTERFACE_CONTRACTS.md` 8.12 节、`docs/PLAN.md`
+- 注意事项:
+  - P9.5 完成，P9 全部子阶段完成
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.12 节、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`
 
 ### 本次任务：P9.3 Crypto 市场规则插件
 - 完成时间: 2026-05-14 (北京时间)

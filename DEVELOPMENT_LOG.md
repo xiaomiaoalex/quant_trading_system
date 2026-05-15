@@ -25,6 +25,25 @@
 
 ## 最近记录
 
+### 2026-05-15 14:00 - P9.5 回测市场端口准备 + 架构修正
+
+- 背景: P9.5 实现回测用市场端口（TradingCalendarPort / MarketCostModelPort / MarketRuleSnapshotProviderPort），不接入真实行情/券商/交易接口。审计发现阻断问题：1) 文档闭环缺失；2) 重复定义 OrderSide/AssetClass；3) A 股字段污染通用 snapshot；4) limit_up/limit_down 语义错误。
+- 决策: 复用 core 层已有枚举；A 股专属字段放入 metadata["china_stock"]；字段命名修正为 limit_up_rate/limit_down_rate；更新 INTERFACE_CONTRACTS.md 8.12 节。
+- 改动:
+  - 新增 `trader/services/backtesting/trading_calendar_port.py`：`TradingCalendarPort`、`FakeTradingCalendar`、`ChinaStockCalendar`
+  - 新增 `trader/services/backtesting/market_cost_model_port.py`：`MarketCostModelPort`、`NoOpCostModel`、`ChinaStockCostModel`
+  - 新增 `trader/services/backtesting/market_rule_snapshot_provider_port.py`：`MarketRuleSnapshotProviderPort`、`FakeMarketRuleSnapshotProvider`、`ChinaStockSnapshotProvider`、`MarketRuleSnapshot`、`ChinaStockMetadata`
+  - 新增 `trader/tests/test_market_ports.py`：24 个测试
+  - 更新 `docs/INTERFACE_CONTRACTS.md`：新增 8.12 节 P9.5 契约
+  - 更新 `docs/PLAN.md`、`PROJECT_STATUS.md`
+- 验证:
+  - `python -m pytest trader/tests/test_market_ports.py -v --tb=short` → 24 passed
+  - black/isort/mypy → passed
+- 风险/遗留:
+  - P9 全部子阶段完成，可以提交
+  - A 股字段通过 metadata 隔离，避免跨市场抽象污染
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.12 节、`docs/PLAN.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-14 14:45 - QuantConnect Lean legacy 运行时代码清理
 
 - 背景: 回测架构已收敛为 Qlib research / VectorBT fast backtest / future EventDrivenRiskReplay，`strategy_adapter.py` 与 `result_converter.py` 仍作为 Lean legacy runtime 文件留在 `trader/services/backtesting/`，容易误导后续开发继续接入旧路线。

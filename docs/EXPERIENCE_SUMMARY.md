@@ -3343,6 +3343,26 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+### 27. P9 跨市场抽象设计原则
+
+**场景**：
+P9.5 实现回测用市场端口，需要支持 A 股和 Crypto 两个市场，但又不让市场专属字段污染通用抽象。
+
+**问题**：
+- 直接在 `MarketRuleSnapshot` 中添加 `sellable_qty`、`limit_up`、`lot_size` 等 A 股专属字段，会让 Crypto 插件读取到无效字段。
+- 重新定义 `OrderSide`、`AssetClass` 枚举会与 core 层已有枚举冲突，导致类型不一致。
+
+**经验**：
+- 复用 core 层已有枚举（如 `AssetClass` 来自 `trader.core.domain.models.market_risk`），使用 type alias 导入。
+- 市场专属字段放入 `metadata` 或 specialization DTO（如 `ChinaStockMetadata`），不污染通用结构。
+- 命名要语义明确：`limit_up_rate` vs `limit_up`，避免后续接 P9.2 插件时产生语义冲突。
+- 枚举类型在跨层传递时使用 value（如 `Venue.SHANGHAI.value`）而非枚举本身，避免 Protocol 兼容性问题。
+
+**收益**：
+- 跨市场抽象清晰，A 股字段不会泄漏到 Crypto 场景。
+- 类型一致性与 core 层对齐，避免隐式转换错误。
+- 可扩展性强，新增市场只需新增 specialization DTO。
+
 ### 34.1 踩坑记录：市场无关接口不要承载 A 股字段
 
 **问题描述**：
