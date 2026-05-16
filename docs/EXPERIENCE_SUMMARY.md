@@ -67,6 +67,21 @@
 
 ---
 
+## 三十四、AI Skills 体系升级经验（2026-05-16）
+
+### 34.1 踩坑记录：CLI 辅助函数不要隐式读取 argparse 变量
+
+**问题描述**：
+`scripts/session_learn.py extract --auto --skill ...` 的自动提取函数内部直接引用了外层 `args.skill`。该函数离开 CLI 命令上下文后没有 `args` 变量，导致自动提取路径运行时 `NameError`。
+
+**解决方案**：
+- 将 `skill` 作为 `_auto_extract(content, skill)` 的显式参数传入。
+- 新增回归测试，使用 `tmp_path` 和 `monkeypatch` 隔离 `SKILLS_DIR`，验证经验写入到指定 Skill 的临时目录。
+
+**经验**：
+- CLI 层负责解析参数，业务辅助函数只接收显式参数，避免隐藏全局状态。
+- 会写入仓库目录的脚本测试必须重定向输出根目录，避免测试污染真实 Skills 经验库。
+
 ## 三十三、Risk Sizing Decision 经验（2026-05-12）
 
 ### 33.16 架构经验：研究框架、快速回测框架、生产级回放不能混成一个主引擎

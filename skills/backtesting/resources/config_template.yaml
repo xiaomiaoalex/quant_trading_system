@@ -1,0 +1,4 @@
+---
+name: backtesting
+description: 回测系统开发与调试，包括EventDrivenRiskReplay、BacktestRiskIntegration、vectorbt适配器等
+---

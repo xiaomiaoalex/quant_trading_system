@@ -16,6 +16,7 @@
 6. **文档闭环**：任何功能性变更必须同步更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md` 和 `docs/EXPERIENCE_SUMMARY.md`。
 7. **文档新鲜度**：影响当前状态、下一步计划、阶段完成度、优先级判断的任务，必须同步刷新相关计划/状态文档。
 8. **TDD 防幻觉流程**：涉及代码行为变更时，必须优先写出能复现目标行为/缺陷的测试；测试必须基于真实已检索接口或先更新接口契约，禁止先臆造实现 API。
+9. **Skills 按需加载**：涉及回测、风控、Binance适配、OMS等模块时，先查阅 `skills/_meta/index.yaml` 加载对应Skill；复杂需求执行 `skills/spec_rfc/SPEC.md` 中的Spec RFC流程。
 
 未理解项目结构和主数据流前，不直接大改。
 

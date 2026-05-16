@@ -39,6 +39,23 @@
   - Funding/OI: `test_crypto_risk_p0.py` 覆盖 Funding/OI 风控检查
   - 一致性: `TestReplayRiskEngineConsistency` + `TestVectorBTReplayConsistency` 覆盖 replay↔RiskEngine、replay↔VectorBT 一致性
 
+### 本次任务：AI编程能力体系升级（Skills + 规则分层）
+- 完成时间: 2026-05-16 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 建立 AI 编程能力体系升级的仓库入口，包括 Skills 元数据、规则分层和 Session-Learning 脚本
+- 开发后状态:
+  - 新增 `skills/_meta/index.yaml` 与 backtesting/risk_management/binance_adapter/oms_core/spec_rfc Skill 文档
+  - 新增 `rules/` L0-L3 分层规则文档
+  - 新增 `scripts/session_learn.py`，并修复 `extract --auto --skill` 自动提取路径的 skill 传递
+  - 更新 `agents.md`、`CLAUDE.md`、`.traerules` 的 Skills 按需加载规则
+- 验证结果:
+  - `python -m py_compile scripts/session_learn.py` → passed
+  - `python scripts/session_learn.py list` → passed
+  - `python -m pytest trader/tests/test_session_learn.py -q --tb=short` → passed
+- 注意事项:
+  - `PyYAML` 当前未安装，本次未执行 YAML 语义解析，仅通过结构与回归测试兜底
+  - Skills 与规则内容需随真实开发经验继续增量维护
+
 ### 本次任务：QuantConnect Lean legacy 运行时代码清理
 - 完成时间: 2026-05-14 (北京时间)
 - 状态: ✅ 已完成
