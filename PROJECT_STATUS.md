@@ -8,6 +8,63 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：P0 风控链路 mypy scoped 收敛
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 先清理 OMS/RiskEngine/RiskSizing/RiskMode 关键风控链路的类型门禁，不扩散到全仓历史类型债
+- 开发后状态:
+  - `OMSCallbackHandler._reserved_balance()` 使用 `Decimal("0")` 作为 `sum()` 初始值，避免空 reservation 返回 `int 0`
+  - `FillCallback` 类型支持同步或异步回调，主下单路径只在返回 awaitable 时执行 `await`
+  - WS fill path 只在回调返回 awaitable 时调度后台任务，避免把同步 `None` 传给 `asyncio.create_task()`
+- 验证结果:
+  - `mypy trader/services/oms_callback.py trader/core/application/risk_engine.py trader/core/domain/models/risk_decision.py trader/core/domain/services/risk_sizing_engine.py trader/core/domain/models/risk_mode.py trader/core/domain/services/risk_mode_controller.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 26 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py --tb=short` → 35 passed ✅
+- 注意事项:
+  - 全仓 `mypy trader/` 仍有既存类型债，不作为本次 P0 scoped 收敛的通过标准
+- 关联文档: `DEVELOPMENT_LOG.md`
+
+### 本次任务：阶段1.1 实盘 RiskSizing 裁剪接入 OMS（含返工）
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含返工修复）
+- 目标: CLIP 决策下 broker 实际收到 final_qty，并写入审计证据
+- 开发后状态:
+  - **核心实现**: `OMSCallbackHandler._apply_risk_sizing_clip()` 读取 `risk_sizing_decision.final_qty` 并修改 signal.quantity
+  - **CLIP 语义识别**: `passed=True + decision=clip` 时应用裁剪
+  - **REJECT 拦截**: `decision=reject/close_only` 时立即拒绝，不调用 broker
+  - **fail-closed**: `final_qty <= 0` 或缺失时抛出 `RiskRejectedError`
+  - **解析保护**: `Decimal(str(final_qty_str))` 用 try-except 包装，解析失败时 `_record_rejection()` 后抛 `RiskRejectedError`
+  - **审计字段**: CLIP 成功订单写入 `risk_sizing_decision`、`risk_requested_qty`、`risk_normalized_qty`、`risk_final_qty`、`risk_limiting_factor`、`risk_trace_id`
+  - **测试修复**: 审计测试改为读取 storage 验证字段存在且值正确
+- 代码变更:
+  - `trader/services/oms_callback.py`: 新增 `_apply_risk_sizing_clip()` 方法，修改 `_run_pre_trade_risk_check()`、`execute_signal()`
+  - `trader/tests/test_oms_pretrade_risk_gate.py`: 新增 `TestOMSRiskSizingClip` 测试类（5个测试）
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 26 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py --tb=short` → 12 passed ✅
+- 注意事项:
+  - OMS 不得重新计算 sizing，只消费核心层决策
+  - `risk_sizing_decision` 存入 signal.metadata 再传递到 order_data
+  - 解析失败时必须 `_record_rejection()` + `RiskRejectedError`，不得静默通过
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.7.5节、`DEVELOPMENT_LOG.md`
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含4点小修正）
+- 目标: 锁定三条风控闭环契约，为后续阶段开发提供基础
+- 开发后状态:
+  - **修正1**：`RiskSizingDecision.calculate()` → `RiskSizingEngine.calculate(signal, snapshot, trace_id)`，统一 live/backtest 计算入口
+  - **修正2**：新增 `PROJECT_ARCHITECTURE.md` 5.1 节三条链路图（RiskSizing裁剪、RiskMode/KillSwitch控制、Funding/OI数据）
+  - **修正3**：RiskMode 动作矩阵区分三种命令（place_order/cancel_order/reduce_only liquidation），修正 CLOSE_ONLY 允许撤单、CANCEL_ALL_AND_HALT 必须执行 cancel-all、LIQUIDATE_AND_DISCONNECT 只允许系统强平 actor
+  - **修正4**：追加阶段0记录到 `PROJECT_STATUS.md` 和 `DEVELOPMENT_LOG.md`
+- 文档变更:
+  - `docs/INTERFACE_CONTRACTS.md`：新增 8.7.5 节 RiskSizingDecision 决策语义、8.8.3 节 RiskMode 动作矩阵（区分三种命令）、8.5.2 节 Funding/OI Runtime Contract
+  - `docs/PROJECT_ARCHITECTURE.md`：新增 5.1 节三条风控闭环链路
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 21 passed ✅
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → 108 passed ✅
+  - `python -m mypy trader/core/domain/models/risk_decision.py trader/core/domain/models/risk_mode.py trader/core/domain/services/risk_sizing_engine.py --ignore-missing-imports` → Success ✅
+- 下一阶段: 阶段1 - 实盘 RiskSizing 裁剪（目标：CLIP 决策下 broker 实际收到 final_qty）
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`
+
 ### 本次任务：P10 任务包 6 — 一致性与回归（返工后）
 - 完成时间: 2026-05-18 (北京时间)
 - 状态: ✅ 已完成（返工后通过）

@@ -381,6 +381,116 @@ flowchart LR
 
 ---
 
+## 5.1 风控闭环链路（阶段0新增）
+
+阶段0锁定了三条核心风控闭环，后续所有开发必须围绕这三条链路展开。
+
+### 5.1.1 RiskSizing 裁剪链路
+
+```mermaid
+sequenceDiagram
+    participant Signal as Signal (策略)
+    participant Engine as RiskSizingEngine.calculate()
+    participant Plugin as CryptoPreTradeRiskPlugin
+    participant OMS as OMSCallbackHandler
+    participant Broker as Binance Broker
+
+    Signal->>Engine: Signal + CryptoRiskSnapshot
+    Engine-->>Plugin: RiskSizingDecision (APPROVE/CLIP/REJECT/CLOSE_ONLY)
+    Plugin->>Plugin: RiskCheckResult with risk_sizing_decision.details
+    Plugin-->>OMS: RiskCheckResult (passed=True for CLIP)
+    OMS->>OMS: read risk_sizing_decision.final_qty
+    alt CLIP decision
+        OMS->>Broker: place_order(qty=final_qty)
+        Note over OMS: 不重新计算 sizing
+    else REJECT decision
+        OMS->>OMS: reject, no place_order
+        Note over OMS: broker 不得收到订单
+    end
+```
+
+**关键约束**：
+- `RiskSizingEngine.calculate()` 位于 Core domain service，输出 `RiskSizingDecision`
+- `CLIP` 时 OMS **必须**使用 `final_qty`，不得使用 `requested_qty` 或 `normalized_qty`
+- OMS 不得重新计算 sizing，只能消费核心层决策
+- 审计必须记录 `requested_qty`、`normalized_qty`、`final_qty`、`limiting_factor`
+- `final_qty <= 0` 或缺失时，OMS 必须 fail-closed 返回 REJECT
+
+### 5.1.2 RiskMode/KillSwitch 控制链路
+
+```mermaid
+sequenceDiagram
+    participant Event as Risk Event (margin/markprice/Funding-OI)
+    participant Controller as RiskModeController
+    participant KillSwitch as KillSwitchService
+    participant Runner as StrategyRunner
+    participant OMS as OMS
+
+    Event->>Controller: check_and_escalate(trigger, reason)
+    Controller->>Controller: 评估是否需要升级
+    alt 需要升级
+        Controller->>KillSwitch: set_state(scope, new_level)
+        Controller->>Runner: 早期拦截 (early gate)
+        Runner->>Runner: block new position signals
+    else 不需要升级
+        Controller-->>Event: 保持当前模式
+    end
+    KillSwitch-->>OMS: 传播 KillSwitch state
+    OMS->>OMS: 最终防线 (final gate)
+    OMS->>OMS: 拒绝或放行订单
+```
+
+**RiskMode 动作矩阵（区分三种命令）**：
+
+| RiskMode | place_order (新下单) | cancel_order / cancel_all | reduce_only liquidation |
+|----------|---------------------|---------------------------|------------------------|
+| NORMAL | ✅ 允许 | ✅ 允许 | ✅ 允许 |
+| NO_NEW_POSITIONS | ❌ 禁止新开仓 | ✅ 允许 | ✅ 允许 |
+| CLOSE_ONLY | ❌ 禁止新开仓 | ✅ 允许（撤销现有挂单） | ✅ 允许 |
+| CANCEL_ALL_AND_HALT | ❌ 禁止所有下单 | ✅ **必须执行** cancel_all | ✅ 允许（系统强平 actor） |
+| LIQUIDATE_AND_DISCONNECT | ❌ 禁止策略订单 | ❌ 禁止 | ✅ **系统强平 actor 允许** |
+
+**关键约束**：
+- `CANCEL_ALL_AND_HALT` 必须先执行 `cancel_all`，再阻止新下单
+- `LIQUIDATE_AND_DISCONNECT` 禁止策略订单，但允许系统强平 actor 发出 `reduce_only` 强平单
+- StrategyRunner 是早期拦截点，OMS 是最终防线
+- KillSwitch 和 RiskMode 不得有两套互相矛盾的等级语义
+
+### 5.1.3 Funding/OI 生产数据链路
+
+```mermaid
+flowchart LR
+    Adapter["Binance Adapter\n(Funding/OI REST/WS)"] --> FeatureStore["FeatureStore\n(历史数据存储)"]
+    FeatureStore --> Provider["FundingOIMetricsProvider"]
+    Provider --> Calculator["FundingOIWindowCalculator\n(Core 纯计算)"]
+    Calculator --> Snapshot["CryptoRiskSnapshot\n(funding_oi_metrics)"]
+    Snapshot --> Plugin["CryptoPreTradeRiskPlugin"]
+
+    subgraph "Fail-Closed 约束"
+        Stale["data_stale=True"] --> Reject["REJECT + CRYPTO_FUNDING_OI_RISK"]
+        Window["window_insufficient=True"] --> Reject
+        Missing["current_missing=True"] --> Reject
+        Exceed["z_score > threshold"] --> Reject
+    end
+```
+
+**数据源契约**：
+
+| 数据源 | Freshness 要求 | fail-closed 行为 |
+|--------|----------------|------------------|
+| 历史 Funding Rate | 必须覆盖 `funding_history_window` 天数 | 窗口不足时 REJECT |
+| 历史 OI | 必须覆盖 `oi_history_window` 天数 | 窗口不足时 REJECT |
+| 当前 Funding Rate | 必须返回最新值 | 缺失时 REJECT（阈值启用时） |
+| 当前 OI | 必须返回最新值 | 缺失时 REJECT（阈值启用时） |
+
+**关键约束**：
+- funding 和 OI **独立计算**，互不影响
+- `None` 不得转成 `0.0` 制造虚假 Z-Score
+- Adapter/Service 层读取数据，Core 层只消费 snapshot
+- 单测不得访问真实网络，必须用 fake provider
+
+---
+
 ## 6. 研究到自动组合运行闭环
 
 ```mermaid

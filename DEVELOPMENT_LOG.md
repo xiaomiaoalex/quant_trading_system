@@ -25,6 +25,54 @@
 
 ## 最近记录
 
+### 2026-05-18 20:10 - P0 风控链路 mypy scoped 收敛
+
+- 背景: 全仓 `mypy trader/` 存在大量历史类型债，不适合作为阶段1/2风控闭环的即时门禁；但 OMS、RiskEngine、RiskSizing、RiskMode 等 P0 风控链路需要先收敛，避免关键下单路径继续新增类型不确定性。
+- 决策: 采用 scoped mypy 门禁，范围限定 `oms_callback.py`、`risk_engine.py`、`risk_decision.py`、`risk_sizing_engine.py`、`risk_mode.py`、`risk_mode_controller.py`，并使用 `--follow-imports=skip` 隔离非本阶段依赖噪声。
+- 改动: `OMSCallbackHandler._reserved_balance()` 为 `sum()` 增加 `Decimal("0")` 初始值；新增 `FillCallback` 类型别名，允许同步或异步 fill callback；主下单和 WS fill 路径均只在回调返回 awaitable 时 await/调度任务。
+- 验证: scoped mypy 6 个 P0 文件 Success；OMS+RiskSizing 回归 26 passed；Crypto Risk P0 + RiskMode 回归 35 passed。
+- 风险/遗留: 全仓 mypy 仍有既存技术债，需要后续单独开全仓类型收敛专项；本次不清理 P10 未提交文件和历史 tests/fakes 类型问题。
+- 关联文档: `PROJECT_STATUS.md`
+
+### 2026-05-18 19:30 - 阶段1.1 实盘 RiskSizing 裁剪接入 OMS（含返工）
+
+- 背景: 阶段1功能主线通过（broker 下单前应用 final_qty），但有3个阻断点：1) 审计测试断言不成立（只检查 order_submit_ok，没验证字段）；2) final_qty 解析无保护；3) 缺少文档闭环记录。
+- 决策: 补阶段1.1返工：CLIP 订单写入审计字段、解析保护、storage 读取验证。
+- 改动:
+  - `trader/services/oms_callback.py`:
+    - `_apply_risk_sizing_clip()`: `Decimal(str(final_qty_str))` 包 try-except，解析失败时 `_record_rejection()` + `RiskRejectedError`
+    - `signal.metadata["risk_sizing_decision"] = sizing_dict` 保存裁剪上下文
+    - `execute_signal()`: CLIP 成功订单写入 `risk_sizing_decision`、`risk_requested_qty`、`risk_normalized_qty`、`risk_final_qty`、`risk_limiting_factor`、`risk_trace_id`
+  - `trader/tests/test_oms_pretrade_risk_gate.py`:
+    - `test_oms_pretrade_risk_clip_audits_requested_and_final_qty`: 改为读取 storage 验证字段存在且值正确
+- 验证:
+  - 5个新测试全部通过 ✅
+  - OMS + RiskSizing: 26 passed ✅
+  - Crypto Risk P0: 12 passed ✅
+- 风险/遗留:
+  - mypy 全仓有既存类型债（不要求阶段1清完）
+  - 下一步：阶段2 RiskMode/KillSwitch 控制 OMS
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`
+
+- 背景: 用户发现阶段0契约存在4个歧义：1) `RiskSizingDecision.calculate()` 写错应为 `RiskSizingEngine.calculate()`；2) 缺少三条链路架构图；3) RiskMode 动作矩阵用单一 blocks_all_orders 混淆三种命令；4) 缺少文档闭环记录。
+- 决策: 先修正4个问题再进入阶段1。统一计算入口为 `RiskSizingEngine.calculate()`；新增三条链路图；区分 place_order/cancel_order/reduce_only liquidation 命令；追加文档记录。
+- 改动:
+  - `docs/INTERFACE_CONTRACTS.md`：
+    - 8.7.5节：将 `RiskSizingDecision.calculate()` 修正为 `RiskSizingEngine.calculate(signal, snapshot, trace_id)`
+    - 8.8.3节：RiskMode 动作矩阵改为区分三种命令（place_order/cancel_order/reduce_only liquidation）
+    - 新增 8.5.2节：Funding/OI Runtime Contract（数据源、freshness、fail-closed 行为矩阵）
+  - `docs/PROJECT_ARCHITECTURE.md`：
+    - 新增 5.1节：三条风控闭环链路（RiskSizing裁剪、RiskMode/KillSwitch控制、Funding/OI数据）
+  - `PROJECT_STATUS.md`：追加阶段0完成记录
+- 验证:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 21 passed ✅
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → 108 passed ✅
+  - `python -m mypy trader/core/domain/models/risk_decision.py trader/core/domain/models/risk_mode.py trader/core/domain/services/risk_sizing_engine.py --ignore-missing-imports` → Success ✅
+- 风险/遗留:
+  - 契约已锁定，后续阶段开发必须基于这三份契约
+  - 阶段1目标：CLIP 决策下 broker 实际收到 final_qty，不是原始 requested_qty
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`
+
 ### 2026-05-18 17:30 - P10 任务包 6 返工：VectorBT 真路径 + 格式修复
 
 - 背景: 主审不通过。P1: `TestVectorBTReplayConsistency` 没有走 VectorBT 路径，仅用 `BacktestRiskIntegration` 间接验证。P1: black/isort 格式检查实际失败，5 个文件需要 reformat。
