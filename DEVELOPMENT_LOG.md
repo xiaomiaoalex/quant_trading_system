@@ -308,6 +308,20 @@
   - 下一步可继续 P6 Risk Mode 状态机，或 P7 回测接入真实风控模块
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`
 
+### 2026-05-15 15:00 - AI编程能力体系升级：Skills + Session-Learning + 规则分层
+
+- 背景: 学习TRAE团队AI编程方法论后，诊断项目现有AI规则体系存在差距：缺少Skills业务封装、Session-Learning积累机制、规则分层。
+- 决策: 采用TRAE四层架构改进AI编程能力：1) Skills渐进式披露架构；2) Session-Learning自动经验沉淀；3) 规则分层（L0/L1/L2/L3）；4) Spec RFC流程。
+- 改动:
+  - 新增 `skills/_meta/index.yaml`、`skills/backtesting/SPEC.md`、`skills/risk_management/SPEC.md`、`skills/binance_adapter/SPEC.md`、`skills/oms_core/SPEC.md`、`skills/spec_rfc/SPEC.md`
+  - 新增 `scripts/session_learn.py`：Session-Learning脚本
+  - 新增 `rules/L0_COLLABORATION.md`、`rules/L1_TECH_STACK.md`、`rules/L2_BUSINESS.md`、`rules/L3_WORKFLOW.md`、`rules/README.md`
+  - 更新 `AGENTS.md`、`CLAUDE.md`、`.traerules`：添加Skills加载规则
+- 修复: `scripts/session_learn.py extract --auto --skill ...` 显式传递 skill，避免自动提取路径引用未定义参数。
+- 验证: `python -m py_compile scripts/session_learn.py`、`python scripts/session_learn.py list`、`python -m pytest trader/tests/test_session_learn.py -q --tb=short` 通过；目录结构正确，规则分层清晰。
+- 风险/遗留: Skills内容需随项目发展持续补充；Session-Learning需人工触发或CI hook；当前 YAML 校验依赖未安装 `PyYAML`，本次只做结构与回归验证。
+- 关联文档: `skills/_meta/index.yaml`、`skills/spec_rfc/SPEC.md`、`rules/README.md`
+
 ### 2026-05-11 - P4.7 Funding/OI 运维页面配置暴露
 
 - 背景: P4.6 已完成 Funding/OI 历史窗口派生基础（Core 计算 + Service Provider），但运维侧无法配置和查看这些阈值。

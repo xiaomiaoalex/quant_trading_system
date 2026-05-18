@@ -14,6 +14,7 @@
 6.  **文档新鲜度**：任何影响“当前状态、下一步计划、阶段完成度、优先级判断”的任务，必须在交付前同步刷新相关文档，禁止让 `PROJECT_STATUS.md`、`PLAN.md`、`DEVELOPMENT_LOG.md`、阶段计划文档与仓库现状脱节。
 7.  **规则入口同步**：修改 `AGENTS.md`、`CLAUDE.md`、`.traerules` 任一 AI/工具规则入口时，必须检查另外两个入口，保持公共工程约束一致。
 8.  **TDD 防幻觉流程**：涉及代码行为变更时，必须优先写出能复现目标行为/缺陷的测试；测试必须基于真实已检索接口或先更新接口契约，禁止先臆造实现 API。
+9.  **Skills 按需加载**：涉及回测、风控、Binance适配、OMS等模块时，先查阅 `skills/_meta/index.yaml` 加载对应Skill；复杂需求执行 `skills/spec_rfc/SPEC.md` 中的Spec RFC流程。
 
 ---
 

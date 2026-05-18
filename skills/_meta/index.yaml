@@ -1,0 +1,24 @@
+# Skills Metadata Index
+# 版本: v1.0.0
+# AI预加载此文件获取所有Skill的概览，按需加载具体指令
+
+skills:
+  - name: backtesting
+    description: 回测系统开发与调试，包括EventDrivenRiskReplay、BacktestRiskIntegration、vectorbt适配器等
+    path: backtesting/SPEC.md
+
+  - name: risk_management
+    description: 风控引擎、RiskEngine、KillSwitch、风险阈值配置与调试
+    path: risk_management/SPEC.md
+
+  - name: binance_adapter
+    description: Binance连接器、WebSocket流、REST对齐、限流退避、DegradedCascade
+    path: binance_adapter/SPEC.md
+
+  - name: oms_core
+    description: 订单管理系统、单调状态机、幂等性、cl_ord_id/exec_id去重
+    path: oms_core/SPEC.md
+
+  - name: spec_rfc
+    description: 需求规格化流程，从一句话需求到完整RFC再到Spec的实现指南
+    path: spec_rfc/SPEC.md

@@ -9,11 +9,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 关键配置文件：`.env`（API Key）、`compose.yml`（Postgres）
 - 架构图：`docs/PROJECT_ARCHITECTURE.md`（当前架构图、主数据流、闭环拓扑）
 - 接口契约：`docs/INTERFACE_CONTRACTS.md`（命名、DTO、事件、跨层调用的单一真相源）
+- Skills索引：`skills/_meta/index.yaml`（AI编程能力清单，涉及回测/风控/OMS/Binance时按需加载）
 - 启动方式：`uvicorn trader.api.main:app --port 8080`
 - 数据流主路径：Binance WS → Connector → OMS → Portfolio → API → Frontend
 - 验证命令：P0 回归测试（见下方）
 
 未理解项目结构前，不直接大改。
+
+## Skills 加载规则
+
+涉及以下模块时，先查阅 `skills/_meta/index.yaml` 加载对应Skill：
+
+| 场景 | Skill |
+|------|-------|
+| 回测系统开发 | `skills/backtesting/SPEC.md` |
+| 风控引擎调试 | `skills/risk_management/SPEC.md` |
+| Binance适配器 | `skills/binance_adapter/SPEC.md` |
+| OMS/订单状态机 | `skills/oms_core/SPEC.md` |
+| 复杂需求实现 | `skills/spec_rfc/SPEC.md` |
 
 ## Communication
 
