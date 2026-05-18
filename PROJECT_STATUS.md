@@ -4,9 +4,40 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-14 (北京时间)
+2026-05-18 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：P10 任务包 6 — 一致性与回归（返工后）
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（返工后通过）
+- 目标: 证明 replay 与现有风控调用一致
+- 开发后状态:
+  - 新增 `TestReplayRiskEngineConsistency`：7 个测试验证 replay decision 与直接 `RiskEngine.check_pre_trade()` 一致性
+    - approved / rejected / clipped 单信号分类一致
+    - 混合信号分类一致
+    - replay 与 `BacktestRiskIntegration` 分类完全一致
+    - effective_quantity 跨路径一致
+    - rejection_reason 跨路径一致
+  - 新增 `TestVectorBTReplayConsistency`：3 个测试验证 VectorBT risk-adjusted 与 replay 订单分类一致
+    - `test_order_classification_matches_vectorbt_plan`：真正调用 `VectorBTAdapterWithRisk._build_risk_adjusted_input_plan()`，比较 replay 的 approved/clipped/rejected 分类与 VectorBT risk plan 的 approved_orders/clipped_orders/rejected_orders
+    - `test_effective_quantity_matches_vectorbt_plan`：验证 approved 和 clipped 订单的 effective_quantity 跨路径一致
+    - `test_rejection_reason_counts_match_vectorbt_plan`：验证 rejection_reason 计数跨路径一致
+  - 新增 `_make_signal_with_dt` 辅助函数，解决 `BacktestRiskIntegration` 需要 `datetime` 类型 timestamp 的问题
+- 返工修复:
+  - [P1] `TestVectorBTReplayConsistency` 原实现仅用 `BacktestRiskIntegration`，未走 VectorBT 路径 → 重写为真正实例化 `VectorBTAdapterWithRisk`，调用 `_build_risk_adjusted_input_plan()`，比较 plan 的 approved_orders/clipped_orders/rejected_orders 与 replay 决策分类
+  - [P1] black/isort 格式门禁失败 → 运行 `black --line-length 100` 和 `isort --profile black` 修复 6 个文件
+- 验证结果:
+  - `python -m pytest trader/tests/test_backtest_risk_replay.py trader/tests/test_backtest_risk_replay_contract.py trader/tests/test_backtest_risk_replay_red.py trader/tests/test_historical_snapshot_provider.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_risk_aware_order_processor.py trader/tests/test_crypto_risk_p0.py -q --tb=short` → 163 passed, 2 warnings
+  - `python -m black --check --line-length 100 ...` → passed ✅
+  - `python -m isort --check-only --profile black ...` → passed ✅
+  - `py_compile` → passed ✅
+  - `git diff --check` → passed ✅
+- 主审覆盖四大类:
+  - 动态状态: `TestRiskModeIntegration` (已有) 覆盖 RiskMode 状态转换
+  - RiskMode: `TestRiskModeIntegration` 覆盖 CLOSE_ONLY/CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT
+  - Funding/OI: `test_crypto_risk_p0.py` 覆盖 Funding/OI 风控检查
+  - 一致性: `TestReplayRiskEngineConsistency` + `TestVectorBTReplayConsistency` 覆盖 replay↔RiskEngine、replay↔VectorBT 一致性
 
 ### 本次任务：QuantConnect Lean legacy 运行时代码清理
 - 完成时间: 2026-05-14 (北京时间)
