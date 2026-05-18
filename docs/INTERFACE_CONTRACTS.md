@@ -1098,3 +1098,268 @@ class MarketRuleSnapshotProviderPort(Protocol):
 - 复用 core 层已有枚举，不新建同名枚举（`AssetClass` 来自 `market_risk`）
 - `venue` 使用字符串而非枚举，避免与 core 枚举冲突
 - A 股字段放入 metadata，不污染通用 snapshot 结构
+
+### 8.13 P10 Dynamic Backtest Risk Replay 契约
+
+P10 扩展 EventDrivenRiskReplay，提供动态时间线回放能力，支持账户状态和持仓轨迹追踪。
+核心目标：每个时间点的风险决策与状态记录，支持 RiskMode duration 追踪和风险归因。
+
+#### 8.13.1 设计目标
+
+1. **多 Symbol 回测**：支持 symbols 列表配置
+2. **Bar Interval 支持**：支持 interval 配置（如 `1m`, `5m`, `1h`）
+3. **RiskMode 集成**：支持 `enable_risk_mode` 开关，跟踪 RiskMode 状态和持续时间
+4. **时间线回放**：支持 `risk_timeline`、`account_timeline`、`position_timeline` 轨迹记录
+5. **动态成交模型**：`fill_model="next_bar_open"` 配置下一 bar 开盘价成交
+6. **风险预算**：支持 `risk_budget` 配置下单量上限
+7. **默认下单量**：`default_order_quantity` 用于策略只输出方向时
+8. **市场无关**：命名和 DTO 设计不绑定 crypto 或 A 股
+9. **Service 层实现**：位于 `trader/services/backtesting/backtest_risk_replay.py`
+10. **通过 RiskEngine.check_pre_trade()**：所有订单风控必须走标准风控入口
+
+#### 8.13.2 BacktestRiskReplayConfig
+
+```python
+@dataclass(frozen=True)
+class BacktestRiskReplayConfig:
+    initial_capital: Decimal
+    symbols: list[str]
+    interval: str
+    commission_rate: Decimal = Decimal("0.0004")
+    fill_model: str = "next_bar_open"
+    risk_budget: Decimal | None = None
+    default_order_quantity: Decimal | None = None
+    enable_risk_mode: bool = False
+    snapshot_provider: BacktestSnapshotProviderPort | None = None
+    risk_engine: BacktestRiskEnginePort | None = None
+```
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `initial_capital` | Decimal | 初始资金 |
+| `symbols` | list[str] | 回测标的列表（如 `["BTCUSDT", "ETHUSDT"]`） |
+| `interval` | str | K 线周期（如 `"1m"`, `"5m"`, `"1h"`） |
+| `commission_rate` | Decimal | 手续费率（默认 0.04%） |
+| `fill_model` | str | 成交模型：`"next_bar_open"` 或其他 |
+| `risk_budget` | Decimal \| None | 风险预算，限制单笔最大下单量 |
+| `default_order_quantity` | Decimal \| None | 默认下单量，策略只输出方向时使用 |
+| `enable_risk_mode` | bool | 是否启用 RiskMode 追踪 |
+| `snapshot_provider` | BacktestSnapshotProviderPort | 回测快照提供者（可选） |
+| `risk_engine` | BacktestRiskEnginePort | 回测风控引擎（可选） |
+
+#### 8.13.3 BacktestRiskReplayResult
+
+```python
+@dataclass
+class BacktestRiskReplayResult:
+    signals: list[dict] = field(default_factory=list)
+    decisions: list[ReplayDecision] = field(default_factory=list)
+    fills: list[ReplayFill] = field(default_factory=list)
+    risk_timeline: list[RiskSnapshot] = field(default_factory=list)
+    account_timeline: list[AccountSnapshot] = field(default_factory=list)
+    position_timeline: list[PositionSnapshot] = field(default_factory=list)
+    equity_curve: list[Decimal] = field(default_factory=list)
+    max_drawdown: Decimal = Decimal("0")
+    final_positions: dict[str, Decimal] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    rejection_counts: dict[str, int] = field(default_factory=dict)
+    risk_mode_transitions: list[RiskModeTransition] = field(default_factory=list)
+    risk_adjusted_metrics: RiskAdjustedMetrics = field(default_factory=RiskAdjustedMetrics)
+```
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `signals` | list[dict] | 原始信号 |
+| `decisions` | list[ReplayDecision] | 风控决策（APPROVED/CLIPPED/REJECTED） |
+| `fills` | list[ReplayFill] | 成交记录 |
+| `risk_timeline` | list[RiskSnapshot] | 风控快照时间线 |
+| `account_timeline` | list[AccountSnapshot] | 账户快照时间线 |
+| `position_timeline` | list[PositionSnapshot] | 持仓快照时间线 |
+| `equity_curve` | list[Decimal] | 权益曲线 |
+| `max_drawdown` | Decimal | 最大回撤 |
+| `final_positions` | dict[str, Decimal] | 最终持仓 |
+| `errors` | list[str] | 错误记录 |
+| `rejection_counts` | dict[str, int] | 拒绝原因统计 |
+| `risk_mode_transitions` | list[RiskModeTransition] | RiskMode 状态变更记录 |
+| `risk_adjusted_metrics` | RiskAdjustedMetrics | 风险调整归因指标 |
+
+#### 8.13.3.1 RiskAdjustedMetrics
+
+```python
+@dataclass
+class RiskAdjustedMetrics:
+    risk_adjusted_equity_curve: list[Decimal] = field(default_factory=list)
+    max_drawdown_before_risk: Decimal = Decimal("0")
+    max_drawdown_after_risk: Decimal = Decimal("0")
+    rejection_counts: dict[str, int] = field(default_factory=dict)
+    clip_counts: int = 0
+    risk_mode_durations: dict[str, int] = field(default_factory=dict)
+    risk_avoided_notional: Decimal = Decimal("0")
+    max_exposure_before_risk: Decimal = Decimal("0")
+    max_exposure_after_risk: Decimal = Decimal("0")
+    max_margin_ratio_after_risk: Decimal = Decimal("0")
+```
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `risk_adjusted_equity_curve` | list[Decimal] | 风险调整后权益曲线 |
+| `max_drawdown_before_risk` | Decimal | 进入风险模式前的最大回撤 |
+| `max_drawdown_after_risk` | Decimal | 进入风险模式后新增的回撤 |
+| `rejection_counts` | dict[str, int] | 按 rejection_reason 分组的拒绝计数 |
+| `clip_counts` | int | CLIPPED 决策次数 |
+| `risk_mode_durations` | dict[str, int] | 各风险模式持续毫秒数（不重叠） |
+| `risk_avoided_notional` | Decimal | 风控避免的名义金额（REJECTED 全额 + CLIPPED 差额） |
+| `max_exposure_before_risk` | Decimal | 进入风险模式前的最大持仓暴露 |
+| `max_exposure_after_risk` | Decimal | 进入风险模式后的最大持仓暴露 |
+| `max_margin_ratio_after_risk` | Decimal | 进入风险模式后的最大保证金比率 |
+
+#### 8.13.4 ReplayDecision
+
+```python
+@dataclass(frozen=True, slots=True)
+class ReplayDecision:
+    symbol: str
+    side: OrderSide
+    quantity: Decimal
+    price: Decimal
+    timestamp_ms: int
+    decision: str
+    effective_quantity: Decimal
+    effective_price: Decimal
+    sizing_decision: dict[str, Any] | None = None
+    rejection_reason: str | None = None
+    risk_mode: str = "NORMAL"
+    risk_mode_transition: bool = False
+```
+
+#### 8.13.5 RiskSnapshot（扩展版）
+
+```python
+@dataclass(frozen=True, slots=True)
+class RiskSnapshot:
+    timestamp_ms: int
+    risk_mode: str
+    equity: Decimal
+    daily_pnl: Decimal
+    daily_pnl_percent: Decimal
+    unrealized_pnl: Decimal
+    drawdown: Decimal
+    decision: str | None = None
+    rejection_reason: str | None = None
+    sizing_decision: dict[str, Any] | None = None
+    account_summary: dict[str, Decimal] | None = None
+    position_summary: dict[str, dict[str, Any]] | None = None
+```
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `timestamp_ms` | int | 时间戳（毫秒） |
+| `risk_mode` | str | 当前 RiskMode（NORMAL/NO_NEW_POSITIONS/CLOSE_ONLY/CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT） |
+| `equity` | Decimal | 当前权益 |
+| `daily_pnl` | Decimal | 当日盈亏 |
+| `daily_pnl_percent` | Decimal | 当日盈亏百分比 |
+| `unrealized_pnl` | Decimal | 浮动盈亏 |
+| `drawdown` | Decimal | 回撤金额 |
+| `decision` | str \| None | 当前风控决策（APPROVED/CLIPPED/REJECTED） |
+| `rejection_reason` | str \| None | 拒绝原因 |
+| `sizing_decision` | dict \| None | 风控调仓决策（max_allowed_qty 等） |
+| `account_summary` | dict \| None | 账户摘要（available_cash, total_equity 等） |
+| `position_summary` | dict \| None | 持仓摘要（按 symbol 分组） |
+
+#### 8.13.6 AccountSnapshot / PositionSnapshot
+
+```python
+@dataclass(frozen=True, slots=True)
+class AccountSnapshot:
+    timestamp_ms: int
+    total_equity: Decimal
+    available_cash: Decimal
+    total_position_value: Decimal
+    margin_used: Decimal = Decimal("0")
+    unrealized_pnl: Decimal = Decimal("0")
+
+@dataclass(frozen=True, slots=True)
+class PositionSnapshot:
+    timestamp_ms: int
+    symbol: str
+    quantity: Decimal
+    avg_price: Decimal
+    market_value: Decimal
+    unrealized_pnl: Decimal = Decimal("0")
+    side: str = "LONG"
+```
+
+#### 8.13.7 BacktestSnapshotProviderPort
+
+```python
+class BacktestSnapshotProviderPort(Protocol):
+    async def get_account_snapshot(self, timestamp_ms: int) -> AccountSnapshot: ...
+    async def get_position_snapshot(self, symbol: str, timestamp_ms: int) -> PositionSnapshot: ...
+    async def get_risk_snapshot(self, timestamp_ms: int) -> RiskSnapshot: ...
+```
+
+#### 8.13.8 BacktestRiskReplayEngine
+
+```python
+class BacktestRiskReplayEngine:
+    def __init__(self, config: BacktestRiskReplayConfig) -> None: ...
+    async def replay(self, signals: list[Signal]) -> BacktestRiskReplayResult: ...
+    @property
+    def config(self) -> BacktestRiskReplayConfig: ...
+```
+
+核心行为：
+- 按 timestamp 排序信号，顺序处理
+- 通过注入的 `risk_engine.check_pre_trade()` 进行风控检查
+- 无 `risk_engine` 时 fail-closed（返回 `RISK_SYSTEM_ERROR`）
+- APPROVED/CLIPPED：成交并更新 position/account
+- REJECTED：不成交，保持 position/account 不变
+- 填充 `account_timeline`、`position_timeline`、逐点 `equity_curve`
+
+#### 8.13.9 HistoricalCryptoRiskSnapshotProvider
+
+```python
+class HistoricalCryptoRiskSnapshotProvider(Protocol):
+    """历史快照提供者契约（满足 CryptoRiskSnapshotProvider Protocol）
+
+    用于回测时从历史数据构建 CryptoRiskSnapshot。
+    输入：Signal
+    输出：CryptoRiskSnapshot（可被 CryptoPreTradeRiskPlugin 消费）
+
+    核心方法：
+    - build(signal) -> CryptoRiskSnapshot：满足 CryptoRiskSnapshotProvider Protocol
+    """
+    async def build(self, signal: Signal) -> CryptoRiskSnapshot: ...
+
+class BacktestSnapshotHelper(Protocol):
+    """回测时间线辅助方法（补充 build）
+
+    用于 replay 时获取账户/持仓快照。
+    """
+    async def get_account_snapshot(
+        self,
+        symbol: str,
+        timestamp_ms: int
+    ) -> AccountSnapshot: ...
+    async def get_position_snapshot(
+        self,
+        symbol: str,
+        timestamp_ms: int
+    ) -> PositionSnapshot: ...
+```
+
+#### 8.13.10 BacktestRiskReplay 主接口
+
+```python
+class BacktestRiskReplay:
+    def __init__(self, config: BacktestRiskReplayConfig) -> None: ...
+    async def replay(self, signals: list[Signal]) -> BacktestRiskReplayResult: ...
+```
+
+#### 8.13.11 P10 禁止范围
+
+- 不修改实盘 OMS 主链路（`trader/core/domain/services/order_management_service.py`）
+- 不在 `CryptoPreTradeRiskPlugin` 中写入回测逻辑
+- 不复制 crypto 风控规则到回测模块
+- 不在 Core 层进行任何 IO 操作
+- 回测 DTO 不得塞入 `trader/core/` 目录

@@ -4,6 +4,69 @@
 
 ---
 
+## 三十五、P10 一致性与回归测试经验（2026-05-18）
+
+### 35.1 架构经验：一致性测试需要两条路径共享同一 RiskCheckResult 序列
+
+**问题描述**：
+验证 replay decision 与 `RiskEngine.check_pre_trade()` 一致性时，需要确保两条路径（`BacktestRiskReplayEngine._make_decision` 和 `BacktestRiskIntegration.evaluate_signal`）对同一 `RiskCheckResult` 产生相同的分类。但两条路径使用不同的 mock engine 实例，如果 side_effect 闭包共享同一个 call_idx，会导致索引混乱。
+
+**解决方案**：
+- 为每条路径创建独立的 mock engine 和独立的 call_idx 计数器
+- 先构建 signals 列表，再用 signals 构建 results 列表（因为 `_clipped_result` 需要访问 `signal.quantity`）
+- 两条路径使用相同的 results 列表，确保输入一致
+
+**经验**：
+- 一致性测试的核心是"相同输入→相同输出"，必须确保两条路径的输入完全一致
+- 闭包中的 nonlocal 变量需要每个路径独立，否则并发调用会互相干扰
+
+### 35.2 踩坑记录：Signal.timestamp 类型不一致导致 BacktestRiskIntegration 崩溃
+
+**问题描述**：
+`_make_signal` 使用 `timestamp_ms: int` 作为 timestamp 参数，`BacktestRiskReplayEngine` 内部通过 `_get_signal_timestamp` 兼容 int/datetime 两种格式。但 `BacktestRiskIntegration._signal_to_dict` 直接调用 `signal.timestamp.isoformat()`，当 timestamp 是 int 时会抛 `AttributeError: 'int' object has no attribute 'isoformat'`。
+
+**解决方案**：
+- 新增 `_make_signal_with_dt` 辅助函数，使用 `datetime` 类型 timestamp
+- 需要与 `BacktestRiskIntegration` 交互的测试使用 `_make_signal_with_dt`
+- 纯 replay 测试继续使用 `_make_signal`（int timestamp）
+
+**经验**：
+- 同一个 dataclass 的字段类型在不同消费者处可能有不同的类型假设
+- `Signal.timestamp` 声明为 `datetime` 但 `__post_init__` 不做类型转换，int 值会原样存储
+- 跨模块一致性测试必须使用所有消费者都能接受的类型
+
+### 35.3 架构经验：一致性测试必须走被测组件的真实路径
+
+**问题描述**：
+`TestVectorBTReplayConsistency` 的类名和注释声称验证 VectorBT risk-adjusted 与 replay 一致性，但实际实现只用了 `BacktestRiskIntegration(vbt_engine)`，没有实例化 `VectorBTAdapterWithRisk`，也没有调用 `_build_risk_adjusted_input_plan()`。这只能证明 replay↔integration 的分类一致，不能证明 replay↔VectorBT risk-adjusted 路径一致。主审标记为 P1。
+
+**解决方案**：
+- 重写 `TestVectorBTReplayConsistency`，真正实例化 `VectorBTAdapterWithRisk`，调用 `_build_risk_adjusted_input_plan()` 生成 `VectorBTRiskInputPlan`
+- 比较 plan 的 `approved_orders`/`clipped_orders`/`rejected_orders` 与 replay 的 decision 分类
+- 补充 `effective_quantity` 跨路径一致和 `rejection_reason_counts` 跨路径一致的断言
+- 构建 mock klines 和 `BacktestConfig` 以满足 `_build_risk_adjusted_input_plan()` 的签名要求
+
+**经验**：
+- 一致性测试的类名/注释必须与实际调用路径严格匹配，否则审计时会被标记为"测试名跑在实现前面"
+- "走真路径"意味着必须实例化被测组件并调用其核心方法，不能仅通过中间层间接验证
+- 当被测方法需要复杂上下文（klines、config）时，用轻量 mock 满足签名即可，不需要完整端到端环境
+
+### 35.4 踩坑记录：格式检查声明必须与实际运行结果一致
+
+**问题描述**：
+交接包声称 `black/isort passed`，但主审实际运行 `black --check --line-length 100` 和 `isort --check-only --profile black` 发现 5-6 个文件需要 reformat。
+
+**解决方案**：
+- 运行 `black --line-length 100` 和 `isort --profile black` 自动修复格式
+- 修复后重新运行 `--check` 验证通过
+- 更新文档中的声明，确保与实际验证结果一致
+
+**经验**：
+- 格式检查声明必须在修复后、提交前实际运行 `--check` 验证，不能仅凭"我跑了 formatter"就声明 passed
+- `black` 和 `isort` 可能互相影响格式（import 排序），需要两个都跑完后都验证
+
+---
+
 ## 三十三、Risk Sizing Decision 经验（2026-05-12）
 
 ### 33.16 架构经验：研究框架、快速回测框架、生产级回放不能混成一个主引擎

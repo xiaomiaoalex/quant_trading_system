@@ -25,6 +25,52 @@
 
 ## 最近记录
 
+### 2026-05-18 17:30 - P10 任务包 6 返工：VectorBT 真路径 + 格式修复
+
+- 背景: 主审不通过。P1: `TestVectorBTReplayConsistency` 没有走 VectorBT 路径，仅用 `BacktestRiskIntegration` 间接验证。P1: black/isort 格式检查实际失败，5 个文件需要 reformat。
+- 决策: 重写 `TestVectorBTReplayConsistency`，真正实例化 `VectorBTAdapterWithRisk`，调用 `_build_risk_adjusted_input_plan()`，比较 plan 的 approved_orders/clipped_orders/rejected_orders 与 replay 决策分类。运行 black/isort 修复格式。
+- 改动:
+  - 重写 `TestVectorBTReplayConsistency`（3 个测试）：
+    - `test_order_classification_matches_vectorbt_plan`：真正调用 `VectorBTAdapterWithRisk._build_risk_adjusted_input_plan()`，比较 replay 的 approved/clipped/rejected 分类与 VectorBT risk plan 的 approved_orders/clipped_orders/rejected_orders
+    - `test_effective_quantity_matches_vectorbt_plan`：验证 approved 和 clipped 订单的 effective_quantity 跨路径一致
+    - `test_rejection_reason_counts_match_vectorbt_plan`：验证 rejection_reason 计数跨路径一致
+  - 运行 `black --line-length 100` 修复 6 个文件格式
+  - 运行 `isort --profile black` 修复 6 个文件 import 排序
+- 验证:
+  - 163 passed, 2 warnings
+  - `python -m black --check --line-length 100 ...` → passed ✅
+  - `python -m isort --check-only --profile black ...` → passed ✅
+  - `py_compile` → passed ✅
+  - `git diff --check` → passed ✅
+- 风险/遗留:
+  - 一致性测试使用 mock RiskEngine，未覆盖真实 CryptoPreTradeRiskPlugin 的完整链路
+  - VectorBT 一致性测试现在真正走 `_build_risk_adjusted_input_plan()` 路径，审计闭环
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` P10 契约、`PROJECT_STATUS.md`
+
+### 2026-05-18 16:00 - P10 任务包 6：一致性与回归
+
+- 背景: P10 回测风险重放引擎需要证明 replay 路径与现有风控调用路径一致。任务包 5 修复了 duration 重叠和 after-risk 指标归零问题，任务包 6 需要验证一致性。
+- 决策: 通过同一 signal + 同一 RiskCheckResult 序列，分别走 replay 和 BacktestRiskIntegration 两条路径，断言分类、effective_quantity、rejection_reason 完全一致。
+- 改动:
+  - 新增 `TestReplayRiskEngineConsistency`（7 个测试）：
+    - `test_approved_signal_matches_direct_check`：approved 信号 replay 分类一致
+    - `test_rejected_signal_matches_direct_check`：rejected 信号 replay 分类一致
+    - `test_clipped_signal_matches_direct_check`：clipped 信号 replay 分类一致
+    - `test_mixed_signals_match_direct_check`：混合信号 replay 分类一致
+    - `test_replay_and_integration_classify_identically`：replay 与 BacktestRiskIntegration 分类完全一致
+    - `test_effective_quantity_matches_integration`：effective_quantity 跨路径一致
+    - `test_rejection_reason_matches_integration`：rejection_reason 跨路径一致
+  - 新增 `TestVectorBTReplayConsistency`（1 个测试）：
+    - `test_order_classification_matches_vectorbt`：VectorBT risk-adjusted 与 replay 订单分类一致
+  - 新增 `_make_signal_with_dt` 辅助函数：BacktestRiskIntegration 需要 datetime 类型 timestamp，而 _make_signal 使用 int
+- 验证:
+  - 139 passed, 2 warnings
+  - black/isort/py_compile/git diff check → passed（后经主审验证 black/isort 实际失败，返工修复）
+- 风险/遗留:
+  - 一致性测试使用 mock RiskEngine，未覆盖真实 CryptoPreTradeRiskPlugin 的完整链路
+  - VectorBT 一致性测试通过 BacktestRiskIntegration 间接验证，未直接调用 VectorBTAdapterWithRisk（返工已修复）
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` P10 契约、`PROJECT_STATUS.md`
+
 ### 2026-05-15 14:00 - P9.5 回测市场端口准备 + 架构修正
 
 - 背景: P9.5 实现回测用市场端口（TradingCalendarPort / MarketCostModelPort / MarketRuleSnapshotProviderPort），不接入真实行情/券商/交易接口。审计发现阻断问题：1) 文档闭环缺失；2) 重复定义 OrderSide/AssetClass；3) A 股字段污染通用 snapshot；4) limit_up/limit_down 语义错误。
