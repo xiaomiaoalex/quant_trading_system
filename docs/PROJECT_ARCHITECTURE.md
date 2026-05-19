@@ -199,11 +199,32 @@ sequenceDiagram
 - P4.6 新增 Funding/OI 历史窗口派生能力，由 Core 纯计算 + Service 层 Provider 组成。
 - Core 层 `FundingOIWindowCalculator` 位于 `trader/core/domain/services/funding_oi_window_calculator.py`，无任何 IO 操作。
 - Service 层 `FundingOIMetricsProvider` 位于 `trader/services/funding_oi_metrics_provider.py`，通过 `FundingOIHistoryPort` 和 `CurrentFundingOIPort` 从 FeatureStore 读取历史数据。
+- Service 层 `BinanceFundingOIMetricsSource` 位于 `trader/services/crypto_risk_snapshot.py`，通过 `BinanceCurrentFundingOISource` 实时拉取当前 funding rate 和 OI。
 - `CryptoFundingOIRiskMetrics` 支持 funding 和 OI 独立计算，包含独立缺失标志：`funding_data_stale`、`oi_data_stale`、`funding_window_insufficient`、`oi_window_insufficient`、`funding_current_missing`、`oi_current_missing`。
 - 缺 funding 不影响 OI 指标，缺 OI 不影响 funding 指标。
 - 当前值缺失时返回 `None`，并设置对应 `_missing` 标志，不转成 `0.0` 制造虚假 Z-Score。
 - `open_interest_change_rate` 为百分比变化率 `(current_oi - mean) / mean * 100`，不是 Z-Score。
+- 历史窗口缺失时返回空列表，由 calculator 设置 `window_insufficient` 标志，不伪造历史。
 - 运行时环境变量（`CRYPTO_RISK_MAX_ABS_FUNDING_RATE_Z_SCORE` 等）待 P4.8 接入 `CryptoPreTradeRiskPlugin`。
+
+### Live Funding/OI 数据链路
+
+```
+DataSourceCryptoRiskSnapshotProvider
+    └── FundingOIMetricsPort (Protocol)
+            └── BinanceFundingOIMetricsSource
+                    └── BinanceCurrentFundingOISource (Adapter)
+                            ├── get_current_funding_rate()  → REST /fapi/v1/fundingRate
+                            ├── get_current_open_interest() → REST /fapi/v1/openInterest
+                            ├── get_latest_funding_ts_ms()  → REST /fapi/v1/fundingRate
+                            └── get_latest_oi_ts_ms_ms()     → REST /fapi/v1/openInterest
+
+BinanceCurrentFundingOISource (Adapter 层) 位于:
+  trader/adapters/binance/funding_oi_stream.py
+
+BinanceFundingOIMetricsSource (Service 层) 位于:
+  trader/services/crypto_risk_snapshot.py
+```
 
 ### 回测市场无关补充
 

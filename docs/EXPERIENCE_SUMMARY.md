@@ -4,6 +4,80 @@
 
 ---
 
+## 三十六、单测禁止访问真实网络（2026-05-19）
+
+### 36.1 踩坑记录：单测误连 Binance 导致超时
+
+**问题描述**：
+阶段3.4 阶段3.5测试中，`TestBinanceCurrentFundingOISource` 直接实例化 `BinanceCurrentFundingOISource()` 并调用 `get_current_funding_rate("BTCUSDT")`，pytest 在30秒后超时。
+
+**根因**：
+单测直接访问 Binance REST API（`https://fapi.binance.com`），违反 `AGENTS.md` 约束：单测严禁访问网络。这也是 funding rate 始终为 None 的直接风险。
+
+**解决方案**：
+- 使用 FakeSession 注入 `source._session = FakeSession()`
+- FakeSession 的 `get()` 返回 FakeContextManager，FakeContextManager 返回 FakeResponse
+- FakeResponse.json() 返回预设的 JSON 数据
+
+```python
+class FakeResponse:
+    status = 200
+    async def json(self):
+        return [{"fundingRate": "0.0001", "fundingTime": 1234567890000}]
+
+class FakeContextManager:
+    async def __aenter__(self):
+        return FakeResponse()
+    async def __aexit__(self, *args):
+        pass
+
+class FakeSession:
+    closed = False
+    def get(self, url, params=None):
+        return FakeContextManager()
+    async def close(self):
+        pass
+
+source = BinanceCurrentFundingOISource()
+source._session = FakeSession()
+result = await source.get_current_funding_rate("BTCUSDT")
+```
+
+**经验**：
+- 所有需要 HTTP 交互的 Adapter 单测必须使用 FakeSession，不允许直接访问网络
+- 测试超时是单测连网的明确信号
+- FakeSession 需要实现 `closed` 属性和 `close()` 方法，防止 source 尝试关闭不存在的 session
+
+### 36.2 踩坑记录：FakeSession.get 必须是同步方法
+
+**问题描述**：
+早期实现中 `FakeSession.get` 是 `async def`，导致 RuntimeWarning: coroutine was never awaited。
+
+**解决方案**：
+- `async with self._session.get(url, params=params) as resp` 内部调用 `get()` 已经是同步上下文管理器
+- FakeSession.get 必须是普通 `def`，不是 `async def`
+
+**经验**：
+- aiohttp 的 `session.get()` 返回的是异步上下文管理器，但其内部 `get()` 方法是同步的
+- pytest-asyncio 在 async with 中调用 async 方法时，如果 mock 方法也是 async 会导致 coroutine 未等待
+
+### 36.3 踩坑记录：fail-closed 不能等于静默失败
+
+**问题描述**：
+阶段3.6 验收时，Funding/OI 历史窗口读取失败会返回空列表，最终由 calculator 标记 `window_insufficient` 并触发 fail-closed。但如果异常分支没有日志，运行时只能看到“窗口不足”，无法判断是市场数据真的不足，还是 FeatureStore/source 读取失败。
+
+**解决方案**：
+- adapter/source 异常可以降级为缺失值或空窗口，让风控继续 fail-closed
+- 捕获异常时必须记录 `logger.warning(...)`
+- 禁止 `except Exception: pass`
+
+**经验**：
+- fail-closed 解决的是交易安全，可观测日志解决的是故障定位
+- 数据缺失、数据过期、窗口不足和 source 异常应该在日志或审计上可区分
+- 返回 `None` 或空窗口前要留下原因，否则生产排障会被误导
+
+---
+
 ## 三十五、P10 一致性与回归测试经验（2026-05-18）
 
 ### 35.1 架构经验：一致性测试需要两条路径共享同一 RiskCheckResult 序列

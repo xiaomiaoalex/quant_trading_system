@@ -34,6 +34,51 @@
   - LIQUIDATE_AND_DISCONNECT 允许系统强平 actor（需设置 `is_system_liquidation=True` 且信号为减仓）
 - 关联文档: `DEVELOPMENT_LOG.md`
 
+### 本次任务：阶段3 Funding/OI 生产数据接线
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 阶段3.1（审线）+ 阶段3.2（Wiring）+ 阶段3.3（第一轮返工）+ 阶段3.4（mypy修复）+ 阶段3.5（测试禁止网络访问）+ 阶段3.6（静默异常修复）完成
+- 目标: 把 Funding/OI 从"契约和测试存在"推进到"生产数据源可用、freshness 可判定、缺失/过期 fail-closed 可审计"
+- 开发后状态:
+  - **阶段3.1 审线结论**: `DataSourceCryptoRiskSnapshotProvider` 没有构建 `funding_oi_metrics`，live 永远返回空字典，导致 metrics 永远缺失
+  - **阶段3.2 实现**:
+    - 新增 `FundingOIMetricsPort` Protocol
+    - `DataSourceCryptoRiskSnapshotProvider` 可选注入 `FundingOIMetricsPort`
+    - 新增 `BinanceFundingOIMetricsSource` 实现
+    - `build_crypto_risk_runtime_components` wiring `BinanceFundingOIMetricsSource`
+  - **阶段3.3 第一轮返工**:
+    - `BinanceCurrentFundingOISource` 实现 `CurrentFundingOIPort`（funding rate + OI 真实拉取）
+    - `BinanceFundingOIMetricsSource` 使用 `BinanceCurrentFundingOISource` 而非 broker
+    - `update_budget()` 重建 provider 时保留 `funding_oi_metrics` wiring
+    - 新增 `trader/tests/test_funding_oi_live_wiring.py` 覆盖 wiring 测试
+  - **阶段3.4 mypy/测试修复**（针对用户验证发现的阻断点）:
+    - 去掉静默 `except Exception: pass`，改为记录日志和返回可审计原因
+    - 历史窗口缺失时返回空列表，不伪造历史（由 calculator 设置 window_insufficient 标志）
+    - 使用 `FeatureStore.read_feature_range()` 读取历史窗口
+    - 所有 mypy 错误通过 `# type: ignore[union-attr]` 修复
+  - **阶段3.5 测试禁止网络访问**（针对 pytest 超时问题）:
+    - `TestBinanceCurrentFundingOISource` 全部改成 FakeSession/fake HTTP response
+    - `FakeSession.get()` 是同步方法，返回异步上下文管理器
+    - 覆盖: funding rate 解析、OI 解析、timestamp 解析、empty response、429 限流
+  - **阶段3.6 静默异常修复**:
+    - `_get_current_funding()` / `_get_current_oi()` / `_get_latest_funding_ts()` / `_get_latest_oi_ts()` 捕获异常时记录 warning 并返回缺失值
+    - `_get_funding_history()` / `_get_oi_history()` 捕获异常时记录 warning 并返回空历史窗口
+    - 禁止 `except Exception: pass`，让 Funding/OI 数据缺失可观测、可追踪
+- fail-closed 保证：Funding/OI metrics 计算失败时抛出 `CryptoRiskSnapshotUnavailable`
+- 代码变更:
+  - `trader/services/crypto_risk_snapshot.py`: 新增 `FundingOIMetricsPort` Protocol、`BinanceFundingOIMetricsSource`
+  - `trader/api/crypto_risk_runtime.py`: wiring `BinanceFundingOIMetricsSource` + `update_budget()` 保留 wiring
+  - `trader/adapters/binance/funding_oi_stream.py`: 新增 `BinanceCurrentFundingOISource` 实现 `CurrentFundingOIPort`
+  - `trader/tests/test_funding_oi_live_wiring.py`: 新增 wiring 测试（fake session）
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_funding_oi_live_wiring.py trader/tests/test_funding_oi_window_calculator.py trader/tests/test_funding_oi_metrics_provider.py trader/tests/test_crypto_risk_p0.py --tb=short` → 62 passed ✅
+  - `python -m pytest -q trader/tests/test_risk_mode_oms_integration.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_risk_mode_controller.py --tb=short` → 50 passed ✅
+  - mypy → Success ✅
+- 注意事项:
+  - `BinanceFundingOIMetricsSource` 历史窗口使用 FeatureStore range 读取；窗口不足时返回空/短窗口，由 calculator 标记 window_insufficient
+  - `BinanceCurrentFundingOISource` 依赖 Binance REST API，需网络可达
+  - 下一步：阶段4 合约规格与订单簿数据管理
+- 关联文档: `DEVELOPMENT_LOG.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 本次任务：P0 风控链路 mypy scoped 收敛
 - 完成时间: 2026-05-18 (北京时间)
 - 状态: ✅ 已完成

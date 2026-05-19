@@ -25,6 +25,60 @@
 
 ## 最近记录
 
+### 2026-05-19 02:00 - 阶段3.6 Funding/OI 静默异常修复
+
+- 背景: 阶段3最终验收发现 `BinanceFundingOIMetricsSource` 的历史窗口读取异常分支仍存在静默吞异常风险；虽然返回空窗口会触发 fail-closed/window_insufficient，但定位真实数据源故障时缺少日志证据。
+- 决策: Funding/OI live 数据链路允许在 adapter/source 异常时返回缺失值进入 fail-closed，但异常必须记录 warning，禁止 `except Exception: pass`。
+- 改动:
+  - `trader/services/crypto_risk_snapshot.py`: `_get_current_funding()`、`_get_current_oi()`、`_get_latest_funding_ts()`、`_get_latest_oi_ts()` 捕获异常时记录 warning 后返回缺失值。
+  - `trader/services/crypto_risk_snapshot.py`: `_get_funding_history()`、`_get_oi_history()` 捕获异常时记录 warning 后返回空历史窗口。
+  - `PROJECT_STATUS.md`: 更新阶段3状态、测试口径和历史窗口说明，移除“实时值模拟”的旧描述。
+- 验证:
+  - `python -m pytest -q trader/tests/test_funding_oi_live_wiring.py trader/tests/test_funding_oi_window_calculator.py trader/tests/test_funding_oi_metrics_provider.py trader/tests/test_crypto_risk_p0.py --tb=short`
+  - `python -m pytest -q trader/tests/test_risk_mode_oms_integration.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_risk_mode_controller.py --tb=short`
+  - scoped mypy: `crypto_risk_snapshot.py`、`crypto_risk_runtime.py`、`funding_oi_metrics_provider.py`、`funding_oi_window_calculator.py`、`crypto_pre_trade_risk_plugin.py`、`funding_oi_stream.py`
+- 风险/遗留: 当前异常日志进入服务日志；后续若需要运维面板展示，可把具体 source_error 汇入 audit details。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-19 01:00 - 阶段3.3 Funding/OI Live Wiring 返工修复
+
+- 背景: 阶段3.2实现后仍有4个问题：
+  1. `BinanceFundingOIMetricsSource._fetch_current_funding()` 使用 `hasattr(broker, "get_funding_rate")`，但 `BinanceFuturesRiskDataSource` 没有此方法，导致 live funding永远为 None
+  2. `_fetch_current_oi()` 直接 `return None`，OI永远缺失
+  3. `update_budget()` 重建 provider 时丢失 `funding_oi_metrics` wiring
+  4. 没有新增测试覆盖关键 wiring
+- 决策: 实现真正的 Binance Current Funding/OI 数据源，复用已有的 `CurrentFundingOIPort` 接口
+- 改动:
+  - `trader/adapters/binance/funding_oi_stream.py`: 新增 `BinanceCurrentFundingOISource` 实现 `CurrentFundingOIPort`
+  - `trader/services/crypto_risk_snapshot.py`: 重构 `BinanceFundingOIMetricsSource` 使用 `BinanceCurrentFundingOISource`
+  - `trader/api/crypto_risk_runtime.py`: 更新 wiring + `update_budget()` 保留 `funding_oi_metrics`
+  - `trader/tests/test_funding_oi_live_wiring.py`: 新增 11 个 wiring 测试
+- 验证:
+  - 60 passed (Funding/OI calculator + metrics provider + live wiring + crypto P0)
+  - 50 passed (RiskMode)
+  - mypy → Success
+- 风险/遗留:
+  - OI 历史窗口暂使用实时值模拟，后续可增强使用 FeatureStore
+  - `BinanceCurrentFundingOISource` 依赖 Binance REST API，需网络可达
+- 关联文档: `PROJECT_STATUS.md`
+
+### 2026-05-18 23:00 - 阶段3.1+3.2 Funding/OI 生产数据接线
+
+- 背景: 阶段3.1审线发现核心断点：`DataSourceCryptoRiskSnapshotProvider` 没有构建 `funding_oi_metrics`，live runtime 永远返回空字典，导致 Funding/OI 风控实际上永远是"数据缺失拒绝"而非"基于实时市场状态拒绝"。
+- 决策: 阶段3.2 最小闭环：注入 `FundingOIMetricsPort` → `BinanceFundingOIMetricsSource` → snapshot
+- 改动:
+  - `trader/services/crypto_risk_snapshot.py`: 新增 `FundingOIMetricsPort` Protocol、`BinanceFundingOIMetricsSource`
+  - `trader/api/crypto_risk_runtime.py`: wiring `BinanceFundingOIMetricsSource` 到 snapshot provider
+  - fail-closed: metrics 计算失败时抛出 `CryptoRiskSnapshotUnavailable`
+- 验证:
+  - 49 passed (Funding/OI + crypto P0)
+  - 50 passed (RiskMode)
+  - mypy → Success
+- 风险/遗留:
+  - `BinanceFundingOIMetricsSource` 只拉取 funding rate，OI 历史窗口使用实时值模拟
+  - 后续可增强：使用 Binance funding history API 或 FeatureStore
+- 关联文档: `PROJECT_STATUS.md`
+
 ### 2026-05-18 22:00 - 阶段2.1 第四轮返工（系统强平入口修正）
 
 - 背景: 第三轮发现两个问题：1) LIQUIDATE_AND_DISCONNECT 的系统强平入口可以绕过开仓限制（只检查 is_system_liquidation=True，未检查信号类型）；2) 测试数量口径仍不准确。
