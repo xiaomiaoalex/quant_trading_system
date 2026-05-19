@@ -4,6 +4,76 @@
 
 ---
 
+## 四十二、FeatureStore OHLCV 导入与覆盖展示经验（2026-05-20）
+
+### 42.1 踩坑记录：静态 Data Catalog 会掩盖真实数据缺口
+
+**问题描述**：
+Data 页面如果只展示静态 source stub，即使 FeatureStore 里没有任何 OHLCV，用户也会误以为真实研究数据已经就绪。这样 Backtests 的 `real_feature_store` fail-closed 和 Data 页面展示会互相矛盾。
+
+**解决方案**：
+- `/v1/data/catalog` 的 `feature_store_ohlcv` 改为从 FeatureStore coverage 动态聚合
+- 新增 `/v1/data/ohlcv/coverage`，按 `symbol + feature_version` 返回 points、first/latest ts 和 quality
+- 前端 Data 页面把 FeatureStore OHLCV 单独展示为覆盖表，不再混在静态数据源卡片里
+
+**经验**：
+- 数据可用性必须来自同一份真相源，不能靠 UI 文案或静态 stub 代替
+- `feature_version` 是研究数据版本边界，Data 页面、Backtests 和审计都必须使用同一命名
+- 缺数据时宁可显示 missing/empty coverage，也不能伪造“可用”
+
+### 42.2 设计模式：导入 API 要幂等且冲突可解释
+
+**问题描述**：
+OHLCV 导入经常会因为重复任务、手动重试或脚本重跑而写入同一批 bar。如果重复导入直接失败，会让开发体验很差；如果同 key 不同值被静默覆盖，又会破坏研究可复现性。
+
+**解决方案**：
+- 写入 key 固定为 `(symbol, feature_name=ohlcv, feature_version, ts_ms)`
+- 同值重复导入返回 `duplicates`，不重复插入
+- 同 key 不同值沿用 FeatureStore 版本冲突保护，API 返回 409
+- K 线形态先在 API 层验证：`high >= max(open, close)`、`low <= min(open, close)`
+
+**经验**：
+- 批量导入必须对“重跑”和“数据漂移”给出不同语义
+- API 层做轻量形态校验，FeatureStore 层负责版本一致性
+- 覆盖查询和回测读取复用 `feature_name=ohlcv`，可以减少后续 ingestion worker 的接线面
+
+---
+
+## 四十一、FeatureStore 真实回测数据接入经验（2026-05-19）
+
+### 41.1 踩坑记录：真实模式不能只换标签，必须换数据入口
+
+**问题描述**：
+`data_mode=real_feature_store` 如果只是请求字段不同，但服务层仍使用 deterministic synthetic data，本质上会把开发烟测伪装成研究级真实回测，后续门禁会被误导。
+
+**解决方案**：
+- 新增 `FeatureStoreOHLCVDataProvider` 实现 `DataProviderPort`
+- `engine=vectorbt + real_feature_store` 只从 FeatureStore 读取数据
+- 缺少 OHLCV 时直接 fail-closed，不回退 dev_smoke
+- 报告 metrics 写入 `data_quality_summary.source=feature_store`
+
+**经验**：
+- `data_mode` 是数据来源契约，不是 UI 标签
+- 真实研究回测必须能追溯到 `feature_version`
+- 缺数据要明确失败或标记 `missing_data`，不能偷偷生成 synthetic bar
+
+### 41.2 设计模式：兼容 compact OHLCV 与列式特征
+
+**问题描述**：
+FeatureStore 是通用特征表，OHLCV 既可能以 `feature_name=ohlcv` 的 dict 存储，也可能以 `open/high/low/close/volume` 五个 feature 分开存储。过早绑定一种形态会让后续 ingestion 或研究数据导入很难接。
+
+**解决方案**：
+- provider 优先读取 `ohlcv` dict，字段为 `{open, high, low, close, volume}`
+- 若不存在，则读取五列独立 feature，并按相同 `ts_ms` 对齐
+- 输出统一转换为 `OHLCV` dataclass，交给 VectorBT adapter
+
+**经验**：
+- 数据存储形态可以灵活，但进入 engine 前必须统一成明确 DTO
+- 对齐逻辑属于 Service/Adapter 层，不能放进 VectorBT engine 内部
+- 数据质量摘要要记录 `feature_names`，方便审计知道实际用了哪种存储形态
+
+---
+
 ## 四十、VectorBT 主回测入口接入经验（2026-05-19）
 
 ### 40.1 踩坑记录：adapter 存在不等于主流程接通

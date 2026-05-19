@@ -166,12 +166,46 @@ export interface DataSourceStatus {
   status: 'available' | 'stub' | 'missing'
   symbols: string[]
   latest_ts_ms?: number | null
+  first_ts_ms?: number | null
   feature_version: string
   quality_score: number
+  total_points?: number | null
+  expected_points?: number | null
+  coverage_percent?: number | null
+  interval?: string | null
   notes?: string | null
 }
 
 export interface DataCatalogResponse {
   feature_version: string
   sources: DataSourceStatus[]
+}
+
+export interface OHLCVBarInput {
+  ts_ms: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface OHLCVImportRequest {
+  symbol: string
+  feature_version: string
+  interval?: string
+  source?: string
+  requested_by?: string
+  bars: OHLCVBarInput[]
+}
+
+export interface OHLCVImportResponse {
+  symbol: string
+  feature_version: string
+  interval: string
+  imported: number
+  duplicates: number
+  first_ts_ms?: number | null
+  latest_ts_ms?: number | null
+  total_points: number
 }

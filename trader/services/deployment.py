@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from trader.adapters.persistence.feature_store import get_feature_store
 from trader.api.models.schemas import (
     ActionResult,
     BacktestRequest,
@@ -16,6 +17,7 @@ from trader.api.models.schemas import (
     DeploymentCreateRequest,
 )
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.services.backtesting.feature_store_data_provider import FeatureStoreOHLCVDataProvider
 from trader.services.backtesting.ports import (
     OHLCV,
     BacktestConfig,
@@ -400,12 +402,6 @@ class BacktestService:
         runtime_strategy_id: str,
         request: BacktestRequest,
     ) -> Dict[str, Any]:
-        if request.data_mode != "dev_smoke":
-            raise ValueError(
-                "VectorBT real_feature_store backtest requires a real FeatureStore "
-                "DataProviderPort; dev_smoke is the only wired API smoke mode"
-            )
-
         symbol = request.symbols[0]
         params = request.params or {}
         interval = str(params.get("interval", "1h"))
@@ -419,9 +415,17 @@ class BacktestService:
             commission_rate=Decimal(str(request.fee_bps)) / Decimal("10000"),
             slippage_rate=Decimal(str(request.slippage_bps)) / Decimal("10000"),
         )
+        if request.data_mode == "real_feature_store":
+            data_provider: DataProviderPort = FeatureStoreOHLCVDataProvider(
+                feature_store=get_feature_store(),
+                feature_version=request.feature_version,
+            )
+        else:
+            data_provider = _DevSmokeOHLCVProvider(self, request)
+
         adapter = VectorBTAdapter(
             config=VectorBTConfig(freq=interval),
-            data_provider=_DevSmokeOHLCVProvider(self, request),
+            data_provider=data_provider,
         )
         strategy = _StrategyRunnerVectorBTBridge(
             runner=runner,
@@ -430,7 +434,12 @@ class BacktestService:
             interval=interval,
         )
         result = await adapter.run_backtest(config, strategy)
-        return self._vectorbt_result_to_simulation(result, request)
+        data_quality_summary = getattr(data_provider, "last_quality_summary", None)
+        return self._vectorbt_result_to_simulation(
+            result,
+            request,
+            data_quality_summary=data_quality_summary,
+        )
 
     def _build_ohlcv_series(
         self,
@@ -462,6 +471,7 @@ class BacktestService:
         self,
         result: BacktestResult,
         request: BacktestRequest,
+        data_quality_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         initial_capital = Decimal(str(request.initial_capital))
         final_equity = result.final_capital
@@ -514,7 +524,8 @@ class BacktestService:
             "fee_bps": request.fee_bps,
             "slippage_bps": request.slippage_bps,
             "benchmark": request.benchmark,
-            "data_quality_summary": {
+            "data_quality_summary": data_quality_summary
+            or {
                 "quality_score": 0.0,
                 "missing_data": True,
                 "source": "deterministic_dev_smoke",

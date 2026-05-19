@@ -39,6 +39,17 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
     const date = new Date(timestamp)
     return Number.isNaN(date.getTime()) ? String(timestamp) : date.toLocaleString()
   }
+  const dataQuality = report.metrics?.data_quality_summary as
+    | {
+        source?: string
+        quality_score?: number
+        missing_data?: boolean
+        total_points?: number
+        expected_points?: number
+        coverage_percent?: number
+        validator_status?: string
+      }
+    | undefined
 
   return (
     <div className="space-y-6">
@@ -122,6 +133,37 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
               <p className="text-xs text-gray-500">VaR 95%</p>
               <p className="text-sm text-gray-300">
                 {report.risk.var_95 !== undefined ? `${report.risk.var_95.toFixed(2)}%` : '-'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Data Quality */}
+      {dataQuality && (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Data Quality</h4>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-xs text-gray-500">Source</p>
+              <p className="text-sm text-gray-300">{dataQuality.source ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Quality Score</p>
+              <p className="text-sm text-gray-300">
+                {typeof dataQuality.quality_score === 'number' ? dataQuality.quality_score.toFixed(2) : '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Coverage</p>
+              <p className="text-sm text-gray-300">
+                {typeof dataQuality.coverage_percent === 'number' ? `${dataQuality.coverage_percent.toFixed(2)}%` : '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Missing Data</p>
+              <p className={dataQuality.missing_data ? 'text-sm text-red-400' : 'text-sm text-green-400'}>
+                {typeof dataQuality.missing_data === 'boolean' ? String(dataQuality.missing_data) : '-'}
               </p>
             </div>
           </div>

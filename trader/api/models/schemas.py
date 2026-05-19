@@ -612,14 +612,48 @@ class DataSourceStatus(BaseModel):
     status: Literal["available", "stub", "missing"]
     symbols: List[str] = Field(default_factory=list)
     latest_ts_ms: Optional[int] = None
+    first_ts_ms: Optional[int] = None
     feature_version: str = "dev_smoke"
     quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    total_points: Optional[int] = None
+    expected_points: Optional[int] = None
+    coverage_percent: Optional[float] = None
+    interval: Optional[str] = None
     notes: Optional[str] = None
 
 
 class DataCatalogResponse(BaseModel):
     feature_version: str
     sources: List[DataSourceStatus]
+
+
+class OHLCVBarInput(BaseModel):
+    ts_ms: int = Field(..., ge=0)
+    open: float = Field(..., gt=0.0)
+    high: float = Field(..., gt=0.0)
+    low: float = Field(..., gt=0.0)
+    close: float = Field(..., gt=0.0)
+    volume: float = Field(..., ge=0.0)
+
+
+class OHLCVImportRequest(BaseModel):
+    symbol: str
+    feature_version: str
+    bars: List[OHLCVBarInput] = Field(default_factory=list)
+    interval: str = "1h"
+    source: str = "manual_import"
+    requested_by: Optional[str] = None
+
+
+class OHLCVImportResponse(BaseModel):
+    symbol: str
+    feature_version: str
+    interval: str
+    imported: int
+    duplicates: int
+    first_ts_ms: Optional[int] = None
+    latest_ts_ms: Optional[int] = None
+    total_points: int = 0
 
 
 # ==================== Order & Execution Models ====================

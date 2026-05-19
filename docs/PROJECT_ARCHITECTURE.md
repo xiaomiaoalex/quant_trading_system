@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-07 03:30 (北京时间)
+- 最后更新: 2026-05-20 06:27 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -233,7 +233,9 @@ BinanceFundingOIMetricsSource (Service 层) 位于:
 - `VectorBTAdapter` 通过 `DataProviderPort` 获取历史 K 线；Binance 历史数据源只作为默认装配，A 股或其他市场数据源应在 Service/Adapter 层注入。
 - 回测执行成本、交易时段、T+1、涨跌停和 lot 约束不得写死在 engine 内，应通过市场规则或执行模型 specialization 接入。
 - Control Plane 的 `/v1/backtests` 统一入口支持 `engine=strategy_runner|vectorbt`。前端 Backtests 页面通过同一 DTO 选择引擎；Service 层负责将已加载的 `StrategyRunner` 策略桥接为 VectorBT signal 序列。
-- `engine=vectorbt` 在 `data_mode=dev_smoke` 下使用确定性 OHLCV provider 做无网络烟测；`data_mode=real_feature_store` 必须显式注入真实 FeatureStore/历史数据 provider，缺数据时不得回退为 synthetic 数据。
+- `engine=vectorbt` 在 `data_mode=dev_smoke` 下使用确定性 OHLCV provider 做无网络烟测；`data_mode=real_feature_store` 通过 `FeatureStoreOHLCVDataProvider` 按 `feature_version` 读取 FeatureStore OHLCV，缺数据时不得回退为 synthetic 数据。
+- Control Plane 的 `/v1/data/catalog`、`/v1/data/ohlcv/coverage` 和 `/v1/data/ohlcv/import` 是当前研究数据入口；前端 Data 页面通过这些接口导入版本化 OHLCV、查看 `symbol + feature_version` 覆盖、最新时间戳和数据质量。
+- `/v1/data/ohlcv/import` 写入 `feature_name=ohlcv` 的 compact dict，后续 `real_feature_store` 回测通过同一 FeatureStore 读取，避免 Data 页面和 Backtests 使用两套数据真相源。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 
@@ -256,7 +258,7 @@ flowchart LR
 - Qlib 只属于 Research/Insight 域，用于因子、模型、预测和研究组合输出。
 - Qlib 输出必须先转换为内部 `Signal`，再进入 `RiskEngine.check_pre_trade()`；禁止 Qlib 直接生成订单或绕过风控。
 - VectorBT 是当前已实现的快速向量化回测引擎，负责快速验证和风控后权益曲线，不承担完整实盘撮合回放语义。
-- Backtests API 已将 VectorBT 接入主回测入口，产出统一的 `BacktestRun` / `BacktestReport`；报告 metrics 中必须标记 `backtest_engine=vectorbt` 与 `backtest_data_mode`，供门禁区分研究级真实回测和开发烟测。
+- Backtests API 已将 VectorBT 接入主回测入口，产出统一的 `BacktestRun` / `BacktestReport`；报告 metrics 中必须标记 `backtest_engine=vectorbt`、`backtest_data_mode` 和 `data_quality_summary`，供门禁区分研究级真实回测和开发烟测。
 - `EventDrivenRiskReplay` 已实现（P9.4），用于更接近实盘的订单、账户、风控、OMS 事件回放。
 - QuantConnect Lean 相关运行时代码已清理；历史选型背景仅保留在 ADR/比较文档中，不再是当前 active engine。
 
@@ -522,6 +524,8 @@ flowchart LR
 ```mermaid
 flowchart LR
     Data["Crypto Core Data Sources"] --> FeatureStore["FeatureStore / feature_version"]
+    Data --> DataAPI["Data Catalog / OHLCV Import API"]
+    DataAPI --> FeatureStore
     FeatureStore --> Candidate["StrategyCandidate Lifecycle"]
     Candidate --> Debug["Code Debug Gate"]
     Debug --> Backtest["Backtest Dataset + Report"]
@@ -538,6 +542,8 @@ flowchart LR
 
 - `candidate_id` 管策略研究生命周期，`strategy_id` 管策略模板，`deployment_id` 管运行实例，三者不得混用。
 - 回测必须显式记录 `feature_version` 和 `data_mode`；`dev_smoke` 只能用于开发烟测，不能作为部署准入。
+- Data 页面不得静态伪造 FeatureStore 覆盖；`feature_store_ohlcv` 必须来自 FeatureStore 聚合查询，缺数据时显示 missing/empty coverage。
+- 研究级 VectorBT 回测和 Data 页面必须共享同一个 `feature_version` 语义，导入、覆盖查询、回测报告和审计中的版本名必须一致。
 - 策略信号进入 OMS 前必须经过仓位分配与风险裁剪，分配结果写入 `AllocationTrace`。
 - Portfolio Runtime Controller 第一版面向 paper/shadow 自动运行，所有启停/降仓决策写入审计事件。
 

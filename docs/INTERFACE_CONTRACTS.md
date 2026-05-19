@@ -190,9 +190,41 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 - `data_mode`: `real_feature_store` 或 `dev_smoke`
 - `engine`: `strategy_runner` 或 `vectorbt`，默认 `strategy_runner`
 
-`strategy_runner` 表示现有事件驱动策略运行器路径；`vectorbt` 表示快速向量化研究回测路径。`vectorbt` 必须通过 `DataProviderPort` 获取 OHLCV 数据；`dev_smoke` 模式可使用确定性内置数据源用于端到端烟测，但 `real_feature_store` 模式必须接入真实数据源并在缺数据时 fail-closed。
+`strategy_runner` 表示现有事件驱动策略运行器路径；`vectorbt` 表示快速向量化研究回测路径。`vectorbt` 必须通过 `DataProviderPort` 获取 OHLCV 数据；`dev_smoke` 模式可使用确定性内置数据源用于端到端烟测。
+
+`real_feature_store` 模式使用 `FeatureStoreOHLCVDataProvider`，按 `feature_version` 从 FeatureStore 读取真实 OHLCV：
+
+- 首选单列 `feature_name=ohlcv`，`value` 为 `{open, high, low, close, volume}`。
+- 兼容五列分开存储：`feature_name=open|high|low|close|volume`，按相同 `ts_ms` 对齐。
+- 缺失全部 OHLCV 时必须 fail-closed，回测状态为 `FAILED`，错误包含 `FeatureStore missing OHLCV data`。
+- 报告 `metrics.data_quality_summary` 必须包含 `source=feature_store`、`feature_version`、`quality_score`、`missing_data`、`total_points`、`expected_points`、`coverage_percent` 和 `validator_status`。
 
 `dev_smoke` 只能用于开发烟测，不能作为 Promote/部署准入依据。`BacktestGateResult` 必须明确给出 `passed`、`failed_rules`、`metrics`、`evidence_refs`。
+
+### 8.2.1 Data Catalog / OHLCV Import
+
+Data 页面与研究级回测共享同一 FeatureStore 数据入口：
+
+- `GET /v1/data/catalog`: 返回 `DataCatalogResponse`，其中 `feature_store_ohlcv` 来源必须按 FeatureStore 实际覆盖动态生成，不得只返回静态 stub。
+- `GET /v1/data/ohlcv/coverage?feature_version=...`: 返回按 `symbol + feature_version` 聚合的 OHLCV 覆盖。
+- `POST /v1/data/ohlcv/import`: 导入版本化 OHLCV 到 FeatureStore，写入 `feature_name=ohlcv`。
+
+`OHLCVImportRequest` 字段：
+
+- `symbol`
+- `feature_version`
+- `interval`
+- `source`
+- `requested_by`
+- `bars[]`: 每条包含 `ts_ms`、`open`、`high`、`low`、`close`、`volume`
+
+导入语义：
+
+- 写入 FeatureStore 使用 key `(symbol, feature_name=ohlcv, feature_version, ts_ms)`。
+- 同 key 同 value 必须幂等，响应中计入 `duplicates`。
+- 同 key 不同 value 必须返回冲突，不得覆盖。
+- `high < max(open, close)` 或 `low > min(open, close)` 必须拒绝。
+- Catalog/coverage 返回字段包含 `first_ts_ms`、`latest_ts_ms`、`total_points`、`coverage_percent`、`quality_score` 和 `feature_version`。
 
 ### 8.3 Allocation / Autopilot
 
