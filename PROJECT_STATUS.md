@@ -4,9 +4,32 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-18 (北京时间)
+2026-05-19 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：阶段4 保证金与强平模型升级
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 将合约保证金与强平价从近似模型推进到交易所语义的 Core 纯计算模型
+- 开发后状态:
+  - `MarginRiskCalculator.calculate_liquidation_price()` 使用显式 `CryptoAccountRisk`、`CryptoPositionRisk`、`list[LeverageBracket]` 和 `FeeBufferConfig`，保持 Core 无 IO、确定性、可回放
+  - 强平价公式改为基于 `initial_margin + unrealized_pnl = maintenance_margin + fee_buffer` 的保证金等式，不再把 quote 维度的 `maint_amount` 直接当价格相加
+  - fee buffer（funding/taker/slippage）计入 `effective_maintenance_margin`，提高风险占用而不是扣低维持保证金
+  - 强平价测试已移除测试文件内的影子公式，直接调用生产实现
+  - `crypto_risk.py` 补充 `Optional` 导入，修复阶段4相关 DTO 的类型追踪问题
+- 代码变更:
+  - `trader/core/domain/services/margin_risk_calculator.py`: 新增/修正 `LiquidationPriceResult`、`FeeBufferConfig`、强平价与费用缓冲计算
+  - `trader/tests/test_margin_risk_calculator.py`: 新增并修正保证金、bracket、fail-closed、费用缓冲、强平价测试
+  - `trader/core/domain/models/crypto_risk.py`: 补充 `Optional` 导入
+  - `docs/INTERFACE_CONTRACTS.md`: 新增并修正阶段4保证金与强平模型契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_sizing_engine.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 50 passed ✅
+  - `python -m mypy trader/core/domain/services/margin_risk_calculator.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+- 注意事项:
+  - `python -m mypy trader/core/domain/services/margin_risk_calculator.py --ignore-missing-imports` 不加 `--follow-imports=skip` 会追入仓库既有历史类型债，当前仍失败；阶段4核心文件 scoped mypy 已通过
+  - 尚未把升级后的 MarginRiskCalculator 接入 `RiskSizingEngine` constraint，下一阶段应优先做实盘 sizing 裁剪联动
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：阶段2.1 RiskMode/KillSwitch 统一控制 OMS（含返工）
 - 完成时间: 2026-05-18 (北京时间)

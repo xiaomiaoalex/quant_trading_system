@@ -25,6 +25,22 @@
 
 ## 最近记录
 
+### 2026-05-19 03:00 - 阶段4 保证金与强平模型升级验收修正
+
+- 背景: 阶段4交付将 `MarginRiskCalculator` 扩展到强平价、费用缓冲和 bracket 语义，但验收发现强平价测试在测试文件内复制了本地 `calculate_liquidation_price()`，没有真正覆盖生产实现；生产公式还存在把 `maint_amount` 直接加到价格上的维度问题。
+- 决策: 测试必须调用生产 `MarginRiskCalculator.calculate_liquidation_price()`；强平价按保证金等式求解，费用缓冲计入有效维持保证金，保持 Core 无 IO、确定性、可回放。
+- 改动:
+  - `trader/core/domain/services/margin_risk_calculator.py`: 修正 long/short 强平价公式，使用 `entry_notional`、`effective_initial_margin`、`maint_margin_ratio`、`maint_amount` 和 fee buffer 解算；`calculate_risk_adjusted_margin()` 将费用计入 adjusted maintenance。
+  - `trader/tests/test_margin_risk_calculator.py`: 移除影子 `LiquidationPriceResult` 和影子 `calculate_liquidation_price()`；费用缓冲测试改为断言生产函数输出。
+  - `trader/core/domain/models/crypto_risk.py`: 补充 `Optional` 导入，修复阶段4相关 DTO 类型追踪。
+  - `docs/INTERFACE_CONTRACTS.md`: 修正阶段4强平价公式与测试约束。
+- 验证:
+  - `python -m pytest -q trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_sizing_engine.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 50 passed
+  - `python -m mypy trader/core/domain/services/margin_risk_calculator.py --ignore-missing-imports --follow-imports=skip` → Success
+  - 未加 `--follow-imports=skip` 的 mypy 会追入历史类型债，当前仍有非阶段4遗留错误。
+- 风险/遗留: MarginRiskCalculator 仍未接入 RiskSizingEngine constraint；费用配置仍需 runtime/交易所费率接线。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-19 02:00 - 阶段3.6 Funding/OI 静默异常修复
 
 - 背景: 阶段3最终验收发现 `BinanceFundingOIMetricsSource` 的历史窗口读取异常分支仍存在静默吞异常风险；虽然返回空窗口会触发 fail-closed/window_insufficient，但定位真实数据源故障时缺少日志证据。

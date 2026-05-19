@@ -78,6 +78,44 @@ result = await source.get_current_funding_rate("BTCUSDT")
 
 ---
 
+## 三十七、保证金与强平模型升级经验（2026-05-19）
+
+### 37.1 踩坑记录：测试文件不能复制生产公式
+
+**问题描述**：
+阶段4初版在 `test_margin_risk_calculator.py` 内定义了本地 `calculate_liquidation_price()` 和本地 `LiquidationPriceResult`。测试虽然通过，但没有覆盖 `MarginRiskCalculator.calculate_liquidation_price()` 的真实实现，导致生产公式中的维度错误没有被测试发现。
+
+**解决方案**：
+- 删除测试文件内的影子公式
+- 所有强平价测试直接调用生产 `MarginRiskCalculator.calculate_liquidation_price()`
+- 在接口契约中明确禁止测试复制生产公式
+
+**经验**：
+- 风控核心公式测试必须打到生产入口
+- 测试 helper 可以构造输入，但不能重新实现被测算法
+- “测试通过”如果没有覆盖真实入口，比失败更危险
+
+### 37.2 设计模式：用保证金等式求强平价
+
+**问题描述**：
+`maint_amount` 是 quote 货币维度，不是价格维度。把它直接加到 `entry_price * (...)` 上会产生单位错误，在高价标的或大持仓下尤其危险。
+
+**解决方案**：
+强平价按保证金等式求解：
+
+```text
+initial_margin + unrealized_pnl = maintenance_margin + fee_buffer
+```
+
+long/short 分别根据 PnL 方向解出价格；费用缓冲计入有效维持保证金，提高风险占用。
+
+**经验**：
+- 交易所语义模型首先要检查量纲
+- `maint_amount` 应进入保证金等式，不能直接当价格修正项
+- fee buffer 是风险占用，不应该把维持保证金扣低
+
+---
+
 ## 三十五、P10 一致性与回归测试经验（2026-05-18）
 
 ### 35.1 架构经验：一致性测试需要两条路径共享同一 RiskCheckResult 序列

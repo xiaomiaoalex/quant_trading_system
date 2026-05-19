@@ -596,6 +596,132 @@ CLIP 订单必须：
 | 3 | CANCEL_ALL_AND_HALT | 取消所有订单并暂停 | False | False | True |
 | 4 | LIQUIDATE_AND_DISCONNECT | 平仓并断开连接 | False | False | True |
 
+### 8.8.2 阶段4保证金与强平模型契约（P4）
+
+阶段4目标是把当前近似模型提升为交易所语义模型。计算仍放在 core domain service。
+
+#### 8.8.2.1 新增 Core 类型
+
+**MarginRiskCalculator（Core domain service）**：
+
+位于 `trader/core/domain/services/margin_risk_calculator.py`，职责：
+- 接收 `CryptoAccountRisk` + `CryptoPositionRisk` + `list[LeverageBracket]`
+- 计算 initial_margin、maintenance_margin、margin_ratio
+- 选择正确的 leverage bracket tier
+
+**MarginRiskResult**：
+
+| 字段 | 含义 |
+|------|------|
+| `ok` | 评估是否通过 |
+| `notional` | 名义价值 `abs(qty) * mark_price` |
+| `initial_margin` | 初始保证金 `notional / effective_leverage` |
+| `maintenance_margin` | 维持保证金 `max(0, notional * maint_margin_ratio - maint_amount)` |
+| `margin_ratio` | 维持保证金 / 保证金余额 |
+| `bracket` | 选中的 leverage bracket |
+| `rejection_reason` | 失败原因（如有） |
+
+**LiquidationPriceResult**：
+
+| 字段 | 含义 |
+|------|------|
+| `ok` | 评估是否通过 |
+| `liquidation_price` | 强平价（交易所语义） |
+| `buffer_ratio` | 距离强平价的距离比例 `(mark_price - liq_price) / mark_price` |
+| `effective_initial_margin` | 有效初始保证金（含费用估算） |
+| `effective_maintenance_margin` | 有效维持保证金（扣减费用后） |
+| `funding_fee_estimate` | 资金费率估算 |
+| `taker_fee_estimate` | Taker 手续费估算 |
+| `slippage_estimate` | 滑点估算 |
+| `rejection_reason` | 失败原因（如有） |
+
+**FeeBufferConfig**：
+
+| 字段 | 含义 | 默认值 |
+|------|------|--------|
+| `funding_rate` | 资金费率 | `0.0001`（0.01%） |
+| `taker_fee_rate` | Taker 手续费率 | `0.0004`（0.04%） |
+| `slippage_bps` | 滑点（基点） | `5` bps |
+| `funding_interval_hours` | 资金费结算周期（小时） | `8` |
+
+#### 8.8.2.2 公式假设（必须写入文档）
+
+**initial_margin 计算**：
+```
+effective_leverage = min(position.leverage, bracket.initial_leverage)
+initial_margin = notional / effective_leverage
+```
+
+**maintenance_margin 计算**：
+```
+maintenance_margin = max(0, notional * bracket.maint_margin_ratio - bracket.maint_amount)
+```
+
+**margin_ratio 计算**：
+```
+margin_ratio = maintenance_margin / account.margin_balance
+```
+
+**liquidation_price 计算（long 仓位）**：
+```
+entry_notional = abs(qty) * entry_price
+effective_initial_margin = entry_notional / effective_leverage
+effective_maintenance_margin = max(0, notional * maint_margin_ratio - maint_amount) + fee_buffer
+liquidation_price =
+  (entry_notional - effective_initial_margin - maint_amount + fee_buffer)
+  / (abs(qty) * (1 - maint_margin_ratio))
+```
+
+**liquidation_price 计算（short 仓位）**：
+```
+entry_notional = abs(qty) * entry_price
+effective_initial_margin = entry_notional / effective_leverage
+effective_maintenance_margin = max(0, notional * maint_margin_ratio - maint_amount) + fee_buffer
+liquidation_price =
+  (entry_notional + effective_initial_margin + maint_amount - fee_buffer)
+  / (abs(qty) * (1 + maint_margin_ratio))
+```
+
+**liquidation_buffer_ratio 计算**：
+```
+buffer_ratio = (mark_price - liquidation_price) / mark_price  (for long)
+buffer_ratio = (liquidation_price - mark_price) / mark_price  (for short)
+```
+
+**费用估算**：
+```
+funding_fee = notional * funding_rate * (funding_interval_hours / 24)
+taker_fee = notional * taker_fee_rate  (for opening, not for reducing)
+slippage_cost = notional * (slippage_bps / 10000)
+```
+
+#### 8.8.2.3 输入必须显式
+
+| 输入 | 来源 | 禁止使用信号 metadata |
+|------|------|----------------------|
+| `margin_mode` | `CryptoPositionRisk.margin_mode` | 不能依赖信号类型推断 |
+| `wallet_balance` | `CryptoAccountRisk.wallet_balance` | 不能用 equity 替代 |
+| `unrealized_pnl` | 持仓计算 | 不能静默为 0 |
+| `maintenance_bracket` | `list[LeverageBracket]` | 缺失必须 fail-closed |
+| `fee_buffer` | `FeeBufferConfig` | 不能硬编码 |
+
+#### 8.8.2.4 fail-closed 约束
+
+- `margin_balance <= 0` → reject，理由 `INVALID_MARGIN_BALANCE`
+- `mark_price <= 0` 或 `leverage <= 0` → reject，理由 `INVALID_POSITION_INPUT`
+- leverage bracket 缺失或 notional 超出所有 bracket 范围 → reject，理由 `MISSING_LEVERAGE_BRACKET`
+- 禁止用空 metrics 或 0 值伪造通过
+
+#### 8.8.2.5 测试要求
+
+- long/short 两个方向的 liquidation buffer 计算正确
+- isolated/cross 两种 margin mode 语义区分
+- bracket tier 按 notional_floor 正确选择
+- missing leverage bracket fail-closed
+- funding fee、taker fee、slippage buffer 会降低可用风险预算
+- 费用估算计入 effective_maintenance_margin
+- 强平价测试必须调用 `MarginRiskCalculator.calculate_liquidation_price()` 生产实现，禁止在测试文件中复制影子公式
+
 **RiskModeState**：
 
 | 字段 | 含义 |
