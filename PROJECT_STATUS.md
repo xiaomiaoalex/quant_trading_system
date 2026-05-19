@@ -8,6 +8,30 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：阶段6 组合风险增强
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 从静态 cap 走向 deterministic stress risk，补齐波动率折扣、压力场景和集中度三类组合风险指标
+- 开发后状态:
+  - 新增 `PortfolioRiskEnhancementService`，聚合 `VolatilityDiscountService`、`StressScenarioService`、`ConcentrationRiskService`
+  - 压力场景损失改为方向敏感 PnL：long 下跌亏损，short 下跌盈利，避免空头被错误记为亏损
+  - 同一 symbol 多条 position 会聚合集中度，不再覆盖前一条 position
+  - mark price / position.mark_price 非正时按 0 风险价格处理，禁止产生负敞口
+  - 契约明确 `symbol_shocks` 是 price multiplier（如 0.95 表示 -5%），不是负收益率
+- 代码变更:
+  - `trader/core/domain/services/portfolio_risk_enhancement.py`: 新增组合风险增强服务、压力场景、集中度和波动率折扣
+  - `trader/tests/test_portfolio_risk_enhancement.py`: 新增概念/一致性测试
+  - `trader/tests/test_portfolio_risk_enhancement_service.py`: 新增生产服务测试，含方向敏感 stress、重复 symbol 聚合和非正价格防护
+  - `docs/INTERFACE_CONTRACTS.md`: 新增并修正阶段6组合风险增强契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_portfolio_risk_enhancement.py trader/tests/test_portfolio_risk_enhancement_service.py --tb=short` → 46 passed ✅
+  - `python -m mypy trader/core/domain/services/portfolio_risk_enhancement.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `python -m py_compile trader/core/domain/services/portfolio_risk_enhancement.py` → passed ✅
+- 注意事项:
+  - 当前服务仍未接入 `RiskSizingEngine` / pre-trade constraint，下一阶段应让组合风险结果驱动实盘裁剪或拒绝
+  - volatility 来源尚未接入实时 30d HV，correlation matrix 尚未实现
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 本次任务：阶段5 盘中与交易后风控
 - 完成时间: 2026-05-19 (北京时间)
 - 状态: ✅ 已完成（含验收修正）

@@ -25,6 +25,21 @@
 
 ## 最近记录
 
+### 2026-05-19 05:00 - 阶段6 组合风险增强验收修正
+
+- 背景: 阶段6交付新增组合风险增强服务，但验收发现 scoped mypy 失败；契约中 stress shock 语义不清；实现未区分多空方向，且同 symbol 多条 position 会被覆盖。
+- 决策: 保持 Core 纯计算与 deterministic stress risk；`symbol_shocks` 明确为价格乘数；stress loss 使用方向敏感 PnL；集中度按 symbol 聚合。
+- 改动:
+  - `trader/core/domain/services/portfolio_risk_enhancement.py`: 修复 `sum(..., Decimal("0"))` 类型问题；新增 `_risk_price()` 非正价格保护；stress result 增加 `pnl`；同 symbol notional 聚合。
+  - `trader/tests/test_portfolio_risk_enhancement_service.py`: 增加 short downturn 盈利、重复 symbol 聚合、非正价格不产生负敞口测试。
+  - `docs/INTERFACE_CONTRACTS.md`: 修正 price multiplier / direction-aware loss / fail-closed 约束。
+- 验证:
+  - `python -m pytest -q trader/tests/test_portfolio_risk_enhancement.py trader/tests/test_portfolio_risk_enhancement_service.py --tb=short` → 46 passed
+  - `python -m mypy trader/core/domain/services/portfolio_risk_enhancement.py --ignore-missing-imports --follow-imports=skip` → Success
+  - `python -m py_compile trader/core/domain/services/portfolio_risk_enhancement.py` → passed
+- 风险/遗留: 尚未把组合风险输出接入 RiskSizingEngine / OMS pre-trade；volatility 和 correlation matrix 仍需后续生产数据接线。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 2026-05-19 04:00 - 阶段5 盘中与交易后风控验收修正
 
 - 背景: 阶段5交付声明新增盘中 monitor，但实际只新增了 controller 直调测试；同时 `risk_mode_controller.py` 用 `except Exception: pass` 吞掉审计异常，违反 Fail-Closed 可观测约束。

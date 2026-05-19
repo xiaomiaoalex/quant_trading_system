@@ -816,6 +816,115 @@ slippage_cost = notional * (slippage_bps / 10000)
 | `trigger` | 触发源 |
 | `triggered_by` | 触发者（system/operator） |
 
+### 8.8.4 阶段6组合风险增强契约（P6）
+
+阶段6目标是从静态 cap 走向动态组合风险，优先做 deterministic stress risk。
+
+#### 8.8.4.1 新增 Core 类型
+
+**PortfolioRiskEnhancementService（Core domain service）**：
+
+位于 `trader/core/domain/services/portfolio_risk_enhancement.py`，职责：
+- 聚合波动率折扣、压力场景、集中度风险评估
+- 回测与实盘复用同一逻辑
+
+**VolatilityDiscountService**：
+
+| 字段 | 含义 |
+|------|------|
+| `VolatilityRegime` | 波动率 regime：`LOW`, `NORMAL`, `HIGH`, `CRISIS` |
+| `VolatilityDiscountConfig` | 波动率折扣配置 |
+
+**VolatilityRegime 折扣映射**：
+
+| Regime | 阈值 | 折扣 |
+|--------|------|------|
+| `LOW` | volatility < 5% | 1.0 (无折扣) |
+| `NORMAL` | 5% ≤ volatility < 15% | 0.85 |
+| `HIGH` | 15% ≤ volatility < 30% | 0.60 |
+| `CRISIS` | volatility ≥ 30% | 0.30 |
+
+**StressScenarioService**：
+
+| 字段 | 含义 |
+|------|------|
+| `StressScenario` | 压力场景定义 |
+| `StressScenarioResult` | 压力场景计算结果 |
+| `pnl` | 压力场景方向敏感盈亏；long 下跌为负，short 下跌为正 |
+
+**预定义 Stress Scenario**：
+
+| Scenario | BTC price multiplier | ETH price multiplier | Liquidity Haircut |
+|----------|----------------------|----------------------|-------------------|
+| `MODERATE_DOWNTURN` | 0.95（-5%） | 0.92（-8%） | 1.0 (无折价) |
+| `SEVERE_DOWNTURN` | 0.85（-15%） | 0.80（-20%） | 0.80 |
+| `CRISIS` | 0.70（-30%） | 0.60（-40%） | 0.50 |
+
+**ConcentrationRiskService**：
+
+| 字段 | 含义 |
+|------|------|
+| `ConcentrationThresholds` | 集中度阈值配置 |
+| `ConcentrationRiskResult` | 集中度风险结果 |
+
+**默认 Concentration Thresholds**：
+
+| 类型 | 默认阈值 |
+|------|----------|
+| 单 symbol 集中度 | 30% |
+| 单 cluster 集中度 | 50% |
+| 单方向集中度 | 80% |
+| 相关 group 集中度 | 60% |
+
+#### 8.8.4.2 Stress Scenario 公式
+
+**压力场景损失计算**：
+```
+stressed_price = base_price * price_multiplier * liquidity_haircut
+scenario_pnl = position.qty * (stressed_price - base_price)
+loss = max(0, -sum(scenario_pnl))
+loss_pct = (loss / original_exposure) * 100
+```
+
+**集中度比率计算**：
+```
+symbol_ratio = symbol_notional / total_notional
+cluster_ratio = cluster_notional / total_notional
+direction_ratio = direction_notional / total_direction_notional
+```
+
+#### 8.8.4.3 输入必须显式
+
+| 输入 | 来源 | 禁止使用默认值 |
+|------|------|---------------|
+| `positions` | `CryptoRiskSnapshot.positions` | 不能空 |
+| `mark_prices` | `CryptoRiskSnapshot.mark_prices` | 不能为空字典 |
+| `symbol_clusters` | `CryptoRiskBudget.symbol_clusters` | 缺失 symbol 用 UNCLUSTERED |
+| `volatility` | 外部输入（如 30d HV） | 可选，无则不应用折扣 |
+
+#### 8.8.4.4 Fail-Closed 约束
+
+- positions 为空时返回空结果，不抛出异常
+- mark_prices 缺失 symbol 时使用 position.mark_price
+- mark price / position.mark_price 非正时按 0 风险价格处理，禁止产生负敞口
+- 除零操作返回默认零值
+
+#### 8.8.4.5 测试要求
+
+- cluster exposure 加入动态波动率折扣
+- stress scenario：BTC -5%、ETH -8%、alt liquidity haircut
+- concentration risk：单 symbol、单 cluster、单 direction
+- 同一 symbol 多条 position 必须聚合，不得覆盖
+- stress loss 必须区分多空方向，short 在下跌场景下不得被错误记为亏损
+- 回测侧复用同一组合风险逻辑
+- 计算确定性：同一输入产生同一输出
+
+#### 8.8.4.6 剩余风险
+
+- 尚未与 RiskSizingEngine 集成
+- volatility 来源尚未接入实时市场数据
+- correlation matrix 尚未实现
+
 **RiskModeState**：
 
 | 字段 | 含义 |
