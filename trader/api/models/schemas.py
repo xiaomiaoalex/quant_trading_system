@@ -356,11 +356,15 @@ class DeploymentRuntime(BaseModel):
 # ==================== Backtest Models ====================
 
 
+BacktestEngine = Literal["strategy_runner", "vectorbt"]
+
+
 class BacktestRequest(BaseModel):
     """回测请求"""
 
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     params: Optional[Dict[str, Any]] = None
     symbols: List[str]
     start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
@@ -383,6 +387,7 @@ class BacktestRun(BaseModel):
     status: str = Field(..., json_schema_extra={"example": "RUNNING"})
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     symbols: List[str]
     start_ts_ms: int
     end_ts_ms: int
@@ -404,6 +409,7 @@ class BacktestReport(BaseModel):
     status: str
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     symbols: List[str]
     start_ts_ms: int
     end_ts_ms: int

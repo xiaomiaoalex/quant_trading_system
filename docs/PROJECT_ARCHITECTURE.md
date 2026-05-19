@@ -232,6 +232,8 @@ BinanceFundingOIMetricsSource (Service 层) 位于:
 
 - `VectorBTAdapter` 通过 `DataProviderPort` 获取历史 K 线；Binance 历史数据源只作为默认装配，A 股或其他市场数据源应在 Service/Adapter 层注入。
 - 回测执行成本、交易时段、T+1、涨跌停和 lot 约束不得写死在 engine 内，应通过市场规则或执行模型 specialization 接入。
+- Control Plane 的 `/v1/backtests` 统一入口支持 `engine=strategy_runner|vectorbt`。前端 Backtests 页面通过同一 DTO 选择引擎；Service 层负责将已加载的 `StrategyRunner` 策略桥接为 VectorBT signal 序列。
+- `engine=vectorbt` 在 `data_mode=dev_smoke` 下使用确定性 OHLCV provider 做无网络烟测；`data_mode=real_feature_store` 必须显式注入真实 FeatureStore/历史数据 provider，缺数据时不得回退为 synthetic 数据。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 
@@ -254,6 +256,7 @@ flowchart LR
 - Qlib 只属于 Research/Insight 域，用于因子、模型、预测和研究组合输出。
 - Qlib 输出必须先转换为内部 `Signal`，再进入 `RiskEngine.check_pre_trade()`；禁止 Qlib 直接生成订单或绕过风控。
 - VectorBT 是当前已实现的快速向量化回测引擎，负责快速验证和风控后权益曲线，不承担完整实盘撮合回放语义。
+- Backtests API 已将 VectorBT 接入主回测入口，产出统一的 `BacktestRun` / `BacktestReport`；报告 metrics 中必须标记 `backtest_engine=vectorbt` 与 `backtest_data_mode`，供门禁区分研究级真实回测和开发烟测。
 - `EventDrivenRiskReplay` 已实现（P9.4），用于更接近实盘的订单、账户、风控、OMS 事件回放。
 - QuantConnect Lean 相关运行时代码已清理；历史选型背景仅保留在 ADR/比较文档中，不再是当前 active engine。
 

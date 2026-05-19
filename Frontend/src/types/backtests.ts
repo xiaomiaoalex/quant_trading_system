@@ -1,5 +1,7 @@
 // Backtest status types
 export type BacktestStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+export type BacktestEngine = 'strategy_runner' | 'vectorbt'
+export type BacktestDataMode = 'real_feature_store' | 'dev_smoke'
 
 // Backtest run from GET /v1/backtests and GET /v1/backtests/{run_id}
 export interface BacktestRun {
@@ -7,6 +9,7 @@ export interface BacktestRun {
   status: BacktestStatus
   strategy_id: string
   version: number
+  engine?: BacktestEngine
   strategy_code_version?: number
   symbols: string[]
   start_ts_ms: number
@@ -24,6 +27,7 @@ export interface BacktestRun {
 export interface BacktestRequest {
   strategy_id: string
   version: number
+  engine?: BacktestEngine
   strategy_code_version?: number
   params?: Record<string, unknown>
   symbols: string[]
@@ -36,7 +40,7 @@ export interface BacktestRequest {
   fee_bps?: number
   slippage_bps?: number
   benchmark?: string
-  data_mode?: 'real_feature_store' | 'dev_smoke'
+  data_mode?: BacktestDataMode
 }
 
 // Backtest report from GET /v1/backtests/{run_id}/report
@@ -45,6 +49,7 @@ export interface BacktestReport {
   status: BacktestStatus
   strategy_id: string
   version: number
+  engine?: BacktestEngine
   symbols: string[]
   start_ts_ms: number
   end_ts_ms: number
@@ -66,11 +71,14 @@ export interface BacktestReport {
   }
   trades?: Array<{
     trade_id: string
-    symbol: string
-    side: string
-    price: number
-    quantity: number
-    timestamp: string
+    symbol?: string
+    side?: string
+    price?: number
+    quantity?: number
+    timestamp?: string | number
+    pnl?: number
+    return?: number
+    status?: string
   }>
   equity_curve?: Array<{
     timestamp: number

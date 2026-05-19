@@ -25,6 +25,7 @@ export function BacktestList({ backtests, onSelect, selectedRunId }: BacktestLis
           <tr>
             <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Run ID</th>
             <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
+            <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Engine</th>
             <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Status</th>
             <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Progress</th>
             <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Created</th>
@@ -43,6 +44,9 @@ export function BacktestList({ backtests, onSelect, selectedRunId }: BacktestLis
             >
               <td className="px-4 py-3 text-sm text-gray-300 font-mono">{backtest.run_id.slice(0, 8)}...</td>
               <td className="px-4 py-3 text-sm text-white">{backtest.strategy_id}</td>
+              <td className="px-4 py-3 text-sm text-gray-300">
+                {backtest.engine ?? (backtest.metrics?.backtest_engine as string | undefined) ?? '-'}
+              </td>
               <td className="px-4 py-3">
                 <BacktestStatusBadge status={backtest.status} />
               </td>

@@ -25,6 +25,24 @@
 
 ## 最近记录
 
+### 2026-05-19 23:00 - VectorBT 回测接入与前端打通
+
+- 背景: 仓库已有 `VectorBTAdapter`，但 `/v1/backtests` 主入口和前端 Backtests 页面仍只能走旧 `StrategyRunner` 模拟路径；真实 `vectorbt` API 还存在 `init_capital`、`final_capital()`、`pf.win_rate()` 等不兼容调用。
+- 决策: 保留 `strategy_runner` 作为默认兼容路径，新增 `engine=vectorbt` 分支；第一步只打通 `dev_smoke` 无网络烟测，`real_feature_store` 在未注入真实 provider 前 fail-closed。
+- 改动:
+  - `BacktestRequest` / `BacktestRun` / `BacktestReport` 新增 `engine` 字段，值域为 `strategy_runner|vectorbt`。
+  - `BacktestService` 新增 `StrategyRunner -> VectorBT` 桥接和 deterministic OHLCV provider，VectorBT 报告写入统一 artifact/metrics。
+  - `VectorBTAdapter` 修复为真实 VectorBT API：`init_cash`、`final_value()`、`pf.trades.win_rate()`、权益曲线和 `records_readable` 交易提取。
+  - 前端 Backtests/Strategy Lab 新增 Engine/Data Mode 选择并提交 `engine`，列表和报告详情展示回测引擎。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 6 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/api/models/schemas.py trader/api/routes/backtests.py trader/services/deployment.py trader/services/backtesting/vectorbt_adapter.py` → passed
+  - `git diff --check` → passed
+  - 本地运行后端/前端后，`POST /v1/backtests` with `engine=vectorbt` → `COMPLETED`，report/metrics 均标记 `vectorbt`
+- 风险/遗留: VectorBT 当前主 API 只接通 `dev_smoke` provider；研究级 `real_feature_store` 还需要注入真实 FeatureStore/DataProviderPort，并补数据质量门禁后才能用于 Promote 准入。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-19 05:00 - 阶段6 组合风险增强验收修正
 
 - 背景: 阶段6交付新增组合风险增强服务，但验收发现 scoped mypy 失败；契约中 stress shock 语义不清；实现未区分多空方向，且同 symbol 多条 position 会被覆盖。

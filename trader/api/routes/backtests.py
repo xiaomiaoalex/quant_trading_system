@@ -129,6 +129,7 @@ async def get_backtest_report(run_id: str = Path(..., description="Backtest run 
         status=backtest.status,
         strategy_id=backtest.strategy_id,
         version=backtest.version,
+        engine=backtest.engine,
         symbols=backtest.symbols,
         start_ts_ms=backtest.start_ts_ms,
         end_ts_ms=backtest.end_ts_ms,

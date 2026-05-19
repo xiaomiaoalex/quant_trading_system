@@ -188,6 +188,9 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 - `slippage_bps`
 - `benchmark`
 - `data_mode`: `real_feature_store` 或 `dev_smoke`
+- `engine`: `strategy_runner` 或 `vectorbt`，默认 `strategy_runner`
+
+`strategy_runner` 表示现有事件驱动策略运行器路径；`vectorbt` 表示快速向量化研究回测路径。`vectorbt` 必须通过 `DataProviderPort` 获取 OHLCV 数据；`dev_smoke` 模式可使用确定性内置数据源用于端到端烟测，但 `real_feature_store` 模式必须接入真实数据源并在缺数据时 fail-closed。
 
 `dev_smoke` 只能用于开发烟测，不能作为 Promote/部署准入依据。`BacktestGateResult` 必须明确给出 `passed`、`failed_rules`、`metrics`、`evidence_refs`。
 

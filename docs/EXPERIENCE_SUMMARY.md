@@ -4,6 +4,43 @@
 
 ---
 
+## 四十、VectorBT 主回测入口接入经验（2026-05-19）
+
+### 40.1 踩坑记录：adapter 存在不等于主流程接通
+
+**问题描述**：
+仓库已有 `VectorBTAdapter` 和相关单测，但 `/v1/backtests` 仍固定走 `BacktestService._simulate_backtest()`，前端也没有 `engine` 字段。用户从页面点击 Run Backtest 时完全不会触发 VectorBT。
+
+**解决方案**：
+- 在 `BacktestRequest`、`BacktestRun`、`BacktestReport` 增加 `engine`
+- `BacktestService` 按 `engine` 分流，`strategy_runner` 保持旧路径，`vectorbt` 走 adapter
+- 前端 Backtests/Strategy Lab 新增 engine 选择，并在列表/详情显示回测引擎
+- 新增主 API 回归测试，直接从 `/v1/backtests` 验证 `engine=vectorbt`
+
+**经验**：
+- 引擎 adapter 单测只能证明 adapter 自身可用，不能证明产品主链路接通
+- 验收测试应覆盖真实 API 入口和前端 DTO 字段，而不是只测 service 内部方法
+- 任何“已接入”都要能从用户入口触发并在报告中留下可识别标记
+
+### 40.2 踩坑记录：真实 VectorBT API 与假对象测试不一致
+
+**问题描述**：
+旧 adapter 使用 `init_capital`、`pf.final_capital()`、`pf.win_rate()`、`pf.profit_factor()`。这些在真实 `vectorbt.Portfolio` 上并不是正确入口；既有单测用 fake object，掩盖了真实 API 不兼容。
+
+**解决方案**：
+- `Portfolio.from_signals()` 使用 `init_cash`
+- 组合最终权益使用 `pf.final_value()`
+- 胜率和 profit factor 从 `pf.trades.win_rate()` / `pf.trades.profit_factor()` 读取
+- 交易记录优先使用 `pf.trades.records_readable`
+- 非有限数值统一归零，避免 NaN/inf 泄漏到报告
+
+**经验**：
+- 第三方库 adapter 测试至少要有一条真实库 smoke，fake object 只能覆盖依赖注入逻辑
+- 交易、权益曲线、指标提取都应做兼容和归一化，前端不能假设所有 engine 的 trade schema 完全一样
+- `dev_smoke` 可以无网络、确定性，但必须在 metrics 中明确标记，不能伪装成研究级真实回测
+
+---
+
 ## 三十六、单测禁止访问真实网络（2026-05-19）
 
 ### 36.1 踩坑记录：单测误连 Binance 导致超时

@@ -8,6 +8,34 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：VectorBT 回测接入与前端打通
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 让 Backtests 主 API 和前端 Strategy Lab 能显式选择并运行 `vectorbt` 快速回测，而不是只存在离线 adapter
+- 开发后状态:
+  - `POST /v1/backtests` 新增 `engine=strategy_runner|vectorbt`，默认保持旧 `strategy_runner` 路径兼容
+  - `engine=vectorbt` 会加载同一策略插件，通过 `StrategyRunner` tick 桥接为 VectorBT entry/exit signal 序列
+  - VectorBT API 适配修复为真实 `vectorbt` 语义：`init_cash`、`final_value()`、`pf.trades.*` 指标和 `records_readable`
+  - 前端 Backtests / Strategy Lab 新增 Engine 与 Data Mode 选择，提交回测时携带 `engine`
+  - Backtest 列表和报告详情展示回测引擎，报告 metrics 标记 `backtest_engine`、`framework` 和 `backtest_data_mode`
+- 代码变更:
+  - `trader/api/models/schemas.py`: 新增 `BacktestEngine` 与 backtest DTO 的 `engine` 字段
+  - `trader/services/deployment.py`: 接入 VectorBT 分流、dev_smoke OHLCV provider、StrategyRunner→VectorBT bridge
+  - `trader/services/backtesting/vectorbt_adapter.py`: 修复真实 VectorBT API 调用与交易/权益曲线提取
+  - `Frontend/src/pages/Backtests.tsx`: 新增引擎选择并随 `/v1/backtests` 提交
+  - `Frontend/src/types/backtests.ts`、`BacktestList.tsx`、`BacktestDetailPanel.tsx`: 同步类型与展示
+  - `trader/tests/test_api_backtest_vectorbt_engine.py`: 新增主 API VectorBT 接入回归测试
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 6 passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `python -m py_compile trader/api/models/schemas.py trader/api/routes/backtests.py trader/services/deployment.py trader/services/backtesting/vectorbt_adapter.py` → passed ✅
+  - `git diff --check` → passed ✅
+  - 本地运行 API smoke：`POST /v1/backtests` with `engine=vectorbt` → `COMPLETED`，report/metrics 均标记 `vectorbt` ✅
+- 注意事项:
+  - 当前 `vectorbt + dev_smoke` 已打通端到端烟测；`vectorbt + real_feature_store` 仍按 fail-closed 返回清晰错误，后续需要接真实 FeatureStore DataProviderPort 后才能作为研究级准入依据
+  - VectorBT 是快速研究回测，不替代生产级 OMS/account/risk replay
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 本次任务：阶段6 组合风险增强
 - 完成时间: 2026-05-19 (北京时间)
 - 状态: ✅ 已完成（含验收修正）
