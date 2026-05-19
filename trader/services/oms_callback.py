@@ -965,7 +965,9 @@ class OMSCallbackHandler:
                             counter_key="RISK_MODE_CANCEL_ALL_AND_HALT",
                         )
                         try:
-                            if hasattr(self._broker, "cancel_all") and callable(self._broker.cancel_all):
+                            if hasattr(self._broker, "cancel_all") and callable(
+                                self._broker.cancel_all
+                            ):
                                 logger.warning(
                                     f"[OMSCallback] CANCEL_ALL_AND_HALT: executing broker.cancel_all()"
                                 )
@@ -974,9 +976,7 @@ class OMSCallbackHandler:
                             logger.error(
                                 f"[OMSCallback] CANCEL_ALL_AND_HALT: broker.cancel_all() failed: {cancel_err}"
                             )
-                        raise RiskRejectedError(
-                            f"RiskMode {risk_mode.name}: all orders cancelled"
-                        )
+                        raise RiskRejectedError(f"RiskMode {risk_mode.name}: all orders cancelled")
                     elif risk_mode == RiskMode.LIQUIDATE_AND_DISCONNECT:
                         is_system_liquidation = signal.metadata.get("is_system_liquidation", False)
                         reduce_only = signal.metadata.get("reduce_only", False)

@@ -160,10 +160,14 @@ class MarginRiskCalculator:
 
         if qty > 0:
             denominator = abs_qty * (Decimal("1") - bracket.maint_margin_ratio)
-            numerator = entry_notional - effective_initial_margin - bracket.maint_amount + total_fees
+            numerator = (
+                entry_notional - effective_initial_margin - bracket.maint_amount + total_fees
+            )
         else:
             denominator = abs_qty * (Decimal("1") + bracket.maint_margin_ratio)
-            numerator = entry_notional + effective_initial_margin + bracket.maint_amount - total_fees
+            numerator = (
+                entry_notional + effective_initial_margin + bracket.maint_amount - total_fees
+            )
 
         if denominator <= 0:
             return LiquidationPriceResult(
@@ -237,8 +241,10 @@ class MarginRiskCalculator:
             return {"funding": Decimal("0"), "taker": Decimal("0"), "slippage": Decimal("0")}
 
         notional = position.notional
-        funding = notional * self._fee_config.funding_rate * (
-            Decimal(self._fee_config.funding_interval_hours) / Decimal("24")
+        funding = (
+            notional
+            * self._fee_config.funding_rate
+            * (Decimal(self._fee_config.funding_interval_hours) / Decimal("24"))
         )
         taker = notional * self._fee_config.taker_fee_rate if not is_reducing else Decimal("0")
         slippage = notional * (self._fee_config.slippage_bps / Decimal("10000"))

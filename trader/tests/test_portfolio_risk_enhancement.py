@@ -16,10 +16,7 @@ from typing import Optional
 
 import pytest
 
-from trader.core.domain.models.crypto_risk import (
-    CryptoPositionRisk,
-    MarginMode,
-)
+from trader.core.domain.models.crypto_risk import CryptoPositionRisk, MarginMode
 from trader.core.domain.models.order import OrderSide
 from trader.core.domain.services.portfolio_exposure_aggregator import (
     ClusterExposure,
@@ -246,7 +243,9 @@ class TestConcentrationRisk:
         assert alpha_exposure == d("65000")
 
         total_exposure = sum(e.total_risk_notional for e in exposures.values())
-        cluster_concentration = alpha_exposure / total_exposure if total_exposure > 0 else Decimal("0")
+        cluster_concentration = (
+            alpha_exposure / total_exposure if total_exposure > 0 else Decimal("0")
+        )
 
         assert cluster_concentration == Decimal("1.0")
 
@@ -402,9 +401,7 @@ class TestStressScenarioWithConcentration:
 
         btc_shock = Decimal("0.95")
         eth_shock = Decimal("0.92")
-        stressed_alpha = (
-            d("100000") * btc_shock + d("30000") * eth_shock
-        )
+        stressed_alpha = d("100000") * btc_shock + d("30000") * eth_shock
 
         stress_loss = alpha_exposure - stressed_alpha
         stress_loss_pct = (stress_loss / alpha_exposure) * Decimal("100")

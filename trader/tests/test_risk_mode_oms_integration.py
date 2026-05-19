@@ -72,7 +72,10 @@ class TestRiskModeGate:
     async def test_no_new_positions_blocks_open_but_allows_reduce(self) -> None:
         """NO_NEW_POSITIONS 阻止开仓/加仓，但允许减仓"""
         from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
-        from trader.core.domain.models.risk_decision import RiskSizingDecision, RiskSizingDecisionType
+        from trader.core.domain.models.risk_decision import (
+            RiskSizingDecision,
+            RiskSizingDecisionType,
+        )
 
         open_signal = _long_signal()
         close_signal = _close_long_signal()
@@ -472,7 +475,9 @@ class TestOMSRiskModeFinalGate:
         broker.place_order.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_oms_liquidate_and_disconnect_blocks_open_even_with_system_liquidation_flag(self) -> None:
+    async def test_oms_liquidate_and_disconnect_blocks_open_even_with_system_liquidation_flag(
+        self,
+    ) -> None:
         """LIQUIDATE_AND_DISCONNECT + is_system_liquidation=True + LONG -> OMS 拒绝"""
         broker = _make_broker()
 

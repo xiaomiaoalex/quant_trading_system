@@ -262,13 +262,11 @@ class ConcentrationRiskService:
         total_notional = sum(symbol_notionals.values(), Decimal("0"))
 
         symbol_ratios = {
-            symbol: _safe_divide(n, total_notional)
-            for symbol, n in symbol_notionals.items()
+            symbol: _safe_divide(n, total_notional) for symbol, n in symbol_notionals.items()
         }
 
         cluster_ratios = {
-            cluster: _safe_divide(n, total_notional)
-            for cluster, n in cluster_notionals.items()
+            cluster: _safe_divide(n, total_notional) for cluster, n in cluster_notionals.items()
         }
 
         total_direction = long_notional + short_notional

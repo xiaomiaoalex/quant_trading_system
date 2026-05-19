@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import logging
 from typing import Callable, Optional
 
 from trader.core.domain.models.risk_mode import (
@@ -11,7 +11,6 @@ from trader.core.domain.models.risk_mode import (
     RiskModeState,
     create_risk_mode_event,
 )
-
 
 logger = logging.getLogger(__name__)
 

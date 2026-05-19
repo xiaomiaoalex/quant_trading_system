@@ -314,7 +314,7 @@ class FundingOIAdapter:
                             exchange_ts_ms=exchange_ts_ms,
                             local_ts_ms=now_ms,
                             period=period,
-                            )
+                        )
                         logger.warning(f"[FundingOI] Empty long short ratio response for {symbol}")
                         return None
                     else:
@@ -690,7 +690,9 @@ class BinanceCurrentFundingOISource:
             if attempt < self._max_retries - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
-        logger.error(f"[FundingOI] get_current_funding_rate failed for {symbol} after {self._max_retries} attempts")
+        logger.error(
+            f"[FundingOI] get_current_funding_rate failed for {symbol} after {self._max_retries} attempts"
+        )
         return None
 
     async def get_current_open_interest(self, symbol: str) -> Optional[Decimal]:
@@ -719,7 +721,9 @@ class BinanceCurrentFundingOISource:
             if attempt < self._max_retries - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
-        logger.error(f"[FundingOI] get_current_open_interest failed for {symbol} after {self._max_retries} attempts")
+        logger.error(
+            f"[FundingOI] get_current_open_interest failed for {symbol} after {self._max_retries} attempts"
+        )
         return None
 
     async def get_latest_funding_ts_ms(self, symbol: str) -> int:
@@ -751,7 +755,9 @@ class BinanceCurrentFundingOISource:
             if attempt < self._max_retries - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
-        logger.error(f"[FundingOI] get_latest_funding_ts_ms failed for {symbol} after {self._max_retries} attempts")
+        logger.error(
+            f"[FundingOI] get_latest_funding_ts_ms failed for {symbol} after {self._max_retries} attempts"
+        )
         return 0
 
     async def get_latest_oi_ts_ms(self, symbol: str) -> int:
@@ -780,7 +786,9 @@ class BinanceCurrentFundingOISource:
             if attempt < self._max_retries - 1:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
-        logger.error(f"[FundingOI] get_latest_oi_ts_ms failed for {symbol} after {self._max_retries} attempts")
+        logger.error(
+            f"[FundingOI] get_latest_oi_ts_ms failed for {symbol} after {self._max_retries} attempts"
+        )
         return 0
 
 

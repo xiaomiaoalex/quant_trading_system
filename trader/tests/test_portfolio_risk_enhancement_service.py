@@ -7,10 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from trader.core.domain.models.crypto_risk import (
-    CryptoPositionRisk,
-    MarginMode,
-)
+from trader.core.domain.models.crypto_risk import CryptoPositionRisk, MarginMode
 from trader.core.domain.services.portfolio_risk_enhancement import (
     ConcentrationRiskResult,
     ConcentrationRiskService,
@@ -19,8 +16,8 @@ from trader.core.domain.services.portfolio_risk_enhancement import (
     StressScenario,
     StressScenarioResult,
     StressScenarioService,
-    VolatilityDiscountService,
     VolatilityDiscountConfig,
+    VolatilityDiscountService,
     VolatilityRegime,
 )
 
@@ -335,8 +332,18 @@ class TestConcentrationRiskService:
                 leverage=d("10"),
             ),
         ]
-        mark_prices = {"BTCUSDT": d("50000"), "ETHUSDT": d("3000"), "BNBUSDT": d("500"), "ADAUSDT": d("0.5")}
-        symbol_clusters = {"BTCUSDT": "ALPHA", "ETHUSDT": "BETA", "BNBUSDT": "GAMMA", "ADAUSDT": "DELTA"}
+        mark_prices = {
+            "BTCUSDT": d("50000"),
+            "ETHUSDT": d("3000"),
+            "BNBUSDT": d("500"),
+            "ADAUSDT": d("0.5"),
+        }
+        symbol_clusters = {
+            "BTCUSDT": "ALPHA",
+            "ETHUSDT": "BETA",
+            "BNBUSDT": "GAMMA",
+            "ADAUSDT": "DELTA",
+        }
 
         result = service.calculate_concentration(positions, symbol_clusters, mark_prices)
 
@@ -503,7 +510,9 @@ class TestBacktestLiveConsistency:
         result_backtest = service.evaluate(positions, symbol_clusters, mark_prices)
 
         assert result_live.worst_case_stress.loss == result_backtest.worst_case_stress.loss
-        assert result_live.concentration.has_violations == result_backtest.concentration.has_violations
+        assert (
+            result_live.concentration.has_violations == result_backtest.concentration.has_violations
+        )
 
     def test_stress_calculation_deterministic(self) -> None:
         service = StressScenarioService()

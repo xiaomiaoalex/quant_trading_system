@@ -13,6 +13,7 @@ from trader.adapters.binance.crypto_risk_source import (
     BinanceFuturesRiskDataSource,
     BinanceFuturesRiskDataSourceConfig,
 )
+from trader.adapters.binance.funding_oi_stream import BinanceCurrentFundingOISource
 from trader.api.env_config import get_binance_env, get_binance_recv_window
 from trader.core.application.ports import BrokerPort
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
@@ -26,7 +27,6 @@ from trader.services.crypto_risk_snapshot import (
     FundingOIMetricsPort,
     build_crypto_pre_trade_risk_check,
 )
-from trader.adapters.binance.funding_oi_stream import BinanceCurrentFundingOISource
 
 CRYPTO_RISK_ENABLED_ENV = "CRYPTO_RISK_ENABLED"
 CRYPTO_RISK_FUTURES_BASE_URL_ENV = "CRYPTO_RISK_FUTURES_BASE_URL"
@@ -225,7 +225,9 @@ class CryptoRiskRuntimeManager:
             funding_oi_metrics = None
             if self._components.funding_oi_metrics is not None:
                 funding_oi_metrics = BinanceFundingOIMetricsSource(
-                    current_source=BinanceCurrentFundingOISource(base_url=new_config.futures_base_url),
+                    current_source=BinanceCurrentFundingOISource(
+                        base_url=new_config.futures_base_url
+                    ),
                     budget=risk_budget,
                 )
             snapshot_provider = DataSourceCryptoRiskSnapshotProvider(

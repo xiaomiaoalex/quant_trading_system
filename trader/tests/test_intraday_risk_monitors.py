@@ -25,16 +25,9 @@ from trader.core.domain.models.crypto_risk import (
     LeverageBracket,
     MarginMode,
 )
-from trader.core.domain.models.risk_mode import (
-    RiskMode,
-    RiskModeAuditEvent,
-    RiskModeState,
-)
+from trader.core.domain.models.risk_mode import RiskMode, RiskModeAuditEvent, RiskModeState
+from trader.core.domain.services.intraday_risk_monitor import IntradayRiskMonitor, MonitorSeverity
 from trader.core.domain.services.margin_risk_calculator import MarginRiskCalculator
-from trader.core.domain.services.intraday_risk_monitor import (
-    IntradayRiskMonitor,
-    MonitorSeverity,
-)
 from trader.core.domain.services.risk_mode_controller import (
     RiskModeController,
     RiskModeControllerConfig,

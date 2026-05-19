@@ -21,7 +21,6 @@ from trader.core.domain.models.risk_mode import RiskMode
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.strategy_runner import StrategyRunner
 
-
 STRATEGY_CODE = """
 from decimal import Decimal
 from trader.core.application.strategy_protocol import MarketData, StrategyPlugin

@@ -67,7 +67,6 @@ class FundingOIMetricsPort(Protocol):
         symbols: set[str],
     ) -> dict[str, CryptoFundingOIRiskMetrics]: ...
 
-
     def has_budget_enabled(self) -> bool: ...
 
 
@@ -218,16 +217,15 @@ class BinanceFundingOIMetricsSource:
         self._cache_ttl_ms: int = 60_000
 
     def has_budget_enabled(self) -> bool:
-        return (
-            self._budget.funding_z_score_enabled
-            or self._budget.oi_change_rate_enabled
-        )
+        return self._budget.funding_z_score_enabled or self._budget.oi_change_rate_enabled
 
     async def compute_funding_oi_metrics(
         self,
         symbols: set[str],
     ) -> dict[str, CryptoFundingOIRiskMetrics]:
-        from trader.core.domain.services.funding_oi_window_calculator import FundingOIWindowCalculator
+        from trader.core.domain.services.funding_oi_window_calculator import (
+            FundingOIWindowCalculator,
+        )
 
         now_ms = int(time.time() * 1000)
         if now_ms - self._cache_ts_ms < self._cache_ttl_ms and self._cache:
@@ -250,7 +248,9 @@ class BinanceFundingOIMetricsSource:
 
             metrics = FundingOIWindowCalculator.compute_funding_oi_metrics(
                 symbol=sym,
-                current_funding_rate=float(current_funding) if current_funding is not None else None,
+                current_funding_rate=(
+                    float(current_funding) if current_funding is not None else None
+                ),
                 current_oi=float(current_oi) if current_oi is not None else None,
                 funding_history=funding_history,
                 oi_history=oi_history,
@@ -274,9 +274,7 @@ class BinanceFundingOIMetricsSource:
             try:
                 return await self._current_source.get_current_funding_rate(symbol)
             except Exception as e:
-                logger.warning(
-                    f"[FundingOI] _get_current_funding failed for {symbol}: {e}"
-                )
+                logger.warning(f"[FundingOI] _get_current_funding failed for {symbol}: {e}")
                 return None
         return None
 
@@ -294,9 +292,7 @@ class BinanceFundingOIMetricsSource:
             try:
                 return await self._current_source.get_latest_funding_ts_ms(symbol)
             except Exception as e:
-                logger.warning(
-                    f"[FundingOI] _get_latest_funding_ts failed for {symbol}: {e}"
-                )
+                logger.warning(f"[FundingOI] _get_latest_funding_ts failed for {symbol}: {e}")
                 return 0
         return 0
 
@@ -327,9 +323,7 @@ class BinanceFundingOIMetricsSource:
                     elif points and len(points) > 0:
                         return [float(p.value) for p in points]
             except Exception as e:
-                logger.warning(
-                    f"[FundingOI] _get_funding_history failed for {symbol}: {e}"
-                )
+                logger.warning(f"[FundingOI] _get_funding_history failed for {symbol}: {e}")
 
         return []
 
@@ -351,8 +345,6 @@ class BinanceFundingOIMetricsSource:
                     elif points and len(points) > 0:
                         return [float(p.value) for p in points]
             except Exception as e:
-                logger.warning(
-                    f"[FundingOI] _get_oi_history failed for {symbol}: {e}"
-                )
+                logger.warning(f"[FundingOI] _get_oi_history failed for {symbol}: {e}")
 
         return []

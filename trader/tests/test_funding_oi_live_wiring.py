@@ -15,10 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from trader.core.domain.models.crypto_risk import CryptoRiskBudget, CryptoRiskSnapshot
-from trader.services.crypto_risk_snapshot import (
-    BinanceFundingOIMetricsSource,
-    FundingOIMetricsPort,
-)
+from trader.services.crypto_risk_snapshot import BinanceFundingOIMetricsSource, FundingOIMetricsPort
 
 
 def make_budget(
@@ -189,19 +186,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 200
+
             async def json(self):
                 return [{"fundingRate": "0.0001", "fundingTime": 1234567890000}]
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
@@ -217,19 +218,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 200
+
             async def json(self):
                 return {"openInterest": "1000000.5", "updateTime": 1234567890000}
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
@@ -245,19 +250,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 200
+
             async def json(self):
                 return [{"fundingRate": "0.0001", "fundingTime": 1234567890000}]
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
@@ -273,19 +282,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 200
+
             async def json(self):
                 return {"openInterest": "1000000.5", "updateTime": 1234567890000}
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
@@ -301,19 +314,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 200
+
             async def json(self):
                 return []
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
@@ -328,19 +345,23 @@ class TestBinanceCurrentFundingOISource:
 
         class FakeResponse:
             status = 429
+
             async def text(self):
                 return "Rate limited"
 
         class FakeContextManager:
             async def __aenter__(self):
                 return FakeResponse()
+
             async def __aexit__(self, *args):
                 pass
 
         class FakeSession:
             closed = False
+
             def get(self, url, params=None):
                 return FakeContextManager()
+
             async def close(self):
                 pass
 
