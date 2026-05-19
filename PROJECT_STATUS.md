@@ -4,9 +4,208 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-18 (北京时间)
+2026-05-19 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：阶段6 组合风险增强
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 从静态 cap 走向 deterministic stress risk，补齐波动率折扣、压力场景和集中度三类组合风险指标
+- 开发后状态:
+  - 新增 `PortfolioRiskEnhancementService`，聚合 `VolatilityDiscountService`、`StressScenarioService`、`ConcentrationRiskService`
+  - 压力场景损失改为方向敏感 PnL：long 下跌亏损，short 下跌盈利，避免空头被错误记为亏损
+  - 同一 symbol 多条 position 会聚合集中度，不再覆盖前一条 position
+  - mark price / position.mark_price 非正时按 0 风险价格处理，禁止产生负敞口
+  - 契约明确 `symbol_shocks` 是 price multiplier（如 0.95 表示 -5%），不是负收益率
+- 代码变更:
+  - `trader/core/domain/services/portfolio_risk_enhancement.py`: 新增组合风险增强服务、压力场景、集中度和波动率折扣
+  - `trader/tests/test_portfolio_risk_enhancement.py`: 新增概念/一致性测试
+  - `trader/tests/test_portfolio_risk_enhancement_service.py`: 新增生产服务测试，含方向敏感 stress、重复 symbol 聚合和非正价格防护
+  - `docs/INTERFACE_CONTRACTS.md`: 新增并修正阶段6组合风险增强契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_portfolio_risk_enhancement.py trader/tests/test_portfolio_risk_enhancement_service.py --tb=short` → 46 passed ✅
+  - `python -m mypy trader/core/domain/services/portfolio_risk_enhancement.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `python -m py_compile trader/core/domain/services/portfolio_risk_enhancement.py` → passed ✅
+- 注意事项:
+  - 当前服务仍未接入 `RiskSizingEngine` / pre-trade constraint，下一阶段应让组合风险结果驱动实盘裁剪或拒绝
+  - volatility 来源尚未接入实时 30d HV，correlation matrix 尚未实现
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
+### 本次任务：阶段5 盘中与交易后风控
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 从下单前风控扩展为持仓生命周期风控，覆盖 mark price 跳变、open order spike、WS silence、margin ratio、drawdown、liquidation buffer 等盘中风险事件
+- 开发后状态:
+  - 新增 `IntradayRiskMonitor` Core domain service，保持无 IO、确定性、可回放；所有监控输入由 runtime/service 显式传入
+  - `IntradayRiskMonitor` 将盘中风险事件转换为明确的 RiskMode 目标升级：NO_NEW_POSITIONS、CLOSE_ONLY、CANCEL_ALL_AND_HALT、LIQUIDATE_AND_DISCONNECT
+  - `RiskModeController.escalate_to()` 支持 monitor 选择目标模式，不再只能依赖连续 rejection 计数推断
+  - 审计回调异常被捕获并记录 warning，风险模式升级仍执行；禁止 `except Exception: pass`
+  - 新增测试覆盖真实 monitor 生产入口，避免只直调 controller 的假绿
+- 代码变更:
+  - `trader/core/domain/services/intraday_risk_monitor.py`: 新增 `IntradayRiskMonitor`、`MonitorResult`、`MonitorSeverity`、`IntradayRiskMonitorConfig`
+  - `trader/core/domain/services/risk_mode_controller.py`: 新增 `escalate_to()`，审计回调异常改为 logging warning
+  - `trader/tests/test_intraday_risk_monitors.py`: 新增盘中 monitor 与 RiskModeController 集成测试
+  - `docs/INTERFACE_CONTRACTS.md`: 新增阶段5盘中与交易后风控契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_intraday_risk_monitors.py trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_mode_controller.py --tb=short` → 80 passed ✅
+  - `python -m mypy trader/core/domain/services/intraday_risk_monitor.py trader/core/domain/services/risk_mode_controller.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `Select-String` 扫描 `risk_mode_controller.py` / `intraday_risk_monitor.py` 无 `except: pass` ✅
+- 注意事项:
+  - 当前阶段完成 Core monitor 与 RiskMode 升级闭环；尚未把 monitor 调度接入真实 WS/MonitorService 定时运行
+  - 后续应在 Service/Control 层把 WS silence、venue health、drawdown 与实时账户快照接入 `IntradayRiskMonitor`
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
+### 本次任务：阶段4 保证金与强平模型升级
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 将合约保证金与强平价从近似模型推进到交易所语义的 Core 纯计算模型
+- 开发后状态:
+  - `MarginRiskCalculator.calculate_liquidation_price()` 使用显式 `CryptoAccountRisk`、`CryptoPositionRisk`、`list[LeverageBracket]` 和 `FeeBufferConfig`，保持 Core 无 IO、确定性、可回放
+  - 强平价公式改为基于 `initial_margin + unrealized_pnl = maintenance_margin + fee_buffer` 的保证金等式，不再把 quote 维度的 `maint_amount` 直接当价格相加
+  - fee buffer（funding/taker/slippage）计入 `effective_maintenance_margin`，提高风险占用而不是扣低维持保证金
+  - 强平价测试已移除测试文件内的影子公式，直接调用生产实现
+  - `crypto_risk.py` 补充 `Optional` 导入，修复阶段4相关 DTO 的类型追踪问题
+- 代码变更:
+  - `trader/core/domain/services/margin_risk_calculator.py`: 新增/修正 `LiquidationPriceResult`、`FeeBufferConfig`、强平价与费用缓冲计算
+  - `trader/tests/test_margin_risk_calculator.py`: 新增并修正保证金、bracket、fail-closed、费用缓冲、强平价测试
+  - `trader/core/domain/models/crypto_risk.py`: 补充 `Optional` 导入
+  - `docs/INTERFACE_CONTRACTS.md`: 新增并修正阶段4保证金与强平模型契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_sizing_engine.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 50 passed ✅
+  - `python -m mypy trader/core/domain/services/margin_risk_calculator.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+- 注意事项:
+  - `python -m mypy trader/core/domain/services/margin_risk_calculator.py --ignore-missing-imports` 不加 `--follow-imports=skip` 会追入仓库既有历史类型债，当前仍失败；阶段4核心文件 scoped mypy 已通过
+  - 尚未把升级后的 MarginRiskCalculator 接入 `RiskSizingEngine` constraint，下一阶段应优先做实盘 sizing 裁剪联动
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：阶段2.1 RiskMode/KillSwitch 统一控制 OMS（含返工）
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含返工修复）
+- 目标: 让 RiskMode/KillSwitch 成为实盘执行链路的一等控制源
+- 开发后状态:
+  - **StrategyRunner Early Gate**: CLOSE_ONLY 只阻止开仓信号，允许减仓信号；CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT 阻止所有策略信号
+  - **OMS Final Gate**: OMS 直接持有 RiskMode 状态源，新增 `set_risk_mode_callback()` 方法和 RiskMode Gate 检查逻辑
+  - **CANCEL_ALL_AND_HALT 执行 cancel-all**: OMS 在拒绝策略订单前执行 `broker.cancel_all()`
+  - **LIQUIDATE_AND_DISCONNECT 系统强平入口**: 通过 `signal.metadata["is_system_liquidation"]=True` 允许系统强平 actor
+  - **RiskMode 动作矩阵修正**: NO_NEW_POSITIONS/CLOSE_ONLY 只阻止开仓(LONG/SHORT)，允许减仓(CLOSE_LONG/CLOSE_SHORT)
+- 代码变更:
+  - `trader/services/strategy_runner.py`: 修复 CLOSE_ONLY 语义，区分开仓/减仓信号
+  - `trader/services/oms_callback.py`: 新增 `set_risk_mode_callback()`、`_risk_mode_callback`，CANCEL_ALL_AND_HALT 执行 cancel-all，LIQUIDATE_AND_DISCONNECT 支持系统强平
+  - `trader/tests/test_strategy_runner_risk_mode_gate.py`: 新增7个测试
+  - `trader/tests/test_risk_mode_oms_integration.py`: 新增12个测试
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_risk_mode_oms_integration.py trader/tests/test_strategy_runner_risk_mode_gate.py --tb=short` → 27 passed ✅
+  - `python -m pytest -q trader/tests/test_risk_mode_controller.py --tb=short` → 23 passed ✅
+  - `mypy trader/services/oms_callback.py trader/services/strategy_runner.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+- 注意事项:
+  - KillSwitch 和 RiskMode 不得有两套互相矛盾的等级语义
+  - StrategyRunner 是早期拦截点，OMS 是最终防线
+  - CLOSE_ONLY 只阻止开仓，不阻止减仓
+  - LIQUIDATE_AND_DISCONNECT 允许系统强平 actor（需设置 `is_system_liquidation=True` 且信号为减仓）
+- 关联文档: `DEVELOPMENT_LOG.md`
+
+### 本次任务：阶段3 Funding/OI 生产数据接线
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 阶段3.1（审线）+ 阶段3.2（Wiring）+ 阶段3.3（第一轮返工）+ 阶段3.4（mypy修复）+ 阶段3.5（测试禁止网络访问）+ 阶段3.6（静默异常修复）完成
+- 目标: 把 Funding/OI 从"契约和测试存在"推进到"生产数据源可用、freshness 可判定、缺失/过期 fail-closed 可审计"
+- 开发后状态:
+  - **阶段3.1 审线结论**: `DataSourceCryptoRiskSnapshotProvider` 没有构建 `funding_oi_metrics`，live 永远返回空字典，导致 metrics 永远缺失
+  - **阶段3.2 实现**:
+    - 新增 `FundingOIMetricsPort` Protocol
+    - `DataSourceCryptoRiskSnapshotProvider` 可选注入 `FundingOIMetricsPort`
+    - 新增 `BinanceFundingOIMetricsSource` 实现
+    - `build_crypto_risk_runtime_components` wiring `BinanceFundingOIMetricsSource`
+  - **阶段3.3 第一轮返工**:
+    - `BinanceCurrentFundingOISource` 实现 `CurrentFundingOIPort`（funding rate + OI 真实拉取）
+    - `BinanceFundingOIMetricsSource` 使用 `BinanceCurrentFundingOISource` 而非 broker
+    - `update_budget()` 重建 provider 时保留 `funding_oi_metrics` wiring
+    - 新增 `trader/tests/test_funding_oi_live_wiring.py` 覆盖 wiring 测试
+  - **阶段3.4 mypy/测试修复**（针对用户验证发现的阻断点）:
+    - 去掉静默 `except Exception: pass`，改为记录日志和返回可审计原因
+    - 历史窗口缺失时返回空列表，不伪造历史（由 calculator 设置 window_insufficient 标志）
+    - 使用 `FeatureStore.read_feature_range()` 读取历史窗口
+    - 所有 mypy 错误通过 `# type: ignore[union-attr]` 修复
+  - **阶段3.5 测试禁止网络访问**（针对 pytest 超时问题）:
+    - `TestBinanceCurrentFundingOISource` 全部改成 FakeSession/fake HTTP response
+    - `FakeSession.get()` 是同步方法，返回异步上下文管理器
+    - 覆盖: funding rate 解析、OI 解析、timestamp 解析、empty response、429 限流
+  - **阶段3.6 静默异常修复**:
+    - `_get_current_funding()` / `_get_current_oi()` / `_get_latest_funding_ts()` / `_get_latest_oi_ts()` 捕获异常时记录 warning 并返回缺失值
+    - `_get_funding_history()` / `_get_oi_history()` 捕获异常时记录 warning 并返回空历史窗口
+    - 禁止 `except Exception: pass`，让 Funding/OI 数据缺失可观测、可追踪
+- fail-closed 保证：Funding/OI metrics 计算失败时抛出 `CryptoRiskSnapshotUnavailable`
+- 代码变更:
+  - `trader/services/crypto_risk_snapshot.py`: 新增 `FundingOIMetricsPort` Protocol、`BinanceFundingOIMetricsSource`
+  - `trader/api/crypto_risk_runtime.py`: wiring `BinanceFundingOIMetricsSource` + `update_budget()` 保留 wiring
+  - `trader/adapters/binance/funding_oi_stream.py`: 新增 `BinanceCurrentFundingOISource` 实现 `CurrentFundingOIPort`
+  - `trader/tests/test_funding_oi_live_wiring.py`: 新增 wiring 测试（fake session）
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_funding_oi_live_wiring.py trader/tests/test_funding_oi_window_calculator.py trader/tests/test_funding_oi_metrics_provider.py trader/tests/test_crypto_risk_p0.py --tb=short` → 62 passed ✅
+  - `python -m pytest -q trader/tests/test_risk_mode_oms_integration.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_risk_mode_controller.py --tb=short` → 50 passed ✅
+  - mypy → Success ✅
+- 注意事项:
+  - `BinanceFundingOIMetricsSource` 历史窗口使用 FeatureStore range 读取；窗口不足时返回空/短窗口，由 calculator 标记 window_insufficient
+  - `BinanceCurrentFundingOISource` 依赖 Binance REST API，需网络可达
+  - 下一步：阶段4 合约规格与订单簿数据管理
+- 关联文档: `DEVELOPMENT_LOG.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：P0 风控链路 mypy scoped 收敛
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 先清理 OMS/RiskEngine/RiskSizing/RiskMode 关键风控链路的类型门禁，不扩散到全仓历史类型债
+- 开发后状态:
+  - `OMSCallbackHandler._reserved_balance()` 使用 `Decimal("0")` 作为 `sum()` 初始值，避免空 reservation 返回 `int 0`
+  - `FillCallback` 类型支持同步或异步回调，主下单路径只在返回 awaitable 时执行 `await`
+  - WS fill path 只在回调返回 awaitable 时调度后台任务，避免把同步 `None` 传给 `asyncio.create_task()`
+- 验证结果:
+  - `mypy trader/services/oms_callback.py trader/core/application/risk_engine.py trader/core/domain/models/risk_decision.py trader/core/domain/services/risk_sizing_engine.py trader/core/domain/models/risk_mode.py trader/core/domain/services/risk_mode_controller.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 26 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py trader/tests/test_risk_mode_controller.py --tb=short` → 35 passed ✅
+- 注意事项:
+  - 全仓 `mypy trader/` 仍有既存类型债，不作为本次 P0 scoped 收敛的通过标准
+- 关联文档: `DEVELOPMENT_LOG.md`
+
+### 本次任务：阶段1.1 实盘 RiskSizing 裁剪接入 OMS（含返工）
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含返工修复）
+- 目标: CLIP 决策下 broker 实际收到 final_qty，并写入审计证据
+- 开发后状态:
+  - **核心实现**: `OMSCallbackHandler._apply_risk_sizing_clip()` 读取 `risk_sizing_decision.final_qty` 并修改 signal.quantity
+  - **CLIP 语义识别**: `passed=True + decision=clip` 时应用裁剪
+  - **REJECT 拦截**: `decision=reject/close_only` 时立即拒绝，不调用 broker
+  - **fail-closed**: `final_qty <= 0` 或缺失时抛出 `RiskRejectedError`
+  - **解析保护**: `Decimal(str(final_qty_str))` 用 try-except 包装，解析失败时 `_record_rejection()` 后抛 `RiskRejectedError`
+  - **审计字段**: CLIP 成功订单写入 `risk_sizing_decision`、`risk_requested_qty`、`risk_normalized_qty`、`risk_final_qty`、`risk_limiting_factor`、`risk_trace_id`
+  - **测试修复**: 审计测试改为读取 storage 验证字段存在且值正确
+- 代码变更:
+  - `trader/services/oms_callback.py`: 新增 `_apply_risk_sizing_clip()` 方法，修改 `_run_pre_trade_risk_check()`、`execute_signal()`
+  - `trader/tests/test_oms_pretrade_risk_gate.py`: 新增 `TestOMSRiskSizingClip` 测试类（5个测试）
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 26 passed ✅
+  - `python -m pytest -q trader/tests/test_crypto_risk_p0.py --tb=short` → 12 passed ✅
+- 注意事项:
+  - OMS 不得重新计算 sizing，只消费核心层决策
+  - `risk_sizing_decision` 存入 signal.metadata 再传递到 order_data
+  - 解析失败时必须 `_record_rejection()` + `RiskRejectedError`，不得静默通过
+- 关联文档: `docs/INTERFACE_CONTRACTS.md` 8.7.5节、`DEVELOPMENT_LOG.md`
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含4点小修正）
+- 目标: 锁定三条风控闭环契约，为后续阶段开发提供基础
+- 开发后状态:
+  - **修正1**：`RiskSizingDecision.calculate()` → `RiskSizingEngine.calculate(signal, snapshot, trace_id)`，统一 live/backtest 计算入口
+  - **修正2**：新增 `PROJECT_ARCHITECTURE.md` 5.1 节三条链路图（RiskSizing裁剪、RiskMode/KillSwitch控制、Funding/OI数据）
+  - **修正3**：RiskMode 动作矩阵区分三种命令（place_order/cancel_order/reduce_only liquidation），修正 CLOSE_ONLY 允许撤单、CANCEL_ALL_AND_HALT 必须执行 cancel-all、LIQUIDATE_AND_DISCONNECT 只允许系统强平 actor
+  - **修正4**：追加阶段0记录到 `PROJECT_STATUS.md` 和 `DEVELOPMENT_LOG.md`
+- 文档变更:
+  - `docs/INTERFACE_CONTRACTS.md`：新增 8.7.5 节 RiskSizingDecision 决策语义、8.8.3 节 RiskMode 动作矩阵（区分三种命令）、8.5.2 节 Funding/OI Runtime Contract
+  - `docs/PROJECT_ARCHITECTURE.md`：新增 5.1 节三条风控闭环链路
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_risk_sizing_engine.py --tb=short` → 21 passed ✅
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → 108 passed ✅
+  - `python -m mypy trader/core/domain/models/risk_decision.py trader/core/domain/models/risk_mode.py trader/core/domain/services/risk_sizing_engine.py --ignore-missing-imports` → Success ✅
+- 下一阶段: 阶段1 - 实盘 RiskSizing 裁剪（目标：CLIP 决策下 broker 实际收到 final_qty）
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`
 
 ### 本次任务：P10 任务包 6 — 一致性与回归（返工后）
 - 完成时间: 2026-05-18 (北京时间)
@@ -1205,8 +1404,6 @@
 - **基于**：`main`
 - **工作树**：有变更（本次为启动阻塞热修）
 - **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
-
-## 最近开发记录（滚动式）
 
 ### 本次任务：三层主线联动增强（网络层 + 协议层 + 交易一致性层）
 - 完成时间: 2026-04-20

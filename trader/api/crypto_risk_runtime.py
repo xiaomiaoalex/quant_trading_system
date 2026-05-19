@@ -6,13 +6,14 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from trader.adapters.binance.crypto_risk_source import (
     BINANCE_USD_M_FUTURES_BASE_URL,
     BinanceFuturesRiskDataSource,
     BinanceFuturesRiskDataSourceConfig,
 )
+from trader.adapters.binance.funding_oi_stream import BinanceCurrentFundingOISource
 from trader.api.env_config import get_binance_env, get_binance_recv_window
 from trader.core.application.ports import BrokerPort
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
@@ -20,8 +21,10 @@ from trader.core.domain.models.crypto_risk import CryptoRiskBudget
 from trader.core.domain.models.signal import Signal
 from trader.services.crypto_pre_trade_risk_audit import build_audited_crypto_pre_trade_risk_check
 from trader.services.crypto_risk_snapshot import (
+    BinanceFundingOIMetricsSource,
     CryptoRiskSnapshotProviderConfig,
     DataSourceCryptoRiskSnapshotProvider,
+    FundingOIMetricsPort,
     build_crypto_pre_trade_risk_check,
 )
 
@@ -60,6 +63,7 @@ class CryptoRiskRuntimeComponents:
     source: BinanceFuturesRiskDataSource
     snapshot_provider: DataSourceCryptoRiskSnapshotProvider
     pre_trade_risk_check: Callable[[Signal], Awaitable[RiskCheckResult]]
+    funding_oi_metrics: Optional[FundingOIMetricsPort] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,12 +222,21 @@ class CryptoRiskRuntimeManager:
                 raise RuntimeError("crypto risk runtime is not wired")
 
             new_config = replace(self._config, risk_budget=risk_budget)
+            funding_oi_metrics = None
+            if self._components.funding_oi_metrics is not None:
+                funding_oi_metrics = BinanceFundingOIMetricsSource(
+                    current_source=BinanceCurrentFundingOISource(
+                        base_url=new_config.futures_base_url
+                    ),
+                    budget=risk_budget,
+                )
             snapshot_provider = DataSourceCryptoRiskSnapshotProvider(
                 self._components.source,
                 config=CryptoRiskSnapshotProviderConfig(
                     base_symbols=new_config.base_symbols,
                     risk_budget=risk_budget,
                 ),
+                funding_oi_metrics=funding_oi_metrics,
             )
             raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(
                 broker=self._broker,
@@ -236,6 +249,7 @@ class CryptoRiskRuntimeManager:
                 source=self._components.source,
                 snapshot_provider=snapshot_provider,
                 pre_trade_risk_check=pre_trade_risk_check,
+                funding_oi_metrics=funding_oi_metrics,
             )
             self._config = new_config
             self._apply_pre_trade_check(pre_trade_risk_check)
@@ -505,6 +519,10 @@ def build_crypto_risk_runtime_components(
         config=CryptoRiskSnapshotProviderConfig(
             base_symbols=runtime_config.base_symbols,
             risk_budget=runtime_config.risk_budget,
+        ),
+        funding_oi_metrics=BinanceFundingOIMetricsSource(
+            current_source=BinanceCurrentFundingOISource(base_url=runtime_config.futures_base_url),
+            budget=runtime_config.risk_budget,
         ),
     )
     raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(

@@ -189,21 +189,44 @@ sequenceDiagram
 - 当前执行适配器仍是 Binance Spot Demo 路径；`execution_env=demo` 反映实际执行环境，USD-M source 的 `mode` 仅描述只读风控数据源 URL，不代表 Futures 下单能力。
 - Frontend `/crypto-risk` 运维页通过 `GET /v1/risk/crypto/runtime`、`PATCH /v1/risk/crypto/budget`、`POST /v1/risk/crypto/probe` 和 `/v1/events?stream_key=risk:crypto` 完成状态查看、预算热更新、只读联通性检查与审计追踪。
 - `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
-- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 group/cluster 敞口和合约保证金纯计算；前三者只依赖市场无关字段，`MarginRiskCalculator` 保持 crypto/futures 专用。
+- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`PortfolioRiskEnhancementService`、`MarginRiskCalculator`、`IntradayRiskMonitor` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 group/cluster 敞口、deterministic stress risk、合约保证金和盘中风险事件纯计算；`MarginRiskCalculator` 与 `IntradayRiskMonitor` 保持 crypto/futures 专用。
 - `CryptoRiskBudget` 支持 `symbol_clusters` 与 `cluster_notional_caps`；cluster 风险按"已成交持仓 + active open orders + 本次拟下单"聚合，命中 cap 时由 Policy Plane 拒绝，不修改 OMS 状态。
 - 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
 - OMS 下单入口可注入独立 `pre_trade_risk_check` 回调；该回调拒绝或异常时必须在 broker `place_order` 之前阻断订单。
+- `IntradayRiskMonitor` 位于 Core 层，只消费显式传入的 mark price、open order count、WS silence 秒数、margin ratio 输入、drawdown 与 liquidation buffer；检测到风险后通过 `RiskModeController.escalate_to()` 单调升级。真实 WS/MonitorService 调度属于 Service/Control 层，禁止 Core 直接拉取 IO。
+- `PortfolioRiskEnhancementService` 位于 Core 层，只消费显式 positions、mark_prices、symbol_clusters 与可选 volatility；压力场景按方向敏感 PnL 计算，集中度按 symbol/cluster/direction 聚合，回测与实盘必须复用同一服务。
 
 ### Funding/OI 历史窗口风控补充
 
 - P4.6 新增 Funding/OI 历史窗口派生能力，由 Core 纯计算 + Service 层 Provider 组成。
 - Core 层 `FundingOIWindowCalculator` 位于 `trader/core/domain/services/funding_oi_window_calculator.py`，无任何 IO 操作。
 - Service 层 `FundingOIMetricsProvider` 位于 `trader/services/funding_oi_metrics_provider.py`，通过 `FundingOIHistoryPort` 和 `CurrentFundingOIPort` 从 FeatureStore 读取历史数据。
+- Service 层 `BinanceFundingOIMetricsSource` 位于 `trader/services/crypto_risk_snapshot.py`，通过 `BinanceCurrentFundingOISource` 实时拉取当前 funding rate 和 OI。
 - `CryptoFundingOIRiskMetrics` 支持 funding 和 OI 独立计算，包含独立缺失标志：`funding_data_stale`、`oi_data_stale`、`funding_window_insufficient`、`oi_window_insufficient`、`funding_current_missing`、`oi_current_missing`。
 - 缺 funding 不影响 OI 指标，缺 OI 不影响 funding 指标。
 - 当前值缺失时返回 `None`，并设置对应 `_missing` 标志，不转成 `0.0` 制造虚假 Z-Score。
 - `open_interest_change_rate` 为百分比变化率 `(current_oi - mean) / mean * 100`，不是 Z-Score。
+- 历史窗口缺失时返回空列表，由 calculator 设置 `window_insufficient` 标志，不伪造历史。
 - 运行时环境变量（`CRYPTO_RISK_MAX_ABS_FUNDING_RATE_Z_SCORE` 等）待 P4.8 接入 `CryptoPreTradeRiskPlugin`。
+
+### Live Funding/OI 数据链路
+
+```
+DataSourceCryptoRiskSnapshotProvider
+    └── FundingOIMetricsPort (Protocol)
+            └── BinanceFundingOIMetricsSource
+                    └── BinanceCurrentFundingOISource (Adapter)
+                            ├── get_current_funding_rate()  → REST /fapi/v1/fundingRate
+                            ├── get_current_open_interest() → REST /fapi/v1/openInterest
+                            ├── get_latest_funding_ts_ms()  → REST /fapi/v1/fundingRate
+                            └── get_latest_oi_ts_ms_ms()     → REST /fapi/v1/openInterest
+
+BinanceCurrentFundingOISource (Adapter 层) 位于:
+  trader/adapters/binance/funding_oi_stream.py
+
+BinanceFundingOIMetricsSource (Service 层) 位于:
+  trader/services/crypto_risk_snapshot.py
+```
 
 ### 回测市场无关补充
 
@@ -378,6 +401,116 @@ flowchart LR
 | `PROJECT_STATUS.md` | 当前状态和最近任务结果 |
 | `DEVELOPMENT_LOG.md` | 只追加的开发过程记录 |
 | `docs/EXPERIENCE_SUMMARY.md` | 踩坑、模式、可复用经验 |
+
+---
+
+## 5.1 风控闭环链路（阶段0新增）
+
+阶段0锁定了三条核心风控闭环，后续所有开发必须围绕这三条链路展开。
+
+### 5.1.1 RiskSizing 裁剪链路
+
+```mermaid
+sequenceDiagram
+    participant Signal as Signal (策略)
+    participant Engine as RiskSizingEngine.calculate()
+    participant Plugin as CryptoPreTradeRiskPlugin
+    participant OMS as OMSCallbackHandler
+    participant Broker as Binance Broker
+
+    Signal->>Engine: Signal + CryptoRiskSnapshot
+    Engine-->>Plugin: RiskSizingDecision (APPROVE/CLIP/REJECT/CLOSE_ONLY)
+    Plugin->>Plugin: RiskCheckResult with risk_sizing_decision.details
+    Plugin-->>OMS: RiskCheckResult (passed=True for CLIP)
+    OMS->>OMS: read risk_sizing_decision.final_qty
+    alt CLIP decision
+        OMS->>Broker: place_order(qty=final_qty)
+        Note over OMS: 不重新计算 sizing
+    else REJECT decision
+        OMS->>OMS: reject, no place_order
+        Note over OMS: broker 不得收到订单
+    end
+```
+
+**关键约束**：
+- `RiskSizingEngine.calculate()` 位于 Core domain service，输出 `RiskSizingDecision`
+- `CLIP` 时 OMS **必须**使用 `final_qty`，不得使用 `requested_qty` 或 `normalized_qty`
+- OMS 不得重新计算 sizing，只能消费核心层决策
+- 审计必须记录 `requested_qty`、`normalized_qty`、`final_qty`、`limiting_factor`
+- `final_qty <= 0` 或缺失时，OMS 必须 fail-closed 返回 REJECT
+
+### 5.1.2 RiskMode/KillSwitch 控制链路
+
+```mermaid
+sequenceDiagram
+    participant Event as Risk Event (margin/markprice/Funding-OI)
+    participant Controller as RiskModeController
+    participant KillSwitch as KillSwitchService
+    participant Runner as StrategyRunner
+    participant OMS as OMS
+
+    Event->>Controller: check_and_escalate(trigger, reason)
+    Controller->>Controller: 评估是否需要升级
+    alt 需要升级
+        Controller->>KillSwitch: set_state(scope, new_level)
+        Controller->>Runner: 早期拦截 (early gate)
+        Runner->>Runner: block new position signals
+    else 不需要升级
+        Controller-->>Event: 保持当前模式
+    end
+    KillSwitch-->>OMS: 传播 KillSwitch state
+    OMS->>OMS: 最终防线 (final gate)
+    OMS->>OMS: 拒绝或放行订单
+```
+
+**RiskMode 动作矩阵（区分三种命令）**：
+
+| RiskMode | place_order (新下单) | cancel_order / cancel_all | reduce_only liquidation |
+|----------|---------------------|---------------------------|------------------------|
+| NORMAL | ✅ 允许 | ✅ 允许 | ✅ 允许 |
+| NO_NEW_POSITIONS | ❌ 禁止新开仓 | ✅ 允许 | ✅ 允许 |
+| CLOSE_ONLY | ❌ 禁止新开仓 | ✅ 允许（撤销现有挂单） | ✅ 允许 |
+| CANCEL_ALL_AND_HALT | ❌ 禁止所有下单 | ✅ **必须执行** cancel_all | ✅ 允许（系统强平 actor） |
+| LIQUIDATE_AND_DISCONNECT | ❌ 禁止策略订单 | ❌ 禁止 | ✅ **系统强平 actor 允许** |
+
+**关键约束**：
+- `CANCEL_ALL_AND_HALT` 必须先执行 `cancel_all`，再阻止新下单
+- `LIQUIDATE_AND_DISCONNECT` 禁止策略订单，但允许系统强平 actor 发出 `reduce_only` 强平单
+- StrategyRunner 是早期拦截点，OMS 是最终防线
+- KillSwitch 和 RiskMode 不得有两套互相矛盾的等级语义
+
+### 5.1.3 Funding/OI 生产数据链路
+
+```mermaid
+flowchart LR
+    Adapter["Binance Adapter\n(Funding/OI REST/WS)"] --> FeatureStore["FeatureStore\n(历史数据存储)"]
+    FeatureStore --> Provider["FundingOIMetricsProvider"]
+    Provider --> Calculator["FundingOIWindowCalculator\n(Core 纯计算)"]
+    Calculator --> Snapshot["CryptoRiskSnapshot\n(funding_oi_metrics)"]
+    Snapshot --> Plugin["CryptoPreTradeRiskPlugin"]
+
+    subgraph "Fail-Closed 约束"
+        Stale["data_stale=True"] --> Reject["REJECT + CRYPTO_FUNDING_OI_RISK"]
+        Window["window_insufficient=True"] --> Reject
+        Missing["current_missing=True"] --> Reject
+        Exceed["z_score > threshold"] --> Reject
+    end
+```
+
+**数据源契约**：
+
+| 数据源 | Freshness 要求 | fail-closed 行为 |
+|--------|----------------|------------------|
+| 历史 Funding Rate | 必须覆盖 `funding_history_window` 天数 | 窗口不足时 REJECT |
+| 历史 OI | 必须覆盖 `oi_history_window` 天数 | 窗口不足时 REJECT |
+| 当前 Funding Rate | 必须返回最新值 | 缺失时 REJECT（阈值启用时） |
+| 当前 OI | 必须返回最新值 | 缺失时 REJECT（阈值启用时） |
+
+**关键约束**：
+- funding 和 OI **独立计算**，互不影响
+- `None` 不得转成 `0.0` 制造虚假 Z-Score
+- Adapter/Service 层读取数据，Core 层只消费 snapshot
+- 单测不得访问真实网络，必须用 fake provider
 
 ---
 

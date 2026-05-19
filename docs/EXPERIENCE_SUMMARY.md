@@ -4,6 +4,185 @@
 
 ---
 
+## 三十六、单测禁止访问真实网络（2026-05-19）
+
+### 36.1 踩坑记录：单测误连 Binance 导致超时
+
+**问题描述**：
+阶段3.4 阶段3.5测试中，`TestBinanceCurrentFundingOISource` 直接实例化 `BinanceCurrentFundingOISource()` 并调用 `get_current_funding_rate("BTCUSDT")`，pytest 在30秒后超时。
+
+**根因**：
+单测直接访问 Binance REST API（`https://fapi.binance.com`），违反 `AGENTS.md` 约束：单测严禁访问网络。这也是 funding rate 始终为 None 的直接风险。
+
+**解决方案**：
+- 使用 FakeSession 注入 `source._session = FakeSession()`
+- FakeSession 的 `get()` 返回 FakeContextManager，FakeContextManager 返回 FakeResponse
+- FakeResponse.json() 返回预设的 JSON 数据
+
+```python
+class FakeResponse:
+    status = 200
+    async def json(self):
+        return [{"fundingRate": "0.0001", "fundingTime": 1234567890000}]
+
+class FakeContextManager:
+    async def __aenter__(self):
+        return FakeResponse()
+    async def __aexit__(self, *args):
+        pass
+
+class FakeSession:
+    closed = False
+    def get(self, url, params=None):
+        return FakeContextManager()
+    async def close(self):
+        pass
+
+source = BinanceCurrentFundingOISource()
+source._session = FakeSession()
+result = await source.get_current_funding_rate("BTCUSDT")
+```
+
+**经验**：
+- 所有需要 HTTP 交互的 Adapter 单测必须使用 FakeSession，不允许直接访问网络
+- 测试超时是单测连网的明确信号
+- FakeSession 需要实现 `closed` 属性和 `close()` 方法，防止 source 尝试关闭不存在的 session
+
+### 36.2 踩坑记录：FakeSession.get 必须是同步方法
+
+**问题描述**：
+早期实现中 `FakeSession.get` 是 `async def`，导致 RuntimeWarning: coroutine was never awaited。
+
+**解决方案**：
+- `async with self._session.get(url, params=params) as resp` 内部调用 `get()` 已经是同步上下文管理器
+- FakeSession.get 必须是普通 `def`，不是 `async def`
+
+**经验**：
+- aiohttp 的 `session.get()` 返回的是异步上下文管理器，但其内部 `get()` 方法是同步的
+- pytest-asyncio 在 async with 中调用 async 方法时，如果 mock 方法也是 async 会导致 coroutine 未等待
+
+### 36.3 踩坑记录：fail-closed 不能等于静默失败
+
+**问题描述**：
+阶段3.6 验收时，Funding/OI 历史窗口读取失败会返回空列表，最终由 calculator 标记 `window_insufficient` 并触发 fail-closed。但如果异常分支没有日志，运行时只能看到“窗口不足”，无法判断是市场数据真的不足，还是 FeatureStore/source 读取失败。
+
+**解决方案**：
+- adapter/source 异常可以降级为缺失值或空窗口，让风控继续 fail-closed
+- 捕获异常时必须记录 `logger.warning(...)`
+- 禁止 `except Exception: pass`
+
+**经验**：
+- fail-closed 解决的是交易安全，可观测日志解决的是故障定位
+- 数据缺失、数据过期、窗口不足和 source 异常应该在日志或审计上可区分
+- 返回 `None` 或空窗口前要留下原因，否则生产排障会被误导
+
+---
+
+## 三十七、保证金与强平模型升级经验（2026-05-19）
+
+### 37.1 踩坑记录：测试文件不能复制生产公式
+
+**问题描述**：
+阶段4初版在 `test_margin_risk_calculator.py` 内定义了本地 `calculate_liquidation_price()` 和本地 `LiquidationPriceResult`。测试虽然通过，但没有覆盖 `MarginRiskCalculator.calculate_liquidation_price()` 的真实实现，导致生产公式中的维度错误没有被测试发现。
+
+**解决方案**：
+- 删除测试文件内的影子公式
+- 所有强平价测试直接调用生产 `MarginRiskCalculator.calculate_liquidation_price()`
+- 在接口契约中明确禁止测试复制生产公式
+
+**经验**：
+- 风控核心公式测试必须打到生产入口
+- 测试 helper 可以构造输入，但不能重新实现被测算法
+- “测试通过”如果没有覆盖真实入口，比失败更危险
+
+### 37.2 设计模式：用保证金等式求强平价
+
+**问题描述**：
+`maint_amount` 是 quote 货币维度，不是价格维度。把它直接加到 `entry_price * (...)` 上会产生单位错误，在高价标的或大持仓下尤其危险。
+
+**解决方案**：
+强平价按保证金等式求解：
+
+```text
+initial_margin + unrealized_pnl = maintenance_margin + fee_buffer
+```
+
+long/short 分别根据 PnL 方向解出价格；费用缓冲计入有效维持保证金，提高风险占用。
+
+**经验**：
+- 交易所语义模型首先要检查量纲
+- `maint_amount` 应进入保证金等式，不能直接当价格修正项
+- fee buffer 是风险占用，不应该把维持保证金扣低
+
+---
+
+## 三十八、盘中与交易后风控经验（2026-05-19）
+
+### 38.1 踩坑记录：只测 RiskModeController 不等于实现 Monitor
+
+**问题描述**：
+阶段5初版测试直接调用 `RiskModeController.check_and_escalate()` 模拟 mark price drop、WS silence 和 drawdown，虽然能证明 RiskMode 可以升级，但没有证明盘中 monitor 生产入口存在，也没有验证指标到 RiskMode 目标的映射。
+
+**解决方案**：
+- 新增 Core 层 `IntradayRiskMonitor`
+- 测试直接调用 `IntradayRiskMonitor.check_*()` 生产入口
+- `RiskModeController` 提供 `escalate_to()`，由 monitor 明确选择目标 RiskMode
+
+**经验**：
+- controller 是状态机，不是监控器
+- 盘中风控必须有“指标输入 → 风险事件 → RiskMode 目标”的真实入口
+- 测试可以 mock runtime 输入，但不能跳过被测生产服务
+
+### 38.2 踩坑记录：审计失败不能静默
+
+**问题描述**：
+为了让 PG 审计不可用时不阻止 RiskMode 升级，初版使用 `except Exception: pass`。这虽然保证了升级继续执行，但让审计故障不可观测，违反 fail-closed 可排障要求。
+
+**解决方案**：
+- 审计回调异常不向上抛出，不阻断 RiskMode 升级
+- 捕获异常时必须 `logger.warning(...)`
+- 测试和代码扫描禁止 `except: pass`
+
+**经验**：
+- 风控决策不能被审计 IO 失败阻断
+- 审计失败也不能消失在日志之外
+- fail-closed 与可观测性是两条都要满足的线
+
+---
+
+## 三十九、组合风险增强经验（2026-05-19）
+
+### 39.1 踩坑记录：stress shock 必须定义成价格乘数还是收益率
+
+**问题描述**：
+阶段6契约最初写 `BTC Shock = -5%`，实现中却使用 `0.95` 作为乘数。如果公式写成 `base_price * symbol_shock`，负收益率会直接生成负价格。
+
+**解决方案**：
+- 契约明确 `symbol_shocks` 是 price multiplier
+- 文档用 `0.95（-5%）` 这种双写法
+- 测试验证压力场景输出为正价格和正确 loss
+
+**经验**：
+- 风控公式字段必须先锁量纲和符号
+- “shock” 这种词容易混淆，代码里应尽量写成 `price_multiplier`
+
+### 39.2 踩坑记录：压力场景必须区分多空方向
+
+**问题描述**：
+如果只用 `original_exposure - stressed_exposure`，空头在下跌场景下会被错误记为亏损。组合风险会因此高估或误判 hedge 的保护效果。
+
+**解决方案**：
+- stress PnL 使用 `position.qty * (stressed_price - base_price)`
+- scenario loss 使用 `max(0, -sum(pnl))`
+- 新增 short downturn 盈利测试
+
+**经验**：
+- 组合风险不是 gross exposure 的静态缩放
+- 压力损失必须从方向敏感 PnL 推导
+- 同一 symbol 多条 position 要聚合，不能覆盖
+
+---
+
 ## 三十五、P10 一致性与回归测试经验（2026-05-18）
 
 ### 35.1 架构经验：一致性测试需要两条路径共享同一 RiskCheckResult 序列

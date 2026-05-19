@@ -34,6 +34,7 @@ from trader.adapters.persistence.postgres import is_postgres_available
 from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult
 from trader.core.domain.models.order import OrderSide, OrderStatus, OrderType
+from trader.core.domain.models.risk_mode import RiskMode
 from trader.core.domain.models.signal import Signal
 from trader.core.domain.services.position_lot_registry import get_lot_manager, set_lot_manager
 from trader.services.account_state import AccountStateService
@@ -41,6 +42,8 @@ from trader.services.execution_budget import ExecutionBudgetService
 from trader.storage.in_memory import ControlPlaneInMemoryStorage, get_storage
 
 logger = logging.getLogger(__name__)
+
+FillCallback = Callable[[str, str, str, str, float, float], Awaitable[None] | None]
 
 
 @dataclass(slots=True)
@@ -108,7 +111,7 @@ class OMSCallbackHandler:
         storage: Optional[ControlPlaneInMemoryStorage] = None,
         live_trading_enabled: Union[bool, Callable[[], bool]] = False,
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
-        fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+        fill_callback: Optional[FillCallback] = None,
         position_lot_manager: Any = None,  # None = 使用全局单例
         execution_repository: Optional[ExecutionRepository] = None,
         execution_budget: Optional[ExecutionBudgetService] = None,
@@ -184,6 +187,10 @@ class OMSCallbackHandler:
         self._fill_latency_sum_ms: float = 0.0
         self._fill_latency_count: int = 0
 
+        # 阶段2: RiskMode/KillSwitch 一等控制源
+        # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
+        self._risk_mode_callback: Optional[Callable[[str], "RiskMode"]] = None
+
     @property
     def _lot_mgr(self):
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
@@ -195,6 +202,22 @@ class OMSCallbackHandler:
     ) -> None:
         """Late-bind or clear the independent pre-trade risk callback."""
         self._pre_trade_risk_check = check
+
+    def set_risk_mode_callback(
+        self,
+        callback: Optional[Callable[[str], RiskMode]],
+    ) -> None:
+        """设置 RiskMode 状态查询回调
+
+        阶段2: OMS 作为 final gate，必须持有 RiskMode 状态。
+        RiskMode 动作矩阵:
+        - NORMAL: 允许所有订单
+        - NO_NEW_POSITIONS: 阻止开仓(LONG/SHORT)，允许减仓
+        - CLOSE_ONLY: 只允许减仓(CLOSE_LONG/CLOSE_SHORT)
+        - CANCEL_ALL_AND_HALT: 阻止所有新订单（策略订单）
+        - LIQUIDATE_AND_DISCONNECT: 阻止策略订单，允许系统强平
+        """
+        self._risk_mode_callback = callback
 
     def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
         key = f"{strategy_id}:{symbol}"
@@ -320,9 +343,12 @@ class OMSCallbackHandler:
         self._cleanup_balance_reservations()
         asset_norm = asset.upper()
         return sum(
-            amount
-            for reserved_asset, amount, _ in self._balance_reservations.values()
-            if reserved_asset == asset_norm
+            (
+                amount
+                for reserved_asset, amount, _ in self._balance_reservations.values()
+                if reserved_asset == asset_norm
+            ),
+            Decimal("0"),
         )
 
     def _reserve_balance(self, cl_ord_id: str, asset: str, amount: Decimal) -> None:
@@ -386,6 +412,27 @@ class OMSCallbackHandler:
             raise RiskRejectedError(f"Pre-trade risk check unavailable: {exc}") from exc
 
         if result.passed:
+            sizing_dict = result.details.get("risk_sizing_decision") if result.details else None
+            if sizing_dict:
+                decision_type = sizing_dict.get("decision", "")
+                if decision_type == "reject" or decision_type == "close_only":
+                    counter_key = (
+                        result.rejection_reason.value
+                        if result.rejection_reason is not None
+                        else "RISK_SIZING_REJECT"
+                    )
+                    reason_text = result.message or counter_key
+                    self._record_rejection(
+                        strategy_id=strategy_id,
+                        signal=signal,
+                        side=None,
+                        quantity=signal.quantity,
+                        price=signal.price,
+                        reason=f"PRE_TRADE_RISK_REJECT: {counter_key}: {reason_text}",
+                        counter_key=counter_key,
+                    )
+                    raise RiskRejectedError(reason_text)
+            self._apply_risk_sizing_clip(signal, result, strategy_id)
             return
 
         counter_key = (
@@ -404,6 +451,84 @@ class OMSCallbackHandler:
             counter_key=counter_key,
         )
         raise RiskRejectedError(reason_text)
+
+    def _apply_risk_sizing_clip(
+        self, signal: Signal, result: "RiskCheckResult", strategy_id: str
+    ) -> None:
+        """Apply RiskSizing CLIP decision: modify signal quantity to final_qty
+
+        阶段1核心逻辑：
+        - CLIP: OMS 必须使用 final_qty，不是原始 requested_qty
+        - REJECT: OMS 必须拒绝，不调用 broker
+        - final_qty <= 0 或缺失: fail-closed
+        - OMS 不得重新计算 sizing
+        """
+        details = result.details or {}
+        sizing_dict = details.get("risk_sizing_decision")
+        if sizing_dict is None:
+            return
+
+        decision_type = sizing_dict.get("decision", "")
+        if decision_type != "clip":
+            return
+
+        final_qty_str = sizing_dict.get("final_qty")
+        if final_qty_str is None:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=None,
+                quantity=signal.quantity,
+                price=signal.price,
+                reason=f"CLIP_REQUIRES_FINAL_QTY: limiting_factor={sizing_dict.get('limiting_factor')}",
+                counter_key=RejectionReason.RISK_SYSTEM_ERROR.value,
+            )
+            raise RiskRejectedError(
+                f"CLIP decision requires final_qty but got None. "
+                f"requested_qty={signal.quantity}, limiting_factor={sizing_dict.get('limiting_factor')}"
+            )
+
+        try:
+            final_qty = Decimal(str(final_qty_str))
+        except Exception as exc:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=None,
+                quantity=signal.quantity,
+                price=signal.price,
+                reason=f"FINAL_QTY_PARSE_ERROR: final_qty_str={final_qty_str!r}, error={exc}",
+                counter_key=RejectionReason.RISK_SYSTEM_ERROR.value,
+            )
+            raise RiskRejectedError(
+                f"Failed to parse final_qty: {final_qty_str!r}. error={exc}"
+            ) from exc
+
+        if final_qty <= 0:
+            self._record_rejection(
+                strategy_id=strategy_id,
+                signal=signal,
+                side=None,
+                quantity=signal.quantity,
+                price=signal.price,
+                reason=f"FINAL_QTY_ZERO: final_qty={final_qty}, limiting_factor={sizing_dict.get('limiting_factor')}",
+                counter_key=RejectionReason.RISK_SYSTEM_ERROR.value,
+            )
+            raise RiskRejectedError(
+                f"final_qty <= 0 is not allowed. "
+                f"requested_qty={signal.quantity}, final_qty={final_qty}, "
+                f"limiting_factor={sizing_dict.get('limiting_factor')}"
+            )
+
+        logger.info(
+            f"[OMSCallback] CLIP applied: strategy={strategy_id}, symbol={signal.symbol}, "
+            f"requested_qty={signal.quantity}, final_qty={final_qty}, "
+            f"limiting_factor={sizing_dict.get('limiting_factor')}"
+        )
+
+        object.__setattr__(signal, "quantity", final_qty)
+
+        signal.metadata["risk_sizing_decision"] = sizing_dict
 
     def _split_symbol_assets(self, symbol: str) -> tuple[str, str]:
         symbol_norm = symbol.upper().strip()
@@ -788,6 +913,111 @@ class OMSCallbackHandler:
             self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
 
+        # ==================== RiskMode Final Gate（阶段2） ====================
+        # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
+        # 动作矩阵：
+        # - NORMAL: 允许所有订单
+        # - NO_NEW_POSITIONS: 阻止开仓(LONG/SHORT)，允许减仓(CLOSE_LONG/CLOSE_SHORT)
+        # - CLOSE_ONLY: 只允许减仓
+        # - CANCEL_ALL_AND_HALT: 阻止所有策略订单
+        # - LIQUIDATE_AND_DISCONNECT: 阻止策略订单，允许系统强平
+        if self._risk_mode_callback:
+            try:
+                risk_mode = self._risk_mode_callback(strategy_id)
+                if risk_mode:
+                    if risk_mode == RiskMode.NO_NEW_POSITIONS:
+                        if signal.is_open_signal():
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_NO_NEW_POSITIONS: open signals blocked",
+                                counter_key="RISK_MODE_NO_NEW_POSITIONS",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open signals blocked, "
+                                f"reduce signals allowed"
+                            )
+                    elif risk_mode == RiskMode.CLOSE_ONLY:
+                        if signal.is_open_signal():
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_CLOSE_ONLY: only reduce allowed",
+                                counter_key="RISK_MODE_CLOSE_ONLY",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open signals blocked"
+                            )
+                    elif risk_mode == RiskMode.CANCEL_ALL_AND_HALT:
+                        self._record_rejection(
+                            strategy_id=strategy_id,
+                            signal=signal,
+                            side=None,
+                            quantity=signal.quantity,
+                            price=signal.price,
+                            reason=f"RISK_MODE_CANCEL_ALL_AND_HALT: cancelling all orders",
+                            counter_key="RISK_MODE_CANCEL_ALL_AND_HALT",
+                        )
+                        try:
+                            if hasattr(self._broker, "cancel_all") and callable(
+                                self._broker.cancel_all
+                            ):
+                                logger.warning(
+                                    f"[OMSCallback] CANCEL_ALL_AND_HALT: executing broker.cancel_all()"
+                                )
+                                await self._broker.cancel_all()
+                        except Exception as cancel_err:
+                            logger.error(
+                                f"[OMSCallback] CANCEL_ALL_AND_HALT: broker.cancel_all() failed: {cancel_err}"
+                            )
+                        raise RiskRejectedError(f"RiskMode {risk_mode.name}: all orders cancelled")
+                    elif risk_mode == RiskMode.LIQUIDATE_AND_DISCONNECT:
+                        is_system_liquidation = signal.metadata.get("is_system_liquidation", False)
+                        reduce_only = signal.metadata.get("reduce_only", False)
+                        if is_system_liquidation and (signal.is_close_signal() or reduce_only):
+                            logger.warning(
+                                f"[OMSCallback] LIQUIDATE_AND_DISCONNECT: system liquidation actor allowed "
+                                f"(close_signal={signal.is_close_signal()}, reduce_only={reduce_only})"
+                            )
+                        else:
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_LIQUIDATE_AND_DISCONNECT: open positions blocked, "
+                                f"only reduce-only liquidation allowed. "
+                                f"Set signal.metadata['is_system_liquidation']=True AND "
+                                f"signal must be CLOSE_LONG/CLOSE_SHORT (or reduce_only=True) for system actors.",
+                                counter_key="RISK_MODE_LIQUIDATE_AND_DISCONNECT",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open positions blocked, "
+                                f"only reduce-only liquidation allowed. "
+                                f"System actors must use CLOSE_LONG/CLOSE_SHORT or set reduce_only=True."
+                            )
+            except RiskRejectedError:
+                raise
+            except Exception as exc:
+                logger.error(f"RiskMode check failed: {exc}")
+                self._record_rejection(
+                    strategy_id=strategy_id,
+                    signal=signal,
+                    side=None,
+                    quantity=signal.quantity,
+                    price=signal.price,
+                    reason=f"RISK_MODE_CHECK_ERROR: {exc}",
+                    counter_key="RISK_MODE_CHECK_ERROR",
+                )
+                raise RiskRejectedError(f"RiskMode check unavailable: {exc}") from exc
+
         await self._run_pre_trade_risk_check(strategy_id, signal)
 
         # ==================== 获取 stepSize ====================
@@ -977,6 +1207,16 @@ class OMSCallbackHandler:
                     else datetime.now(timezone.utc).isoformat()
                 ),
             }
+
+            if "risk_sizing_decision" in signal.metadata:
+                sizing = signal.metadata["risk_sizing_decision"]
+                order_data["risk_sizing_decision"] = sizing
+                order_data["risk_requested_qty"] = sizing.get("requested_qty", "")
+                order_data["risk_normalized_qty"] = sizing.get("normalized_qty", "")
+                order_data["risk_final_qty"] = sizing.get("final_qty", "")
+                order_data["risk_limiting_factor"] = sizing.get("limiting_factor", "")
+                order_data["risk_trace_id"] = sizing.get("trace_id", "")
+
             self._storage.create_order(order_data)
 
             # ==================== 如果有成交，保存成交记录 ====================
@@ -1115,7 +1355,7 @@ class OMSCallbackHandler:
                 # ==================== 调用 on_fill 回调 ====================
                 if self._fill_callback:
                     try:
-                        await self._fill_callback(
+                        fill_result = self._fill_callback(
                             strategy_id,
                             cl_ord_id,
                             signal.symbol,
@@ -1123,6 +1363,8 @@ class OMSCallbackHandler:
                             float(broker_order.filled_quantity),
                             float(broker_order.average_price),
                         )
+                        if inspect.isawaitable(fill_result):
+                            await fill_result
                         logger.info(
                             f"[OMSCallback] on_fill called: strategy={strategy_id}, "
                             f"order={cl_ord_id}, qty={broker_order.filled_quantity}, "
@@ -1330,7 +1572,7 @@ def create_oms_callback(
     broker: BinanceSpotDemoBroker,
     live_trading_enabled: Union[bool, Callable[[], bool]] = False,
     event_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
-    fill_callback: Optional[Callable[[str, str, str, str, float, float], None]] = None,
+    fill_callback: Optional[FillCallback] = None,
     position_lot_manager: Any = None,
     execution_budget: Optional[ExecutionBudgetService] = None,
     account_state: Optional[AccountStateService] = None,
@@ -1541,9 +1783,11 @@ def create_oms_callback(
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链
-                    asyncio.create_task(
-                        fill_callback(strategy_id, cl_ord_id, symbol, side, quantity, price)
+                    fill_result = fill_callback(
+                        strategy_id, cl_ord_id, symbol, side, quantity, price
                     )
+                    if inspect.isawaitable(fill_result):
+                        asyncio.ensure_future(fill_result)
                     logger.info(
                         "[OMSCallback] Fill processed: cl_ord_id=%s, exec_id=%s, qty=%s, price=%s",
                         cl_ord_id,

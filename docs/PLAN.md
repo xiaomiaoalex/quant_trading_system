@@ -68,6 +68,10 @@
 | **市场无关风险审计 P4.1** | `adapters/persistence/market_risk_audit_repository.py`, `adapters/persistence/postgres/risk_audit_storage.py`, `api/routes/risk.py` | **2026-05-06 完成：`risk_audit_events` PG-first 仓储、`risk:crypto` 过滤视图、budget/probe 审计接入与内存事件投影兼容；真实 PG 集成回归 40 passed** |
 | **Pre-trade 风控拒绝证据 P4.2** | `services/crypto_pre_trade_risk_audit.py`, `api/crypto_risk_runtime.py` | **2026-05-06 完成：runtime pre-trade 拒绝/异常写入 `risk_audit_events`，事件为 `crypto_risk.pre_trade_rejected`，Core 风控插件保持无 IO** |
 | **DecisionTrace 审计查询 P4.3** | `api/routes/risk.py`, `services/crypto_pre_trade_risk_audit.py`, `Frontend/src/pages/CryptoRiskOps.tsx` | **2026-05-07 完成：`decision_trace_id` 标准化，新增 `/v1/risk/crypto/audit` PG-first 查询，前端支持 event/trace/signal 过滤** |
+| **阶段3 Funding/OI 生产数据接线** | `services/crypto_risk_snapshot.py`, `adapters/binance/funding_oi_stream.py`, `api/crypto_risk_runtime.py` | **2026-05-19 完成：live Funding/OI metrics wiring、Binance current source、FeatureStore 历史窗口、缺失/异常 fail-closed 可观测** |
+| **阶段4 保证金与强平模型升级** | `core/domain/services/margin_risk_calculator.py`, `core/domain/models/crypto_risk.py` | **2026-05-19 完成：交易所语义强平价、fee buffer、bracket fail-closed、生产公式测试覆盖；下一步接入 RiskSizingEngine constraint** |
+| **阶段5 盘中与交易后风控** | `core/domain/services/intraday_risk_monitor.py`, `core/domain/services/risk_mode_controller.py` | **2026-05-19 完成：Core monitor 生产入口、RiskMode 目标升级、审计异常可观测；下一步接入真实 WS/MonitorService 调度** |
+| **阶段6 组合风险增强** | `core/domain/services/portfolio_risk_enhancement.py` | **2026-05-19 完成：volatility discount、direction-aware stress risk、symbol/cluster/direction concentration；下一步接入 RiskSizingEngine constraint** |
 
 ### 已完成（Phase 6 全部完成 ✅）
 

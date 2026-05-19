@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
+from typing import Optional
 
 from trader.core.domain.models.market_risk import (
     AssetClass,

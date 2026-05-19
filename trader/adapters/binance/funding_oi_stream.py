@@ -21,6 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 if TYPE_CHECKING:
@@ -153,19 +154,24 @@ class FundingOIAdapter:
 
         for attempt in range(self._config.max_retries):
             try:
-                async with self._session.get(url, params=params) as resp:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
                     if resp.status == 200:
-                        data = await resp.json()
-                        if data and len(data) > 0:
-                            record = data[0]
-                            now_ms = int(time.time() * 1000)
-                            return FundingRecord(
-                                symbol=symbol,
-                                funding_rate=float(record["fundingRate"]),
-                                exchange_ts_ms=record["fundingTime"],
-                                local_ts_ms=now_ms,
-                                next_funding_time_ms=record.get("nextFundingTime", 0),
-                            )
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return None
+                        if not isinstance(json_result, (list, tuple)) or len(json_result) == 0:
+                            return None
+                        first_record: Any = json_result[0]  # type: ignore[index, union-attr]
+                        next_funding = first_record.get("nextFundingTime")  # type: ignore[union-attr]
+                        funding_time = first_record.get("fundingTime")  # type: ignore[union-attr]
+                        now_ms = int(time.time() * 1000)
+                        return FundingRecord(
+                            symbol=symbol,
+                            funding_rate=float(first_record["fundingRate"]),
+                            exchange_ts_ms=funding_time if funding_time is not None else now_ms,
+                            local_ts_ms=now_ms,
+                            next_funding_time_ms=next_funding if next_funding is not None else 0,
+                        )
                         logger.warning(f"[FundingOI] Empty funding rate response for {symbol}")
                         return None
                     else:
@@ -207,14 +213,17 @@ class FundingOIAdapter:
 
         for attempt in range(self._config.max_retries):
             try:
-                async with self._session.get(url, params=params) as resp:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
                     if resp.status == 200:
-                        data = await resp.json()
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return None
                         now_ms = int(time.time() * 1000)
+                        update_time = json_result.get("updateTime")
                         return OIRecord(
                             symbol=symbol,
-                            open_interest=float(data["openInterest"]),
-                            exchange_ts_ms=data.get("updateTime", now_ms),
+                            open_interest=float(json_result["openInterest"]),
+                            exchange_ts_ms=update_time if update_time is not None else now_ms,
                             local_ts_ms=now_ms,
                         )
                     else:
@@ -260,50 +269,52 @@ class FundingOIAdapter:
 
         for attempt in range(self._config.max_retries):
             try:
-                async with self._session.get(url, params=params) as resp:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
                     if resp.status == 200:
-                        data = await resp.json()
-                        if data and len(data) > 0:
-                            # 取最新一条数据
-                            record = data[0]
-                            now_ms = int(time.time() * 1000)
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return None
+                        if not len(json_result):
+                            return None
+                        record: Any = json_result[0]
+                        now_ms = int(time.time() * 1000)
 
-                            # 安全获取 updateTime，缺失时记录警告
-                            if "updateTime" not in record:
-                                logger.warning(
-                                    f"[FundingOI] Missing updateTime in long short ratio response for {symbol}, "
-                                    f"using local time instead"
-                                )
-                                exchange_ts_ms = now_ms
-                            else:
-                                exchange_ts_ms = record.get("updateTime")
-
-                            # 安全计算inverse_long_short_ratio，避免除零和极端小值风险
-                            # 极端小值阈值：小于 1e-6 视为无效值
-                            EXTREME_SMALL_THRESHOLD = 1e-6
-                            long_short_ratio_val = float(record.get("longShortRatio", 0))
-                            if (
-                                long_short_ratio_val == 0
-                                or long_short_ratio_val < EXTREME_SMALL_THRESHOLD
-                            ):
-                                inverse_long_short_ratio = 0.0
-                                if long_short_ratio_val != 0:
-                                    logger.warning(
-                                        f"[FundingOI] Extreme small long_short_ratio for {symbol}: "
-                                        f"{long_short_ratio_val}, treating as 0"
-                                    )
-                            else:
-                                inverse_long_short_ratio = 1.0 / long_short_ratio_val
-                            return LongShortRatioRecord(
-                                symbol=symbol,
-                                long_rate=long_short_ratio_val,
-                                inverse_long_short_ratio=inverse_long_short_ratio,
-                                long_position_ratio=float(record.get("longPositionRatio", 0)),
-                                short_position_ratio=float(record.get("shortPositionRatio", 0)),
-                                exchange_ts_ms=exchange_ts_ms,
-                                local_ts_ms=now_ms,
-                                period=period,
+                        update_time_val = record.get("updateTime")
+                        if update_time_val is None:
+                            logger.warning(
+                                f"[FundingOI] Missing updateTime in long short ratio response for {symbol}, "
+                                f"using local time instead"
                             )
+                            exchange_ts_ms = now_ms
+                        else:
+                            exchange_ts_ms = update_time_val
+
+                        # 安全计算inverse_long_short_ratio，避免除零和极端小值风险
+                        # 极端小值阈值：小于 1e-6 视为无效值
+                        EXTREME_SMALL_THRESHOLD = 1e-6
+                        long_short_ratio_val = float(record.get("longShortRatio", 0))
+                        if (
+                            long_short_ratio_val == 0
+                            or long_short_ratio_val < EXTREME_SMALL_THRESHOLD
+                        ):
+                            inverse_long_short_ratio = 0.0
+                            if long_short_ratio_val != 0:
+                                logger.warning(
+                                    f"[FundingOI] Extreme small long_short_ratio for {symbol}: "
+                                    f"{long_short_ratio_val}, treating as 0"
+                                )
+                        else:
+                            inverse_long_short_ratio = 1.0 / long_short_ratio_val
+                        return LongShortRatioRecord(
+                            symbol=symbol,
+                            long_rate=long_short_ratio_val,
+                            inverse_long_short_ratio=inverse_long_short_ratio,
+                            long_position_ratio=float(record.get("longPositionRatio", 0)),
+                            short_position_ratio=float(record.get("shortPositionRatio", 0)),
+                            exchange_ts_ms=exchange_ts_ms,
+                            local_ts_ms=now_ms,
+                            period=period,
+                        )
                         logger.warning(f"[FundingOI] Empty long short ratio response for {symbol}")
                         return None
                     else:
@@ -618,3 +629,170 @@ async def stop_funding_oi_service() -> None:
     global _global_adapter
     if _global_adapter:
         await _global_adapter.stop()
+
+
+class BinanceCurrentFundingOISource:
+    """
+    Binance 当前 Funding/OI 数据源
+
+    实现 CurrentFundingOIPort，从 Binance REST API 拉取当前 Funding Rate 和 Open Interest。
+    """
+
+    def __init__(
+        self,
+        base_url: str = BINANCE_FUTURES_BASE_URL,
+        request_timeout: float = 10.0,
+        max_retries: int = 3,
+    ) -> None:
+        self._base_url = base_url
+        self._request_timeout = request_timeout
+        self._max_retries = max_retries
+        self._session: Optional[aiohttp.ClientSession] = None
+
+    async def _ensure_session(self) -> None:
+        if self._session is None or self._session.closed:
+            import aiohttp
+
+            timeout = aiohttp.ClientTimeout(total=self._request_timeout)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+
+    async def _close_session(self) -> None:
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    async def get_current_funding_rate(self, symbol: str) -> Optional[Decimal]:
+        await self._ensure_session()
+        url = f"{self._base_url}/fapi/v1/fundingRate"
+        params = {"symbol": symbol}
+
+        for attempt in range(self._max_retries):
+            try:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
+                    if resp.status == 200:
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return None
+                        if not len(json_result):
+                            return None
+                        record: Any = json_result[0]
+                        rate = float(record["fundingRate"])
+                        return Decimal(str(rate))
+                    elif resp.status == 429:
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+            except Exception as e:
+                logger.warning(
+                    f"[FundingOI] get_current_funding_rate error for {symbol}: {e}, "
+                    f"attempt {attempt + 1}/{self._max_retries}"
+                )
+
+            if attempt < self._max_retries - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        logger.error(
+            f"[FundingOI] get_current_funding_rate failed for {symbol} after {self._max_retries} attempts"
+        )
+        return None
+
+    async def get_current_open_interest(self, symbol: str) -> Optional[Decimal]:
+        await self._ensure_session()
+        url = f"{self._base_url}/fapi/v1/openInterest"
+        params = {"symbol": symbol}
+
+        for attempt in range(self._max_retries):
+            try:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
+                    if resp.status == 200:
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return None
+                        oi = float(json_result["openInterest"])
+                        return Decimal(str(oi))
+                    elif resp.status == 429:
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+            except Exception as e:
+                logger.warning(
+                    f"[FundingOI] get_current_open_interest error for {symbol}: {e}, "
+                    f"attempt {attempt + 1}/{self._max_retries}"
+                )
+
+            if attempt < self._max_retries - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        logger.error(
+            f"[FundingOI] get_current_open_interest failed for {symbol} after {self._max_retries} attempts"
+        )
+        return None
+
+    async def get_latest_funding_ts_ms(self, symbol: str) -> int:
+        await self._ensure_session()
+        url = f"{self._base_url}/fapi/v1/fundingRate"
+        params = {"symbol": symbol}
+
+        for attempt in range(self._max_retries):
+            try:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
+                    if resp.status == 200:
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return 0
+                        if not len(json_result):
+                            return 0
+                        record: Any = json_result[0]
+                        ts = record.get("fundingTime")
+                        return ts if ts is not None else 0
+                    elif resp.status == 429:
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+            except Exception as e:
+                logger.warning(
+                    f"[FundingOI] get_latest_funding_ts_ms error for {symbol}: {e}, "
+                    f"attempt {attempt + 1}/{self._max_retries}"
+                )
+
+            if attempt < self._max_retries - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        logger.error(
+            f"[FundingOI] get_latest_funding_ts_ms failed for {symbol} after {self._max_retries} attempts"
+        )
+        return 0
+
+    async def get_latest_oi_ts_ms(self, symbol: str) -> int:
+        await self._ensure_session()
+        url = f"{self._base_url}/fapi/v1/openInterest"
+        params = {"symbol": symbol}
+
+        for attempt in range(self._max_retries):
+            try:
+                async with self._session.get(url, params=params) as resp:  # type: ignore[union-attr]
+                    if resp.status == 200:
+                        json_result: Any = await resp.json()  # type: ignore[union-attr]
+                        if json_result is None:
+                            return int(time.time() * 1000)
+                        ts = json_result.get("updateTime")
+                        return ts if ts is not None else int(time.time() * 1000)
+                    elif resp.status == 429:
+                        await asyncio.sleep(1 * (attempt + 1))
+                        continue
+            except Exception as e:
+                logger.warning(
+                    f"[FundingOI] get_latest_oi_ts_ms error for {symbol}: {e}, "
+                    f"attempt {attempt + 1}/{self._max_retries}"
+                )
+
+            if attempt < self._max_retries - 1:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        logger.error(
+            f"[FundingOI] get_latest_oi_ts_ms failed for {symbol} after {self._max_retries} attempts"
+        )
+        return 0
+
+
+def get_binance_current_funding_oi_source(
+    base_url: str = BINANCE_FUTURES_BASE_URL,
+) -> BinanceCurrentFundingOISource:
+    return BinanceCurrentFundingOISource(base_url=base_url)

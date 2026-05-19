@@ -37,6 +37,7 @@ from trader.core.application.strategy_protocol import (
     ValidationResult,
     validate_strategy_plugin,
 )
+from trader.core.domain.models.risk_mode import RiskMode
 from trader.core.domain.models.signal import Signal, SignalType
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,16 @@ class StrategyRunner:
         self._runtime_state_storage = runtime_state_storage
         # 策略级别的锁，用于保护并发更新
         self._strategy_locks: Dict[str, asyncio.Lock] = {}
+        # 阶段2: RiskMode early gate 回调（可选）
+        self._risk_mode_callback: Optional[Callable[[str], "RiskMode"]] = None
+
+    def set_risk_mode_callback(self, callback: Callable[[str], "RiskMode"]) -> None:
+        """设置 RiskMode 查询回调，用于 early gate 检查
+
+        Args:
+            callback: 接收 strategy_id，返回当前 RiskMode
+        """
+        self._risk_mode_callback = callback
 
     # 部署模式值（与策略的交易方向 mode 不冲突）
     _DEPLOYMENT_MODES = {"paper", "demo", "live", "shadow"}
@@ -798,6 +809,39 @@ class StrategyRunner:
                 # 确保信号包含策略信息
                 if not signal.strategy_name:
                     signal.strategy_name = info.strategy_id
+
+                # ==================== RiskMode Gate 检查（阶段2） ====================
+                # RiskMode 动作矩阵：
+                # - NO_NEW_POSITIONS: 阻止开仓信号(LONG/SHORT)，允许减仓信号(CLOSE_LONG/CLOSE_SHORT)
+                # - CLOSE_ONLY: 阻止开仓信号，允许减仓信号
+                # - CANCEL_ALL_AND_HALT: 阻止所有策略信号
+                # - LIQUIDATE_AND_DISCONNECT: 阻止所有策略信号
+                if self._risk_mode_callback:
+                    try:
+                        risk_mode = self._risk_mode_callback(strategy_id)
+                        if risk_mode:
+                            if risk_mode == RiskMode.NO_NEW_POSITIONS:
+                                if signal.is_open_signal():
+                                    info.blocked_reason = f"RiskMode {risk_mode.name} active"
+                                    logger.warning(
+                                        f"策略 {strategy_id} 被 RiskMode {risk_mode.name} 阻止开仓信号: {signal.signal_type}"
+                                    )
+                                    signal = None
+                            elif risk_mode == RiskMode.CLOSE_ONLY:
+                                if signal.is_open_signal():
+                                    info.blocked_reason = f"RiskMode {risk_mode.name} active"
+                                    logger.warning(
+                                        f"策略 {strategy_id} 被 RiskMode {risk_mode.name} 阻止开仓信号: {signal.signal_type}"
+                                    )
+                                    signal = None
+                            elif risk_mode.value >= RiskMode.CANCEL_ALL_AND_HALT.value:
+                                info.blocked_reason = f"RiskMode {risk_mode.name} active"
+                                logger.warning(
+                                    f"策略 {strategy_id} 被 RiskMode {risk_mode.name} 阻止所有信号"
+                                )
+                                signal = None
+                    except Exception as e:
+                        logger.error(f"RiskMode 检查失败: {e}")
 
                 # ==================== 资源限制检查 ====================
                 if limits:
