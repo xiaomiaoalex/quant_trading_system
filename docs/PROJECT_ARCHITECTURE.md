@@ -189,10 +189,11 @@ sequenceDiagram
 - 当前执行适配器仍是 Binance Spot Demo 路径；`execution_env=demo` 反映实际执行环境，USD-M source 的 `mode` 仅描述只读风控数据源 URL，不代表 Futures 下单能力。
 - Frontend `/crypto-risk` 运维页通过 `GET /v1/risk/crypto/runtime`、`PATCH /v1/risk/crypto/budget`、`POST /v1/risk/crypto/probe` 和 `/v1/events?stream_key=risk:crypto` 完成状态查看、预算热更新、只读联通性检查与审计追踪。
 - `BinanceFuturesRiskDataSource` 位于 Adapter 层，只在该层处理 `clientOrderId`、`positionAmt`、`markPrice`、`notionalCap` 等 Binance 原始字段，并在进入 Service 前转换为内部 DTO。
-- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 group/cluster 敞口和合约保证金纯计算；前三者只依赖市场无关字段，`MarginRiskCalculator` 保持 crypto/futures 专用。
+- `ExchangeRuleGuard`、`OpenOrderExposureCalculator`、`PortfolioExposureAggregator`、`MarginRiskCalculator`、`IntradayRiskMonitor` 均位于 Core domain service，负责交易所规则、在途订单最坏占用、组合级 group/cluster 敞口、合约保证金和盘中风险事件纯计算；前三者只依赖市场无关字段，`MarginRiskCalculator` 与 `IntradayRiskMonitor` 保持 crypto/futures 专用。
 - `CryptoRiskBudget` 支持 `symbol_clusters` 与 `cluster_notional_caps`；cluster 风险按"已成交持仓 + active open orders + 本次拟下单"聚合，命中 cap 时由 Policy Plane 拒绝，不修改 OMS 状态。
 - 在途 `reduce_only` 订单不得提前释放风险预算；只有成交事件进入账本后才减少真实风险。
 - OMS 下单入口可注入独立 `pre_trade_risk_check` 回调；该回调拒绝或异常时必须在 broker `place_order` 之前阻断订单。
+- `IntradayRiskMonitor` 位于 Core 层，只消费显式传入的 mark price、open order count、WS silence 秒数、margin ratio 输入、drawdown 与 liquidation buffer；检测到风险后通过 `RiskModeController.escalate_to()` 单调升级。真实 WS/MonitorService 调度属于 Service/Control 层，禁止 Core 直接拉取 IO。
 
 ### Funding/OI 历史窗口风控补充
 

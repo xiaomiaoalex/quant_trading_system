@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from typing import Callable, Optional
 
 from trader.core.domain.models.risk_mode import (
@@ -10,6 +11,9 @@ from trader.core.domain.models.risk_mode import (
     RiskModeState,
     create_risk_mode_event,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -107,6 +111,17 @@ class RiskModeController:
 
         return self._escalate_to(target_mode, reason, trigger, trace_id, metadata)
 
+    def escalate_to(
+        self,
+        target: RiskMode,
+        reason: str,
+        trigger: str,
+        trace_id: str = "",
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """Escalate directly to a monitor-selected target mode."""
+        return self._escalate_to(target, reason, trigger, trace_id, metadata)
+
     def _determine_escalation_target(self) -> RiskMode | None:
         """根据当前模式和拒绝次数确定目标模式
 
@@ -157,7 +172,15 @@ class RiskModeController:
         )
 
         if self._audit_callback:
-            self._audit_callback(event)
+            try:
+                self._audit_callback(event)
+            except Exception as exc:
+                logger.warning(
+                    "RiskMode audit callback failed for trigger=%s trace_id=%s: %s",
+                    trigger,
+                    trace_id,
+                    exc,
+                )
 
         return True
 
@@ -205,7 +228,14 @@ class RiskModeController:
         )
 
         if self._audit_callback:
-            self._audit_callback(event)
+            try:
+                self._audit_callback(event)
+            except Exception as exc:
+                logger.warning(
+                    "RiskMode audit callback failed for manual escalation trace_id=%s: %s",
+                    trace_id,
+                    exc,
+                )
 
         return True
 
@@ -247,7 +277,14 @@ class RiskModeController:
             )
 
             if self._audit_callback:
-                self._audit_callback(event)
+                try:
+                    self._audit_callback(event)
+                except Exception as exc:
+                    logger.warning(
+                        "RiskMode audit callback failed for manual release trace_id=%s: %s",
+                        trace_id,
+                        exc,
+                    )
 
             return True
 
@@ -287,6 +324,13 @@ class RiskModeController:
         )
 
         if self._audit_callback:
-            self._audit_callback(event)
+            try:
+                self._audit_callback(event)
+            except Exception as exc:
+                logger.warning(
+                    "RiskMode audit callback failed for force override trace_id=%s: %s",
+                    trace_id,
+                    exc,
+                )
 
         return True

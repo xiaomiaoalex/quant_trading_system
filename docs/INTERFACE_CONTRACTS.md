@@ -722,6 +722,100 @@ slippage_cost = notional * (slippage_bps / 10000)
 - 费用估算计入 effective_maintenance_margin
 - 强平价测试必须调用 `MarginRiskCalculator.calculate_liquidation_price()` 生产实现，禁止在测试文件中复制影子公式
 
+### 8.8.3 阶段5盘中与交易后风控契约（P5）
+
+阶段5目标是从"下单前风控"扩展为"持仓生命周期风控"。
+
+#### 8.8.3.1 盘中风控 Monitor 类型
+
+**IntradayRiskMonitor（Core domain service）**：
+
+位于 `trader/core/domain/services/intraday_risk_monitor.py`（新增），职责：
+- 接收 runtime/service 显式传入的 margin ratio、mark price 跳变、open order spike、drawdown、venue health、WS silence 等指标
+- 检测风险事件后调用 `RiskModeController.escalate_to()`，由 monitor 明确选择目标 RiskMode
+- Core 层无 IO；真实 WS/MonitorService 调度只允许在 Service/Control 层完成
+
+**MonitorResult**：
+
+| 字段 | 含义 |
+|------|------|
+| `event_type` | 事件类型：`margin_ratio`, `mark_price_drop`, `order_spike`, `drawdown`, `venue_degraded`, `ws_silence` |
+| `severity` | 严重程度：`LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| `triggered` | 是否触发升级 |
+| `current_mode` | 当前 RiskMode |
+| `escalation_target` | 目标 RiskMode（如有） |
+| `trace_id` | 追踪 ID |
+| `reason` | 触发原因 |
+| `metadata` | 指标快照 |
+
+#### 8.8.3.2 盘中 Monitor 动作矩阵
+
+| Monitor | 触发条件 | 首次触发目标 | 累计触发目标 |
+|---------|----------|--------------|--------------|
+| `mark_price_drop` | mark price 下跌 >10% | CLOSE_ONLY | LIQUIDATE_AND_DISCONNECT |
+| `margin_ratio` | margin_ratio > 80% | CLOSE_ONLY | LIQUIDATE_AND_DISCONNECT |
+| `liquidation_buffer` | buffer < 5% | CLOSE_ONLY | LIQUIDATE_AND_DISCONNECT |
+| `open_order_spike` | open_orders > 阈值 | CLOSE_ONLY | CANCEL_ALL_AND_HALT |
+| `drawdown` | drawdown > 20% | CLOSE_ONLY | LIQUIDATE_AND_DISCONNECT |
+| `venue_degraded` | WS silence > 30s | NO_NEW_POSITIONS | CLOSE_ONLY |
+| `ws_silence` | WS silence > 60s | CLOSE_ONLY | CANCEL_ALL_AND_HALT |
+
+#### 8.8.3.3 Post-Trade Reconciliation Check
+
+**ReconciliationEngine（Core domain service）**：
+
+位于 `trader/core/domain/services/reconciliation_engine.py`，职责：
+- 对比 broker 持仓与 OMS 持仓
+- 检测不一致并触发相应动作
+
+**ReconciliationOutcome**：
+
+| 字段 | 含义 |
+|------|------|
+| `status` | 状态：`CONSISTENT`, `DISCREPANCY`, `HISTORICAL_GAP` |
+| `action` | 动作：`NONE`, `ALERT`, `KILLSWITCH_L1` |
+| `diff_ratio` | 差异比例 |
+| `is_within_tolerance` | 是否在容忍范围内 |
+
+#### 8.8.3.4 Fail-Closed 约束
+
+- PG audit 写入失败时，风控决策仍必须执行，不影响 RiskMode 升级
+- 缺少关键风控数据时（mark price、margin_balance 等）fail-closed
+- 审计回调异常不得阻止风控状态变更
+- 审计回调异常必须记录日志，禁止 `except Exception: pass`
+
+#### 8.8.3.5 幂等性约束
+
+- 同一触发源连续触发，`check_and_escalate()` 每调用一次计数一次
+- 模式已升级到 `LIQUIDATE_AND_DISCONNECT` 时不再升级
+- 人工干预（`manual_release`）后重置拒绝计数
+
+#### 8.8.3.6 测试要求
+
+- mark price 急跌触发 RiskMode 升级
+- open order spike 触发 cancel-all
+- WS silence 超时触发 degraded + no-new-positions
+- PG audit 不可用时 fail-closed
+- 重复风险事件幂等，不重复升级、不重复记账
+- 审计事件不可变，包含必要字段
+- Monitor 测试必须调用 `IntradayRiskMonitor.check_*()` 生产入口，禁止只直调 `RiskModeController` 冒充盘中监控
+
+#### 8.8.3.7 审计事件字段
+
+每个 `RiskModeAuditEvent` 必须包含：
+
+| 字段 | 含义 |
+|------|------|
+| `event_type` | 固定为 `risk_mode_changed` |
+| `schema_version` | 固定为 `1` |
+| `trace_id` | 追踪 ID |
+| `ts_ms` | 时间戳 |
+| `mode_before` | 升级前模式值 |
+| `mode_after` | 升级后模式值 |
+| `reason` | 原因 |
+| `trigger` | 触发源 |
+| `triggered_by` | 触发者（system/operator） |
+
 **RiskModeState**：
 
 | 字段 | 含义 |

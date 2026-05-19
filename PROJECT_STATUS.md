@@ -8,6 +8,30 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：阶段5 盘中与交易后风控
+- 完成时间: 2026-05-19 (北京时间)
+- 状态: ✅ 已完成（含验收修正）
+- 目标: 从下单前风控扩展为持仓生命周期风控，覆盖 mark price 跳变、open order spike、WS silence、margin ratio、drawdown、liquidation buffer 等盘中风险事件
+- 开发后状态:
+  - 新增 `IntradayRiskMonitor` Core domain service，保持无 IO、确定性、可回放；所有监控输入由 runtime/service 显式传入
+  - `IntradayRiskMonitor` 将盘中风险事件转换为明确的 RiskMode 目标升级：NO_NEW_POSITIONS、CLOSE_ONLY、CANCEL_ALL_AND_HALT、LIQUIDATE_AND_DISCONNECT
+  - `RiskModeController.escalate_to()` 支持 monitor 选择目标模式，不再只能依赖连续 rejection 计数推断
+  - 审计回调异常被捕获并记录 warning，风险模式升级仍执行；禁止 `except Exception: pass`
+  - 新增测试覆盖真实 monitor 生产入口，避免只直调 controller 的假绿
+- 代码变更:
+  - `trader/core/domain/services/intraday_risk_monitor.py`: 新增 `IntradayRiskMonitor`、`MonitorResult`、`MonitorSeverity`、`IntradayRiskMonitorConfig`
+  - `trader/core/domain/services/risk_mode_controller.py`: 新增 `escalate_to()`，审计回调异常改为 logging warning
+  - `trader/tests/test_intraday_risk_monitors.py`: 新增盘中 monitor 与 RiskModeController 集成测试
+  - `docs/INTERFACE_CONTRACTS.md`: 新增阶段5盘中与交易后风控契约
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_intraday_risk_monitors.py trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_mode_controller.py --tb=short` → 80 passed ✅
+  - `python -m mypy trader/core/domain/services/intraday_risk_monitor.py trader/core/domain/services/risk_mode_controller.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+  - `Select-String` 扫描 `risk_mode_controller.py` / `intraday_risk_monitor.py` 无 `except: pass` ✅
+- 注意事项:
+  - 当前阶段完成 Core monitor 与 RiskMode 升级闭环；尚未把 monitor 调度接入真实 WS/MonitorService 定时运行
+  - 后续应在 Service/Control 层把 WS silence、venue health、drawdown 与实时账户快照接入 `IntradayRiskMonitor`
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 本次任务：阶段4 保证金与强平模型升级
 - 完成时间: 2026-05-19 (北京时间)
 - 状态: ✅ 已完成（含验收修正）

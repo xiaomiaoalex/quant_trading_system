@@ -25,6 +25,22 @@
 
 ## 最近记录
 
+### 2026-05-19 04:00 - 阶段5 盘中与交易后风控验收修正
+
+- 背景: 阶段5交付声明新增盘中 monitor，但实际只新增了 controller 直调测试；同时 `risk_mode_controller.py` 用 `except Exception: pass` 吞掉审计异常，违反 Fail-Closed 可观测约束。
+- 决策: 新增 Core 层 `IntradayRiskMonitor` 作为真实生产入口；RiskMode 目标由 monitor 明确选择，审计异常只影响审计写入，不影响模式升级，并必须记录 warning。
+- 改动:
+  - `trader/core/domain/services/intraday_risk_monitor.py`: 新增 mark price、open order、WS silence、margin ratio、drawdown、liquidation buffer 检查方法。
+  - `trader/core/domain/services/risk_mode_controller.py`: 新增 `escalate_to()`，审计回调异常改为 `logger.warning(...)`。
+  - `trader/tests/test_intraday_risk_monitors.py`: 新增真实 monitor 入口测试，保留 controller 幂等和审计测试。
+  - 同步更新阶段5契约、架构、状态、经验和计划文档。
+- 验证:
+  - `python -m pytest -q trader/tests/test_intraday_risk_monitors.py trader/tests/test_margin_risk_calculator.py trader/tests/test_risk_mode_controller.py --tb=short` → 80 passed
+  - `python -m mypy trader/core/domain/services/intraday_risk_monitor.py trader/core/domain/services/risk_mode_controller.py --ignore-missing-imports --follow-imports=skip` → Success
+  - `risk_mode_controller.py` / `intraday_risk_monitor.py` 无 `except: pass`
+- 风险/遗留: monitor 调度尚未接入真实 WS/private stream/MonitorService；当前完成的是 Core 决策入口和 RiskMode 升级闭环。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
 ### 2026-05-19 03:00 - 阶段4 保证金与强平模型升级验收修正
 
 - 背景: 阶段4交付将 `MarginRiskCalculator` 扩展到强平价、费用缓冲和 bracket 语义，但验收发现强平价测试在测试文件内复制了本地 `calculate_liquidation_price()`，没有真正覆盖生产实现；生产公式还存在把 `maint_amount` 直接加到价格上的维度问题。
