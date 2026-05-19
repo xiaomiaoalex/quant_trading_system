@@ -34,6 +34,7 @@ from trader.adapters.persistence.postgres import is_postgres_available
 from trader.core.application.ports import BrokerBusinessError, BrokerNetworkError
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult
 from trader.core.domain.models.order import OrderSide, OrderStatus, OrderType
+from trader.core.domain.models.risk_mode import RiskMode
 from trader.core.domain.models.signal import Signal
 from trader.core.domain.services.position_lot_registry import get_lot_manager, set_lot_manager
 from trader.services.account_state import AccountStateService
@@ -186,6 +187,10 @@ class OMSCallbackHandler:
         self._fill_latency_sum_ms: float = 0.0
         self._fill_latency_count: int = 0
 
+        # 阶段2: RiskMode/KillSwitch 一等控制源
+        # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
+        self._risk_mode_callback: Optional[Callable[[str], "RiskMode"]] = None
+
     @property
     def _lot_mgr(self):
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
@@ -197,6 +202,22 @@ class OMSCallbackHandler:
     ) -> None:
         """Late-bind or clear the independent pre-trade risk callback."""
         self._pre_trade_risk_check = check
+
+    def set_risk_mode_callback(
+        self,
+        callback: Optional[Callable[[str], RiskMode]],
+    ) -> None:
+        """设置 RiskMode 状态查询回调
+
+        阶段2: OMS 作为 final gate，必须持有 RiskMode 状态。
+        RiskMode 动作矩阵:
+        - NORMAL: 允许所有订单
+        - NO_NEW_POSITIONS: 阻止开仓(LONG/SHORT)，允许减仓
+        - CLOSE_ONLY: 只允许减仓(CLOSE_LONG/CLOSE_SHORT)
+        - CANCEL_ALL_AND_HALT: 阻止所有新订单（策略订单）
+        - LIQUIDATE_AND_DISCONNECT: 阻止策略订单，允许系统强平
+        """
+        self._risk_mode_callback = callback
 
     def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
         key = f"{strategy_id}:{symbol}"
@@ -891,6 +912,111 @@ class OMSCallbackHandler:
             reason = "INVALID_QUANTITY"
             self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
+
+        # ==================== RiskMode Final Gate（阶段2） ====================
+        # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
+        # 动作矩阵：
+        # - NORMAL: 允许所有订单
+        # - NO_NEW_POSITIONS: 阻止开仓(LONG/SHORT)，允许减仓(CLOSE_LONG/CLOSE_SHORT)
+        # - CLOSE_ONLY: 只允许减仓
+        # - CANCEL_ALL_AND_HALT: 阻止所有策略订单
+        # - LIQUIDATE_AND_DISCONNECT: 阻止策略订单，允许系统强平
+        if self._risk_mode_callback:
+            try:
+                risk_mode = self._risk_mode_callback(strategy_id)
+                if risk_mode:
+                    if risk_mode == RiskMode.NO_NEW_POSITIONS:
+                        if signal.is_open_signal():
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_NO_NEW_POSITIONS: open signals blocked",
+                                counter_key="RISK_MODE_NO_NEW_POSITIONS",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open signals blocked, "
+                                f"reduce signals allowed"
+                            )
+                    elif risk_mode == RiskMode.CLOSE_ONLY:
+                        if signal.is_open_signal():
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_CLOSE_ONLY: only reduce allowed",
+                                counter_key="RISK_MODE_CLOSE_ONLY",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open signals blocked"
+                            )
+                    elif risk_mode == RiskMode.CANCEL_ALL_AND_HALT:
+                        self._record_rejection(
+                            strategy_id=strategy_id,
+                            signal=signal,
+                            side=None,
+                            quantity=signal.quantity,
+                            price=signal.price,
+                            reason=f"RISK_MODE_CANCEL_ALL_AND_HALT: cancelling all orders",
+                            counter_key="RISK_MODE_CANCEL_ALL_AND_HALT",
+                        )
+                        try:
+                            if hasattr(self._broker, "cancel_all") and callable(self._broker.cancel_all):
+                                logger.warning(
+                                    f"[OMSCallback] CANCEL_ALL_AND_HALT: executing broker.cancel_all()"
+                                )
+                                await self._broker.cancel_all()
+                        except Exception as cancel_err:
+                            logger.error(
+                                f"[OMSCallback] CANCEL_ALL_AND_HALT: broker.cancel_all() failed: {cancel_err}"
+                            )
+                        raise RiskRejectedError(
+                            f"RiskMode {risk_mode.name}: all orders cancelled"
+                        )
+                    elif risk_mode == RiskMode.LIQUIDATE_AND_DISCONNECT:
+                        is_system_liquidation = signal.metadata.get("is_system_liquidation", False)
+                        reduce_only = signal.metadata.get("reduce_only", False)
+                        if is_system_liquidation and (signal.is_close_signal() or reduce_only):
+                            logger.warning(
+                                f"[OMSCallback] LIQUIDATE_AND_DISCONNECT: system liquidation actor allowed "
+                                f"(close_signal={signal.is_close_signal()}, reduce_only={reduce_only})"
+                            )
+                        else:
+                            self._record_rejection(
+                                strategy_id=strategy_id,
+                                signal=signal,
+                                side=None,
+                                quantity=signal.quantity,
+                                price=signal.price,
+                                reason=f"RISK_MODE_LIQUIDATE_AND_DISCONNECT: open positions blocked, "
+                                f"only reduce-only liquidation allowed. "
+                                f"Set signal.metadata['is_system_liquidation']=True AND "
+                                f"signal must be CLOSE_LONG/CLOSE_SHORT (or reduce_only=True) for system actors.",
+                                counter_key="RISK_MODE_LIQUIDATE_AND_DISCONNECT",
+                            )
+                            raise RiskRejectedError(
+                                f"RiskMode {risk_mode.name}: open positions blocked, "
+                                f"only reduce-only liquidation allowed. "
+                                f"System actors must use CLOSE_LONG/CLOSE_SHORT or set reduce_only=True."
+                            )
+            except RiskRejectedError:
+                raise
+            except Exception as exc:
+                logger.error(f"RiskMode check failed: {exc}")
+                self._record_rejection(
+                    strategy_id=strategy_id,
+                    signal=signal,
+                    side=None,
+                    quantity=signal.quantity,
+                    price=signal.price,
+                    reason=f"RISK_MODE_CHECK_ERROR: {exc}",
+                    counter_key="RISK_MODE_CHECK_ERROR",
+                )
+                raise RiskRejectedError(f"RiskMode check unavailable: {exc}") from exc
 
         await self._run_pre_trade_risk_check(strategy_id, signal)
 

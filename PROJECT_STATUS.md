@@ -8,6 +8,32 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：阶段2.1 RiskMode/KillSwitch 统一控制 OMS（含返工）
+- 完成时间: 2026-05-18 (北京时间)
+- 状态: ✅ 已完成（含返工修复）
+- 目标: 让 RiskMode/KillSwitch 成为实盘执行链路的一等控制源
+- 开发后状态:
+  - **StrategyRunner Early Gate**: CLOSE_ONLY 只阻止开仓信号，允许减仓信号；CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT 阻止所有策略信号
+  - **OMS Final Gate**: OMS 直接持有 RiskMode 状态源，新增 `set_risk_mode_callback()` 方法和 RiskMode Gate 检查逻辑
+  - **CANCEL_ALL_AND_HALT 执行 cancel-all**: OMS 在拒绝策略订单前执行 `broker.cancel_all()`
+  - **LIQUIDATE_AND_DISCONNECT 系统强平入口**: 通过 `signal.metadata["is_system_liquidation"]=True` 允许系统强平 actor
+  - **RiskMode 动作矩阵修正**: NO_NEW_POSITIONS/CLOSE_ONLY 只阻止开仓(LONG/SHORT)，允许减仓(CLOSE_LONG/CLOSE_SHORT)
+- 代码变更:
+  - `trader/services/strategy_runner.py`: 修复 CLOSE_ONLY 语义，区分开仓/减仓信号
+  - `trader/services/oms_callback.py`: 新增 `set_risk_mode_callback()`、`_risk_mode_callback`，CANCEL_ALL_AND_HALT 执行 cancel-all，LIQUIDATE_AND_DISCONNECT 支持系统强平
+  - `trader/tests/test_strategy_runner_risk_mode_gate.py`: 新增7个测试
+  - `trader/tests/test_risk_mode_oms_integration.py`: 新增12个测试
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_risk_mode_oms_integration.py trader/tests/test_strategy_runner_risk_mode_gate.py --tb=short` → 27 passed ✅
+  - `python -m pytest -q trader/tests/test_risk_mode_controller.py --tb=short` → 23 passed ✅
+  - `mypy trader/services/oms_callback.py trader/services/strategy_runner.py --ignore-missing-imports --follow-imports=skip` → Success ✅
+- 注意事项:
+  - KillSwitch 和 RiskMode 不得有两套互相矛盾的等级语义
+  - StrategyRunner 是早期拦截点，OMS 是最终防线
+  - CLOSE_ONLY 只阻止开仓，不阻止减仓
+  - LIQUIDATE_AND_DISCONNECT 允许系统强平 actor（需设置 `is_system_liquidation=True` 且信号为减仓）
+- 关联文档: `DEVELOPMENT_LOG.md`
+
 ### 本次任务：P0 风控链路 mypy scoped 收敛
 - 完成时间: 2026-05-18 (北京时间)
 - 状态: ✅ 已完成
@@ -1262,8 +1288,6 @@
 - **基于**：`main`
 - **工作树**：有变更（本次为启动阻塞热修）
 - **最新提交**：fix(task-15): harden binance stream resilience and alignment tests
-
-## 最近开发记录（滚动式）
 
 ### 本次任务：三层主线联动增强（网络层 + 协议层 + 交易一致性层）
 - 完成时间: 2026-04-20

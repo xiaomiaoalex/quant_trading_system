@@ -25,6 +25,53 @@
 
 ## 最近记录
 
+### 2026-05-18 22:00 - 阶段2.1 第四轮返工（系统强平入口修正）
+
+- 背景: 第三轮发现两个问题：1) LIQUIDATE_AND_DISCONNECT 的系统强平入口可以绕过开仓限制（只检查 is_system_liquidation=True，未检查信号类型）；2) 测试数量口径仍不准确。
+- 决策: 将系统强平入口从布尔标签升级为真正的 reduce-only 约束。
+- 改动:
+  - `trader/services/oms_callback.py`: LIQUIDATE_AND_DISCONNECT 放行条件改为 `is_system_liquidation=True AND (is_close_signal() OR reduce_only=True)`
+  - `trader/tests/test_risk_mode_oms_integration.py`: 新增 `test_oms_liquidate_and_disconnect_blocks_open_even_with_system_liquidation_flag`
+  - `PROJECT_STATUS.md`: 清理重复 header，修正测试数量为 27+23=50
+- 验证:
+  - 50 passed ✅ (20 OMS集成 + 7 StrategyRunner + 23 Controller)
+  - mypy → Success ✅
+- 关联文档: `PROJECT_STATUS.md`
+
+### 2026-05-18 21:00 - 阶段2.1 RiskMode/KillSwitch 统一控制 OMS（含返工）
+
+- 背景: 阶段2原实现存在4个阻断点：1) PROJECT_STATUS.md 被截断；2) NO_NEW_POSITIONS 逻辑错误（只设置 blocked_reason 但不阻止开仓）；3) 测试主要 mock OMS callback 而非 StrategyRunner tick 路径；4) 测试数量口径不准确。
+- 决策: 补阶段2.1返工：恢复历史文档、修复 RiskMode gate 逻辑、添加真实的 StrategyRunner tick 路径测试。
+- 改动:
+  - `PROJECT_STATUS.md`: 恢复历史内容（使用 git checkout），在顶部追加阶段2.1记录
+  - `trader/services/strategy_runner.py`: 修复 RiskMode gate 逻辑；CLOSE_ONLY 只阻止开仓信号，允许减仓信号；CANCEL_ALL_AND_HALT/LIQUIDATE_AND_DISCONNECT 阻止所有策略信号
+  - `trader/tests/test_strategy_runner_risk_mode_gate.py`: 新增7个测试，真实测试 StrategyRunner.tick() 路径中的 RiskMode gate 行为
+- 验证:
+  - 50 passed ✅ (20+7+23) - 注：第三轮修正后口径
+  - mypy strategy_runner.py → Success ✅
+- 风险/遗留:
+  - 测试数量：OMS集成 20个 + StrategyRunner 7个 + Controller 23个 = 50个总计
+  - 下一步：阶段3 Funding/OI 生产数据接线
+- 关联文档: `PROJECT_STATUS.md`
+  - 下一步：阶段3 Funding/OI 生产数据接线
+- 关联文档: `PROJECT_STATUS.md`
+
+### 2026-05-18 20:30 - 阶段2 RiskMode/KillSwitch 统一控制 OMS
+
+- 背景: RiskMode/KillSwitch 需要成为实盘执行链路的一等控制源。StrategyRunner 做 early gate，OMS 做 final gate。
+- 决策: 在 StrategyRunner.tick() 中增加 RiskMode 检查回调，CLOSE_ONLY 及以上模式阻止所有信号。
+- 改动:
+  - `trader/services/strategy_runner.py`: 新增 `set_risk_mode_callback()` 方法和 `_risk_mode_callback` 属性
+  - RiskMode early gate 检查逻辑：CLOSE_ONLY 及以上阻止所有信号
+  - `trader/tests/test_risk_mode_oms_integration.py`: 新增 9个测试
+- 验证:
+  - 36 passed ✅
+  - mypy scoped 7 files → Success ✅
+- 风险/遗留:
+  - KillSwitch 和 RiskMode 语义必须保持一致
+  - 下一步：阶段3 Funding/OI 生产数据接线
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md` 8.8节
+
 ### 2026-05-18 20:10 - P0 风控链路 mypy scoped 收敛
 
 - 背景: 全仓 `mypy trader/` 存在大量历史类型债，不适合作为阶段1/2风控闭环的即时门禁；但 OMS、RiskEngine、RiskSizing、RiskMode 等 P0 风控链路需要先收敛，避免关键下单路径继续新增类型不确定性。

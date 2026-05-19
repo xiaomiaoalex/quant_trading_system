@@ -701,6 +701,22 @@ CLIP 订单必须：
 - **系统强平 actor 允许**发出 `reduce_only` 强平单
 - 进入强平/减仓流程后停止交易连接
 
+**系统强平 actor 入口字段约束**：
+- 放行条件：`signal.metadata["is_system_liquidation"] == True` AND (`signal.is_close_signal()` OR `signal.metadata["reduce_only"] == True`)
+- 信号类型约束：必须为减仓信号（CLOSE_LONG / CLOSE_SHORT）或明确设置 `reduce_only=True`
+- 开仓信号（LONG / SHORT）即使带有 `is_system_liquidation=True` 也必须拒绝
+- 示例：
+  ```python
+  # 允许的强平信号
+  sys_signal = Signal(signal_type=SignalType.CLOSE_LONG, ...)
+  sys_signal.metadata["is_system_liquidation"] = True
+
+  # 或使用 reduce_only 标志
+  sys_signal = Signal(signal_type=SignalType.LONG, ...)  # 注意：仍需 CLOSE_LONG/CLOSE_SHORT
+  sys_signal.metadata["is_system_liquidation"] = True
+  sys_signal.metadata["reduce_only"] = True
+  ```
+
 **语义约束**：
 - `reduce_only liquidation` 只允许系统强平 actor 发出，策略订单不得绕过
 - 状态只能单调升级（数字越大越严格），除非人工 `manual_release` 到 `NORMAL`
