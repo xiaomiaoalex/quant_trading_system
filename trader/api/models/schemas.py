@@ -406,6 +406,7 @@ class BacktestRun(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     error: Optional[str] = None
+    tearsheet_ref: Optional[str] = None
 
 
 class BacktestReport(BaseModel):
@@ -430,6 +431,7 @@ class BacktestReport(BaseModel):
     equity_curve: Optional[List[Dict[str, Any]]] = None
     metrics: Optional[Dict[str, Any]] = None
     artifact_ref: Optional[str] = None
+    tearsheet_ref: Optional[str] = None
 
 
 StrategyCandidateStatus = Literal[
@@ -1228,3 +1230,19 @@ class ReconciliationResult(BaseModel):
     tolerance: str
     status: str  # CONSISTENT / DISCREPANCY / HISTORICAL_GAP
     action_taken: Optional[str] = None  # NONE / AUTO_ALIGNED / ALERTED / KILLSWITCH_L1
+
+
+# ==================== NAV Models (Stage 6) ====================
+
+
+class NAVPointSchema(BaseModel):
+    """单次 NAV（净资产价值）快照，由 nav_service 在每次成交后写入。"""
+
+    deployment_id: str
+    strategy_id: str
+    timestamp_ms: int
+    equity: float
+    cash: float
+    unrealized_pnl: float
+    realized_pnl: float
+    total_pnl: float

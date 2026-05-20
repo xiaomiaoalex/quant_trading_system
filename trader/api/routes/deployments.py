@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from trader.api.models.schemas import ActionResult, Deployment, DeploymentCreateRequest
+from trader.api.models.schemas import ActionResult, Deployment, DeploymentCreateRequest, NAVPointSchema
 from trader.services import DeploymentService
 
 router = APIRouter(tags=["Deployments"])
@@ -75,6 +75,46 @@ async def stop_deployment(deployment_id: str = Path(..., description="Deployment
     """
     service = DeploymentService()
     return service.stop_deployment(deployment_id)
+
+
+@router.get("/v1/deployments/{deployment_id}/nav", response_model=List[NAVPointSchema])
+async def get_deployment_nav(
+    deployment_id: str = Path(..., description="Deployment ID"),
+    since_ms: Optional[int] = Query(None, description="Filter points with timestamp_ms >= since_ms"),
+    limit: int = Query(500, ge=1, le=5000, description="Maximum number of points to return"),
+):
+    """
+    Get NAV history for a deployment.
+
+    Returns NAV time series from in-memory cache (falling back to PostgreSQL if empty).
+    """
+    from trader.storage.in_memory import get_storage
+
+    storage = get_storage()
+    series = storage.get_nav_series(deployment_id, since_ms=since_ms)
+
+    # fallback: 若 deployment_id 与 strategy_id 不同，尝试用 strategy_id 查内存
+    if not series:
+        deployment = DeploymentService().get_deployment(deployment_id)
+        if deployment and deployment.strategy_id != deployment_id:
+            series = storage.get_nav_series(deployment.strategy_id, since_ms=since_ms)
+
+    if not series:
+        from trader.storage.nav_store import get_nav_series_pg
+
+        series = await get_nav_series_pg(deployment_id, since_ms=since_ms, limit=limit)
+        # PG 同样 fallback 到 strategy_id
+        if not series:
+            deployment = DeploymentService().get_deployment(deployment_id)
+            if deployment and deployment.strategy_id != deployment_id:
+                series = await get_nav_series_pg(
+                    deployment.strategy_id, since_ms=since_ms, limit=limit
+                )
+
+    if len(series) > limit:
+        series = series[-limit:]
+
+    return series
 
 
 @router.post("/v1/deployments/{deployment_id}/params", response_model=Deployment)

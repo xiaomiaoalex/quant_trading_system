@@ -32,6 +32,7 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
 import { MetricCard } from '@/components/monitor'
 import { StrategyDetailModal } from '@/components/strategies'
 import { PageHeader } from '@/components/layout'
+import { LiveNAVChart } from '@/components/charts'
 import { formatAPIError } from '@/api/client'
 import { strategyKeys } from '@/hooks/useStrategies'
 
@@ -484,6 +485,15 @@ export function Strategies() {
                                     {statusConfig.label}
                                   </span>
                                 </div>
+                                {runtime.status === 'running' && (
+                                  <div className="mt-2">
+                                    <LiveNAVChart
+                                      deploymentId={runtime.deployment_id}
+                                      strategyId={runtime.strategy_id}
+                                      height={100}
+                                    />
+                                  </div>
+                                )}
                                 <div className="mt-3">
                                   <RuntimeActions
                                     runtime={runtime}

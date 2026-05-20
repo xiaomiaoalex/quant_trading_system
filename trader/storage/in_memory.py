@@ -4,13 +4,14 @@ Storage - In-memory storage implementation for the control plane
 Provides in-memory storage for strategies, deployments, orders, positions, etc.
 """
 
+from collections import deque
 import hashlib
 import logging
 import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from trader.core.domain.models.order import OrderStatus
 
@@ -110,6 +111,9 @@ class ControlPlaneInMemoryStorage:
 
         # Task 18: Strategy runtime state persistence
         self.strategy_runtime_states: Dict[str, Dict[str, Any]] = {}
+
+        # Stage 6: NAV 净值时序（内存滚动窗口，最多 1000 条/部署）
+        self.nav_series: Dict[str, Deque[Dict[str, Any]]] = {}
 
     # ==================== Strategy Methods ====================
 
@@ -829,6 +833,24 @@ class ControlPlaneInMemoryStorage:
             "total_pnl": str(total_realized + total_unrealized),
             "updated_ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
         }
+
+    # ==================== NAV Methods (Stage 6) ====================
+
+    def append_nav_point(self, deployment_id: str, nav_point: Dict[str, Any]) -> None:
+        """追加 NAV 快照；内存中每个部署最多保留 1000 条（滚动窗口）。"""
+        series = self.nav_series.setdefault(deployment_id, deque(maxlen=1000))
+        series.append(nav_point)
+
+    def get_nav_series(
+        self,
+        deployment_id: str,
+        since_ms: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """返回指定部署的 NAV 时序，可按 since_ms 过滤。"""
+        series = self.nav_series.get(deployment_id, deque())
+        if since_ms is not None:
+            return [p for p in series if p.get("timestamp_ms", 0) >= since_ms]
+        return list(series)
 
     # ==================== Event Methods ====================
 

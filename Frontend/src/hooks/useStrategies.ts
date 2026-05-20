@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { strategiesAPI } from '@/api'
-import type { LoadStrategyPayload, StrategyParams } from '@/types'
+import type { LoadStrategyPayload, NAVPoint, StrategyParams } from '@/types'
 import { formatAPIError } from '@/api/client'
 
 export const strategyKeys = {
@@ -309,4 +309,14 @@ export function useSafetyGate() {
     enable,
     disable,
   }
+}
+
+export function useDeploymentNAV(deploymentId: string, enabled = true) {
+  return useQuery<NAVPoint[]>({
+    queryKey: ['nav', deploymentId],
+    queryFn: () => strategiesAPI.getDeploymentNav(deploymentId),
+    enabled,
+    staleTime: 0,
+    refetchInterval: false,
+  })
 }
