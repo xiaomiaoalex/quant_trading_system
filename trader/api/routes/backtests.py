@@ -7,9 +7,11 @@ Backtest run management endpoints (Task 9.4, 9.5).
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi.responses import FileResponse, JSONResponse
 
 from trader.api.models.schemas import BacktestReport, BacktestRequest, BacktestRun
 from trader.services import BacktestService
+from trader.storage.artifact_storage import get_artifact_storage
 
 router = APIRouter(tags=["Backtests"])
 
@@ -123,6 +125,19 @@ async def get_backtest_report(run_id: str = Path(..., description="Backtest run 
         if "equity_curve" in metrics:
             equity_curve = metrics["equity_curve"]
 
+    # Attach tearsheet_ref if available
+    tearsheet_ref: str | None = None
+    bt_raw = service.get_backtest(run_id)
+    if bt_raw and hasattr(bt_raw, "metrics") and isinstance(bt_raw.metrics, dict):
+        tearsheet_ref = bt_raw.metrics.get("tearsheet_ref") or (
+            backtest.metrics.get("tearsheet_ref") if backtest.metrics else None
+        )
+    if not tearsheet_ref:
+        # Check storage directly
+        raw = service._storage.get_backtest(run_id) if hasattr(service, "_storage") else None
+        if raw:
+            tearsheet_ref = raw.get("tearsheet_ref")
+
     # 构建报告
     return BacktestReport(
         run_id=backtest.run_id,
@@ -143,4 +158,37 @@ async def get_backtest_report(run_id: str = Path(..., description="Backtest run 
         risk=risk,
         trades=trades,
         equity_curve=equity_curve,
+        tearsheet_ref=tearsheet_ref,
+    )
+
+
+@router.get("/v1/backtests/{run_id}/tearsheet")
+async def get_backtest_tearsheet(run_id: str = Path(..., description="Backtest run ID")):
+    """
+    Download QuantStats HTML tearsheet for a completed backtest.
+
+    Returns the HTML file directly. If tearsheet is not yet generated,
+    returns 202 Accepted with a status message.
+    """
+    service = BacktestService()
+    backtest = service.get_backtest(run_id)
+    if not backtest:
+        raise HTTPException(status_code=404, detail=f"Backtest run {run_id} not found")
+
+    html_path = get_artifact_storage().get_tearsheet_path(run_id)
+    if html_path is None:
+        if backtest.status == "COMPLETED":
+            return JSONResponse(
+                status_code=202,
+                content={"message": "Tearsheet not yet generated. Retry in a few seconds.", "run_id": run_id},
+            )
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tearsheet not available for run {run_id} (status: {backtest.status})",
+        )
+
+    return FileResponse(
+        path=str(html_path),
+        media_type="text/html",
+        filename=f"tearsheet_{run_id[:8]}.html",
     )

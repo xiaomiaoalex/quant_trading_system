@@ -21,6 +21,7 @@ export interface BacktestRun {
   started_at?: string
   finished_at?: string
   error?: string
+  tearsheet_ref?: string | null
 }
 
 // Backtest request for POST /v1/backtests
@@ -86,6 +87,7 @@ export interface BacktestReport {
   }>
   metrics?: Record<string, unknown>
   artifact_ref?: string
+  tearsheet_ref?: string | null
 }
 
 // Display configuration for status

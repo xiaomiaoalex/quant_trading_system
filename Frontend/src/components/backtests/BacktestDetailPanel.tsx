@@ -1,5 +1,6 @@
 import type { BacktestReport } from '@/types'
 import { BacktestStatusBadge } from './BacktestStatusBadge'
+import { EquityCurveChart, DrawdownChart } from '@/components/charts'
 
 interface BacktestDetailPanelProps {
   report: BacktestReport | undefined
@@ -57,7 +58,19 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
       <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-medium text-white">Backtest Report</h3>
-          <BacktestStatusBadge status={report.status} />
+          <div className="flex items-center gap-2">
+            {report.tearsheet_ref && (
+              <a
+                href={`/v1/backtests/${report.run_id}/tearsheet`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded bg-indigo-900/40 px-3 py-1 text-xs text-indigo-300 hover:bg-indigo-900/60 transition-colors"
+              >
+                下载完整报告 ↗
+              </a>
+            )}
+            <BacktestStatusBadge status={report.status} />
+          </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -167,6 +180,22 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Equity Curve */}
+      {report.equity_curve && report.equity_curve.length > 1 && (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Equity Curve</h4>
+          <EquityCurveChart data={report.equity_curve} height={200} />
+        </div>
+      )}
+
+      {/* Drawdown */}
+      {report.equity_curve && report.equity_curve.length > 1 && (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Drawdown</h4>
+          <DrawdownChart data={report.equity_curve} height={160} />
         </div>
       )}
 

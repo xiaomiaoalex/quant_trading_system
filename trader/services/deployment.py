@@ -318,6 +318,13 @@ class BacktestService:
                     "error": None,
                 },
             )
+
+            # Post-process: generate QuantStats HTML tearsheet (non-blocking, best-effort)
+            equity_curve_data = simulation.get("equity_curve") or []
+            asyncio.create_task(
+                self._generate_tearsheet_async(run_id, equity_curve_data, request.strategy_id)
+            )
+
             if request.candidate_id:
                 try:
                     is_valid_for_promotion = (
@@ -378,6 +385,24 @@ class BacktestService:
                     runtime_strategy_id,
                     e,
                 )
+
+    async def _generate_tearsheet_async(
+        self,
+        run_id: str,
+        equity_curve: list[dict],
+        strategy_name: str,
+    ) -> None:
+        """Post-process: generate QuantStats HTML tearsheet and store as artifact. Best-effort."""
+        from trader.services.backtesting.quantstats_report import generate_tearsheet
+
+        try:
+            html_path = generate_tearsheet(equity_curve, run_id=run_id, strategy_name=strategy_name)
+            if html_path:
+                tearsheet_ref = get_artifact_storage().save_tearsheet(run_id, html_path)
+                self._storage.update_backtest(run_id, {"tearsheet_ref": tearsheet_ref})
+                logger.info("Tearsheet stored for run %s: %s", run_id, tearsheet_ref)
+        except Exception as exc:
+            logger.warning("Tearsheet async generation failed for run %s: %s", run_id, exc)
 
     async def _load_strategy_for_backtest(
         self,

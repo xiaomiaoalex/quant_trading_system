@@ -96,6 +96,22 @@ class ArtifactStorage:
         with open(report_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def _get_tearsheet_path(self, run_id: str) -> Path:
+        return self._base_path / "backtest_reports" / f"{run_id}_tearsheet.html"
+
+    def save_tearsheet(self, run_id: str, html_path: str) -> str:
+        """Copy a generated HTML tearsheet into artifact storage. Returns artifact_ref."""
+        import shutil
+        dest = self._get_tearsheet_path(run_id)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(html_path, dest)
+        return f"backtest_tearsheet:{run_id}"
+
+    def get_tearsheet_path(self, run_id: str) -> Path | None:
+        """Return path to tearsheet file, or None if not stored."""
+        p = self._get_tearsheet_path(run_id)
+        return p if p.exists() else None
+
     def delete_report(self, run_id: str) -> bool:
         """
         删除回测报告。

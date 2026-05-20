@@ -11,6 +11,7 @@ asyncpg >= 0.30.0
 matplotlib >= 3.8
 seaborn >= 0.13
 vectorbt >= 0.25, < 1.0
+quantstats >= 0.0.62
 
 # 类型检查
 mypy >= 1.5

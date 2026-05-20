@@ -5,7 +5,8 @@ import { LoadingState, ErrorState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
 import { PageHeader } from '@/components/layout'
 import { researchAPI } from '@/api'
-import { formatAPIError } from '@/api/client'
+import { formatAPIError, isAPIError } from '@/api/client'
+import { useNavigate } from 'react-router-dom'
 import type { BacktestDataMode, BacktestEngine, StrategyCandidate } from '@/types'
 
 const STRATEGY_TEMPLATES: Record<string, string> = {
@@ -188,6 +189,7 @@ def get_plugin():
 }
 
 export function Backtests() {
+  const navigate = useNavigate()
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
 
@@ -392,20 +394,50 @@ export function Backtests() {
         code_version: result.code_version ?? candidate.code_version,
         updated_at: result.promoted_at,
       })
-      setLabMessage(`Promoted to paper. Deployment: ${result.deployment_id}`)
+      setLabMessage(`已提升至纸上交易。Deployment ID：${result.deployment_id}。前往「Strategies」页面查看运行状态。`)
       await refetchLoaded()
-    } catch (e) {
-      setLabError(formatAPIError(e))
+    } catch (e: unknown) {
+      // client.ts interceptor converts Axios errors to APIError { code, message, details }
+      if (isAPIError(e)) {
+        const code = e.code
+        const details = e.details as Record<string, unknown> | undefined
+        if (code === 'PROMOTE_LOAD_FAILED') {
+          setLabError('加载失败（PROMOTE_LOAD_FAILED）：运行时初始化异常，候选已自动回滚至 VALIDATION_PASSED，可重试。')
+        } else if (code === 'PROMOTE_CONFLICT') {
+          setLabError('并发冲突（PROMOTE_CONFLICT）：该候选正在被提升中，请稍后重试。')
+        } else if (code === 'INVALID_STATE') {
+          const currentState = details?.current_state ?? '?'
+          setLabError(`状态不符（当前：${currentState}）：需要 VALIDATION_PASSED 才能 promote。`)
+        } else {
+          setLabError(formatAPIError(e))
+        }
+      } else {
+        setLabError(formatAPIError(e))
+      }
     } finally {
       setIsPromoting(false)
     }
   }
 
-  const canDebug = true
-  const canSaveDraft = true
   const canSubmitBacktest = candidate?.status === 'DEBUG_PASSED'
   const canValidate = candidate?.status === 'BACKTEST_PASSED'
   const canPromote = candidate?.status === 'VALIDATION_PASSED'
+
+  // 状态驱动：主操作按钮（同一时刻只有一个主操作）
+  type PrimaryAction = 'save' | 'debug' | 'backtest' | 'validate' | 'promote' | 'approved' | 'running'
+  const primaryAction: PrimaryAction = (() => {
+    if (!candidate) return 'save'
+    switch (candidate.status) {
+      case 'DRAFT': return 'debug'
+      case 'DEBUG_PASSED': return 'backtest'
+      case 'BACKTEST_RUNNING': return 'running'
+      case 'BACKTEST_PASSED': return 'validate'
+      case 'VALIDATION_PASSED': return 'promote'
+      case 'APPROVED_FOR_PAPER': return 'approved'
+      case 'PAPER_RUNNING': return 'approved'
+      default: return 'save'
+    }
+  })()
 
   if (isLoading) return <div className="p-6"><LoadingState message="Loading backtests..." /></div>
   if (isError) return <div className="p-6"><ErrorState title="Failed to load backtests" message={formatAPIError(error)} onRetry={refetch} /></div>
@@ -554,42 +586,112 @@ export function Backtests() {
             />
           </div>
 
+          {/* 状态驱动操作区：主操作 + 辅助操作 */}
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <button
-              onClick={handleSaveDraft}
-              disabled={!canSaveDraft || isSaving}
-              className="rounded bg-gray-700/40 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-700/60 disabled:opacity-60"
-            >
-              {isSaving ? 'Saving...' : 'Save Draft'}
-            </button>
-            <button
-              onClick={handleDebug}
-              disabled={!canDebug || isDebugging}
-              className="rounded bg-indigo-900/40 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-900/60 disabled:opacity-60"
-            >
-              {isDebugging ? 'Debugging...' : 'Debug'}
-            </button>
-            <button
-              onClick={handleSubmitBacktest}
-              disabled={!canSubmitBacktest || isBacktesting}
-              className="rounded bg-cyan-900/40 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/60 disabled:opacity-60"
-            >
-              {isBacktesting ? 'Backtesting...' : 'Submit Backtest Gate'}
-            </button>
-            <button
-              onClick={handleValidate}
-              disabled={!canValidate || isValidating}
-              className="rounded bg-blue-900/40 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900/60 disabled:opacity-60"
-            >
-              {isValidating ? 'Validating...' : 'Validate'}
-            </button>
-            <button
-              onClick={handlePromote}
-              disabled={!canPromote || isPromoting}
-              className="rounded bg-emerald-900/40 px-3 py-1.5 text-xs text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-60"
-            >
-              {isPromoting ? 'Promoting...' : 'Promote to Paper'}
-            </button>
+            {/* 主操作：根据状态动态显示，每个状态只有一个主入口 */}
+
+            {/* 无候选：Save Draft 是唯一入口 */}
+            {primaryAction === 'save' && (
+              <button
+                onClick={handleSaveDraft}
+                disabled={isSaving}
+                className="rounded bg-gray-600/60 px-4 py-1.5 text-xs font-medium text-gray-100 hover:bg-gray-600/80 disabled:opacity-60"
+              >
+                {isSaving ? 'Saving...' : '▶ Save Draft'}
+              </button>
+            )}
+
+            {/* DRAFT：Debug 是主操作，Save Draft 作为灰色辅助 */}
+            {primaryAction === 'debug' && (
+              <>
+                <button
+                  onClick={handleDebug}
+                  disabled={isDebugging}
+                  className="rounded bg-indigo-600/60 px-4 py-1.5 text-xs font-medium text-indigo-100 hover:bg-indigo-600/80 disabled:opacity-60"
+                >
+                  {isDebugging ? 'Debugging...' : '▶ Debug'}
+                </button>
+                <button
+                  onClick={handleSaveDraft}
+                  disabled={isSaving}
+                  className="rounded bg-gray-700/30 px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-700/50 disabled:opacity-40"
+                >
+                  {isSaving ? 'Saving...' : 'Save Draft'}
+                </button>
+              </>
+            )}
+
+            {primaryAction === 'backtest' && (
+              <button
+                onClick={handleSubmitBacktest}
+                disabled={!canSubmitBacktest || isBacktesting}
+                className="rounded bg-cyan-600/60 px-4 py-1.5 text-xs font-medium text-cyan-100 hover:bg-cyan-600/80 disabled:opacity-60"
+              >
+                {isBacktesting ? 'Backtesting...' : '▶ Submit Backtest'}
+              </button>
+            )}
+
+            {primaryAction === 'running' && (
+              <span className="flex items-center gap-1.5 text-xs text-blue-400">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
+                Backtest running...
+              </span>
+            )}
+
+            {primaryAction === 'validate' && (
+              <button
+                onClick={handleValidate}
+                disabled={!canValidate || isValidating}
+                className="rounded bg-blue-600/60 px-4 py-1.5 text-xs font-medium text-blue-100 hover:bg-blue-600/80 disabled:opacity-60"
+              >
+                {isValidating ? 'Validating...' : '▶ Validate'}
+              </button>
+            )}
+
+            {primaryAction === 'promote' && (
+              <button
+                onClick={handlePromote}
+                disabled={!canPromote || isPromoting}
+                className="rounded bg-emerald-600/70 px-5 py-1.5 text-xs font-semibold text-emerald-50 hover:bg-emerald-600/90 shadow shadow-emerald-900/30 disabled:opacity-60"
+              >
+                {isPromoting ? 'Promoting...' : '🚀 Promote to Paper'}
+              </button>
+            )}
+
+            {/* APPROVED_FOR_PAPER / PAPER_RUNNING：显示状态 + 跳转到部署监控 */}
+            {primaryAction === 'approved' && (
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 rounded bg-emerald-950/40 px-3 py-1.5 text-xs text-emerald-300">
+                  <span>✓ Approved for paper trading</span>
+                  {candidate?.deployment_id && (
+                    <span className="font-mono text-emerald-500/70">· {candidate.deployment_id}</span>
+                  )}
+                </span>
+                <button
+                  onClick={() => navigate('/strategies')}
+                  className="rounded bg-emerald-800/50 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-800/70"
+                >
+                  查看运行状态 →
+                </button>
+              </div>
+            )}
+
+            {/* 状态指示步骤条 */}
+            <div className="ml-auto flex items-center gap-1 text-xs text-gray-600">
+              {(['DRAFT','DEBUG_PASSED','BACKTEST_PASSED','VALIDATION_PASSED','APPROVED_FOR_PAPER'] as const).map((s, i) => {
+                const statuses = ['DRAFT','DEBUG_PASSED','BACKTEST_RUNNING','BACKTEST_PASSED','VALIDATION_PASSED','APPROVED_FOR_PAPER','PAPER_RUNNING']
+                const currentIdx = candidate ? statuses.indexOf(candidate.status) : -1
+                const stepIdx = statuses.indexOf(s)
+                const done = currentIdx >= stepIdx && currentIdx !== -1
+                const labels = ['Draft','Debug','Backtest','Validate','Promoted']
+                return (
+                  <span key={s} className={`flex items-center gap-1 ${done ? 'text-gray-400' : 'text-gray-700'}`}>
+                    {i > 0 && <span className="text-gray-700">›</span>}
+                    <span className={done ? 'text-gray-300' : ''}>{labels[i]}</span>
+                  </span>
+                )
+              })}
+            </div>
           </div>
 
           {debugResult && (
