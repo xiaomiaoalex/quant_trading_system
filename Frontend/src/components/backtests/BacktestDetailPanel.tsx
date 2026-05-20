@@ -27,6 +27,30 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
     )
   }
 
+  const engine = report.engine ?? (report.metrics?.backtest_engine as string | undefined) ?? '-'
+  const formatPrice = (price?: number) => (
+    typeof price === 'number' ? `$${price.toFixed(2)}` : '-'
+  )
+  const formatQuantity = (quantity?: number) => (
+    typeof quantity === 'number' ? quantity.toString() : '-'
+  )
+  const formatTradeTime = (timestamp?: string | number) => {
+    if (timestamp === undefined || timestamp === null || timestamp === '') return '-'
+    const date = new Date(timestamp)
+    return Number.isNaN(date.getTime()) ? String(timestamp) : date.toLocaleString()
+  }
+  const dataQuality = report.metrics?.data_quality_summary as
+    | {
+        source?: string
+        quality_score?: number
+        missing_data?: boolean
+        total_points?: number
+        expected_points?: number
+        coverage_percent?: number
+        validator_status?: string
+      }
+    | undefined
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -43,6 +67,10 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
           <div>
             <p className="text-xs text-gray-500">Strategy</p>
             <p className="text-sm text-gray-300">{report.strategy_id} (v{report.version})</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500">Engine</p>
+            <p className="text-sm text-gray-300">{engine}</p>
           </div>
           <div>
             <p className="text-xs text-gray-500">Symbols</p>
@@ -111,6 +139,37 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
         </div>
       )}
 
+      {/* Data Quality */}
+      {dataQuality && (
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+          <h4 className="text-sm font-medium text-gray-300 mb-3">Data Quality</h4>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="text-xs text-gray-500">Source</p>
+              <p className="text-sm text-gray-300">{dataQuality.source ?? '-'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Quality Score</p>
+              <p className="text-sm text-gray-300">
+                {typeof dataQuality.quality_score === 'number' ? dataQuality.quality_score.toFixed(2) : '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Coverage</p>
+              <p className="text-sm text-gray-300">
+                {typeof dataQuality.coverage_percent === 'number' ? `${dataQuality.coverage_percent.toFixed(2)}%` : '-'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Missing Data</p>
+              <p className={dataQuality.missing_data ? 'text-sm text-red-400' : 'text-sm text-green-400'}>
+                {typeof dataQuality.missing_data === 'boolean' ? String(dataQuality.missing_data) : '-'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Trades */}
       {report.trades && report.trades.length > 0 && (
         <div className="rounded-lg border border-gray-700 bg-gray-800/50 overflow-hidden">
@@ -131,15 +190,15 @@ export function BacktestDetailPanel({ report, isLoading }: BacktestDetailPanelPr
             <tbody className="divide-y divide-gray-700">
               {report.trades.slice(0, 20).map((trade, i) => (
                 <tr key={i} className="table-row-hover">
-                  <td className="px-4 py-2 text-sm text-gray-300">{trade.symbol}</td>
+                  <td className="px-4 py-2 text-sm text-gray-300">{trade.symbol ?? '-'}</td>
                   <td className="px-4 py-2 text-sm">
                     <span className={trade.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
-                      {trade.side}
+                      {trade.side ?? '-'}
                     </span>
                   </td>
-                  <td className="px-4 py-2 text-sm text-gray-300">${trade.price.toFixed(2)}</td>
-                  <td className="px-4 py-2 text-sm text-gray-300">{trade.quantity}</td>
-                  <td className="px-4 py-2 text-xs text-gray-500">{new Date(trade.timestamp).toLocaleString()}</td>
+                  <td className="px-4 py-2 text-sm text-gray-300">{formatPrice(trade.price)}</td>
+                  <td className="px-4 py-2 text-sm text-gray-300">{formatQuantity(trade.quantity)}</td>
+                  <td className="px-4 py-2 text-xs text-gray-500">{formatTradeTime(trade.timestamp)}</td>
                 </tr>
               ))}
             </tbody>

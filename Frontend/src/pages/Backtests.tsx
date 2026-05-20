@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/layout'
 import { strategiesAPI } from '@/api'
 import { formatAPIError } from '@/api/client'
 import { buildDeploymentId, type DeploymentMode } from '@/types/strategies'
+import type { BacktestDataMode, BacktestEngine } from '@/types'
 
 const DEFAULT_STRATEGY_CODE = `from __future__ import annotations
 
@@ -108,6 +109,7 @@ export function Backtests() {
     name: 'Lab Strategy',
     description: 'Editable strategy code for fast backtest iteration',
     version: 1,
+    engine: 'vectorbt' as BacktestEngine,
     symbols: 'BTCUSDT',
     start_ts_ms: Date.now() - 30 * 24 * 60 * 60 * 1000,
     end_ts_ms: Date.now(),
@@ -120,7 +122,7 @@ export function Backtests() {
     fee_bps: 10,
     slippage_bps: 5,
     benchmark: 'BTCUSDT',
-    data_mode: 'dev_smoke' as const,
+    data_mode: 'dev_smoke' as BacktestDataMode,
     requested_by: 'console_user',
   })
   const [strategyCode, setStrategyCode] = useState(DEFAULT_STRATEGY_CODE)
@@ -204,6 +206,7 @@ export function Backtests() {
     const result = await create({
       strategy_id: labForm.strategy_id,
       version: Number(labForm.version),
+      engine: labForm.engine,
       strategy_code_version: savedCodeVersion ?? undefined,
       symbols: labSymbols,
       start_ts_ms: labForm.start_ts_ms,
@@ -246,6 +249,7 @@ export function Backtests() {
           slippage_bps: labForm.slippage_bps,
           benchmark: labForm.benchmark,
           data_mode: labForm.data_mode,
+          backtest_engine: labForm.engine,
         },
       })
       setLabForm(current => ({ ...current, deployment_id: result.deployment_id }))
@@ -384,6 +388,24 @@ export function Backtests() {
               <option value="shadow">shadow</option>
               <option value="demo">demo</option>
               <option value="live">live</option>
+            </select>
+            <select
+              value={labForm.engine}
+              onChange={(e) => setLabForm({ ...labForm, engine: e.target.value as BacktestEngine })}
+              aria-label="Backtest engine"
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+            >
+              <option value="vectorbt">vectorbt</option>
+              <option value="strategy_runner">strategy_runner</option>
+            </select>
+            <select
+              value={labForm.data_mode}
+              onChange={(e) => setLabForm({ ...labForm, data_mode: e.target.value as BacktestDataMode })}
+              aria-label="Backtest data mode"
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+            >
+              <option value="dev_smoke">dev_smoke</option>
+              <option value="real_feature_store">real_feature_store</option>
             </select>
             <input
               type="text"

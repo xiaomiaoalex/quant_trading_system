@@ -4,6 +4,149 @@
 
 ---
 
+## 四十三、Binance OHLCV 持续 Ingestion Worker 经验（2026-05-20）
+
+### 43.1 踩坑记录：持续补数不能每轮从固定起点重拉
+
+**问题描述**：
+如果 worker 每轮都从配置的 `start_ts_ms` 或 lookback 窗口开始拉取，短时间内看似幂等，但会不断制造重复请求、浪费 Binance rate limit，并让 Data 页面重复看到 duplicates 增长。
+
+**解决方案**：
+- 每轮先查 FeatureStore 中 `symbol + feature_version` 的 `latest_ts_ms`
+- 下一轮从 `latest_ts_ms + interval_ms` 开始
+- 只有首次无覆盖时才使用 `lookback_hours`
+- 同 key 同值仍保持幂等，同 key 不同值记录 conflict，不覆盖历史
+
+**经验**：
+- 持续 ingestion 的核心不是“定时调用接口”，而是“有状态地续拉缺口”
+- FeatureStore coverage 是 worker 的断点来源，也是 UI 的真实状态来源
+- rate limit 风险要靠减少无意义重复请求先解决，再谈退避
+
+### 43.2 设计模式：Adapter 映射原始 Kline，Service 编排写入
+
+**问题描述**：
+Binance `/v3/klines` 返回数组格式，如果直接把数组传给 Service 或 FeatureStore，字段含义只能靠下标记忆，后续很容易把 open time、close time、volume 等字段搞混。
+
+**解决方案**：
+- Adapter 层 `BinanceOHLCVRestSource` 把原始数组转换为 `BinanceOHLCVBar`
+- Service 层 `BinanceOHLCVIngestionWorker` 只消费内部 bar
+- FeatureStore 继续只存 compact `feature_name=ohlcv` value dict
+- 前端和回测只通过 FeatureStore coverage / provider 看数据，不接触 Binance 原始 payload
+
+**经验**：
+- 外部字段和数组下标必须在 Adapter 边界被消化
+- Worker 不该触碰 OMS 或策略状态，它只是研究数据写入器
+- Control API 的 start 幂等性很重要，重复点击不能创建多个后台任务
+
+---
+
+## 四十二、FeatureStore OHLCV 导入与覆盖展示经验（2026-05-20）
+
+### 42.1 踩坑记录：静态 Data Catalog 会掩盖真实数据缺口
+
+**问题描述**：
+Data 页面如果只展示静态 source stub，即使 FeatureStore 里没有任何 OHLCV，用户也会误以为真实研究数据已经就绪。这样 Backtests 的 `real_feature_store` fail-closed 和 Data 页面展示会互相矛盾。
+
+**解决方案**：
+- `/v1/data/catalog` 的 `feature_store_ohlcv` 改为从 FeatureStore coverage 动态聚合
+- 新增 `/v1/data/ohlcv/coverage`，按 `symbol + feature_version` 返回 points、first/latest ts 和 quality
+- 前端 Data 页面把 FeatureStore OHLCV 单独展示为覆盖表，不再混在静态数据源卡片里
+
+**经验**：
+- 数据可用性必须来自同一份真相源，不能靠 UI 文案或静态 stub 代替
+- `feature_version` 是研究数据版本边界，Data 页面、Backtests 和审计都必须使用同一命名
+- 缺数据时宁可显示 missing/empty coverage，也不能伪造“可用”
+
+### 42.2 设计模式：导入 API 要幂等且冲突可解释
+
+**问题描述**：
+OHLCV 导入经常会因为重复任务、手动重试或脚本重跑而写入同一批 bar。如果重复导入直接失败，会让开发体验很差；如果同 key 不同值被静默覆盖，又会破坏研究可复现性。
+
+**解决方案**：
+- 写入 key 固定为 `(symbol, feature_name=ohlcv, feature_version, ts_ms)`
+- 同值重复导入返回 `duplicates`，不重复插入
+- 同 key 不同值沿用 FeatureStore 版本冲突保护，API 返回 409
+- K 线形态先在 API 层验证：`high >= max(open, close)`、`low <= min(open, close)`
+
+**经验**：
+- 批量导入必须对“重跑”和“数据漂移”给出不同语义
+- API 层做轻量形态校验，FeatureStore 层负责版本一致性
+- 覆盖查询和回测读取复用 `feature_name=ohlcv`，可以减少后续 ingestion worker 的接线面
+
+---
+
+## 四十一、FeatureStore 真实回测数据接入经验（2026-05-19）
+
+### 41.1 踩坑记录：真实模式不能只换标签，必须换数据入口
+
+**问题描述**：
+`data_mode=real_feature_store` 如果只是请求字段不同，但服务层仍使用 deterministic synthetic data，本质上会把开发烟测伪装成研究级真实回测，后续门禁会被误导。
+
+**解决方案**：
+- 新增 `FeatureStoreOHLCVDataProvider` 实现 `DataProviderPort`
+- `engine=vectorbt + real_feature_store` 只从 FeatureStore 读取数据
+- 缺少 OHLCV 时直接 fail-closed，不回退 dev_smoke
+- 报告 metrics 写入 `data_quality_summary.source=feature_store`
+
+**经验**：
+- `data_mode` 是数据来源契约，不是 UI 标签
+- 真实研究回测必须能追溯到 `feature_version`
+- 缺数据要明确失败或标记 `missing_data`，不能偷偷生成 synthetic bar
+
+### 41.2 设计模式：兼容 compact OHLCV 与列式特征
+
+**问题描述**：
+FeatureStore 是通用特征表，OHLCV 既可能以 `feature_name=ohlcv` 的 dict 存储，也可能以 `open/high/low/close/volume` 五个 feature 分开存储。过早绑定一种形态会让后续 ingestion 或研究数据导入很难接。
+
+**解决方案**：
+- provider 优先读取 `ohlcv` dict，字段为 `{open, high, low, close, volume}`
+- 若不存在，则读取五列独立 feature，并按相同 `ts_ms` 对齐
+- 输出统一转换为 `OHLCV` dataclass，交给 VectorBT adapter
+
+**经验**：
+- 数据存储形态可以灵活，但进入 engine 前必须统一成明确 DTO
+- 对齐逻辑属于 Service/Adapter 层，不能放进 VectorBT engine 内部
+- 数据质量摘要要记录 `feature_names`，方便审计知道实际用了哪种存储形态
+
+---
+
+## 四十、VectorBT 主回测入口接入经验（2026-05-19）
+
+### 40.1 踩坑记录：adapter 存在不等于主流程接通
+
+**问题描述**：
+仓库已有 `VectorBTAdapter` 和相关单测，但 `/v1/backtests` 仍固定走 `BacktestService._simulate_backtest()`，前端也没有 `engine` 字段。用户从页面点击 Run Backtest 时完全不会触发 VectorBT。
+
+**解决方案**：
+- 在 `BacktestRequest`、`BacktestRun`、`BacktestReport` 增加 `engine`
+- `BacktestService` 按 `engine` 分流，`strategy_runner` 保持旧路径，`vectorbt` 走 adapter
+- 前端 Backtests/Strategy Lab 新增 engine 选择，并在列表/详情显示回测引擎
+- 新增主 API 回归测试，直接从 `/v1/backtests` 验证 `engine=vectorbt`
+
+**经验**：
+- 引擎 adapter 单测只能证明 adapter 自身可用，不能证明产品主链路接通
+- 验收测试应覆盖真实 API 入口和前端 DTO 字段，而不是只测 service 内部方法
+- 任何“已接入”都要能从用户入口触发并在报告中留下可识别标记
+
+### 40.2 踩坑记录：真实 VectorBT API 与假对象测试不一致
+
+**问题描述**：
+旧 adapter 使用 `init_capital`、`pf.final_capital()`、`pf.win_rate()`、`pf.profit_factor()`。这些在真实 `vectorbt.Portfolio` 上并不是正确入口；既有单测用 fake object，掩盖了真实 API 不兼容。
+
+**解决方案**：
+- `Portfolio.from_signals()` 使用 `init_cash`
+- 组合最终权益使用 `pf.final_value()`
+- 胜率和 profit factor 从 `pf.trades.win_rate()` / `pf.trades.profit_factor()` 读取
+- 交易记录优先使用 `pf.trades.records_readable`
+- 非有限数值统一归零，避免 NaN/inf 泄漏到报告
+
+**经验**：
+- 第三方库 adapter 测试至少要有一条真实库 smoke，fake object 只能覆盖依赖注入逻辑
+- 交易、权益曲线、指标提取都应做兼容和归一化，前端不能假设所有 engine 的 trade schema 完全一样
+- `dev_smoke` 可以无网络、确定性，但必须在 metrics 中明确标记，不能伪装成研究级真实回测
+
+---
+
 ## 三十六、单测禁止访问真实网络（2026-05-19）
 
 ### 36.1 踩坑记录：单测误连 Binance 导致超时

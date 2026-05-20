@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from trader.adapters.persistence.feature_store import get_feature_store
 from trader.api.models.schemas import (
     ActionResult,
     BacktestRequest,
@@ -16,6 +17,14 @@ from trader.api.models.schemas import (
     DeploymentCreateRequest,
 )
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.services.backtesting.feature_store_data_provider import FeatureStoreOHLCVDataProvider
+from trader.services.backtesting.ports import (
+    OHLCV,
+    BacktestConfig,
+    BacktestResult,
+    DataProviderPort,
+)
+from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
 from trader.services.strategy_runner import StrategyRunner
 from trader.storage.artifact_storage import get_artifact_storage
 from trader.storage.in_memory import InMemoryStorage, get_storage
@@ -38,6 +47,77 @@ def _to_decimal(value: Any, default: Decimal) -> Decimal:
 def _stable_int(value: str) -> int:
     """Stable int hash for repeatable synthetic market data generation."""
     return int(hashlib.sha256(value.encode("utf-8")).hexdigest()[:16], 16)
+
+
+class _DevSmokeOHLCVProvider(DataProviderPort):
+    """Deterministic no-network OHLCV provider for API smoke backtests."""
+
+    def __init__(self, service: "BacktestService", request: BacktestRequest):
+        self._service = service
+        self._request = request
+
+    async def get_klines(
+        self,
+        symbol: str,
+        interval: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> List[OHLCV]:
+        del start_date, end_date
+        return self._service._build_ohlcv_series(
+            self._request,
+            symbol=symbol,
+            interval=interval,
+        )
+
+
+class _StrategyRunnerVectorBTBridge:
+    """Adapts StrategyRunner ticks to VectorBT numeric entry/exit signals."""
+
+    def __init__(
+        self,
+        runner: StrategyRunner,
+        runtime_strategy_id: str,
+        symbol: str,
+        interval: str,
+    ):
+        self._runner = runner
+        self._runtime_strategy_id = runtime_strategy_id
+        self._symbol = symbol
+        self._interval = interval
+
+    async def generate_signals(self, klines: List[OHLCV]) -> List[int]:
+        signals: List[int] = []
+        for kline in klines:
+            market_data = MarketData(
+                symbol=self._symbol,
+                data_type=MarketDataType.KLINE,
+                price=kline.close,
+                volume=kline.volume,
+                timestamp=kline.timestamp,
+                kline_open=kline.open,
+                kline_high=kline.high,
+                kline_low=kline.low,
+                kline_close=kline.close,
+                kline_interval=self._interval,
+            )
+            signal = await self._runner.tick(self._runtime_strategy_id, market_data)
+            if signal is None:
+                signals.append(0)
+                continue
+
+            signal_type = (
+                signal.signal_type.value
+                if hasattr(signal.signal_type, "value")
+                else str(signal.signal_type)
+            )
+            if signal_type in {"BUY", "LONG"}:
+                signals.append(1)
+            elif signal_type in {"SELL", "SHORT", "CLOSE_LONG", "CLOSE_SHORT"}:
+                signals.append(-1)
+            else:
+                signals.append(0)
+        return signals
 
 
 class DeploymentService:
@@ -183,54 +263,24 @@ class BacktestService:
         runtime_strategy_id = f"backtest_{run_id}"
 
         try:
-            strategy_meta = self._storage.get_strategy(request.strategy_id) or {}
-            code_entry = None
-
-            if request.strategy_code_version is not None:
-                code_entry = self._storage.get_strategy_code_version(
-                    request.strategy_id, request.strategy_code_version
-                )
-                if code_entry is None:
-                    raise ValueError(
-                        f"Strategy code version {request.strategy_code_version} not found "
-                        f"for {request.strategy_id}"
-                    )
-
-            entrypoint = str(strategy_meta.get("entrypoint", ""))
-            if code_entry is None and (entrypoint.startswith("dynamic:") or entrypoint == ""):
-                code_entry = self._storage.get_latest_strategy_code(request.strategy_id)
-                if code_entry is None:
-                    raise ValueError(
-                        f"Strategy {request.strategy_id} is dynamic but no code version is saved"
-                    )
-
-            if code_entry is not None:
-                await runner.load_strategy_from_code(
-                    strategy_id=runtime_strategy_id,
-                    version=f"v{request.version}",
-                    code=code_entry["code"],
-                    config=request.params or {},
-                )
-            else:
-                if not entrypoint:
-                    raise ValueError(f"Strategy {request.strategy_id} has no entrypoint")
-                await runner.load_strategy(
-                    strategy_id=runtime_strategy_id,
-                    version=f"v{request.version}",
-                    module_path=entrypoint,
-                    config=request.params or {},
-                )
-
+            await self._load_strategy_for_backtest(runner, runtime_strategy_id, request)
             await runner.start(runtime_strategy_id)
 
-            bars = self._build_market_data_series(request)
-            simulation = await self._simulate_backtest(
-                runner=runner,
-                runtime_strategy_id=runtime_strategy_id,
-                run_id=run_id,
-                request=request,
-                bars=bars,
-            )
+            if request.engine == "vectorbt":
+                simulation = await self._run_vectorbt_backtest(
+                    runner=runner,
+                    runtime_strategy_id=runtime_strategy_id,
+                    request=request,
+                )
+            else:
+                bars = self._build_market_data_series(request)
+                simulation = await self._simulate_backtest(
+                    runner=runner,
+                    runtime_strategy_id=runtime_strategy_id,
+                    run_id=run_id,
+                    request=request,
+                    bars=bars,
+                )
             returns = simulation["returns"]
             risk = simulation["risk"]
             report_metrics = simulation["metrics"]
@@ -244,8 +294,11 @@ class BacktestService:
                 metadata={
                     "strategy_id": request.strategy_id,
                     "version": request.version,
+                    "engine": request.engine,
                     "venue": request.venue,
                     "requested_by": request.requested_by,
+                    "data_mode": request.data_mode,
+                    "feature_version": request.feature_version,
                 },
             )
             self._storage.update_backtest(
@@ -286,6 +339,206 @@ class BacktestService:
                     runtime_strategy_id,
                     e,
                 )
+
+    async def _load_strategy_for_backtest(
+        self,
+        runner: StrategyRunner,
+        runtime_strategy_id: str,
+        request: BacktestRequest,
+    ) -> None:
+        strategy_meta = self._storage.get_strategy(request.strategy_id) or {}
+        code_entry = None
+
+        if request.strategy_code_version is not None:
+            code_entry = self._storage.get_strategy_code_version(
+                request.strategy_id,
+                request.strategy_code_version,
+            )
+            if code_entry is None:
+                raise ValueError(
+                    f"Strategy code version {request.strategy_code_version} not found "
+                    f"for {request.strategy_id}"
+                )
+
+        entrypoint = str(strategy_meta.get("entrypoint", ""))
+        if code_entry is None and (entrypoint.startswith("dynamic:") or entrypoint == ""):
+            code_entry = self._storage.get_latest_strategy_code(request.strategy_id)
+            if code_entry is None:
+                raise ValueError(
+                    f"Strategy {request.strategy_id} is dynamic but no code version is saved"
+                )
+
+        if code_entry is not None:
+            await runner.load_strategy_from_code(
+                strategy_id=request.strategy_id,
+                version=f"v{request.version}",
+                code=code_entry["code"],
+                config=request.params or {},
+                deployment_id=runtime_strategy_id,
+                symbols=request.symbols,
+                account_id="backtest",
+                venue=request.venue,
+                mode="backtest",
+            )
+            return
+
+        if not entrypoint:
+            raise ValueError(f"Strategy {request.strategy_id} has no entrypoint")
+        await runner.load_strategy(
+            strategy_id=request.strategy_id,
+            version=f"v{request.version}",
+            module_path=entrypoint,
+            config=request.params or {},
+            deployment_id=runtime_strategy_id,
+            symbols=request.symbols,
+            account_id="backtest",
+            venue=request.venue,
+            mode="backtest",
+        )
+
+    async def _run_vectorbt_backtest(
+        self,
+        runner: StrategyRunner,
+        runtime_strategy_id: str,
+        request: BacktestRequest,
+    ) -> Dict[str, Any]:
+        symbol = request.symbols[0]
+        params = request.params or {}
+        interval = str(params.get("interval", "1h"))
+        config = BacktestConfig(
+            start_date=datetime.fromtimestamp(request.start_ts_ms / 1000, tz=timezone.utc),
+            end_date=datetime.fromtimestamp(request.end_ts_ms / 1000, tz=timezone.utc),
+            initial_capital=Decimal(str(request.initial_capital)),
+            symbol=symbol,
+            interval=interval,
+            benchmark=request.benchmark,
+            commission_rate=Decimal(str(request.fee_bps)) / Decimal("10000"),
+            slippage_rate=Decimal(str(request.slippage_bps)) / Decimal("10000"),
+        )
+        if request.data_mode == "real_feature_store":
+            data_provider: DataProviderPort = FeatureStoreOHLCVDataProvider(
+                feature_store=get_feature_store(),
+                feature_version=request.feature_version,
+            )
+        else:
+            data_provider = _DevSmokeOHLCVProvider(self, request)
+
+        adapter = VectorBTAdapter(
+            config=VectorBTConfig(freq=interval),
+            data_provider=data_provider,
+        )
+        strategy = _StrategyRunnerVectorBTBridge(
+            runner=runner,
+            runtime_strategy_id=runtime_strategy_id,
+            symbol=symbol,
+            interval=interval,
+        )
+        result = await adapter.run_backtest(config, strategy)
+        data_quality_summary = getattr(data_provider, "last_quality_summary", None)
+        return self._vectorbt_result_to_simulation(
+            result,
+            request,
+            data_quality_summary=data_quality_summary,
+        )
+
+    def _build_ohlcv_series(
+        self,
+        request: BacktestRequest,
+        symbol: str,
+        interval: str = "1h",
+    ) -> List[OHLCV]:
+        bars = self._build_market_data_series(request)
+        series: List[OHLCV] = []
+        for bar in bars:
+            if bar.symbol != symbol:
+                continue
+            close = bar.kline_close or bar.price
+            series.append(
+                OHLCV(
+                    timestamp=bar.timestamp,
+                    open=bar.kline_open or bar.price,
+                    high=bar.kline_high or close,
+                    low=bar.kline_low or close,
+                    close=close,
+                    volume=bar.volume,
+                )
+            )
+        if not series:
+            raise ValueError(f"No dev_smoke OHLCV data generated for {symbol}/{interval}")
+        return series
+
+    def _vectorbt_result_to_simulation(
+        self,
+        result: BacktestResult,
+        request: BacktestRequest,
+        data_quality_summary: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        initial_capital = Decimal(str(request.initial_capital))
+        final_equity = result.final_capital
+        total_return = final_equity - initial_capital
+        total_return_ratio = float(result.total_return)
+        total_return_pct = float(result.metrics.get("total_return_pct", total_return_ratio * 100))
+        max_drawdown_ratio = float(result.max_drawdown)
+        max_drawdown_pct = max_drawdown_ratio * 100
+        win_rate_ratio = float(result.win_rate)
+        win_rate_pct = win_rate_ratio * 100 if win_rate_ratio <= 1 else win_rate_ratio
+        equity_curve = list(result.equity_curve)
+        trades = list(result.trades)
+
+        returns = {
+            "total_return": float(total_return),
+            "total_return_pct": total_return_pct,
+            "annualized_return": float(result.metrics.get("annualized_return", 0.0)),
+            "sharpe_ratio": float(result.sharpe_ratio),
+        }
+        risk = {
+            "max_drawdown": max_drawdown_ratio,
+            "max_drawdown_pct": max_drawdown_pct,
+            "volatility": float(result.metrics.get("volatility", 0.0)),
+            "var_95": float(result.metrics.get("var_95", 0.0)),
+        }
+        metrics = {
+            "backtest_engine": "vectorbt",
+            "framework": "vectorbt",
+            "total_return": float(total_return),
+            "total_return_pct": total_return_pct,
+            "annualized_return": returns["annualized_return"],
+            "sharpe_ratio": float(result.sharpe_ratio),
+            "max_drawdown": max_drawdown_ratio,
+            "max_drawdown_pct": max_drawdown_pct,
+            "volatility": risk["volatility"],
+            "var_95": risk["var_95"],
+            "trade_count": result.num_trades,
+            "winning_trades": None,
+            "losing_trades": None,
+            "win_rate": win_rate_pct,
+            "profit_factor": float(result.profit_factor),
+            "initial_capital": float(initial_capital),
+            "final_equity": float(final_equity),
+            "returns": returns,
+            "risk": risk,
+            "trades": trades,
+            "equity_curve": equity_curve,
+            "backtest_data_mode": request.data_mode,
+            "feature_version": request.feature_version,
+            "fee_bps": request.fee_bps,
+            "slippage_bps": request.slippage_bps,
+            "benchmark": request.benchmark,
+            "data_quality_summary": data_quality_summary
+            or {
+                "quality_score": 0.0,
+                "missing_data": True,
+                "source": "deterministic_dev_smoke",
+            },
+        }
+
+        return {
+            "returns": returns,
+            "risk": risk,
+            "trades": trades,
+            "equity_curve": equity_curve,
+            "metrics": metrics,
+        }
 
     def _build_market_data_series(self, request: BacktestRequest) -> List[MarketData]:
         symbols = request.symbols
@@ -351,7 +604,10 @@ class BacktestService:
         bars: List[MarketData],
     ) -> Dict[str, Any]:
         params = request.params or {}
-        initial_capital = _to_decimal(params.get("initial_capital"), Decimal("100000"))
+        initial_capital = _to_decimal(
+            params.get("initial_capital"),
+            Decimal(str(request.initial_capital)),
+        )
         default_order_size = _to_decimal(params.get("order_size"), Decimal("1"))
         cash = initial_capital
         positions: Dict[str, Decimal] = {symbol: Decimal("0") for symbol in request.symbols}
@@ -501,6 +757,8 @@ class BacktestService:
         }
 
         metrics = {
+            "backtest_engine": "strategy_runner",
+            "framework": "strategy_runner",
             "total_return": float(total_return),
             "total_return_pct": total_return_pct,
             "annualized_return": annualized_return,

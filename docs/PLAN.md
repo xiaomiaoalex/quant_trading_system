@@ -254,8 +254,25 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3 ──�
 **交付物**：
 - `adapters/persistence/feature_store.py`
   - 表结构：`feature_values(symbol, feature_name, version, ts_ms, value, meta)`
-  - 接口：`write_feature()`, `read_feature()`, `list_versions()`
+  - 接口：`write_feature()`, `read_feature()`, `read_feature_range()`, `list_versions()`
   - 版本锁定：同一 `(symbol, feature_name, version)` 不可覆盖写（幂等）
+- `services/backtesting/feature_store_data_provider.py`
+  - `FeatureStoreOHLCVDataProvider` 实现 `DataProviderPort`
+  - `engine=vectorbt + data_mode=real_feature_store` 从 FeatureStore 读取真实 OHLCV
+  - 支持 `ohlcv` 单列 dict 或 `open/high/low/close/volume` 五列对齐
+- `api/routes/data_catalog.py`
+  - `POST /v1/data/ohlcv/import` 导入版本化 OHLCV 到 FeatureStore
+  - `POST /v1/data/ohlcv/sync-binance` 从 Binance REST 单次补数
+  - `POST /v1/data/ohlcv/worker/start|stop` 和 `GET /status` 控制持续 OHLCV worker
+  - `GET /v1/data/ohlcv/coverage` 查询 `symbol + feature_version` 覆盖
+  - `GET /v1/data/catalog` 动态展示 `feature_store_ohlcv` 覆盖、最新时间戳和质量摘要
+- `adapters/binance/ohlcv_source.py`
+  - `BinanceOHLCVRestSource` 调用 Binance `/v3/klines` 并映射内部 OHLCV bar
+- `services/ohlcv_ingestion.py`
+  - `BinanceOHLCVIngestionWorker` 支持分页、断点续拉、幂等写入和 start/stop/status
+- `Frontend/src/pages/Data.tsx`
+  - 支持手动导入 OHLCV JSON
+  - 展示 FeatureStore OHLCV 覆盖表、数据源状态和 Binance worker 控制
 - `adapters/persistence/postgres/migrations/001_feature_store.sql`
 - 单测：版本冲突拒绝、幂等写入、跨版本读取隔离
 
@@ -263,6 +280,12 @@ Phase 0 (当前)  ──► Phase 1 ──► Phase 2 ──► Phase 3 ──�
 - [x] 同一特征不同版本可共存
 - [x] 写入幂等（重复写相同数据不报错，不重复插入）
 - [x] 版本冲突（相同key不同value）抛出明确异常
+- [x] `read_feature_range()` 支持按时间窗口批量读取版本化特征
+- [x] VectorBT 真实研究回测可通过 `FeatureStoreOHLCVDataProvider` 读取 `real_feature_store` 数据
+- [x] OHLCV import API 以幂等方式写入 `feature_name=ohlcv`
+- [x] Data 页面显示 FeatureStore OHLCV 的版本覆盖、最新时间戳和质量状态
+- [x] Binance OHLCV worker 支持单次同步、持续运行、停止和状态查询
+- [x] Worker 从 FeatureStore 最新时间戳后续拉，不重复拉已覆盖窗口
 - [x] CI postgres-integration阶段通过
 
 ---

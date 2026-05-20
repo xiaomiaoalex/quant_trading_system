@@ -25,6 +25,82 @@
 
 ## 最近记录
 
+### 2026-05-20 06:55 - Binance OHLCV 持续 Ingestion Worker
+
+- 背景: FeatureStore 已支持 OHLCV 手动导入和 `real_feature_store` 回测读取，但真实研究级流程还缺持续从 Binance REST 拉取 OHLCV、按版本写入 FeatureStore 的 worker。
+- 决策: 按五层边界拆分为 Adapter source + Service worker + Control API；Adapter 层隔离 Binance 原始 kline 数组，Service 层只处理内部 bar、分页、断点续拉和 FeatureStore 幂等写入。
+- 改动:
+  - `trader/adapters/binance/ohlcv_source.py`: 新增 `BinanceOHLCVRestSource`，调用 `/v3/klines` 并转换为内部 `BinanceOHLCVBar`。
+  - `trader/services/ohlcv_ingestion.py`: 新增 `BinanceOHLCVIngestionWorker`，支持 sync once、start/stop/status、分页和 latest+interval 续拉。
+  - `trader/api/routes/data_catalog.py`: 新增 `/v1/data/ohlcv/sync-binance`、`/worker/start`、`/worker/stop`、`/worker/status` 和 env autostart helper。
+  - `trader/api/models/schemas.py`: 新增 Binance OHLCV ingestion request/result/status DTO。
+  - `trader/api/main.py`: 在 lifespan 中按 `BINANCE_OHLCV_INGESTION_ENABLED` 可选启动 worker，并在 shutdown 关闭。
+  - `Frontend/src/pages/Data.tsx`、`Frontend/src/api/research.ts`、`Frontend/src/types/research.ts`: Data 页面新增 worker 控制和状态展示。
+  - `trader/tests/test_api_binance_ohlcv_ingestion.py`、`trader/tests/test_binance_ohlcv_ingestion_worker.py`: 新增无网络 fake worker/source 测试。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_binance_ohlcv_ingestion.py trader/tests/test_binance_ohlcv_ingestion_worker.py trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_feature_store_range.py --tb=short` → 28 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/adapters/binance/ohlcv_source.py trader/services/ohlcv_ingestion.py trader/api/models/schemas.py trader/api/routes/data_catalog.py trader/api/main.py trader/tests/test_api_binance_ohlcv_ingestion.py trader/tests/test_binance_ohlcv_ingestion_worker.py` → passed
+  - scoped `black --check` / `isort --check-only` / `git diff --check` → passed
+  - 本地 API smoke：`POST /v1/data/ohlcv/sync-binance` with `feature_version=smoke_binance_ohlcv_20260520` → imported 1 bar，coverage 可查询
+- 风险/遗留: Worker 已能持续写 FeatureStore，但尚未把 OHLCV freshness 接入 Promote gate / Portfolio Autopilot；expected_points 仍按导入覆盖展示，后续应按 interval 与目标窗口计算质量阈值。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-20 06:27 - FeatureStore OHLCV 导入与 Data 页面覆盖展示
+
+- 背景: `engine=vectorbt + data_mode=real_feature_store` 已能从 FeatureStore 读取 OHLCV，但仓库还缺少把 OHLCV 写入 FeatureStore 的前端入口与覆盖查询；Data 页面仍无法告诉用户某个 `feature_version` 是否真的有数据。
+- 决策: 在 Control Plane 增加最小可审计的 OHLCV import/coverage API，写入仍复用 FeatureStore 的幂等与冲突保护；前端 Data 页面只展示真实 coverage 聚合，不静态伪造 FeatureStore 可用性。
+- 改动:
+  - `trader/api/routes/data_catalog.py`: 新增 `/v1/data/ohlcv/import`、`/v1/data/ohlcv/coverage`，并让 `/v1/data/catalog` 动态返回 `feature_store_ohlcv` 覆盖。
+  - `trader/api/models/schemas.py`: 新增 `OHLCVBarInput`、`OHLCVImportRequest`、`OHLCVImportResponse`，扩展 `DataSourceStatus` 覆盖字段。
+  - `trader/adapters/persistence/feature_store.py`: 新增 `list_feature_coverage()`，支持 memory 与 PostgreSQL 聚合。
+  - `Frontend/src/pages/Data.tsx`、`Frontend/src/api/research.ts`、`Frontend/src/types/research.ts`: Data 页面支持导入 OHLCV JSON，并展示 FeatureStore coverage 表。
+  - `trader/tests/test_api_data_ohlcv_feature_store.py`: 覆盖导入成功、幂等重复、非法 K 线拒绝和 catalog 动态更新。
+  - 同步接口契约、架构、计划、状态和经验文档。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_feature_store_range.py --tb=short` → 23 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/api/models/schemas.py trader/api/routes/data_catalog.py trader/adapters/persistence/feature_store.py trader/services/backtesting/feature_store_data_provider.py trader/services/deployment.py trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py` → passed
+  - scoped `black --check` / `isort --check-only` / `git diff --check` → passed
+- 风险/遗留: 当前是手动/API 导入和覆盖聚合；持续自动拉取 Binance OHLCV、按 interval 计算目标 expected_points、以及把 data_quality 门禁和 OOS/成本压力测试合并到 Promote gate 仍需后续实现。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-19 23:21 - VectorBT 真实 FeatureStore 数据接入
+
+- 背景: 上一轮已打通 `engine=vectorbt` 主链路，但 `data_mode=real_feature_store` 仍返回“未接 provider”的 fail-closed 错误；真实研究级回测需要从 FeatureStore 按 `feature_version` 读取 OHLCV，并输出数据质量证据。
+- 决策: 新增 `FeatureStoreOHLCVDataProvider` 实现 `DataProviderPort`，让 VectorBT 继续只依赖 provider port；支持 `ohlcv` 单列 dict 和 `open/high/low/close/volume` 五列对齐两种存储形态。
+- 改动:
+  - `trader/services/backtesting/feature_store_data_provider.py`: 新增 FeatureStore OHLCV provider、质量摘要、缺数据 fail-closed。
+  - `trader/services/deployment.py`: `engine=vectorbt + real_feature_store` 注入 FeatureStore provider，报告 metrics 写入 `data_quality_summary`。
+  - `trader/tests/test_api_backtest_vectorbt_engine.py`: 新增真实 FeatureStore 回测成功和缺数据失败测试。
+  - `Frontend/src/components/backtests/BacktestDetailPanel.tsx`: 新增 Data Quality 展示卡片。
+  - 同步接口契约、架构、计划、状态和经验文档。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_backtesting_vectorbt_adapter.py trader/tests/test_feature_store_range.py --tb=short` → 24 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/services/backtesting/feature_store_data_provider.py trader/services/deployment.py trader/tests/test_api_backtest_vectorbt_engine.py` → passed
+  - scoped `black --check` / `isort --check-only` / `git diff --check` → passed
+- 风险/遗留: 当前接的是读取侧；持续写入 OHLCV 的生产 ingestion、Data 页面版本覆盖展示和门禁 OOS/成本压力测试仍需后续补齐。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-19 23:00 - VectorBT 回测接入与前端打通
+
+- 背景: 仓库已有 `VectorBTAdapter`，但 `/v1/backtests` 主入口和前端 Backtests 页面仍只能走旧 `StrategyRunner` 模拟路径；真实 `vectorbt` API 还存在 `init_capital`、`final_capital()`、`pf.win_rate()` 等不兼容调用。
+- 决策: 保留 `strategy_runner` 作为默认兼容路径，新增 `engine=vectorbt` 分支；第一步只打通 `dev_smoke` 无网络烟测，`real_feature_store` 在未注入真实 provider 前 fail-closed。
+- 改动:
+  - `BacktestRequest` / `BacktestRun` / `BacktestReport` 新增 `engine` 字段，值域为 `strategy_runner|vectorbt`。
+  - `BacktestService` 新增 `StrategyRunner -> VectorBT` 桥接和 deterministic OHLCV provider，VectorBT 报告写入统一 artifact/metrics。
+  - `VectorBTAdapter` 修复为真实 VectorBT API：`init_cash`、`final_value()`、`pf.trades.win_rate()`、权益曲线和 `records_readable` 交易提取。
+  - 前端 Backtests/Strategy Lab 新增 Engine/Data Mode 选择并提交 `engine`，列表和报告详情展示回测引擎。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_backtesting_vectorbt_adapter.py --tb=short` → 6 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/api/models/schemas.py trader/api/routes/backtests.py trader/services/deployment.py trader/services/backtesting/vectorbt_adapter.py` → passed
+  - `git diff --check` → passed
+  - 本地运行后端/前端后，`POST /v1/backtests` with `engine=vectorbt` → `COMPLETED`，report/metrics 均标记 `vectorbt`
+- 风险/遗留: VectorBT 当前主 API 只接通 `dev_smoke` provider；研究级 `real_feature_store` 还需要注入真实 FeatureStore/DataProviderPort，并补数据质量门禁后才能用于 Promote 准入。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-19 05:00 - 阶段6 组合风险增强验收修正
 
 - 背景: 阶段6交付新增组合风险增强服务，但验收发现 scoped mypy 失败；契约中 stress shock 语义不清；实现未区分多空方向，且同 symbol 多条 position 会被覆盖。

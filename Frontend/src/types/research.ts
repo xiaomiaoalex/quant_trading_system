@@ -166,12 +166,97 @@ export interface DataSourceStatus {
   status: 'available' | 'stub' | 'missing'
   symbols: string[]
   latest_ts_ms?: number | null
+  first_ts_ms?: number | null
   feature_version: string
   quality_score: number
+  total_points?: number | null
+  expected_points?: number | null
+  coverage_percent?: number | null
+  interval?: string | null
   notes?: string | null
 }
 
 export interface DataCatalogResponse {
   feature_version: string
   sources: DataSourceStatus[]
+}
+
+export interface OHLCVBarInput {
+  ts_ms: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface OHLCVImportRequest {
+  symbol: string
+  feature_version: string
+  interval?: string
+  source?: string
+  requested_by?: string
+  bars: OHLCVBarInput[]
+}
+
+export interface OHLCVImportResponse {
+  symbol: string
+  feature_version: string
+  interval: string
+  imported: number
+  duplicates: number
+  first_ts_ms?: number | null
+  latest_ts_ms?: number | null
+  total_points: number
+}
+
+export interface BinanceOHLCVIngestionRequest {
+  symbols: string[]
+  feature_version: string
+  interval?: string
+  start_ts_ms?: number | null
+  end_ts_ms?: number | null
+  lookback_hours?: number
+  poll_interval_seconds?: number
+  limit?: number
+  requested_by?: string
+}
+
+export interface BinanceOHLCVSymbolIngestionResult {
+  symbol: string
+  imported: number
+  duplicates: number
+  conflicts: number
+  first_ts_ms?: number | null
+  latest_ts_ms?: number | null
+  error?: string | null
+}
+
+export interface BinanceOHLCVIngestionResult {
+  running: boolean
+  feature_version: string
+  interval: string
+  symbols: string[]
+  started_at: string
+  finished_at: string
+  total_imported: number
+  total_duplicates: number
+  total_conflicts: number
+  last_error?: string | null
+  symbol_results: BinanceOHLCVSymbolIngestionResult[]
+}
+
+export interface BinanceOHLCVWorkerStatus {
+  running: boolean
+  feature_version?: string | null
+  interval?: string | null
+  symbols: string[]
+  poll_interval_seconds?: number | null
+  last_started_at?: string | null
+  last_finished_at?: string | null
+  last_error?: string | null
+  total_imported: number
+  total_duplicates: number
+  total_conflicts: number
+  last_result?: BinanceOHLCVIngestionResult | null
 }

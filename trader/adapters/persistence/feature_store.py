@@ -544,6 +544,108 @@ class FeatureStore:
                 {"version": row["version"], "latest_ts_ms": row["latest_ts_ms"]} for row in rows
             ]
 
+    async def list_feature_coverage(
+        self,
+        feature_name: str,
+        version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List coverage by symbol/version for a feature.
+
+        Used by Control Plane data catalog endpoints to expose which versioned
+        datasets are actually available for research backtests.
+        """
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_list_feature_coverage(feature_name, version)
+            except Exception as e:
+                logger.warning(
+                    f"PostgreSQL list_feature_coverage failed: {e}, falling back to in-memory"
+                )
+
+        return self._memory_list_feature_coverage(feature_name, version)
+
+    def _memory_list_feature_coverage(
+        self,
+        feature_name: str,
+        version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        coverage: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for feature in self._memory_storage.feature_values_by_key.values():
+            if feature.get("feature_name") != feature_name:
+                continue
+            if version is not None and feature.get("version") != version:
+                continue
+            key = (str(feature.get("symbol")), str(feature.get("version")))
+            item = coverage.setdefault(
+                key,
+                {
+                    "symbol": key[0],
+                    "feature_name": feature_name,
+                    "version": key[1],
+                    "total_points": 0,
+                    "first_ts_ms": None,
+                    "latest_ts_ms": None,
+                },
+            )
+            ts_ms = int(feature["ts_ms"])
+            item["total_points"] += 1
+            item["first_ts_ms"] = (
+                ts_ms if item["first_ts_ms"] is None else min(int(item["first_ts_ms"]), ts_ms)
+            )
+            item["latest_ts_ms"] = (
+                ts_ms if item["latest_ts_ms"] is None else max(int(item["latest_ts_ms"]), ts_ms)
+            )
+
+        return sorted(
+            coverage.values(),
+            key=lambda item: (str(item["symbol"]), str(item["version"])),
+        )
+
+    async def _postgres_list_feature_coverage(
+        self,
+        feature_name: str,
+        version: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        async with self._postgres_storage.acquire() as conn:
+            if version is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT symbol, feature_name, version, COUNT(*) AS total_points,
+                           MIN(ts_ms) AS first_ts_ms, MAX(ts_ms) AS latest_ts_ms
+                    FROM feature_values
+                    WHERE feature_name = $1 AND version = $2
+                    GROUP BY symbol, feature_name, version
+                    ORDER BY symbol, version
+                    """,
+                    feature_name,
+                    version,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT symbol, feature_name, version, COUNT(*) AS total_points,
+                           MIN(ts_ms) AS first_ts_ms, MAX(ts_ms) AS latest_ts_ms
+                    FROM feature_values
+                    WHERE feature_name = $1
+                    GROUP BY symbol, feature_name, version
+                    ORDER BY symbol, version
+                    """,
+                    feature_name,
+                )
+
+            return [
+                {
+                    "symbol": row["symbol"],
+                    "feature_name": row["feature_name"],
+                    "version": row["version"],
+                    "total_points": int(row["total_points"]),
+                    "first_ts_ms": row["first_ts_ms"],
+                    "latest_ts_ms": row["latest_ts_ms"],
+                }
+                for row in rows
+            ]
+
 
 def get_feature_store() -> FeatureStore:
     """Get or create the global FeatureStore instance"""

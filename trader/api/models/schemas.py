@@ -356,11 +356,15 @@ class DeploymentRuntime(BaseModel):
 # ==================== Backtest Models ====================
 
 
+BacktestEngine = Literal["strategy_runner", "vectorbt"]
+
+
 class BacktestRequest(BaseModel):
     """回测请求"""
 
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     params: Optional[Dict[str, Any]] = None
     symbols: List[str]
     start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
@@ -383,6 +387,7 @@ class BacktestRun(BaseModel):
     status: str = Field(..., json_schema_extra={"example": "RUNNING"})
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     symbols: List[str]
     start_ts_ms: int
     end_ts_ms: int
@@ -404,6 +409,7 @@ class BacktestReport(BaseModel):
     status: str
     strategy_id: str
     version: int
+    engine: BacktestEngine = "strategy_runner"
     symbols: List[str]
     start_ts_ms: int
     end_ts_ms: int
@@ -606,14 +612,99 @@ class DataSourceStatus(BaseModel):
     status: Literal["available", "stub", "missing"]
     symbols: List[str] = Field(default_factory=list)
     latest_ts_ms: Optional[int] = None
+    first_ts_ms: Optional[int] = None
     feature_version: str = "dev_smoke"
     quality_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    total_points: Optional[int] = None
+    expected_points: Optional[int] = None
+    coverage_percent: Optional[float] = None
+    interval: Optional[str] = None
     notes: Optional[str] = None
 
 
 class DataCatalogResponse(BaseModel):
     feature_version: str
     sources: List[DataSourceStatus]
+
+
+class OHLCVBarInput(BaseModel):
+    ts_ms: int = Field(..., ge=0)
+    open: float = Field(..., gt=0.0)
+    high: float = Field(..., gt=0.0)
+    low: float = Field(..., gt=0.0)
+    close: float = Field(..., gt=0.0)
+    volume: float = Field(..., ge=0.0)
+
+
+class OHLCVImportRequest(BaseModel):
+    symbol: str
+    feature_version: str
+    bars: List[OHLCVBarInput] = Field(default_factory=list)
+    interval: str = "1h"
+    source: str = "manual_import"
+    requested_by: Optional[str] = None
+
+
+class OHLCVImportResponse(BaseModel):
+    symbol: str
+    feature_version: str
+    interval: str
+    imported: int
+    duplicates: int
+    first_ts_ms: Optional[int] = None
+    latest_ts_ms: Optional[int] = None
+    total_points: int = 0
+
+
+class BinanceOHLCVIngestionRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    feature_version: str = "binance_ohlcv_v1"
+    interval: str = "1h"
+    start_ts_ms: Optional[int] = None
+    end_ts_ms: Optional[int] = None
+    lookback_hours: float = Field(default=24.0, gt=0.0)
+    poll_interval_seconds: float = Field(default=300.0, gt=0.0)
+    limit: int = Field(default=1000, ge=1, le=1000)
+    requested_by: Optional[str] = None
+
+
+class BinanceOHLCVSymbolIngestionResult(BaseModel):
+    symbol: str
+    imported: int = 0
+    duplicates: int = 0
+    conflicts: int = 0
+    first_ts_ms: Optional[int] = None
+    latest_ts_ms: Optional[int] = None
+    error: Optional[str] = None
+
+
+class BinanceOHLCVIngestionResult(BaseModel):
+    running: bool = False
+    feature_version: str
+    interval: str
+    symbols: List[str] = Field(default_factory=list)
+    started_at: str
+    finished_at: str
+    total_imported: int = 0
+    total_duplicates: int = 0
+    total_conflicts: int = 0
+    last_error: Optional[str] = None
+    symbol_results: List[BinanceOHLCVSymbolIngestionResult] = Field(default_factory=list)
+
+
+class BinanceOHLCVWorkerStatus(BaseModel):
+    running: bool = False
+    feature_version: Optional[str] = None
+    interval: Optional[str] = None
+    symbols: List[str] = Field(default_factory=list)
+    poll_interval_seconds: Optional[float] = None
+    last_started_at: Optional[str] = None
+    last_finished_at: Optional[str] = None
+    last_error: Optional[str] = None
+    total_imported: int = 0
+    total_duplicates: int = 0
+    total_conflicts: int = 0
+    last_result: Optional[BinanceOHLCVIngestionResult] = None
 
 
 # ==================== Order & Execution Models ====================
