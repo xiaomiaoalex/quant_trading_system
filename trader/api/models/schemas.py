@@ -113,6 +113,9 @@ class StrategyCodeDebugResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+
+
+
 class StrategyVersion(BaseModel):
     """策略版本"""
 
@@ -357,6 +360,7 @@ class DeploymentRuntime(BaseModel):
 
 
 BacktestEngine = Literal["strategy_runner", "vectorbt"]
+BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
 
 
 class BacktestRequest(BaseModel):
@@ -378,6 +382,8 @@ class BacktestRequest(BaseModel):
     slippage_bps: float = Field(default=5.0, ge=0.0)
     benchmark: Optional[str] = None
     data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
+    candidate_id: Optional[str] = Field(default=None, description="关联的 strategy candidate ID，用于自动状态流转")
+    risk_mode: BacktestRiskMode = Field(default="risk_adjusted", description="回测风控模式: raw_only | risk_adjusted | event_replay")
 
 
 class BacktestRun(BaseModel):
@@ -440,6 +446,9 @@ StrategyCandidateStatus = Literal[
 ]
 
 
+BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
+
+
 class BacktestDatasetSpec(BaseModel):
     """研究回测数据集选择。"""
 
@@ -453,6 +462,7 @@ class BacktestDatasetSpec(BaseModel):
     slippage_bps: float = Field(default=5.0, ge=0.0)
     benchmark: Optional[str] = None
     data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
+    risk_mode: BacktestRiskMode = "risk_adjusted"
 
 
 class BacktestGateResult(BaseModel):
@@ -503,6 +513,20 @@ class StrategyCandidateDebugRequest(BaseModel):
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
+class StrategyCandidateDebugResponse(BaseModel):
+    """候选策略调试响应：包含 debug 结果和更新后的候选策略"""
+
+    ok: bool
+    syntax_ok: bool
+    protocol_ok: bool
+    validation_status: Optional[str] = None
+    checksum: Optional[str] = None
+    signals: List[Dict[str, Any]] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    candidate: Optional[StrategyCandidate] = None
+
+
 class StrategyCandidateBacktestRequest(BaseModel):
     dataset: BacktestDatasetSpec
     requested_by: str = "console_user"
@@ -516,6 +540,27 @@ class StrategyCandidatePromoteRequest(BaseModel):
     mode: DeploymentMode = "paper"
     version: str = "v1"
     config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PromotePaperResponse(BaseModel):
+    """promote-paper 成功响应。"""
+
+    candidate_id: str
+    strategy_id: str
+    deployment_id: str
+    code_version: Optional[int] = None
+    status: Literal["APPROVED_FOR_PAPER"]
+    promoted_at: str
+
+
+class PromotePaperError(BaseModel):
+    """promote-paper 失败响应体（嵌入 HTTPException.detail）。"""
+
+    error_code: Literal["INVALID_STATE", "PROMOTE_LOAD_FAILED", "PROMOTE_CONFLICT"]
+    current_state: Optional[str] = None
+    required_state: Optional[str] = None
+    detail: str
+    candidate_id: str
 
 
 class StrategyAllocationProfileUpdateRequest(BaseModel):

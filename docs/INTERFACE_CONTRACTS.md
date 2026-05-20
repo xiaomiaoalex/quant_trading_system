@@ -174,6 +174,27 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 
 候选策略删除接口为 `DELETE /v1/strategy-candidates/{candidate_id}`，仅删除研究候选实体，不删除策略模板、代码版本、回测报告或部署实例。处于 `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 的候选必须先停止/解除运行关系后才能删除；删除必须写入 `strategy_candidate.deleted` 审计事件。
 
+#### 8.1.1 StrategyCandidateDebugResponse
+
+`POST /v1/strategy-candidates/{candidate_id}/debug` 响应契约：
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `ok` | bool | 调试是否整体通过 |
+| `syntax_ok` | bool | Python 语法检查是否通过 |
+| `protocol_ok` | bool | 策略协议检查是否通过 |
+| `validation_status` | str \| None | 验证状态 |
+| `checksum` | str \| None | 代码 checksum |
+| `signals` | List[Dict] | 调试期间产生的信号样本 |
+| `errors` | List[str] | 错误信息列表 |
+| `warnings` | List[str] | 警告信息列表 |
+| `candidate` | StrategyCandidate \| None | 更新后的候选策略实体 |
+
+**关键语义**：
+- 调试失败时 `ok=false`，但 `candidate.status` **保持 `DRAFT`**，不进入终态 `REJECTED`
+- 前端通过 `candidate` 字段获取最新状态，通过 `errors` 字段显示错误
+- 这支持前端迭代开发：用户修复代码后可重复 debug
+
 ### 8.2 BacktestDatasetSpec / BacktestGateResult
 
 `BacktestDatasetSpec` 作为回测数据选择契约，第一版字段为：
@@ -189,6 +210,14 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 - `benchmark`
 - `data_mode`: `real_feature_store` 或 `dev_smoke`
 - `engine`: `strategy_runner` 或 `vectorbt`，默认 `strategy_runner`
+- `risk_mode`: `raw_only` | `risk_adjusted` | `event_replay`，默认 `risk_adjusted`
+
+`risk_mode` 控制回测风控行为：
+- `raw_only`: 纯策略信号回测，不经过风控引擎
+- `risk_adjusted`: 使用 VectorBTAdapterWithRisk 进行风控调整后回测
+- `event_replay`: 使用 EventDrivenRiskReplay 逐信号风控回放
+
+`dev_smoke` 只能用于开发烟测，不能作为 Promote/部署准入依据。`real_feature_store` + (`risk_adjusted` 或 `event_replay`) 是晋级 `BACKTEST_PASSED` 的必要条件。
 
 `strategy_runner` 表示现有事件驱动策略运行器路径；`vectorbt` 表示快速向量化研究回测路径。`vectorbt` 必须通过 `DataProviderPort` 获取 OHLCV 数据；`dev_smoke` 模式可使用确定性内置数据源用于端到端烟测。
 
@@ -1366,7 +1395,30 @@ for signal in signals:
 | `num_trades` | 交易次数 |
 | `final_capital` | 最终资金 |
 
-#### 8.9.8 测试要求
+#### 8.9.8 回测报告字段（风控相关）
+
+`risk_adjusted` 和 `event_replay` 回测报告必须在 `metrics` 中包含以下风控证据字段：
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `approved_orders` | List[Dict] | 通过风控的订单列表 |
+| `clipped_orders` | List[Dict] | 被裁剪的订单列表 |
+| `rejected_orders` | List[Dict] | 被拒绝的订单列表 |
+| `rejection_reason_counts` | Dict[str, int] | 拒绝原因统计 |
+| `max_drawdown_before_risk` | float \| None | 风控前最大回撤 |
+| `max_drawdown_after_risk` | float \| None | 风控后最大回撤 |
+| `risk_adjusted_metrics` | Dict[str, Any] | 风控后指标（sharpe_ratio, max_drawdown 等） |
+| `risk_adjusted_equity_curve` | List[float] | 风控后权益曲线 |
+| `risk_replay` | Dict \| None | `event_replay` 模式下的回放统计 |
+
+`event_replay` 模式的 `risk_replay` 子字段：
+- `approved_orders`, `clipped_orders`, `rejected_orders`, `rejection_reason_counts`
+- `raw_signals`: 原始信号列表
+- `risk_decisions`: 风控决策轨迹
+- `final_positions`: 最终持仓
+- `errors`: 回放错误列表
+
+#### 8.9.9 测试要求
 
 - `BacktestRiskIntegration.evaluate_signal()` 调用 `risk_engine.check_pre_trade()`。
 - APPROVED / CLIPPED / REJECTED 状态区分正确。
@@ -1374,8 +1426,11 @@ for signal in signals:
 - REJECTED 订单不进入 `NextBarOpenExecutor` 队列，也不进入 VectorBT 成交模拟。
 - VectorBT 风控路径不能硬编码 `BTCUSDT`、`price=0` 或固定数量。
 - 同一信号在相同 snapshot 下，回测风控和实盘风控入口一致。
+- `risk_adjusted` 回测必须产生 `approved_orders/clipped_orders/rejected_orders` 字段。
+- `event_replay` 回测必须产生 `risk_replay` 字段。
+- `raw_only` 回测不产生风控相关字段。
 
-#### 8.9.9 验收标准
+#### 8.9.10 验收标准
 
 - 回测通过 `RiskEngine.check_pre_trade()` 调用完整风控，不复制一套回测专用风控逻辑。
 - 回测报告同时包含 `raw_signals`、`approved_orders`、`clipped_orders`、`rejected_orders`、`rejection_reason_counts`。
@@ -1956,4 +2011,83 @@ class BacktestRiskReplay:
 - 不在 `CryptoPreTradeRiskPlugin` 中写入回测逻辑
 - 不复制 crypto 风控规则到回测模块
 - 不在 Core 层进行任何 IO 操作
+
+---
+
+## 9. 阶段3接口契约 — Promote-Paper 原子编排
+
+### 9.1 新增 API 端点
+
+```
+POST /v1/strategy-candidates/{candidate_id}/promote-paper
+```
+
+**请求**：无请求体（candidate_id 是唯一输入）
+
+**成功响应** `200 OK`：
+```python
+class PromotePaperResponse(BaseModel):
+    candidate_id: str
+    strategy_id: str
+    deployment_id: str
+    code_version_id: str
+    status: Literal["APPROVED_FOR_PAPER"]
+    promoted_at: str  # ISO 8601
+```
+
+**失败响应** `409 Conflict`：
+```python
+class PromotePaperError(BaseModel):
+    error_code: Literal["INVALID_STATE", "PROMOTE_LOAD_FAILED", "PROMOTE_CONFLICT"]
+    current_state: str           # 仅 INVALID_STATE 时存在
+    required_state: str          # 仅 INVALID_STATE 时存在
+    detail: str                  # 人类可读错误描述
+    candidate_id: str
+```
+
+### 9.2 StrategyCandidate 状态流更新
+
+新增错误状态路径（不进入正式状态机，仅用于 audit trail 记录）：
+
+```
+VALIDATION_PASSED --promote--> [PROMOTE_IN_PROGRESS] --success--> APPROVED_FOR_PAPER
+                                                      --failure--> VALIDATION_PASSED  (回滚)
+```
+
+audit trail 事件类型：
+- `PROMOTE_STARTED`：promote 开始，记录 `initiated_at` 和 `triggered_by`
+- `PROMOTE_LOAD_FAILED`：动态加载失败，记录 `error_code`、`error_detail`、`failed_at`
+- `PROMOTE_CONFLICT`：并发冲突，记录 `conflict_reason`
+- `PROMOTE_COMPLETED`：成功，记录 `deployment_id`、`strategy_id`、`completed_at`
+- `PROMOTE_ROLLED_BACK`：回滚完成，记录 `rollback_reason`、`rolled_back_at`
+
+### 9.3 错误码语义
+
+| 错误码 | HTTP 状态 | 触发条件 | 回滚动作 |
+|--------|-----------|---------|---------|
+| `INVALID_STATE` | 409 | candidate 不是 `VALIDATION_PASSED` | 无需回滚 |
+| `PROMOTE_LOAD_FAILED` | 409 | 动态加载失败（语法错误/插件缺失/初始化失败） | unload runtime → 清理 deployment → candidate 回 VALIDATION_PASSED |
+| `PROMOTE_CONFLICT` | 409 | deployment_id 已存在或 runtime 已是 LOADED | 无需回滚（操作未执行） |
+
+### 9.4 原子边界（运行态原子）
+
+| 资产类型 | 失败时行为 | 原因 |
+|---------|-----------|------|
+| `code_version` 记录 | **保留** | 审计资产，供事后排查 |
+| audit trail 事件 | **保留** | 记录失败原因和回滚过程 |
+| `StrategyRunner` runtime | **必须清理** | 影响后续交易入口 |
+| `deployment` 记录 | **必须清理**（删除或标记 `PROMOTE_ROLLED_BACK`） | 影响后续交易入口 |
+| `candidate` 状态 | **回退到 `VALIDATION_PASSED`** | 允许用户修复后重试 |
+
+### 9.5 并发保护规范
+
+- 按 `candidate_id` 粒度加 `asyncio.Lock`（或数据库 CAS version 字段）
+- 并发第二个请求检测到锁被占用或状态已变更，立即返回 `PROMOTE_CONFLICT` 409
+- 不排队、不等待
+
+### 9.6 禁止范围
+
+- `promote-paper` 接口不得开启 `live` 模式，只能到达 `APPROVED_FOR_PAPER`
+- `dev_smoke` 标记的候选不得 promote（继承阶段0约束）
+- 不允许在 promote 流程中绕过 RiskEngine 或 OMS
 - 回测 DTO 不得塞入 `trader/core/` 目录

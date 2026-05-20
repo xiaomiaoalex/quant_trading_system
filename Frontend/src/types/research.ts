@@ -33,6 +33,8 @@ export const DATA_SOURCE_STATUS_DISPLAY: Record<DataSourceStatusValue, { label: 
   missing:  { label: 'Missing',  bgClass: 'bg-red-950/40',     textClass: 'text-red-300' },
 }
 
+export type BacktestRiskMode = 'raw_only' | 'risk_adjusted' | 'event_replay'
+
 export interface BacktestDatasetSpec {
   symbols: string[]
   start_ts_ms: number
@@ -44,6 +46,7 @@ export interface BacktestDatasetSpec {
   slippage_bps: number
   benchmark?: string
   data_mode: 'real_feature_store' | 'dev_smoke'
+  risk_mode: BacktestRiskMode
 }
 
 export interface BacktestGateResult {
@@ -91,6 +94,28 @@ export interface StrategyCandidatePromoteRequest {
   mode: DeploymentMode
   version?: string
   config?: Record<string, unknown>
+}
+
+export interface StrategyCandidateDebugRequest {
+  code?: string
+  config?: Record<string, unknown>
+}
+
+export interface StrategyCandidateDebugResponse {
+  ok: boolean
+  syntax_ok: boolean
+  protocol_ok: boolean
+  validation_status?: string | null
+  checksum?: string | null
+  signals: Array<Record<string, unknown>>
+  errors: string[]
+  warnings: string[]
+  candidate?: StrategyCandidate | null
+}
+
+export interface StrategyCandidateBacktestRequest {
+  dataset: BacktestDatasetSpec
+  requested_by?: string
 }
 
 export interface StrategyAllocationProfile {

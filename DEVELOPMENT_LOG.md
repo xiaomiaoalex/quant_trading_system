@@ -25,6 +25,25 @@
 
 ## 最近记录
 
+### 2026-05-20 20:00 - Strategy Lab 风控回测集成修复与红测覆盖
+
+- 背景: 用户 Review 发现 7 个关键问题（3 Critical + 2 High + 1 Medium + 1 Process），涉及 debug 前后端契约不一致、risk_adjusted 未注入 RiskEngine、event_replay 使用 pass-all Mock、前端 risk_mode 未提交、debug 失败打入终态、风控报告字段缺失、文档未同步。
+- 决策: 按问题优先级逐个修复，每修复一个补对应红测，最后同步文档闭环。
+- 改动:
+  - `trader/api/models/schemas.py`: 新增 `StrategyCandidateDebugResponse`（含 `candidate` 嵌套），`BacktestDatasetSpec` 新增 `risk_mode` 字段
+  - `trader/api/routes/strategy_candidates.py`: `/debug` 返回 `StrategyCandidateDebugResponse`；失败时保持 `DRAFT` 并写入 `debug_errors`；backtest 创建时透传 `dataset.risk_mode`
+  - `trader/services/deployment.py`: `risk_adjusted`/`event_replay` 创建真实 `RiskEngine` + `FakeBroker`；修复 `RiskConfig` 参数名（`max_positions`/`max_order_rate`）；`event_replay` 通过 `runner.tick()` 获取 Signal 对象；完善 `_vectorbt_result_to_simulation` 和 `_event_replay_result_to_simulation` 报告字段
+  - `Frontend/src/pages/Backtests.tsx`: 按 `StrategyCandidateDebugResponse` 处理 debug 响应（`result.ok` + `result.candidate`）；提交 `dataset.risk_mode`
+  - 新增红测: `test_candidate_debug_contract.py`（debug 契约 + 失败保持 DRAFT）、`test_candidate_backtest_risk_mode.py`（risk_mode 透传 + 不自动晋级）、`test_risk_adjusted_produces_risk_decisions.py`（risk_adjusted/event_replay 必须产生风控决策字段）
+- 验证:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_backtest_risk_integration.py trader/tests/test_backtest_risk_replay.py trader/tests/test_candidate_debug_contract.py trader/tests/test_candidate_backtest_risk_mode.py trader/tests/test_risk_adjusted_produces_risk_decisions.py --tb=short` -> 70 passed
+  - `npm run typecheck`（Frontend）-> passed
+- 风险/遗留:
+  - `event_replay` 当前使用 `FakeBroker`，虽风控规则与实盘一致但成交为模拟；生产级应接入真实 broker snapshot
+  - `real_feature_store` + `event_replay` 的端到端集成测试尚未覆盖
+  - 前端 `risk_mode` 下拉 UI 已存在但用户体验可进一步优化（如根据 data_mode 自动推荐 risk_mode）
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`
+
 ### 2026-05-20 06:55 - Binance OHLCV 持续 Ingestion Worker
 
 - 背景: FeatureStore 已支持 OHLCV 手动导入和 `real_feature_store` 回测读取，但真实研究级流程还缺持续从 Binance REST 拉取 OHLCV、按版本写入 FeatureStore 的 worker。
@@ -912,3 +931,25 @@
 - 验证: 文档计划治理变更，无代码测试。
 - 风险/遗留: 后续执行 P4.5-P9 时，必须在每段结束后等待审计通过，不能自行进入下一段。
 - 关联文档: `docs/PLAN.md`、`PROJECT_STATUS.md`
+
+### 2026-05-20 - 阶段3：promote-paper 原子编排接口实现
+
+- 背景: 阶段0-2 验收通过（115测试全通过）。阶段3目标是把多步手动 promote 流程变成后端原子编排，前端只留单按钮。
+- 决策:
+  - 运行态原子语义：code_version/audit 保留，runtime + deployment 必须干净（成功全有，失败全无）
+  - 并发保护：asyncio.Lock 按 candidate_id 粒度 + 快速 409，不排队
+  - dev_smoke 候选在路由层直接拒绝，不进入 load 流程
+  - promote-paper 永远只创建 mode=paper 的 deployment，live 默认禁用
+- 改动:
+  - `trader/api/models/schemas.py`：新增 `PromotePaperResponse`、`PromotePaperError` DTO
+  - `trader/services/strategy_candidate.py`：新增 `promote_to_paper()`、`_load_strategy_runtime()`、`_rollback_promote()`、`_append_promote_event()`
+  - `trader/api/routes/strategy_candidates.py`：新增 `POST /v1/strategy-candidates/{candidate_id}/promote-paper` 路由
+  - `docs/INTERFACE_CONTRACTS.md`：追加第9节（promote-paper 接口契约、错误码、原子边界、并发保护规范）
+  - `trader/tests/test_promote_paper_workflow.py`：12 个新测试（TDD 流程：先 RED 后 GREEN）
+  - `artifacts/notes/promote-paper-design-decisions.md`：设计决策备忘
+  - `artifacts/todos/pending/implement-promote-paper-endpoint.md`：任务书（已完成）
+- 验证: 135 个测试全部通过（含 20 个新测试），仅既有 Pydantic deprecation warnings
+- 风险/遗留:
+  - `_promote_locks` 是进程内字典，多进程部署时并发保护需升级为分布式锁（Redis SETNX）
+  - 前端 Backtests.tsx 单按钮改造（移除旧的 Load/Start 绕过按钮）尚未完成
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`artifacts/notes/promote-paper-design-decisions.md`

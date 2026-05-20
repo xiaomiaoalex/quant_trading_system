@@ -25,6 +25,12 @@ from trader.services.backtesting.ports import (
     DataProviderPort,
 )
 from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
+from trader.services.backtesting.vectorbt_risk_adapter import VectorBTAdapterWithRisk, VectorBTRiskAdapterConfig
+from trader.services.backtesting.event_driven_risk_replay import EventDrivenRiskReplay
+from trader.services.backtesting.backtest_risk_integration import BacktestRiskIntegration
+from trader.core.application.risk_engine import RiskEngine, RiskConfig
+from trader.adapters.broker.testing.fake_broker import FakeBroker, FakeBrokerConfig
+from trader.services.strategy_candidate import StrategyCandidateService
 from trader.services.strategy_runner import StrategyRunner
 from trader.storage.artifact_storage import get_artifact_storage
 from trader.storage.in_memory import InMemoryStorage, get_storage
@@ -312,6 +318,28 @@ class BacktestService:
                     "error": None,
                 },
             )
+            if request.candidate_id:
+                try:
+                    is_valid_for_promotion = (
+                        request.data_mode == "real_feature_store"
+                        and request.risk_mode in {"risk_adjusted", "event_replay"}
+                    )
+                    if is_valid_for_promotion:
+                        StrategyCandidateService().mark_backtest_passed(request.candidate_id)
+                    else:
+                        logger.info(
+                            "Skipping auto mark_backtest_passed for candidate %s: "
+                            "data_mode=%s, risk_mode=%s (requires real_feature_store + risk_adjusted/event_replay)",
+                            request.candidate_id,
+                            request.data_mode,
+                            request.risk_mode,
+                        )
+                except Exception as cand_exc:
+                    logger.warning(
+                        "Auto mark_backtest_passed failed for candidate %s: %s",
+                        request.candidate_id,
+                        cand_exc,
+                    )
         except Exception as exc:
             self._storage.update_backtest(
                 run_id,
@@ -322,6 +350,17 @@ class BacktestService:
                     "error": str(exc),
                 },
             )
+            if request.candidate_id:
+                try:
+                    StrategyCandidateService().mark_backtest_failed(
+                        request.candidate_id, reason=f"backtest_failed: {exc}"
+                    )
+                except Exception as cand_exc:
+                    logger.warning(
+                        "Auto mark_backtest_failed failed for candidate %s: %s",
+                        request.candidate_id,
+                        cand_exc,
+                    )
         finally:
             try:
                 await runner.stop(runtime_strategy_id)
@@ -423,15 +462,87 @@ class BacktestService:
         else:
             data_provider = _DevSmokeOHLCVProvider(self, request)
 
-        adapter = VectorBTAdapter(
-            config=VectorBTConfig(freq=interval),
-            data_provider=data_provider,
-        )
         strategy = _StrategyRunnerVectorBTBridge(
             runner=runner,
             runtime_strategy_id=runtime_strategy_id,
             symbol=symbol,
             interval=interval,
+        )
+
+        # 创建回测用 RiskEngine（使用 FakeBroker 作为底层，避免网络依赖）
+        fake_broker = FakeBroker(FakeBrokerConfig(latency_ms=0))
+        await fake_broker.connect()
+        risk_engine = RiskEngine(
+            broker=fake_broker,
+            config=RiskConfig(
+                max_daily_loss_percent=5.0,
+                max_drawdown_percent=10.0,
+                max_positions=10,
+                max_order_rate=60,
+            ),
+        )
+
+        if request.risk_mode == "event_replay":
+            klines = await data_provider.get_klines(
+                symbol=config.symbol,
+                interval=config.interval,
+                start_date=config.start_date,
+                end_date=config.end_date,
+            )
+            # 直接通过 runner.tick 获取 Signal 对象，而不是整数信号
+            signals: list[Any] = []
+            for kline in klines:
+                market_data = MarketData(
+                    symbol=config.symbol,
+                    data_type=MarketDataType.KLINE,
+                    price=kline.close,
+                    volume=kline.volume,
+                    timestamp=kline.timestamp,
+                    kline_open=kline.open,
+                    kline_high=kline.high,
+                    kline_low=kline.low,
+                    kline_close=kline.close,
+                    kline_interval=config.interval,
+                )
+                signal = await runner.tick(runtime_strategy_id, market_data)
+                if signal is not None:
+                    signals.append(signal)
+            risk_integration = BacktestRiskIntegration(risk_engine)
+            replay = EventDrivenRiskReplay(risk_integration)
+            replay_result = await replay.replay(signals)
+            data_quality_summary = getattr(data_provider, "last_quality_summary", None)
+            return self._event_replay_result_to_simulation(
+                replay_result, request, data_quality_summary=data_quality_summary
+            )
+
+        if request.risk_mode == "risk_adjusted":
+            base_adapter = VectorBTAdapter(
+                config=VectorBTConfig(freq=interval),
+                data_provider=data_provider,
+            )
+            risk_adapter = VectorBTAdapterWithRisk(
+                base_adapter=base_adapter,
+                config=VectorBTRiskAdapterConfig(
+                    enable_risk_adjustment=True,
+                    include_raw_metrics=True,
+                    include_risk_adjusted_metrics=True,
+                    freq=interval,
+                ),
+                data_provider=data_provider,
+                risk_engine=risk_engine,
+            )
+            result = await risk_adapter.run_backtest_with_risk(config, strategy)
+            data_quality_summary = getattr(data_provider, "last_quality_summary", None)
+            return self._vectorbt_result_to_simulation(
+                result,
+                request,
+                data_quality_summary=data_quality_summary,
+                risk_mode="risk_adjusted",
+            )
+
+        adapter = VectorBTAdapter(
+            config=VectorBTConfig(freq=interval),
+            data_provider=data_provider,
         )
         result = await adapter.run_backtest(config, strategy)
         data_quality_summary = getattr(data_provider, "last_quality_summary", None)
@@ -439,6 +550,7 @@ class BacktestService:
             result,
             request,
             data_quality_summary=data_quality_summary,
+            risk_mode="raw_only",
         )
 
     def _build_ohlcv_series(
@@ -472,6 +584,7 @@ class BacktestService:
         result: BacktestResult,
         request: BacktestRequest,
         data_quality_summary: Optional[Dict[str, Any]] = None,
+        risk_mode: str = "raw_only",
     ) -> Dict[str, Any]:
         initial_capital = Decimal(str(request.initial_capital))
         final_equity = result.final_capital
@@ -500,6 +613,7 @@ class BacktestService:
         metrics = {
             "backtest_engine": "vectorbt",
             "framework": "vectorbt",
+            "risk_mode": risk_mode,
             "total_return": float(total_return),
             "total_return_pct": total_return_pct,
             "annualized_return": returns["annualized_return"],
@@ -530,6 +644,15 @@ class BacktestService:
                 "missing_data": True,
                 "source": "deterministic_dev_smoke",
             },
+            # 风控报告字段
+            "approved_orders": list(result.approved_orders),
+            "clipped_orders": list(result.clipped_orders),
+            "rejected_orders": list(result.rejected_orders),
+            "rejection_reason_counts": dict(result.rejection_reason_counts),
+            "max_drawdown_before_risk": float(result.max_drawdown_before_risk) if result.max_drawdown_before_risk is not None else None,
+            "max_drawdown_after_risk": float(result.max_drawdown_after_risk) if result.max_drawdown_after_risk is not None else None,
+            "risk_adjusted_metrics": dict(result.risk_adjusted_metrics),
+            "risk_adjusted_equity_curve": list(result.risk_adjusted_equity_curve),
         }
 
         return {
@@ -538,6 +661,108 @@ class BacktestService:
             "trades": trades,
             "equity_curve": equity_curve,
             "metrics": metrics,
+        }
+
+    def _event_replay_result_to_simulation(
+        self,
+        result: Any,
+        request: BacktestRequest,
+        data_quality_summary: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        initial_capital = Decimal(str(request.initial_capital))
+        final_equity = result.equity_curve[-1] if result.equity_curve else initial_capital
+        total_return = final_equity - initial_capital
+        total_return_pct = float((total_return / initial_capital) * Decimal("100")) if initial_capital > 0 else 0.0
+        max_drawdown = float(result.max_drawdown)
+        max_drawdown_pct = max_drawdown * 100
+        equity_curve = [
+            {"timestamp": i, "equity": float(e)}
+            for i, e in enumerate(result.equity_curve)
+        ]
+        approved_count = len(result.approved_orders)
+        clipped_count = len(result.clipped_orders)
+        rejected_count = len(result.rejected_orders)
+        total_orders = approved_count + clipped_count + rejected_count
+        win_rate = (approved_count / total_orders * 100) if total_orders > 0 else 0.0
+
+        returns = {
+            "total_return": float(total_return),
+            "total_return_pct": total_return_pct,
+            "annualized_return": 0.0,
+            "sharpe_ratio": 0.0,
+        }
+        risk = {
+            "max_drawdown": max_drawdown,
+            "max_drawdown_pct": max_drawdown_pct,
+            "volatility": 0.0,
+            "var_95": 0.0,
+        }
+        metrics = {
+            "backtest_engine": "vectorbt",
+            "framework": "event_driven_risk_replay",
+            "risk_mode": "event_replay",
+            "total_return": float(total_return),
+            "total_return_pct": total_return_pct,
+            "annualized_return": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": max_drawdown,
+            "max_drawdown_pct": max_drawdown_pct,
+            "volatility": 0.0,
+            "var_95": 0.0,
+            "trade_count": total_orders,
+            "winning_trades": approved_count,
+            "losing_trades": rejected_count,
+            "win_rate": win_rate,
+            "profit_factor": 0.0,
+            "initial_capital": float(initial_capital),
+            "final_equity": float(final_equity),
+            "returns": returns,
+            "risk": risk,
+            "trades": [],
+            "equity_curve": equity_curve,
+            "backtest_data_mode": request.data_mode,
+            "feature_version": request.feature_version,
+            "fee_bps": request.fee_bps,
+            "slippage_bps": request.slippage_bps,
+            "benchmark": request.benchmark,
+            "data_quality_summary": data_quality_summary
+            or {
+                "quality_score": 0.0,
+                "missing_data": True,
+                "source": "deterministic_dev_smoke",
+            },
+            "risk_replay": {
+                "approved_order_count": approved_count,
+                "clipped_order_count": clipped_count,
+                "rejected_order_count": rejected_count,
+                "approved_orders": [self._replay_order_to_dict(o) for o in result.approved_orders],
+                "clipped_orders": [self._replay_order_to_dict(o) for o in result.clipped_orders],
+                "rejected_orders": [self._replay_order_to_dict(o) for o in result.rejected_orders],
+                "rejection_reason_counts": result.rejection_reason_counts,
+            },
+        }
+
+        return {
+            "returns": returns,
+            "risk": risk,
+            "trades": [],
+            "equity_curve": equity_curve,
+            "metrics": metrics,
+        }
+
+    @staticmethod
+    def _replay_order_to_dict(order: Any) -> Dict[str, Any]:
+        """将 ReplayOrder / ReplayRiskDecision 转为可序列化 dict"""
+        return {
+            "symbol": order.symbol,
+            "side": str(order.side),
+            "qty": str(order.qty),
+            "price": str(order.price),
+            "timestamp_ms": order.timestamp_ms,
+            "decision": str(order.decision),
+            "normalized_qty": str(order.normalized_qty),
+            "normalized_price": str(order.normalized_price),
+            "rejection_reason": order.rejection_reason,
         }
 
     def _build_market_data_series(self, request: BacktestRequest) -> List[MarketData]:

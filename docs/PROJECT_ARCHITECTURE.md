@@ -5,9 +5,18 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-20 06:55 (北京时间)
+- 最后更新: 2026-05-20 20:00 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成。
+
+### 本次变更摘要（2026-05-20）
+
+1. **Strategy Lab Debug 契约对齐**: 新增 `StrategyCandidateDebugResponse` 模型，debug 失败保持 `DRAFT` 状态
+2. **Risk Mode 端到端透传**: 前端 `Backtests.tsx` -> `BacktestDatasetSpec.risk_mode` -> `BacktestRequest.risk_mode` -> 回测引擎
+3. **Risk Engine 注入**: `risk_adjusted` 和 `event_replay` 模式使用真实 `RiskEngine` + `FakeBroker`，不再使用 pass-all Mock
+4. **EventDrivenRiskReplay 集成**: `event_replay` 通过 `runner.tick()` 获取 Signal 对象，逐信号风控回放
+5. **风控报告字段完整化**: `approved_orders/clipped_orders/rejected_orders/rejection_reason_counts/max_drawdown_before_risk/max_drawdown_after_risk/risk_adjusted_metrics/risk_adjusted_equity_curve/risk_replay`
+6. **红测覆盖**: 新增 `test_candidate_debug_contract.py`, `test_candidate_backtest_risk_mode.py`, `test_risk_adjusted_produces_risk_decisions.py`
 
 ---
 
@@ -293,7 +302,15 @@ flowchart TB
 
 ### P7 回测风控集成路径
 
-回测层通过 `BacktestRiskIntegration` 接入真实风控，分为订单入队路径和 VectorBT 风控后权益曲线路径：
+回测层通过 `BacktestRiskIntegration` 接入真实风控，支持三种 `risk_mode`：
+
+- `raw_only`: 纯策略信号回测，不经过风控引擎
+- `risk_adjusted`: 使用 `VectorBTAdapterWithRisk` 进行风控调整后回测
+- `event_replay`: 使用 `EventDrivenRiskReplay` 逐信号风控回放
+
+`risk_mode` 由前端 `Backtests.tsx` 下拉选择，通过 `BacktestDatasetSpec.risk_mode` 提交到后端，最终写入 `BacktestRequest.risk_mode`。
+
+回测分为订单入队路径和 VectorBT 风控后权益曲线路径：
 
 ```mermaid
 sequenceDiagram

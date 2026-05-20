@@ -111,6 +111,10 @@ class RejectingRiskSource(ProbeRiskSource):
         self.calls.append("positions")
         return []
 
+    async def get_open_orders(self, symbols: set[str] | None = None) -> list[object]:
+        self.calls.append("open_orders")
+        return []
+
 
 def _component_builder(source: FakeRiskSource, check: MagicMock):
     def _build(**_kwargs) -> CryptoRiskRuntimeComponents:

@@ -16,6 +16,9 @@ import type {
   StrategyCandidate,
   StrategyCandidateCreateRequest,
   StrategyCandidatePromoteRequest,
+  StrategyCandidateDebugRequest,
+  StrategyCandidateDebugResponse,
+  StrategyCandidateBacktestRequest,
 } from '@/types'
 
 export class ResearchAPI extends APIClient {
@@ -62,6 +65,24 @@ export class ResearchAPI extends APIClient {
 
   async deleteCandidate(candidateId: string): Promise<ActionResult> {
     return this.delete<ActionResult>(`/v1/strategy-candidates/${candidateId}`)
+  }
+
+  async debugCandidate(
+    candidateId: string,
+    request: StrategyCandidateDebugRequest,
+  ): Promise<StrategyCandidateDebugResponse> {
+    return this.post<StrategyCandidateDebugResponse>(`/v1/strategy-candidates/${candidateId}/debug`, request)
+  }
+
+  async runCandidateBacktest(
+    candidateId: string,
+    request: StrategyCandidateBacktestRequest,
+  ): Promise<StrategyCandidate> {
+    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/backtests`, request)
+  }
+
+  async validateCandidate(candidateId: string): Promise<StrategyCandidate> {
+    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/validate`)
   }
 
   async promoteCandidate(

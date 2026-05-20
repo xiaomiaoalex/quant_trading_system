@@ -4,6 +4,70 @@
 
 ---
 
+## 四十四、Strategy Lab 风控回测集成修复经验（2026-05-20）
+
+### 44.1 踩坑记录：Debug 前后端契约不一致导致运行时错误
+
+**问题描述**：
+前端把 `/debug` 响应当成 `StrategyCandidateDebugResponse` 使用，读取 `result.ok/errors/signals`，但后端返回的是 `StrategyCandidate`。结果是 debug 成功后 `result.ok` 为 `undefined`，前端进入失败分支并调用 `result.errors.join(...)`，会抛运行时错误。
+
+**解决方案**：
+- 新增 `StrategyCandidateDebugResponse` 模型，包含 `ok/syntax_ok/protocol_ok/signals/errors/warnings/candidate`
+- 后端 `/debug` 返回新模型，前端按新契约处理
+- `candidate` 字段嵌套更新后的候选策略实体，前端可同步刷新状态
+
+**经验**：
+- 前后端契约变更必须双向同步，不能假设"前端会适配"
+- 响应模型应包含足够信息让前端一次请求完成状态更新
+- 契约变更后必须补 contract test，验证字段存在性和类型
+
+### 44.2 踩坑记录：MockRiskEngine 永远 passed=true 绕过真实风控
+
+**问题描述**：
+`event_replay` 分支内联了 `_MockRiskEngine`，`check_pre_trade()` 永远 `passed=True`。这绕过了项目真实风控体系，和"EventDrivenRiskReplay 作为最终门禁"的目标相反。
+
+**解决方案**：
+- 删除 `_MockRiskEngine`，统一使用真实 `RiskEngine`
+- 回测场景注入 `FakeBroker`（零延迟、模拟余额），避免网络依赖
+- `RiskConfig` 参数必须与生产一致，不能随意编造字段名
+
+**经验**：
+- "测试友好"不等于"绕过核心逻辑"，Mock 只能隔离外部 IO，不能简化内部规则
+- `FakeBroker` 是测试基础设施，`_MockRiskEngine` 是逻辑漏洞
+- 配置类字段名变更必须通过 type checker，dataclass 不接受未知参数会直接抛异常
+
+### 44.3 踩坑记录：前端 UI 字段未提交到 API
+
+**问题描述**：
+前端有 `risk_mode` 下拉选择，但提交回测时 dataset 里没有带该字段；后端 `BacktestDatasetSpec` 也没有 `risk_mode`，导致用户选择不生效。
+
+**解决方案**：
+- 前端 `Backtests.tsx` 在 dataset 中显式包含 `risk_mode: labForm.risk_mode`
+- 后端 `BacktestDatasetSpec` 新增 `risk_mode: BacktestRiskMode = "risk_adjusted"`
+- 路由创建 `BacktestRequest` 时透传 `risk_mode=dataset.risk_mode`
+
+**经验**：
+- 前端表单字段 -> API DTO -> Service Request 的透传链路必须显式验证
+- 默认值不能掩盖"前端选了但后端没收到"的问题
+- 端到端测试应验证"用户选择 X，最终执行的是 X"
+
+### 44.4 设计模式：Debug 失败保持 DRAFT 支持迭代开发
+
+**问题描述**：
+Debug 失败直接写 `status=REJECTED`，而状态机中 `REJECTED` 没有任何后续转移。用户一次语法错误后不能继续修复同一个候选。
+
+**解决方案**：
+- Debug 失败只更新 `debug_errors/debug_warnings`，状态保持 `DRAFT`
+- 前端显示错误后用户可修改代码重新 Debug
+- 只有门禁/人工/系统决策失败才进入 `REJECTED`
+
+**经验**：
+- 开发态和终态要分开：开发过程中的错误是"反馈"，不是"判决"
+- 状态机设计时要考虑"用户修复后重试"的路径
+- 终态（REJECTED/APPROVED）必须有明确的进入条件和退出限制
+
+---
+
 ## 四十三、Binance OHLCV 持续 Ingestion Worker 经验（2026-05-20）
 
 ### 43.1 踩坑记录：持续补数不能每轮从固定起点重拉

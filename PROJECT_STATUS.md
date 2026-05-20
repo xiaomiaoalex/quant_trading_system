@@ -4,9 +4,38 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-20 (北京时间)
+2026-05-20 20:00 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Strategy Lab 风控回测集成修复与红测覆盖
+- 完成时间: 2026-05-20 20:00 (北京时间)
+- 状态: 已完成
+- 目标: 修复用户 Review 发现的 7 个关键问题（3 Critical + 2 High + 1 Medium + 1 Process）
+- 开发后状态:
+  - **Critical-1 Debug 契约对齐**: 新增 `StrategyCandidateDebugResponse` 模型，包含 `ok/syntax_ok/protocol_ok/signals/errors/warnings/candidate`；前端按新契约处理；debug 失败保持 `DRAFT` 不进入 `REJECTED`
+  - **Critical-2 RiskEngine 注入**: `risk_adjusted` 模式创建真实 `RiskEngine` + `FakeBroker`，传入 `VectorBTAdapterWithRisk(..., risk_engine=risk_engine)`
+  - **Critical-3 EventReplay 真实风控**: `event_replay` 使用真实 `RiskEngine` 替代 pass-all `_MockRiskEngine`；通过 `runner.tick()` 获取 Signal 对象逐信号回放
+  - **High-1 RiskMode 透传**: 前端 `Backtests.tsx` 下拉选择 `risk_mode`，通过 `BacktestDatasetSpec` -> `BacktestRequest` 透传到回测引擎
+  - **High-2 Debug 失败不终态**: `/debug` 失败只更新 `debug_errors/debug_warnings`，状态保持 `DRAFT`，支持前端迭代开发
+  - **Medium 风控报告字段**: `_vectorbt_result_to_simulation` 和 `_event_replay_result_to_simulation` 完整写入 `approved_orders/clipped_orders/rejected_orders/rejection_reason_counts/max_drawdown_before_risk/max_drawdown_after_risk/risk_adjusted_metrics/risk_adjusted_equity_curve/risk_replay`
+  - **Process 文档闭环**: 更新 `docs/INTERFACE_CONTRACTS.md`（8.1.1 StrategyCandidateDebugResponse、8.2 BacktestDatasetSpec.risk_mode、8.9.8 回测报告字段）；更新 `docs/PROJECT_ARCHITECTURE.md`（P7 risk_mode 说明、变更摘要）
+- 代码变更:
+  - `trader/api/models/schemas.py`: 新增 `StrategyCandidateDebugResponse`，`BacktestDatasetSpec` 新增 `risk_mode`
+  - `trader/api/routes/strategy_candidates.py`: `/debug` 返回 `StrategyCandidateDebugResponse`；debug 失败保持 DRAFT；backtest 创建透传 `risk_mode`
+  - `trader/services/deployment.py`: `risk_adjusted`/`event_replay` 注入真实 RiskEngine；修复 `RiskConfig` 参数名；`event_replay` 通过 `runner.tick()` 获取 Signal；完善报告字段映射
+  - `Frontend/src/pages/Backtests.tsx`: 按 `StrategyCandidateDebugResponse` 处理 debug 响应；提交 `dataset.risk_mode`
+  - `trader/tests/test_candidate_debug_contract.py`: 红测覆盖 debug 响应契约和失败保持 DRAFT
+  - `trader/tests/test_candidate_backtest_risk_mode.py`: 红测覆盖 risk_mode 透传和 dev_smoke+raw_only 不自动晋级
+  - `trader/tests/test_risk_adjusted_produces_risk_decisions.py`: 红测覆盖 risk_adjusted/event_replay 必须产生风控决策字段
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_strategy_candidate_workflow.py trader/tests/test_vectorbt_risk_adapter.py trader/tests/test_backtest_risk_integration.py trader/tests/test_backtest_risk_replay.py trader/tests/test_candidate_debug_contract.py trader/tests/test_candidate_backtest_risk_mode.py trader/tests/test_risk_adjusted_produces_risk_decisions.py --tb=short` -> 70 passed
+  - `npm run typecheck`（Frontend）-> passed
+- 注意事项:
+  - 当前 `event_replay` 使用 `FakeBroker` + `RiskEngine`，风控规则与实盘一致但 broker 为模拟
+  - `dev_smoke` + `raw_only` 不会自动晋级 `BACKTEST_PASSED`，只有 `real_feature_store` + `risk_adjusted/event_replay` 才会
+  - 后续应补 `real_feature_store` + `event_replay` 的端到端集成测试
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`
 
 ### 本次任务：Binance OHLCV 持续 Ingestion Worker
 - 完成时间: 2026-05-20 (北京时间)
