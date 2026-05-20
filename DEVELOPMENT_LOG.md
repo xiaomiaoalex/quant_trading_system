@@ -953,3 +953,19 @@
   - `_promote_locks` 是进程内字典，多进程部署时并发保护需升级为分布式锁（Redis SETNX）
   - 前端 Backtests.tsx 单按钮改造（移除旧的 Load/Start 绕过按钮）尚未完成
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`artifacts/notes/promote-paper-design-decisions.md`
+
+### 2026-05-20 - 阶段3：Strategy Lab Promote to Paper 前端收口
+
+- 背景: 后端 `POST /v1/strategy-candidates/{candidate_id}/promote-paper` 已实现运行态原子、回滚和并发保护，但前端 Strategy Lab 仍调用旧 `/promote` 并发送 deployment 请求体，存在绕开后端原子编排语义的风险。
+- 决策: Strategy Lab 的候选晋级路径只允许调用 `promote-paper`；前端不再构造 deployment_id/mode/account 请求体，运行态加载与 deployment_id 以后端为准。
+- 改动:
+  - `Frontend/src/api/research.ts` 新增 `promoteCandidateToPaper(candidateId)`，指向 `/promote-paper` 且无请求体。
+  - `Frontend/src/types/research.ts` 新增 `PromotePaperResponse`、`PromotePaperError` 和错误码类型。
+  - `Frontend/src/pages/Backtests.tsx` 将 `Promote to Paper` 按钮接入原子接口，成功后用返回的 `deployment_id` 更新本地 candidate。
+  - `Frontend/src/api/client.ts` 解析 FastAPI `detail.error_code/detail`，让 promote 失败原因在 UI 中可见。
+  - `Frontend/tests/api/research.test.ts` 新增契约测试，防止回退到旧 `/promote`。
+- 验证:
+  - `npm test -- tests/api/research.test.ts` -> 1 passed
+  - `npm run typecheck` -> passed
+- 风险/遗留: 当前只完成前端 API 与按钮链路收口；完整浏览器 E2E 仍建议在后续联调中覆盖 `Save Draft -> Debug -> Submit Backtest Gate -> Validate -> Promote to Paper`。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

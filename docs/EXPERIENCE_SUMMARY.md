@@ -3807,6 +3807,36 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+---
+
+## 二十六、Strategy Lab Promote-Paper 前端收口经验
+
+### 26.1 踩坑记录：后端原子接口完成后，前端仍可能保留旧路径
+
+**场景**：
+后端新增 `POST /v1/strategy-candidates/{candidate_id}/promote-paper`，旧 `/promote` 已返回 410，但 Strategy Lab 里仍调用旧 `promoteCandidate()` 并发送 deployment 配置请求体。
+
+**问题**：
+- 前端路径如果不收口，用户看到的“Promote to Paper”按钮语义会和后端运行态原子设计脱节
+- deployment_id、mode、account_id 若继续由前端传入，会削弱后端统一编排和回滚边界
+
+**经验**：
+- 后端替换关键工作流接口时，必须同步搜索前端 API 封装和页面按钮，而不是只改路由
+- 对这种“禁止回退旧路径”的约束，应补一个很小的 API 契约测试
+
+### 26.2 设计模式：前端只提交意图，运行态事实以后端响应为准
+
+**实现模式**：
+1. 前端调用 `promoteCandidateToPaper(candidate_id)`，不发送请求体
+2. 后端负责生成 `deployment_id`、创建 deployment、动态 load runtime、approve candidate
+3. 前端用 `PromotePaperResponse.deployment_id` 更新本地 candidate 状态
+4. FastAPI `detail.error_code/detail` 被统一转换为前端 `APIError`，用于展示明确失败原因
+
+**收益**：
+- UI 只表达用户意图，不复制后端编排细节
+- 失败时能展示 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT`
+- 后续阶段4仓位分配可以基于后端返回的真实 `deployment_id` 继续衔接
+
 ### 27. P9 跨市场抽象设计原则
 
 **场景**：

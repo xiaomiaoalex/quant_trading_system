@@ -11,11 +11,11 @@ import type {
   PortfolioAutopilotDecision,
   PortfolioAutopilotSnapshot,
   PortfolioAutopilotTickRequest,
+  PromotePaperResponse,
   StrategyAllocationProfile,
   StrategyAllocationProfileUpdateRequest,
   StrategyCandidate,
   StrategyCandidateCreateRequest,
-  StrategyCandidatePromoteRequest,
   StrategyCandidateDebugRequest,
   StrategyCandidateDebugResponse,
   StrategyCandidateBacktestRequest,
@@ -85,11 +85,8 @@ export class ResearchAPI extends APIClient {
     return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/validate`)
   }
 
-  async promoteCandidate(
-    candidateId: string,
-    request: StrategyCandidatePromoteRequest,
-  ): Promise<StrategyCandidate> {
-    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/promote`, request)
+  async promoteCandidateToPaper(candidateId: string): Promise<PromotePaperResponse> {
+    return this.post<PromotePaperResponse>(`/v1/strategy-candidates/${candidateId}/promote-paper`)
   }
 
   async listAllocations(): Promise<StrategyAllocationProfile[]> {

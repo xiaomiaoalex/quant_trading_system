@@ -6,7 +6,6 @@ import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
 import { PageHeader } from '@/components/layout'
 import { researchAPI } from '@/api'
 import { formatAPIError } from '@/api/client'
-import { buildDeploymentId, type DeploymentMode } from '@/types/strategies'
 import type { BacktestDataMode, BacktestEngine, StrategyCandidate } from '@/types'
 
 const STRATEGY_TEMPLATES: Record<string, string> = {
@@ -203,15 +202,11 @@ export function Backtests() {
     strategy_id: 'lab_strategy',
     name: 'Lab Strategy',
     description: 'Editable strategy code for fast backtest iteration',
-    version: 1,
     engine: 'vectorbt' as BacktestEngine,
     symbols: 'BTCUSDT',
     start_ts_ms: Date.now() - 30 * 24 * 60 * 60 * 1000,
     end_ts_ms: Date.now(),
     venue: 'BINANCE',
-    account_id: 'binance_demo',
-    mode: 'paper' as DeploymentMode,
-    deployment_id: '',
     feature_version: 'dev_smoke',
     initial_capital: 100000,
     fee_bps: 10,
@@ -235,21 +230,15 @@ export function Backtests() {
 
   const runtimeInfo = useMemo(() => {
     return (loadedStrategies ?? []).find(item => {
-      if (labForm.deployment_id) return item.deployment_id === labForm.deployment_id
+      if (candidate?.deployment_id) return item.deployment_id === candidate.deployment_id
       return item.strategy_id === labForm.strategy_id
     }) ?? null
-  }, [loadedStrategies, labForm.deployment_id, labForm.strategy_id])
+  }, [candidate?.deployment_id, loadedStrategies, labForm.strategy_id])
 
   const labSymbols = useMemo(
     () => labForm.symbols.split(',').map(s => s.trim()).filter(Boolean),
     [labForm.symbols],
   )
-
-  const resolvedDeploymentId = useMemo(() => {
-    if (labForm.deployment_id.trim()) return labForm.deployment_id.trim()
-    const primarySymbol = labSymbols[0] ?? 'BTCUSDT'
-    return buildDeploymentId(labForm.strategy_id, primarySymbol, labForm.mode, labForm.account_id)
-  }, [labForm.account_id, labForm.deployment_id, labForm.mode, labForm.strategy_id, labSymbols])
 
   const handleTemplateChange = useCallback((key: string) => {
     setTemplateKey(key)
@@ -395,17 +384,15 @@ export function Backtests() {
         setLabError('Candidate must be VALIDATION_PASSED before promote.')
         return
       }
-      const result = await researchAPI.promoteCandidate(candidate.candidate_id, {
-        deployment_id: resolvedDeploymentId,
-        symbols: labSymbols,
-        account_id: labForm.account_id,
-        venue: labForm.venue,
-        mode: labForm.mode,
-        version: `v${labForm.version}`,
-        config: {},
+      const result = await researchAPI.promoteCandidateToPaper(candidate.candidate_id)
+      setCandidate({
+        ...candidate,
+        status: result.status,
+        deployment_id: result.deployment_id,
+        code_version: result.code_version ?? candidate.code_version,
+        updated_at: result.promoted_at,
       })
-      setCandidate(result)
-      setLabMessage(`Promoted to paper. Status: ${result.status}`)
+      setLabMessage(`Promoted to paper. Deployment: ${result.deployment_id}`)
       await refetchLoaded()
     } catch (e) {
       setLabError(formatAPIError(e))
@@ -448,7 +435,7 @@ export function Backtests() {
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-semibold text-white">Strategy Lab</h2>
             <div className="text-xs text-gray-400">
-              deployment: <span className="text-gray-200">{runtimeInfo?.deployment_id ?? resolvedDeploymentId}</span>
+              deployment: <span className="text-gray-200">{candidate?.deployment_id ?? runtimeInfo?.deployment_id ?? '-'}</span>
               <span className="mx-2 text-gray-600">/</span>
               runtime: <span className="text-gray-200">{runtimeInfo?.status ?? 'NOT_LOADED'}</span>
               {candidate && (

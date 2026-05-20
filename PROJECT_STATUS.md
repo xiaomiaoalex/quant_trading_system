@@ -4,9 +4,31 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-20 20:00 (北京时间)
+2026-05-20 20:15 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：阶段3 Strategy Lab Promote to Paper 前端收口
+- 完成时间: 2026-05-20 20:15 (北京时间)
+- 状态: 已完成
+- 目标: 在后端 `promote-paper` 原子编排完成后，让前端 Strategy Lab 的 `Promote to Paper` 按钮走唯一可信晋级入口，移除旧 `/promote` 请求体路径。
+- 开发后状态:
+  - `ResearchAPI.promoteCandidateToPaper(candidate_id)` 调用 `POST /v1/strategy-candidates/{candidate_id}/promote-paper`，不再发送 deployment 配置请求体。
+  - `Backtests.tsx` 的 `Promote to Paper` 成功后使用 `PromotePaperResponse.deployment_id` 更新本地 candidate，状态展示为 `APPROVED_FOR_PAPER`。
+  - 前端 API 错误解析支持 FastAPI `detail.error_code/detail`，可展示 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT` 的明确原因。
+  - 新增前端 API 契约测试，防止 Strategy Lab 回退到旧 `/promote`。
+- 代码变更:
+  - `Frontend/src/api/research.ts`: 新增 `promoteCandidateToPaper()`，移除候选工作流里的旧 promote API 调用。
+  - `Frontend/src/types/research.ts`: 新增 `PromotePaperResponse`、`PromotePaperError` 与错误码类型。
+  - `Frontend/src/pages/Backtests.tsx`: Promote 按钮接入后端原子晋级接口，`deployment_id` 以后端返回为准。
+  - `Frontend/src/api/client.ts`: 兼容 FastAPI detail 错误体到统一 `APIError`。
+  - `Frontend/tests/api/research.test.ts`: 覆盖 promote-paper 路径与无请求体契约。
+- 验证结果:
+  - `npm test -- tests/api/research.test.ts` -> 1 passed
+  - `npm run typecheck`（Frontend）-> passed
+- 注意事项:
+  - Strategies 页面仍保留通用 runtime/deployment 管理能力；Strategy Lab 候选晋级路径不再使用旧 `/promote`。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`、`DEVELOPMENT_LOG.md`
 
 ### 本次任务：Strategy Lab 风控回测集成修复与红测覆盖
 - 完成时间: 2026-05-20 20:00 (北京时间)

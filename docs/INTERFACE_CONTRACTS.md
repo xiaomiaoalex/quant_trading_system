@@ -2030,7 +2030,7 @@ class PromotePaperResponse(BaseModel):
     candidate_id: str
     strategy_id: str
     deployment_id: str
-    code_version_id: str
+    code_version: int | None
     status: Literal["APPROVED_FOR_PAPER"]
     promoted_at: str  # ISO 8601
 ```
@@ -2066,7 +2066,7 @@ audit trail 事件类型：
 | 错误码 | HTTP 状态 | 触发条件 | 回滚动作 |
 |--------|-----------|---------|---------|
 | `INVALID_STATE` | 409 | candidate 不是 `VALIDATION_PASSED` | 无需回滚 |
-| `PROMOTE_LOAD_FAILED` | 409 | 动态加载失败（语法错误/插件缺失/初始化失败） | unload runtime → 清理 deployment → candidate 回 VALIDATION_PASSED |
+| `PROMOTE_LOAD_FAILED` | 409 | 动态加载、approve 或 promote audit 阶段失败（语法错误/插件缺失/初始化失败/状态写入失败） | unload runtime → 清理 deployment → candidate 回 VALIDATION_PASSED |
 | `PROMOTE_CONFLICT` | 409 | deployment_id 已存在或 runtime 已是 LOADED | 无需回滚（操作未执行） |
 
 ### 9.4 原子边界（运行态原子）
@@ -2091,3 +2091,10 @@ audit trail 事件类型：
 - `dev_smoke` 标记的候选不得 promote（继承阶段0约束）
 - 不允许在 promote 流程中绕过 RiskEngine 或 OMS
 - 回测 DTO 不得塞入 `trader/core/` 目录
+
+### 9.7 前端 Strategy Lab 接线契约
+
+- Strategy Lab 只能通过 `POST /v1/strategy-candidates/{candidate_id}/promote-paper` 完成候选策略晋级，不得调用已废弃的 `/promote`。
+- 前端不发送 deployment 配置请求体；`deployment_id`、`mode=paper`、runtime load 和回滚语义均以后端原子编排为准。
+- 成功后前端以 `PromotePaperResponse.deployment_id` 更新本地 `StrategyCandidate.deployment_id`，状态展示为 `APPROVED_FOR_PAPER`。
+- 失败时前端必须展示 `PromotePaperError.error_code` 与 `detail`，至少区分 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT`。

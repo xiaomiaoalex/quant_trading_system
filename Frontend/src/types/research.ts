@@ -1,5 +1,3 @@
-import type { DeploymentMode } from './strategies'
-
 export type StrategyCandidateStatus =
   | 'DRAFT'
   | 'DEBUG_PASSED'
@@ -86,16 +84,6 @@ export interface StrategyCandidateCreateRequest {
   created_by?: string
 }
 
-export interface StrategyCandidatePromoteRequest {
-  deployment_id?: string
-  symbols: string[]
-  account_id: string
-  venue: string
-  mode: DeploymentMode
-  version?: string
-  config?: Record<string, unknown>
-}
-
 export interface StrategyCandidateDebugRequest {
   code?: string
   config?: Record<string, unknown>
@@ -116,6 +104,25 @@ export interface StrategyCandidateDebugResponse {
 export interface StrategyCandidateBacktestRequest {
   dataset: BacktestDatasetSpec
   requested_by?: string
+}
+
+export type PromotePaperErrorCode = 'INVALID_STATE' | 'PROMOTE_LOAD_FAILED' | 'PROMOTE_CONFLICT'
+
+export interface PromotePaperResponse {
+  candidate_id: string
+  strategy_id: string
+  deployment_id: string
+  code_version?: number | null
+  status: 'APPROVED_FOR_PAPER'
+  promoted_at: string
+}
+
+export interface PromotePaperError {
+  error_code: PromotePaperErrorCode
+  current_state?: string | null
+  required_state?: string | null
+  detail: string
+  candidate_id: string
 }
 
 export interface StrategyAllocationProfile {

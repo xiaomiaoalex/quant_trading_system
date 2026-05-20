@@ -5,9 +5,9 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-20 20:00 (北京时间)
+- 最后更新: 2026-05-20 20:15 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级。
 
 ### 本次变更摘要（2026-05-20）
 
@@ -17,6 +17,7 @@
 4. **EventDrivenRiskReplay 集成**: `event_replay` 通过 `runner.tick()` 获取 Signal 对象，逐信号风控回放
 5. **风控报告字段完整化**: `approved_orders/clipped_orders/rejected_orders/rejection_reason_counts/max_drawdown_before_risk/max_drawdown_after_risk/risk_adjusted_metrics/risk_adjusted_equity_curve/risk_replay`
 6. **红测覆盖**: 新增 `test_candidate_debug_contract.py`, `test_candidate_backtest_risk_mode.py`, `test_risk_adjusted_produces_risk_decisions.py`
+7. **Promote to Paper 前端收口**: Strategy Lab 改为调用原子 `promote-paper` 接口；前端不再向候选晋级流程发送旧 `/promote` 请求体，`deployment_id` 以后端返回为准。
 
 ---
 
