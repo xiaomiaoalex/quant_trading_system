@@ -25,6 +25,27 @@
 
 ## 最近记录
 
+### 2026-05-20 06:55 - Binance OHLCV 持续 Ingestion Worker
+
+- 背景: FeatureStore 已支持 OHLCV 手动导入和 `real_feature_store` 回测读取，但真实研究级流程还缺持续从 Binance REST 拉取 OHLCV、按版本写入 FeatureStore 的 worker。
+- 决策: 按五层边界拆分为 Adapter source + Service worker + Control API；Adapter 层隔离 Binance 原始 kline 数组，Service 层只处理内部 bar、分页、断点续拉和 FeatureStore 幂等写入。
+- 改动:
+  - `trader/adapters/binance/ohlcv_source.py`: 新增 `BinanceOHLCVRestSource`，调用 `/v3/klines` 并转换为内部 `BinanceOHLCVBar`。
+  - `trader/services/ohlcv_ingestion.py`: 新增 `BinanceOHLCVIngestionWorker`，支持 sync once、start/stop/status、分页和 latest+interval 续拉。
+  - `trader/api/routes/data_catalog.py`: 新增 `/v1/data/ohlcv/sync-binance`、`/worker/start`、`/worker/stop`、`/worker/status` 和 env autostart helper。
+  - `trader/api/models/schemas.py`: 新增 Binance OHLCV ingestion request/result/status DTO。
+  - `trader/api/main.py`: 在 lifespan 中按 `BINANCE_OHLCV_INGESTION_ENABLED` 可选启动 worker，并在 shutdown 关闭。
+  - `Frontend/src/pages/Data.tsx`、`Frontend/src/api/research.ts`、`Frontend/src/types/research.ts`: Data 页面新增 worker 控制和状态展示。
+  - `trader/tests/test_api_binance_ohlcv_ingestion.py`、`trader/tests/test_binance_ohlcv_ingestion_worker.py`: 新增无网络 fake worker/source 测试。
+- 验证:
+  - `python -m pytest -q trader/tests/test_api_binance_ohlcv_ingestion.py trader/tests/test_binance_ohlcv_ingestion_worker.py trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_feature_store_range.py --tb=short` → 28 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - `python -m py_compile trader/adapters/binance/ohlcv_source.py trader/services/ohlcv_ingestion.py trader/api/models/schemas.py trader/api/routes/data_catalog.py trader/api/main.py trader/tests/test_api_binance_ohlcv_ingestion.py trader/tests/test_binance_ohlcv_ingestion_worker.py` → passed
+  - scoped `black --check` / `isort --check-only` / `git diff --check` → passed
+  - 本地 API smoke：`POST /v1/data/ohlcv/sync-binance` with `feature_version=smoke_binance_ohlcv_20260520` → imported 1 bar，coverage 可查询
+- 风险/遗留: Worker 已能持续写 FeatureStore，但尚未把 OHLCV freshness 接入 Promote gate / Portfolio Autopilot；expected_points 仍按导入覆盖展示，后续应按 interval 与目标窗口计算质量阈值。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-20 06:27 - FeatureStore OHLCV 导入与 Data 页面覆盖展示
 
 - 背景: `engine=vectorbt + data_mode=real_feature_store` 已能从 FeatureStore 读取 OHLCV，但仓库还缺少把 OHLCV 写入 FeatureStore 的前端入口与覆盖查询；Data 页面仍无法告诉用户某个 `feature_version` 是否真的有数据。

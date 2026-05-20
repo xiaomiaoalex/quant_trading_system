@@ -844,6 +844,11 @@ async def lifespan(app: FastAPI):
     _connection_manager = ConnectionManager()
     await _connection_manager.start()
 
+    try:
+        await data_catalog.maybe_start_ohlcv_ingestion_from_env()
+    except Exception as e:
+        logger.error(f"[OHLCVIngestion] Failed to start from env: {e}")
+
     health.configure_heartbeat(
         heartbeat_service=_heartbeat_service,
         connection_manager=_connection_manager,
@@ -861,6 +866,10 @@ async def lifespan(app: FastAPI):
         await strategies.shutdown_strategy_runtime_resources()
     except Exception as e:
         logger.error(f"[Main] Failed to shutdown strategy runtime: {e}")
+    try:
+        await data_catalog.shutdown_ohlcv_ingestion_worker()
+    except Exception as e:
+        logger.error(f"[OHLCVIngestion] Error shutting down worker: {e}")
     if _binance_connector_instance is not None:
         try:
             await _binance_connector_instance.stop()

@@ -656,6 +656,57 @@ class OHLCVImportResponse(BaseModel):
     total_points: int = 0
 
 
+class BinanceOHLCVIngestionRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    feature_version: str = "binance_ohlcv_v1"
+    interval: str = "1h"
+    start_ts_ms: Optional[int] = None
+    end_ts_ms: Optional[int] = None
+    lookback_hours: float = Field(default=24.0, gt=0.0)
+    poll_interval_seconds: float = Field(default=300.0, gt=0.0)
+    limit: int = Field(default=1000, ge=1, le=1000)
+    requested_by: Optional[str] = None
+
+
+class BinanceOHLCVSymbolIngestionResult(BaseModel):
+    symbol: str
+    imported: int = 0
+    duplicates: int = 0
+    conflicts: int = 0
+    first_ts_ms: Optional[int] = None
+    latest_ts_ms: Optional[int] = None
+    error: Optional[str] = None
+
+
+class BinanceOHLCVIngestionResult(BaseModel):
+    running: bool = False
+    feature_version: str
+    interval: str
+    symbols: List[str] = Field(default_factory=list)
+    started_at: str
+    finished_at: str
+    total_imported: int = 0
+    total_duplicates: int = 0
+    total_conflicts: int = 0
+    last_error: Optional[str] = None
+    symbol_results: List[BinanceOHLCVSymbolIngestionResult] = Field(default_factory=list)
+
+
+class BinanceOHLCVWorkerStatus(BaseModel):
+    running: bool = False
+    feature_version: Optional[str] = None
+    interval: Optional[str] = None
+    symbols: List[str] = Field(default_factory=list)
+    poll_interval_seconds: Optional[float] = None
+    last_started_at: Optional[str] = None
+    last_finished_at: Optional[str] = None
+    last_error: Optional[str] = None
+    total_imported: int = 0
+    total_duplicates: int = 0
+    total_conflicts: int = 0
+    last_result: Optional[BinanceOHLCVIngestionResult] = None
+
+
 # ==================== Order & Execution Models ====================
 
 

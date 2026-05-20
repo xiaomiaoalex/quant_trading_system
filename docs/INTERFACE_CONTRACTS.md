@@ -208,6 +208,10 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - `GET /v1/data/catalog`: 返回 `DataCatalogResponse`，其中 `feature_store_ohlcv` 来源必须按 FeatureStore 实际覆盖动态生成，不得只返回静态 stub。
 - `GET /v1/data/ohlcv/coverage?feature_version=...`: 返回按 `symbol + feature_version` 聚合的 OHLCV 覆盖。
 - `POST /v1/data/ohlcv/import`: 导入版本化 OHLCV 到 FeatureStore，写入 `feature_name=ohlcv`。
+- `POST /v1/data/ohlcv/sync-binance`: 从 Binance REST Kline 拉取一段 OHLCV 并写入 FeatureStore，用于单次补数。
+- `POST /v1/data/ohlcv/worker/start`: 启动持续 OHLCV ingestion worker。
+- `POST /v1/data/ohlcv/worker/stop`: 停止持续 OHLCV ingestion worker。
+- `GET /v1/data/ohlcv/worker/status`: 查询持续 worker 状态、最近同步结果和错误。
 
 `OHLCVImportRequest` 字段：
 
@@ -225,6 +229,63 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - 同 key 不同 value 必须返回冲突，不得覆盖。
 - `high < max(open, close)` 或 `low > min(open, close)` 必须拒绝。
 - Catalog/coverage 返回字段包含 `first_ts_ms`、`latest_ts_ms`、`total_points`、`coverage_percent`、`quality_score` 和 `feature_version`。
+
+`BinanceOHLCVIngestionRequest` 字段：
+
+- `symbols`
+- `feature_version`
+- `interval`
+- `start_ts_ms`
+- `end_ts_ms`
+- `lookback_hours`
+- `poll_interval_seconds`
+- `limit`
+- `requested_by`
+
+`BinanceOHLCVIngestionResult` 字段：
+
+- `running`
+- `feature_version`
+- `interval`
+- `symbols`
+- `started_at`
+- `finished_at`
+- `total_imported`
+- `total_duplicates`
+- `total_conflicts`
+- `last_error`
+- `symbol_results[]`: 每个 symbol 包含 `imported`、`duplicates`、`conflicts`、`first_ts_ms`、`latest_ts_ms`、`error`
+
+`BinanceOHLCVWorkerStatus` 字段：
+
+- `running`
+- `feature_version`
+- `interval`
+- `symbols`
+- `poll_interval_seconds`
+- `last_started_at`
+- `last_finished_at`
+- `last_error`
+- `total_imported`
+- `total_duplicates`
+- `total_conflicts`
+- `last_result`
+
+持续 worker 语义：
+
+- Worker 位于 Service 层，Binance REST 调用位于 Adapter 层；Binance 原始 kline 数组不得进入 Core。
+- Worker 每轮按 `symbol + feature_version + interval` 查询 FeatureStore 最新 `ohlcv` 时间戳，下一轮从 `latest_ts_ms + interval_ms` 开始补数。
+- 未提供 `start_ts_ms` 且 FeatureStore 无历史覆盖时，使用 `lookback_hours` 计算首次补数窗口。
+- 同一 bar 重复写入必须保持幂等；同 key 不同 OHLCV 必须返回冲突并记录 `last_error`。
+- `worker/start` 重复调用不得创建重复 task；已运行时返回当前状态。
+- 默认不在生产启动 live/paper 策略；该 worker 只写研究数据 FeatureStore，不下单、不触碰 OMS。
+- Lifespan 自动启动默认关闭；仅当 `BINANCE_OHLCV_INGESTION_ENABLED` 为 `1|true|yes|on` 时使用以下环境变量创建 worker request：
+  - `BINANCE_OHLCV_SYMBOLS`
+  - `BINANCE_OHLCV_FEATURE_VERSION`
+  - `BINANCE_OHLCV_INTERVAL`
+  - `BINANCE_OHLCV_LOOKBACK_HOURS`
+  - `BINANCE_OHLCV_POLL_SECONDS`
+  - `BINANCE_OHLCV_LIMIT`
 
 ### 8.3 Allocation / Autopilot
 

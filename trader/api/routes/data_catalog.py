@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from trader.adapters.binance.ohlcv_source import BinanceOHLCVRestConfig, BinanceOHLCVRestSource
 from trader.adapters.persistence.feature_store import (
     FeatureStore,
     FeatureVersionConflictError,
     get_feature_store,
 )
+from trader.api.env_config import get_binance_env_config
 from trader.api.models.schemas import (
+    BinanceOHLCVIngestionRequest,
+    BinanceOHLCVIngestionResult,
+    BinanceOHLCVWorkerStatus,
     DataCatalogResponse,
     DataSourceStatus,
     OHLCVImportRequest,
     OHLCVImportResponse,
 )
+from trader.services.ohlcv_ingestion import BinanceOHLCVIngestionWorker
 
 router = APIRouter(tags=["DataCatalog"])
+_ohlcv_ingestion_worker: Any | None = None
 
 
 def _validate_ohlcv_bar(bar: Any) -> None:
@@ -28,6 +36,34 @@ def _validate_ohlcv_bar(bar: Any) -> None:
 
 def _quality_score(total_points: int) -> float:
     return 1.0 if total_points > 0 else 0.0
+
+
+def _serialize_worker_payload(payload: Any) -> Any:
+    if hasattr(payload, "to_dict"):
+        return payload.to_dict()
+    return payload
+
+
+def get_ohlcv_ingestion_worker() -> Any:
+    global _ohlcv_ingestion_worker
+    if _ohlcv_ingestion_worker is None:
+        env_config = get_binance_env_config()
+        source = BinanceOHLCVRestSource(
+            BinanceOHLCVRestConfig(
+                base_url=env_config["rest_base"],
+                timeout=float(os.environ.get("BINANCE_OHLCV_TIMEOUT_SECONDS", "10")),
+            )
+        )
+        _ohlcv_ingestion_worker = BinanceOHLCVIngestionWorker(
+            feature_store=get_feature_store(),
+            source=source,
+        )
+    return _ohlcv_ingestion_worker
+
+
+def set_ohlcv_ingestion_worker(worker: Any | None) -> None:
+    global _ohlcv_ingestion_worker
+    _ohlcv_ingestion_worker = worker
 
 
 def _static_sources(feature_version: str) -> List[DataSourceStatus]:
@@ -188,3 +224,72 @@ async def import_ohlcv(request: OHLCVImportRequest):
         latest_ts_ms=latest_ts_ms,
         total_points=total_points,
     )
+
+
+@router.post("/v1/data/ohlcv/sync-binance", response_model=BinanceOHLCVIngestionResult)
+async def sync_binance_ohlcv(request: BinanceOHLCVIngestionRequest):
+    worker = get_ohlcv_ingestion_worker()
+    try:
+        result = await worker.sync_once(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_worker_payload(result)
+
+
+@router.post("/v1/data/ohlcv/worker/start", response_model=BinanceOHLCVWorkerStatus)
+async def start_binance_ohlcv_worker(request: BinanceOHLCVIngestionRequest):
+    worker = get_ohlcv_ingestion_worker()
+    try:
+        status = await worker.start(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_worker_payload(status)
+
+
+@router.post("/v1/data/ohlcv/worker/stop", response_model=BinanceOHLCVWorkerStatus)
+async def stop_binance_ohlcv_worker():
+    worker = get_ohlcv_ingestion_worker()
+    status = await worker.stop()
+    return _serialize_worker_payload(status)
+
+
+@router.get("/v1/data/ohlcv/worker/status", response_model=BinanceOHLCVWorkerStatus)
+async def get_binance_ohlcv_worker_status():
+    worker = get_ohlcv_ingestion_worker()
+    status = await worker.status()
+    return _serialize_worker_payload(status)
+
+
+def build_ohlcv_ingestion_request_from_env() -> BinanceOHLCVIngestionRequest | None:
+    enabled = os.environ.get("BINANCE_OHLCV_INGESTION_ENABLED", "false").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return None
+
+    raw_symbols = os.environ.get("BINANCE_OHLCV_SYMBOLS", "BTCUSDT,ETHUSDT")
+    symbols = [item.strip() for item in raw_symbols.split(",") if item.strip()]
+    return BinanceOHLCVIngestionRequest(
+        symbols=symbols,
+        feature_version=os.environ.get("BINANCE_OHLCV_FEATURE_VERSION", "binance_ohlcv_v1"),
+        interval=os.environ.get("BINANCE_OHLCV_INTERVAL", "1h"),
+        lookback_hours=float(os.environ.get("BINANCE_OHLCV_LOOKBACK_HOURS", "24")),
+        poll_interval_seconds=float(os.environ.get("BINANCE_OHLCV_POLL_SECONDS", "300")),
+        limit=int(os.environ.get("BINANCE_OHLCV_LIMIT", "1000")),
+        requested_by="lifespan",
+    )
+
+
+async def maybe_start_ohlcv_ingestion_from_env() -> None:
+    request = build_ohlcv_ingestion_request_from_env()
+    if request is None:
+        return
+    await get_ohlcv_ingestion_worker().start(request)
+
+
+async def shutdown_ohlcv_ingestion_worker() -> None:
+    worker = _ohlcv_ingestion_worker
+    if worker is None:
+        return
+    if hasattr(worker, "close"):
+        await worker.close()
+    else:
+        await worker.stop()

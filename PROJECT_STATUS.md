@@ -8,6 +8,37 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：Binance OHLCV 持续 Ingestion Worker
+- 完成时间: 2026-05-20 (北京时间)
+- 状态: ✅ 已完成
+- 目标: 在已有 FeatureStore OHLCV 导入和 `real_feature_store` 回测读取基础上，补齐真正持续自动拉 Binance OHLCV 的 worker
+- 开发后状态:
+  - 新增 Adapter 层 `BinanceOHLCVRestSource`，调用 Binance REST `/v3/klines` 并把原始数组映射为内部 bar
+  - 新增 Service 层 `BinanceOHLCVIngestionWorker`，支持分页拉取、按 FeatureStore 最新时间戳断点续拉、幂等写入和冲突记录
+  - 新增 `POST /v1/data/ohlcv/sync-binance` 单次补数接口
+  - 新增 `POST /v1/data/ohlcv/worker/start`、`POST /stop`、`GET /status` 持续 worker 控制接口
+  - FastAPI lifespan 支持 `BINANCE_OHLCV_INGESTION_ENABLED=true` 时自动启动，默认关闭
+  - 前端 Data 页面新增 Binance OHLCV Worker 控制区，可 Sync Once / Start / Stop / Status
+- 代码变更:
+  - `trader/adapters/binance/ohlcv_source.py`: 新增 Binance OHLCV REST adapter
+  - `trader/services/ohlcv_ingestion.py`: 新增持续 ingestion worker
+  - `trader/api/routes/data_catalog.py`: 新增 sync/start/stop/status API 与 env autostart helper
+  - `trader/api/models/schemas.py`: 新增 Binance OHLCV ingestion DTO
+  - `trader/api/main.py`: lifespan 启停 worker
+  - `Frontend/src/pages/Data.tsx`、`Frontend/src/api/research.ts`、`Frontend/src/types/research.ts`: 接入 worker 控制与状态
+  - `trader/tests/test_api_binance_ohlcv_ingestion.py`、`trader/tests/test_binance_ohlcv_ingestion_worker.py`: 新增 API 和 worker 单测
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_api_binance_ohlcv_ingestion.py trader/tests/test_binance_ohlcv_ingestion_worker.py trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py trader/tests/test_feature_store_range.py --tb=short` → 28 passed ✅
+  - `npm run typecheck`（Frontend）→ passed ✅
+  - `python -m py_compile` scoped files → passed ✅
+  - scoped `black --check` / `isort --check-only` / `git diff --check` → passed ✅
+  - 本地 API smoke：`POST /v1/data/ohlcv/sync-binance` with `feature_version=smoke_binance_ohlcv_20260520` → imported 1 bar，coverage 可查询 ✅
+- 注意事项:
+  - Worker 默认不自动启动；生产/研究环境可通过 API 或 `BINANCE_OHLCV_INGESTION_ENABLED=true` 开启
+  - 当前 worker 只写 `feature_name=ohlcv`，不触碰 OMS、不下单、不改变策略状态
+  - 后续应补 data freshness/risk gate，把 stale OHLCV 与 Promote/Autopilot 风险联动
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 本次任务：FeatureStore OHLCV 导入与 Data 页面覆盖展示
 - 完成时间: 2026-05-20 (北京时间)
 - 状态: ✅ 已完成
@@ -31,7 +62,7 @@
   - `python -m py_compile trader/api/models/schemas.py trader/api/routes/data_catalog.py trader/adapters/persistence/feature_store.py trader/services/backtesting/feature_store_data_provider.py trader/services/deployment.py trader/tests/test_api_data_ohlcv_feature_store.py trader/tests/test_api_backtest_vectorbt_engine.py` → passed ✅
   - scoped `black --check` / `isort --check-only` / `git diff --check` → passed ✅
 - 注意事项:
-  - 这一步提供的是导入和覆盖查询入口；持续自动拉取 Binance OHLCV 的 ingestion worker 仍是下一步
+  - 这一步提供的是导入和覆盖查询入口；后续任务已补入持续自动拉取 Binance OHLCV 的 ingestion worker
   - 当前覆盖率按已导入点数聚合，后续可根据 interval 与目标时间区间计算 expected_points
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 

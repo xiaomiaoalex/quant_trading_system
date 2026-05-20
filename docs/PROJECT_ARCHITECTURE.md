@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-20 06:27 (北京时间)
+- 最后更新: 2026-05-20 06:55 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
 
@@ -236,6 +236,8 @@ BinanceFundingOIMetricsSource (Service 层) 位于:
 - `engine=vectorbt` 在 `data_mode=dev_smoke` 下使用确定性 OHLCV provider 做无网络烟测；`data_mode=real_feature_store` 通过 `FeatureStoreOHLCVDataProvider` 按 `feature_version` 读取 FeatureStore OHLCV，缺数据时不得回退为 synthetic 数据。
 - Control Plane 的 `/v1/data/catalog`、`/v1/data/ohlcv/coverage` 和 `/v1/data/ohlcv/import` 是当前研究数据入口；前端 Data 页面通过这些接口导入版本化 OHLCV、查看 `symbol + feature_version` 覆盖、最新时间戳和数据质量。
 - `/v1/data/ohlcv/import` 写入 `feature_name=ohlcv` 的 compact dict，后续 `real_feature_store` 回测通过同一 FeatureStore 读取，避免 Data 页面和 Backtests 使用两套数据真相源。
+- `BinanceOHLCVRestSource` 位于 Adapter 层，负责调用 Binance REST `/v3/klines` 并把原始数组映射为内部 OHLCV bar；`BinanceOHLCVIngestionWorker` 位于 Service 层，负责分页、断点续拉、幂等写入 FeatureStore。
+- `POST /v1/data/ohlcv/sync-binance` 提供单次补数；`/v1/data/ohlcv/worker/start|stop|status` 控制持续 worker。默认不自动启动，只有 `BINANCE_OHLCV_INGESTION_ENABLED=true` 时由 lifespan 启动。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 
@@ -523,7 +525,9 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Data["Crypto Core Data Sources"] --> FeatureStore["FeatureStore / feature_version"]
+    Data["Crypto Core Data Sources"] --> BinanceSource["Binance OHLCV REST Source"]
+    BinanceSource --> Ingestion["OHLCV Ingestion Worker"]
+    Ingestion --> FeatureStore["FeatureStore / feature_version"]
     Data --> DataAPI["Data Catalog / OHLCV Import API"]
     DataAPI --> FeatureStore
     FeatureStore --> Candidate["StrategyCandidate Lifecycle"]
@@ -544,6 +548,7 @@ flowchart LR
 - 回测必须显式记录 `feature_version` 和 `data_mode`；`dev_smoke` 只能用于开发烟测，不能作为部署准入。
 - Data 页面不得静态伪造 FeatureStore 覆盖；`feature_store_ohlcv` 必须来自 FeatureStore 聚合查询，缺数据时显示 missing/empty coverage。
 - 研究级 VectorBT 回测和 Data 页面必须共享同一个 `feature_version` 语义，导入、覆盖查询、回测报告和审计中的版本名必须一致。
+- Binance OHLCV worker 只写研究数据，不下单、不调用 OMS、不改变策略运行状态；遇到 FeatureStore key 冲突时不得覆盖旧值，只记录 conflicts 和 last_error。
 - 策略信号进入 OMS 前必须经过仓位分配与风险裁剪，分配结果写入 `AllocationTrace`。
 - Portfolio Runtime Controller 第一版面向 paper/shadow 自动运行，所有启停/降仓决策写入审计事件。
 

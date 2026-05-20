@@ -1,6 +1,9 @@
 import { APIClient } from './client'
 import type {
   ActionResult,
+  BinanceOHLCVIngestionRequest,
+  BinanceOHLCVIngestionResult,
+  BinanceOHLCVWorkerStatus,
   DataCatalogResponse,
   DataSourceStatus,
   OHLCVImportRequest,
@@ -27,6 +30,26 @@ export class ResearchAPI extends APIClient {
 
   async importOHLCV(request: OHLCVImportRequest): Promise<OHLCVImportResponse> {
     return this.post<OHLCVImportResponse>('/v1/data/ohlcv/import', request)
+  }
+
+  async syncBinanceOHLCV(
+    request: BinanceOHLCVIngestionRequest,
+  ): Promise<BinanceOHLCVIngestionResult> {
+    return this.post<BinanceOHLCVIngestionResult>('/v1/data/ohlcv/sync-binance', request)
+  }
+
+  async startBinanceOHLCVWorker(
+    request: BinanceOHLCVIngestionRequest,
+  ): Promise<BinanceOHLCVWorkerStatus> {
+    return this.post<BinanceOHLCVWorkerStatus>('/v1/data/ohlcv/worker/start', request)
+  }
+
+  async stopBinanceOHLCVWorker(): Promise<BinanceOHLCVWorkerStatus> {
+    return this.post<BinanceOHLCVWorkerStatus>('/v1/data/ohlcv/worker/stop', {})
+  }
+
+  async getBinanceOHLCVWorkerStatus(): Promise<BinanceOHLCVWorkerStatus> {
+    return this.get<BinanceOHLCVWorkerStatus>('/v1/data/ohlcv/worker/status')
   }
 
   async listCandidates(): Promise<StrategyCandidate[]> {

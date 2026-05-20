@@ -4,6 +4,42 @@
 
 ---
 
+## 四十三、Binance OHLCV 持续 Ingestion Worker 经验（2026-05-20）
+
+### 43.1 踩坑记录：持续补数不能每轮从固定起点重拉
+
+**问题描述**：
+如果 worker 每轮都从配置的 `start_ts_ms` 或 lookback 窗口开始拉取，短时间内看似幂等，但会不断制造重复请求、浪费 Binance rate limit，并让 Data 页面重复看到 duplicates 增长。
+
+**解决方案**：
+- 每轮先查 FeatureStore 中 `symbol + feature_version` 的 `latest_ts_ms`
+- 下一轮从 `latest_ts_ms + interval_ms` 开始
+- 只有首次无覆盖时才使用 `lookback_hours`
+- 同 key 同值仍保持幂等，同 key 不同值记录 conflict，不覆盖历史
+
+**经验**：
+- 持续 ingestion 的核心不是“定时调用接口”，而是“有状态地续拉缺口”
+- FeatureStore coverage 是 worker 的断点来源，也是 UI 的真实状态来源
+- rate limit 风险要靠减少无意义重复请求先解决，再谈退避
+
+### 43.2 设计模式：Adapter 映射原始 Kline，Service 编排写入
+
+**问题描述**：
+Binance `/v3/klines` 返回数组格式，如果直接把数组传给 Service 或 FeatureStore，字段含义只能靠下标记忆，后续很容易把 open time、close time、volume 等字段搞混。
+
+**解决方案**：
+- Adapter 层 `BinanceOHLCVRestSource` 把原始数组转换为 `BinanceOHLCVBar`
+- Service 层 `BinanceOHLCVIngestionWorker` 只消费内部 bar
+- FeatureStore 继续只存 compact `feature_name=ohlcv` value dict
+- 前端和回测只通过 FeatureStore coverage / provider 看数据，不接触 Binance 原始 payload
+
+**经验**：
+- 外部字段和数组下标必须在 Adapter 边界被消化
+- Worker 不该触碰 OMS 或策略状态，它只是研究数据写入器
+- Control API 的 start 幂等性很重要，重复点击不能创建多个后台任务
+
+---
+
 ## 四十二、FeatureStore OHLCV 导入与覆盖展示经验（2026-05-20）
 
 ### 42.1 踩坑记录：静态 Data Catalog 会掩盖真实数据缺口
