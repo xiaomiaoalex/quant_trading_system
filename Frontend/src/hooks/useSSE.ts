@@ -107,7 +107,7 @@ export function useSSE(
     }
 
     // Listen for specific event types
-    const eventTypes = ["monitor_update", "strategy_update", "order_update", "reconciliation_update"]
+    const eventTypes = ["monitor_update", "strategy_update", "order_update", "reconciliation_update", "nav_update"]
     for (const eventType of eventTypes) {
       eventSource.addEventListener(eventType, (event) => {
         try {

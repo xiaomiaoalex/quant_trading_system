@@ -283,8 +283,10 @@ class VectorBTAdapterWithRisk:
         if risk_adjusted_metrics is not None:
             risk_adjusted_curve = self._curve_to_dicts(risk_adjusted_metrics.equity_curve)
             max_drawdown_after_risk = Decimal(str(round(risk_adjusted_metrics.max_drawdown, 6)))
+            # max_drawdown 统一存为百分比，与 validate_candidate 阈值语义一致
             risk_adjusted_dict = {
-                "max_drawdown": risk_adjusted_metrics.max_drawdown,
+                "max_drawdown": risk_adjusted_metrics.max_drawdown * 100,
+                "max_drawdown_pct": risk_adjusted_metrics.max_drawdown * 100,
                 "sharpe_ratio": risk_adjusted_metrics.sharpe_ratio,
                 "total_return": risk_adjusted_metrics.total_return,
                 "win_rate": risk_adjusted_metrics.win_rate,

@@ -2,6 +2,10 @@ import type { AxiosError } from 'axios'
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import type { APIError, ActionResult } from '@/types'
 
+type APIErrorResponse = Partial<APIError> & {
+  detail?: string | Record<string, unknown>
+}
+
 // Base URL is handled by Vite proxy in development
 const BASE_URL = ''
 
@@ -32,14 +36,30 @@ export class APIClient {
     // Response interceptor for error handling
     this.client.interceptors.response.use(
       response => response,
-      (error: AxiosError<APIError>) => {
+      (error: AxiosError<APIErrorResponse>) => {
         if (error.response) {
+          const responseData = error.response.data
+          const detail = responseData?.detail
+          let code = responseData?.code ?? `HTTP_${error.response.status}`
+          let message = responseData?.message ?? error.message
+          let details = responseData?.details
+
+          if (typeof detail === 'string') {
+            message = detail
+          } else if (detail && typeof detail === 'object') {
+            const detailCode = detail.error_code
+            const detailMessage = detail.detail
+            code = typeof detailCode === 'string' ? detailCode : code
+            message = typeof detailMessage === 'string' ? detailMessage : message
+            details = { ...(details ?? {}), ...detail }
+          }
+
           // Server responded with error status
           const apiError: APIError = {
-            code: error.response.data?.code ?? `HTTP_${error.response.status}`,
-            message: error.response.data?.message ?? error.message,
-            details: error.response.data?.details,
-            request_id: error.response.data?.request_id,
+            code,
+            message,
+            details,
+            request_id: responseData?.request_id,
           }
           console.error(`[API] Error ${error.response.status}:`, apiError)
           return Promise.reject(apiError)

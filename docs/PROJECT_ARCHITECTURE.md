@@ -5,9 +5,22 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-20 06:55 (北京时间)
+- 最后更新: 2026-05-21 22:07 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁。
+
+### 本次变更摘要（2026-05-20）
+
+1. **Strategy Lab Debug 契约对齐**: 新增 `StrategyCandidateDebugResponse` 模型，debug 失败保持 `DRAFT` 状态
+2. **Risk Mode 端到端透传**: 前端 `Backtests.tsx` -> `BacktestDatasetSpec.risk_mode` -> `BacktestRequest.risk_mode` -> 回测引擎
+3. **Risk Engine 注入**: `risk_adjusted` 和 `event_replay` 模式使用真实 `RiskEngine` + `FakeBroker`，不再使用 pass-all Mock
+4. **EventDrivenRiskReplay 集成**: `event_replay` 通过 `runner.tick()` 获取 Signal 对象，逐信号风控回放
+5. **风控报告字段完整化**: `approved_orders/clipped_orders/rejected_orders/rejection_reason_counts/max_drawdown_before_risk/max_drawdown_after_risk/risk_adjusted_metrics/risk_adjusted_equity_curve/risk_replay`
+6. **红测覆盖**: 新增 `test_candidate_debug_contract.py`, `test_candidate_backtest_risk_mode.py`, `test_risk_adjusted_produces_risk_decisions.py`
+7. **Promote to Paper 前端收口**: Strategy Lab 改为调用原子 `promote-paper` 接口；前端不再向候选晋级流程发送旧 `/promote` 请求体，`deployment_id` 以后端返回为准。
+8. **CapitalAllocator OMS 前置接入**: `StrategyRunner` 在 OMS callback 前执行仓位分配，支持 profile 热更新、CLIPPED 数量裁剪、REJECTED 阻断和 `AllocationTrace` 审计。
+9. **Stage 5 审查返工**: 补齐 allocator/management/runner 测试，修正 OMS 前 reservation 不提前写 `current_notional`，并将 allocation reservation 保护收敛为 portfolio-wide 锁，覆盖跨 symbol 组合预算和净敞口投影。
+10. **Stage 4A/5/回测审查修复**: Strategy Lab 在 `BACKTEST_RUNNING` 期间轮询候选状态；成功回测与部署准入分离，`dev_smoke/raw_only` 可完成回测但必须在 validation 阶段拒绝；`event_replay` equity curve 使用真实 Unix 毫秒时间轴。
 
 ---
 
@@ -18,6 +31,7 @@ flowchart TB
     subgraph Control["Control Plane: trader/api/, trader/services/"]
         API["FastAPI Routes"]
         Lifecycle["Strategy Lifecycle / Runner"]
+        AllocMgmt["Allocation Management\nProfiles / Traces"]
         CryptoRuntime["Crypto Risk Runtime Config"]
         CryptoOps["Crypto Risk Ops API"]
         Monitor["Monitor / SSE / Runtime Services"]
@@ -27,6 +41,7 @@ flowchart TB
     subgraph Policy["Policy Plane: trader/core/application/, trader/services/risk.py"]
         Risk["Risk Engine"]
         Gate["Pre-trade Gates"]
+        Allocator["CapitalAllocator\nOMS pre-gate"]
         CryptoGate["Crypto Pre-trade Risk Plugin"]
         CryptoSnapshot["Crypto Risk Snapshot Provider"]
         Kill["KillSwitch L0-L3"]
@@ -58,8 +73,11 @@ flowchart TB
     end
 
     API --> Lifecycle
+    API --> AllocMgmt
     API --> CryptoOps
     Lifecycle --> CryptoRuntime
+    Lifecycle --> Allocator
+    AllocMgmt --> Allocator
     CryptoOps --> CryptoRuntime
     CryptoRuntime --> Gate
     CryptoRuntime --> CryptoSnapshot
@@ -74,7 +92,9 @@ flowchart TB
     CryptoRisk --> MarketRisk
     CryptoSnapshot --> CryptoSource
     Risk --> Kill
-    Gate --> OMS
+    Gate --> Allocator
+    Allocator --> OMS
+    Allocator --> Projection
     OMS --> Deterministic
     OMS --> EventLog
     EventLog --> Projection
@@ -144,6 +164,7 @@ sequenceDiagram
     participant FE as Frontend/API
     participant Runner as StrategyRunner
     participant Policy as Risk/Policy Gates
+    participant Allocator as CapitalAllocator
     participant Snapshot as Crypto Snapshot Provider
     participant OMS as OMS
     participant Broker as Binance Adapter
@@ -157,18 +178,33 @@ sequenceDiagram
     Snapshot-->>Policy: CryptoRiskSnapshot or fail-closed error
     Policy->>Policy: exchange rules / open-order exposure / cluster exposure / margin check
     Policy-->>Runner: approve / reject / reduce
-    Runner->>OMS: submit order command
-    OMS->>OMS: cl_ord_id idempotency + monotonic state
-    OMS->>Broker: canonical order request
-    Broker-->>OMS: ack / reject / fill event
-    OMS->>OMS: exec_id dedup + state transition
-    OMS->>Store: append event / execution
+    Runner->>Allocator: check profile + runtime exposure
+    Allocator->>Allocator: portfolio-wide lock + in-flight reservation
+    Allocator-->>Runner: approved / clipped / rejected
+    alt rejected
+        Allocator->>Store: append AllocationTrace
+        Runner-->>FE: signal blocked, no OMS call
+    else approved or clipped
+        Allocator->>Store: append AllocationTrace
+        Runner->>OMS: submit order command
+        OMS-->>Runner: accepted / rejected / failed
+        Runner->>Allocator: commit notional on success / release reservation on failure
+        OMS->>OMS: cl_ord_id idempotency + monotonic state
+        OMS->>Broker: canonical order request
+        Broker-->>OMS: ack / reject / fill event
+        OMS->>OMS: exec_id dedup + state transition
+        OMS->>Store: append event / execution
+    end
     Store-->>FE: projected order / position / monitor view
 ```
 
 ### 闭环不变性
 
-- 下单前必须经过风险、余额、预算和 KillSwitch gate。
+- 下单前必须经过风险、余额、预算、KillSwitch 和 CapitalAllocator gate。
+- 开仓信号在 OMS callback 前必须按 `deployment_id` 读取最新 allocation profile；`REJECTED` 不得调用 OMS，`CLIPPED` 必须修改 `Signal.quantity` 后再进入 OMS。
+- CapitalAllocator 的 OMS 前 reservation 只存在于进程内，不得提前增加 `StrategyAllocationProfile.current_notional`；只有 OMS callback 返回 truthy 后，才提交 committed exposure 并更新 `current_notional`。
+- Allocation reservation 使用 portfolio-wide 锁；同一运行进程内所有 symbol 的分配检查、预留、提交和释放串行化，避免跨 symbol 并发穿透组合级预算或净敞口限制。
+- OMS 返回 falsy 或抛异常时只释放 in-flight reservation，不得减少已有 committed notional。
 - 订单幂等主键是 `cl_ord_id`；成交幂等键是 `cl_ord_id + exec_id`。
 - 终态订单不得回退。
 - Broker 异常必须按业务拒单和网络不确定性区分处理。
@@ -293,7 +329,15 @@ flowchart TB
 
 ### P7 回测风控集成路径
 
-回测层通过 `BacktestRiskIntegration` 接入真实风控，分为订单入队路径和 VectorBT 风控后权益曲线路径：
+回测层通过 `BacktestRiskIntegration` 接入真实风控，支持三种 `risk_mode`：
+
+- `raw_only`: 纯策略信号回测，不经过风控引擎
+- `risk_adjusted`: 使用 `VectorBTAdapterWithRisk` 进行风控调整后回测
+- `event_replay`: 使用 `EventDrivenRiskReplay` 逐信号风控回放
+
+`risk_mode` 由前端 `Backtests.tsx` 下拉选择，通过 `BacktestDatasetSpec.risk_mode` 提交到后端，最终写入 `BacktestRequest.risk_mode`。
+
+回测分为订单入队路径和 VectorBT 风控后权益曲线路径：
 
 ```mermaid
 sequenceDiagram
@@ -545,7 +589,7 @@ flowchart LR
 ### 闭环规则
 
 - `candidate_id` 管策略研究生命周期，`strategy_id` 管策略模板，`deployment_id` 管运行实例，三者不得混用。
-- 回测必须显式记录 `feature_version` 和 `data_mode`；`dev_smoke` 只能用于开发烟测，不能作为部署准入。
+- 回测必须显式记录 `feature_version` 和 `data_mode`；成功回测可推进候选到 `BACKTEST_PASSED` 以完成前端闭环，但 `dev_smoke`、`raw_only` 只能用于开发烟测，必须在 validation 阶段拒绝部署准入。
 - Data 页面不得静态伪造 FeatureStore 覆盖；`feature_store_ohlcv` 必须来自 FeatureStore 聚合查询，缺数据时显示 missing/empty coverage。
 - 研究级 VectorBT 回测和 Data 页面必须共享同一个 `feature_version` 语义，导入、覆盖查询、回测报告和审计中的版本名必须一致。
 - Binance OHLCV worker 只写研究数据，不下单、不调用 OMS、不改变策略运行状态；遇到 FeatureStore key 冲突时不得覆盖旧值，只记录 conflicts 和 last_error。

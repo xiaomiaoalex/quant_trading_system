@@ -20,7 +20,16 @@
 
 审计通过前，AI 开发工程师只能回答问题、补充审计材料或修复审计指出的问题；不得开始下一段计划。
 
-当前停顿点（2026-05-15）：P9.5 回测市场端口准备已完成（含架构修正：复用 core 枚举、A 股字段放入 metadata、limit_up_rate/limit_down_rate 命名修正）。P9 全部子阶段完成。
+当前停顿点（2026-05-21）：Stage 5 CapitalAllocator OMS 前置接入已完成审查返工，并继续修复本轮审查指出的候选回测轮询、部署准入分层、portfolio-wide allocation lock 和 event_replay 时间轴问题；审计通过前不得自行推进 Stage 6。
+
+当前补充执行主线（差距分析 4A-6）：
+
+| 阶段 | 目标 | 状态 | 说明 |
+|------|------|------|------|
+| Stage 4A | 前端 Stage 3 闭环 + 图表可视化 | ✅ 已完成 | Recharts 图表、状态驱动按钮、promote 错误差异化 |
+| Stage 4B | QuantStats 回测撕页集成 | ✅ 已完成 | tearsheet 后处理、artifact/API/frontend 下载入口 |
+| Stage 5 | CapitalAllocator OMS 接入 | ✅ 已完成（含审查返工） | `StrategyRunner` OMS 前置 allocation gate、热配置、trace 审计、portfolio-wide reservation lock、OMS 成功后提交 committed notional |
+| Stage 6 | 实时 NAV 追踪 + PostgreSQL 持久化 | 未开始 | 下一入口，需新增 `NAVPoint`、`nav_points` 表、SSE 与前端净值曲线 |
 
 ---
 

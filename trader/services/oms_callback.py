@@ -1433,6 +1433,21 @@ class OMSCallbackHandler:
             except Exception:
                 pass  # SSE broadcast is non-critical, don't fail order processing
 
+            # Stage 6: NAV snapshot（非阻塞，best-effort）
+            if broker_order.filled_quantity > 0:
+                try:
+                    from trader.services.nav_service import record_nav_snapshot
+
+                    asyncio.create_task(
+                        record_nav_snapshot(
+                            strategy_id=strategy_id,
+                            storage=self._storage,
+                            deployment_id=getattr(self, "_deployment_id", None),
+                        )
+                    )
+                except Exception:
+                    pass
+
             return {
                 "order_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
@@ -1795,6 +1810,22 @@ def create_oms_callback(
                         quantity,
                         price,
                     )
+
+                # Stage 6: NAV snapshot（WS fill 路径，非阻塞，best-effort）
+                if strategy_id:
+                    try:
+                        from trader.services.nav_service import record_nav_snapshot
+
+                        asyncio.ensure_future(
+                            record_nav_snapshot(
+                                strategy_id=strategy_id,
+                                storage=handler._storage,
+                                deployment_id=None,
+                            )
+                        )
+                    except Exception:
+                        pass
+
             except Exception as e:
                 logger.error(f"[OMSCallback] Fill handler error: {e}", exc_info=True)
 

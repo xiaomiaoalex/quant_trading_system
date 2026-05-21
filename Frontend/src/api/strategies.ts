@@ -3,6 +3,7 @@
 import { APIClient } from './client'
 import type {
   LoadStrategyPayload,
+  NAVPoint,
   RegisteredStrategy,
   StrategyRuntimeInfo,
   StrategyParams,
@@ -147,6 +148,12 @@ export class StrategiesAPI extends APIClient {
   ): Promise<TradingPairsResponse> {
     return this.get<TradingPairsResponse>('/v1/exchange/trading-pairs', {
       params: { status_filter: statusFilter, quote_asset: quoteAsset },
+    })
+  }
+
+  async getDeploymentNav(deploymentId: string, sinceMs?: number, limit?: number): Promise<NAVPoint[]> {
+    return this.get<NAVPoint[]>(`/v1/deployments/${deploymentId}/nav`, {
+      params: { since_ms: sinceMs, limit },
     })
   }
 

@@ -11,11 +11,14 @@ import type {
   PortfolioAutopilotDecision,
   PortfolioAutopilotSnapshot,
   PortfolioAutopilotTickRequest,
+  PromotePaperResponse,
   StrategyAllocationProfile,
   StrategyAllocationProfileUpdateRequest,
   StrategyCandidate,
   StrategyCandidateCreateRequest,
-  StrategyCandidatePromoteRequest,
+  StrategyCandidateDebugRequest,
+  StrategyCandidateDebugResponse,
+  StrategyCandidateBacktestRequest,
 } from '@/types'
 
 export class ResearchAPI extends APIClient {
@@ -56,6 +59,10 @@ export class ResearchAPI extends APIClient {
     return this.get<StrategyCandidate[]>('/v1/strategy-candidates')
   }
 
+  async getCandidate(candidateId: string): Promise<StrategyCandidate> {
+    return this.get<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}`)
+  }
+
   async createCandidate(request: StrategyCandidateCreateRequest): Promise<StrategyCandidate> {
     return this.post<StrategyCandidate>('/v1/strategy-candidates', request)
   }
@@ -64,11 +71,26 @@ export class ResearchAPI extends APIClient {
     return this.delete<ActionResult>(`/v1/strategy-candidates/${candidateId}`)
   }
 
-  async promoteCandidate(
+  async debugCandidate(
     candidateId: string,
-    request: StrategyCandidatePromoteRequest,
+    request: StrategyCandidateDebugRequest,
+  ): Promise<StrategyCandidateDebugResponse> {
+    return this.post<StrategyCandidateDebugResponse>(`/v1/strategy-candidates/${candidateId}/debug`, request)
+  }
+
+  async runCandidateBacktest(
+    candidateId: string,
+    request: StrategyCandidateBacktestRequest,
   ): Promise<StrategyCandidate> {
-    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/promote`, request)
+    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/backtests`, request)
+  }
+
+  async validateCandidate(candidateId: string): Promise<StrategyCandidate> {
+    return this.post<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}/validate`)
+  }
+
+  async promoteCandidateToPaper(candidateId: string): Promise<PromotePaperResponse> {
+    return this.post<PromotePaperResponse>(`/v1/strategy-candidates/${candidateId}/promote-paper`)
   }
 
   async listAllocations(): Promise<StrategyAllocationProfile[]> {

@@ -244,6 +244,17 @@ export function groupRuntimeByStrategy(
   return grouped
 }
 
+export interface NAVPoint {
+  deployment_id: string
+  strategy_id: string
+  timestamp_ms: number
+  equity: number
+  cash: number
+  unrealized_pnl: number
+  realized_pnl: number
+  total_pnl: number
+}
+
 export function buildDeploymentId(
   strategyId: string,
   symbol: string,

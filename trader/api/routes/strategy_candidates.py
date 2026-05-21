@@ -5,10 +5,12 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from trader.api.models.schemas import (
     ActionResult,
     BacktestRequest,
+    PromotePaperResponse,
     StrategyCandidate,
     StrategyCandidateBacktestRequest,
     StrategyCandidateCreateRequest,
     StrategyCandidateDebugRequest,
+    StrategyCandidateDebugResponse,
     StrategyCandidatePromoteRequest,
     StrategyCodeCreateRequest,
     StrategyCodeDebugRequest,
@@ -58,7 +60,9 @@ async def delete_candidate(candidate_id: str = Path(...)):
     )
 
 
-@router.post("/v1/strategy-candidates/{candidate_id}/debug", response_model=StrategyCandidate)
+@router.post(
+    "/v1/strategy-candidates/{candidate_id}/debug", response_model=StrategyCandidateDebugResponse
+)
 async def debug_candidate(
     request: StrategyCandidateDebugRequest,
     candidate_id: str = Path(...),
@@ -82,24 +86,27 @@ async def debug_candidate(
         )
     )
     if not debug_result.ok:
+        # Debug 失败回到 DRAFT 状态，清空 code_version 防止旧版本被回测
+        # 记录 debug_errors 供前端展示，不进入终态 REJECTED
         get_storage().update_strategy_candidate(
             candidate_id,
             {
-                "status": "REJECTED",
-                "validation": {
-                    "passed": False,
-                    "failed_rules": ["debug_failed"],
-                    "metrics": {},
-                    "evidence_refs": {},
-                },
+                "status": "DRAFT",
+                "code_version": None,
+                "debug_errors": debug_result.errors,
+                "debug_warnings": debug_result.warnings,
             },
         )
-        rejected = service.get_candidate(candidate_id)
-        if rejected is None:
-            raise HTTPException(
-                status_code=404, detail=f"StrategyCandidate {candidate_id} not found"
-            )
-        return rejected
+        updated = service.get_candidate(candidate_id)
+        return StrategyCandidateDebugResponse(
+            ok=False,
+            syntax_ok=debug_result.syntax_ok,
+            protocol_ok=debug_result.protocol_ok,
+            checksum=debug_result.checksum,
+            errors=debug_result.errors,
+            warnings=debug_result.warnings,
+            candidate=updated,
+        )
 
     code_entry = await create_strategy_code(
         StrategyCodeCreateRequest(
@@ -112,7 +119,20 @@ async def debug_candidate(
             register_if_missing=True,
         )
     )
-    return service.mark_debug_passed(candidate_id, code_version=code_entry.code_version)
+    updated_candidate = service.mark_debug_passed(
+        candidate_id, code_version=code_entry.code_version
+    )
+    return StrategyCandidateDebugResponse(
+        ok=True,
+        syntax_ok=True,
+        protocol_ok=True,
+        validation_status=debug_result.validation_status,
+        checksum=debug_result.checksum,
+        signals=debug_result.signals,
+        errors=[],
+        warnings=debug_result.warnings,
+        candidate=updated_candidate,
+    )
 
 
 @router.post("/v1/strategy-candidates/{candidate_id}/backtests", response_model=StrategyCandidate)
@@ -152,6 +172,8 @@ async def run_candidate_backtest(
                 slippage_bps=dataset.slippage_bps,
                 benchmark=dataset.benchmark,
                 data_mode=dataset.data_mode,
+                risk_mode=dataset.risk_mode,
+                candidate_id=candidate_id,
             )
         )
     except ValueError as exc:
@@ -179,43 +201,39 @@ async def validate_candidate(candidate_id: str = Path(...)):
         raise HTTPException(status_code=409, detail=str(exc))
 
 
-@router.post("/v1/strategy-candidates/{candidate_id}/promote", response_model=StrategyCandidate)
-async def promote_candidate(
+@router.post(
+    "/v1/strategy-candidates/{candidate_id}/promote-paper",
+    response_model=PromotePaperResponse,
+    summary="原子 promote：VALIDATION_PASSED -> APPROVED_FOR_PAPER（含 runtime 加载）",
+)
+async def promote_candidate_to_paper(candidate_id: str = Path(...)):
+    """
+    原子编排接口。内部顺序固定：
+    检查状态 -> 保存代码版本 -> 注册策略 -> 创建 deployment -> load strategy -> approve paper。
+
+    失败时触发补偿回滚（运行态原子）：unload runtime -> 清理 deployment -> candidate 回 VALIDATION_PASSED。
+    """
+    return await StrategyCandidateService().promote_to_paper(candidate_id)
+
+
+@router.post(
+    "/v1/strategy-candidates/{candidate_id}/promote",
+    deprecated=True,
+    summary="[已废弃] 请使用 /promote-paper",
+    include_in_schema=True,
+)
+async def promote_candidate_deprecated(
     request: StrategyCandidatePromoteRequest,
     candidate_id: str = Path(...),
 ):
-    service = StrategyCandidateService()
-    candidate = service.get_candidate(candidate_id)
-    if candidate is None:
-        raise HTTPException(status_code=404, detail=f"StrategyCandidate {candidate_id} not found")
-    if candidate.status != "VALIDATION_PASSED":
-        raise HTTPException(
-            status_code=409,
-            detail="Candidate must be VALIDATION_PASSED before promote",
-        )
-    if request.mode == "live":
-        raise HTTPException(
-            status_code=409, detail="First release only promotes paper/shadow deployments"
-        )
+    """旧 promote 接口已废弃。不再具备运行态原子、并发保护、回滚语义。
 
-    deployment_id = request.deployment_id or (
-        f"{candidate.strategy_id}__{request.symbols[0].lower()}__"
-        f"{request.mode}__{request.account_id.lower()}"
-    )
-
-    from trader.api.routes.strategies import LoadStrategyRequest, load_strategy
-
-    await load_strategy(
-        candidate.strategy_id,
-        LoadStrategyRequest(
-            deployment_id=deployment_id,
-            code_version=candidate.code_version,
-            version=request.version,
-            config={**candidate.config, **request.config},
-            symbols=request.symbols,
-            account_id=request.account_id,
-            venue=request.venue,
-            mode=request.mode,
+    请使用 POST /v1/strategy-candidates/{candidate_id}/promote-paper。
+    """
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This endpoint is deprecated and has been replaced by the atomic promote-paper interface. "
+            f"Use: POST /v1/strategy-candidates/{candidate_id}/promote-paper"
         ),
     )
-    return service.approve_for_paper(candidate_id, deployment_id)

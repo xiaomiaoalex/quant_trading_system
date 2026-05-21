@@ -4,6 +4,140 @@
 
 ---
 
+## 四十六、CapitalAllocator 审查返工经验（2026-05-21）
+
+### 46.1 踩坑记录：OMS 前预留不能污染 committed notional
+
+**问题描述**：
+初版 Stage 5 在 OMS callback 前就调用 `add_runtime_notional()`，这能阻止并发穿透，但把“待提交 reservation”写成了“已提交 committed notional”。如果 OMS 返回失败或进程中断，后续 allocation 会基于偏大的 `current_notional` 做预算判断。
+
+**解决方案**：
+- 将 runtime exposure 拆成 in-flight reservation 和 committed projection
+- OMS 前只写进程内 reservation
+- OMS 返回 truthy 后才提交 committed exposure 并增加 profile `current_notional`
+- OMS 返回 falsy 或抛异常时只释放 reservation，不减少已有 committed notional
+
+**经验**：
+- 资金分配链路至少有三个状态：decision、reservation、commit，不能把它们混成一个字段
+- `current_notional` 这类持久/控制面字段必须表达已接受事实，而不是待处理意图
+- 测试必须覆盖“已有 committed notional 后下一笔 OMS 失败”的场景，否则 release 逻辑会误扣存量仓位
+
+### 46.2 设计模式：按 symbol 分片保护同向敞口
+
+**问题描述**：
+全局 allocation lock 简单安全，但会让不同 symbol 的策略互相阻塞；按 deployment 锁又无法保护两个 deployment 同时交易同一 symbol 时的 `max_symbol_exposure`。
+
+**解决方案**：
+- allocation lock key 使用 `symbol`
+- 同一 symbol 的多策略信号串行做 allocation decision + reservation
+- 不同 symbol 的信号可并行，减少无关阻塞
+
+**经验**：
+- 锁粒度要跟不变量绑定：这里的不变量是 symbol 级净敞口和同向敞口，不是 deployment 生命周期
+- 分片锁应覆盖“检查 + 预留”这一个原子段，OMS IO 不应持锁
+- 并发测试要卡住第一个 OMS，验证第二个信号能看到第一笔 reservation
+
+---
+
+## 四十五、CapitalAllocator OMS 前置接入经验（2026-05-20）
+
+### 45.1 踩坑记录：分配检查通过不等于敞口已经被占用
+
+**问题描述**：
+如果两个策略并发 tick，且第一个 OMS callback 尚未返回，第二个策略可能仍看到旧的 exposure，从而同时通过 `max_symbol_exposure` 检查。顺序测试会通过，但真实异步运行会穿透同向敞口限制。
+
+**解决方案**：
+- 在 `StrategyRunner` 中增加 allocation runtime exposure 账本
+- allocation 决策与 exposure 预留放入同一个 `asyncio.Lock` 临界区
+- OMS 返回 falsy 或抛异常时回滚预留，避免失败订单长期占用预算
+- 新增并发测试：第一个 OMS 卡住时，第二个同向策略必须被拒绝
+
+**经验**：
+- OMS 前置 gate 不能只做“检查”，还要有“预留”语义
+- 异步交易路径需要测试“未返回但已决策”的中间态
+- 进程内预留只能解决当前 runtime 并发，重启恢复仍要依赖持久化持仓/NAV 或对账
+
+### 45.2 设计模式：未配置 profile 时保持旧路径兼容
+
+**问题描述**：
+把 allocation gate 接入主链路时，如果默认强制分配，会让所有尚未配置 allocation profile 的策略突然无法下单，形成破坏性升级。
+
+**解决方案**：
+- `StrategyRunner` 每次 tick 按 `deployment_id` 热读取 profile
+- 没有 profile 且没有显式注入 allocator 时直接沿用旧行为
+- 存在 profile 时才执行 `enabled/min_confidence/max_notional/max_symbol_exposure/allow_short` 检查
+
+**经验**：
+- 控制面配置类 gate 应支持增量启用，而不是一次性改变所有策略行为
+- 热配置要在主链路里读真实服务，不要在 runner 启动时缓存 profile
+- 审计 trace 应覆盖 approved/clipped/rejected，方便前端解释“为什么没下单”
+
+---
+
+## 四十四、Strategy Lab 风控回测集成修复经验（2026-05-20）
+
+### 44.1 踩坑记录：Debug 前后端契约不一致导致运行时错误
+
+**问题描述**：
+前端把 `/debug` 响应当成 `StrategyCandidateDebugResponse` 使用，读取 `result.ok/errors/signals`，但后端返回的是 `StrategyCandidate`。结果是 debug 成功后 `result.ok` 为 `undefined`，前端进入失败分支并调用 `result.errors.join(...)`，会抛运行时错误。
+
+**解决方案**：
+- 新增 `StrategyCandidateDebugResponse` 模型，包含 `ok/syntax_ok/protocol_ok/signals/errors/warnings/candidate`
+- 后端 `/debug` 返回新模型，前端按新契约处理
+- `candidate` 字段嵌套更新后的候选策略实体，前端可同步刷新状态
+
+**经验**：
+- 前后端契约变更必须双向同步，不能假设"前端会适配"
+- 响应模型应包含足够信息让前端一次请求完成状态更新
+- 契约变更后必须补 contract test，验证字段存在性和类型
+
+### 44.2 踩坑记录：MockRiskEngine 永远 passed=true 绕过真实风控
+
+**问题描述**：
+`event_replay` 分支内联了 `_MockRiskEngine`，`check_pre_trade()` 永远 `passed=True`。这绕过了项目真实风控体系，和"EventDrivenRiskReplay 作为最终门禁"的目标相反。
+
+**解决方案**：
+- 删除 `_MockRiskEngine`，统一使用真实 `RiskEngine`
+- 回测场景注入 `FakeBroker`（零延迟、模拟余额），避免网络依赖
+- `RiskConfig` 参数必须与生产一致，不能随意编造字段名
+
+**经验**：
+- "测试友好"不等于"绕过核心逻辑"，Mock 只能隔离外部 IO，不能简化内部规则
+- `FakeBroker` 是测试基础设施，`_MockRiskEngine` 是逻辑漏洞
+- 配置类字段名变更必须通过 type checker，dataclass 不接受未知参数会直接抛异常
+
+### 44.3 踩坑记录：前端 UI 字段未提交到 API
+
+**问题描述**：
+前端有 `risk_mode` 下拉选择，但提交回测时 dataset 里没有带该字段；后端 `BacktestDatasetSpec` 也没有 `risk_mode`，导致用户选择不生效。
+
+**解决方案**：
+- 前端 `Backtests.tsx` 在 dataset 中显式包含 `risk_mode: labForm.risk_mode`
+- 后端 `BacktestDatasetSpec` 新增 `risk_mode: BacktestRiskMode = "risk_adjusted"`
+- 路由创建 `BacktestRequest` 时透传 `risk_mode=dataset.risk_mode`
+
+**经验**：
+- 前端表单字段 -> API DTO -> Service Request 的透传链路必须显式验证
+- 默认值不能掩盖"前端选了但后端没收到"的问题
+- 端到端测试应验证"用户选择 X，最终执行的是 X"
+
+### 44.4 设计模式：Debug 失败保持 DRAFT 支持迭代开发
+
+**问题描述**：
+Debug 失败直接写 `status=REJECTED`，而状态机中 `REJECTED` 没有任何后续转移。用户一次语法错误后不能继续修复同一个候选。
+
+**解决方案**：
+- Debug 失败只更新 `debug_errors/debug_warnings`，状态保持 `DRAFT`
+- 前端显示错误后用户可修改代码重新 Debug
+- 只有门禁/人工/系统决策失败才进入 `REJECTED`
+
+**经验**：
+- 开发态和终态要分开：开发过程中的错误是"反馈"，不是"判决"
+- 状态机设计时要考虑"用户修复后重试"的路径
+- 终态（REJECTED/APPROVED）必须有明确的进入条件和退出限制
+
+---
+
 ## 四十三、Binance OHLCV 持续 Ingestion Worker 经验（2026-05-20）
 
 ### 43.1 踩坑记录：持续补数不能每轮从固定起点重拉
@@ -3742,6 +3876,68 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+---
+
+## 二十六、候选回测闭环与组合级 reservation 经验
+
+### 26.1 踩坑记录：不要把“回测完成”和“可部署”绑在同一个状态
+
+**场景**：
+候选策略使用 `dev_smoke + raw_only` 完成回测，但因为不能作为部署准入，后端没有标记 `BACKTEST_PASSED`，前端只能停留在 `BACKTEST_RUNNING`。
+
+**经验**：
+- `BACKTEST_PASSED` 应表达“回测执行成功并产生报告”，不是“已经满足部署条件”。
+- 是否可 promote 必须由 validation gate 判断；`dev_smoke`、`raw_only` 等证据应在 `failed_rules` 中拒绝。
+- 前端在异步任务状态下必须轮询候选详情，不能假设提交响应就是最终状态。
+
+### 26.2 设计模式：组合级预算使用 portfolio-wide 临界区
+
+**场景**：
+CapitalAllocator 的 same-symbol 限制可以按 symbol 串行，但 net exposure / total budget 是组合级约束。按 symbol 分片锁会让 BTC 与 ETH 两个信号同时读取旧组合投影，从而一起越过预算。
+
+**经验**：
+- 同一个运行进程内，组合级预算检查、in-flight reservation、commit/release 必须位于同一个 portfolio-wide 临界区。
+- 若后续需要更高吞吐，应引入原子组合账本、数据库 CAS 或 actor 化 allocator，而不是简单回退到 symbol lock。
+
+### 26.3 踩坑记录：前端图表 timestamp 不能使用序号占位
+
+**场景**：
+`event_replay` equity curve 使用数组下标作为 `timestamp`，前端日期轴会显示为 1970 年附近，且无法与真实行情时间对齐。
+
+**经验**：
+- 后端报告里的 `equity_curve.timestamp` 契约必须始终是 Unix 毫秒。
+- 回测路径中即使是事件回放，也要保留行情 bar 时间轴并贯穿到报告层。
+
+---
+
+## 二十六、Strategy Lab Promote-Paper 前端收口经验
+
+### 26.1 踩坑记录：后端原子接口完成后，前端仍可能保留旧路径
+
+**场景**：
+后端新增 `POST /v1/strategy-candidates/{candidate_id}/promote-paper`，旧 `/promote` 已返回 410，但 Strategy Lab 里仍调用旧 `promoteCandidate()` 并发送 deployment 配置请求体。
+
+**问题**：
+- 前端路径如果不收口，用户看到的“Promote to Paper”按钮语义会和后端运行态原子设计脱节
+- deployment_id、mode、account_id 若继续由前端传入，会削弱后端统一编排和回滚边界
+
+**经验**：
+- 后端替换关键工作流接口时，必须同步搜索前端 API 封装和页面按钮，而不是只改路由
+- 对这种“禁止回退旧路径”的约束，应补一个很小的 API 契约测试
+
+### 26.2 设计模式：前端只提交意图，运行态事实以后端响应为准
+
+**实现模式**：
+1. 前端调用 `promoteCandidateToPaper(candidate_id)`，不发送请求体
+2. 后端负责生成 `deployment_id`、创建 deployment、动态 load runtime、approve candidate
+3. 前端用 `PromotePaperResponse.deployment_id` 更新本地 candidate 状态
+4. FastAPI `detail.error_code/detail` 被统一转换为前端 `APIError`，用于展示明确失败原因
+
+**收益**：
+- UI 只表达用户意图，不复制后端编排细节
+- 失败时能展示 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT`
+- 后续阶段4仓位分配可以基于后端返回的真实 `deployment_id` 继续衔接
 
 ### 27. P9 跨市场抽象设计原则
 
