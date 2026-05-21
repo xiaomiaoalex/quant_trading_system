@@ -1,12 +1,13 @@
 """
 红测：覆盖 risk_adjusted 回测必须产生风险决策（approved/clipped/rejected）
 """
+
 from __future__ import annotations
 
 import asyncio
 
-from trader.services.deployment import BacktestService
 from trader.api.models.schemas import BacktestRequest
+from trader.services.deployment import BacktestService
 from trader.storage.in_memory import get_storage
 
 
@@ -68,11 +69,13 @@ def get_plugin():
 """
 
     # 注册策略代码
-    storage.create_strategy({
-        "strategy_id": "risk_decision_test",
-        "name": "Risk Decision Test",
-        "entrypoint": "dynamic:risk_decision_test",
-    })
+    storage.create_strategy(
+        {
+            "strategy_id": "risk_decision_test",
+            "name": "Risk Decision Test",
+            "entrypoint": "dynamic:risk_decision_test",
+        }
+    )
     storage.create_strategy_code(
         "risk_decision_test",
         {
@@ -117,7 +120,9 @@ def get_plugin():
     assert "approved_orders" in metrics, "risk_adjusted backtest must include approved_orders"
     assert "clipped_orders" in metrics, "risk_adjusted backtest must include clipped_orders"
     assert "rejected_orders" in metrics, "risk_adjusted backtest must include rejected_orders"
-    assert "rejection_reason_counts" in metrics, "risk_adjusted backtest must include rejection_reason_counts"
+    assert (
+        "rejection_reason_counts" in metrics
+    ), "risk_adjusted backtest must include rejection_reason_counts"
 
     # 由于使用了真实的 RiskEngine，应该有风控决策产生
     # 注意：FakeBroker 初始余额足够，所以可能全部通过，但字段必须存在
@@ -184,11 +189,13 @@ def get_plugin():
     return SignalStrategy()
 """
 
-    storage.create_strategy({
-        "strategy_id": "event_replay_test",
-        "name": "Event Replay Test",
-        "entrypoint": "dynamic:event_replay_test",
-    })
+    storage.create_strategy(
+        {
+            "strategy_id": "event_replay_test",
+            "name": "Event Replay Test",
+            "entrypoint": "dynamic:event_replay_test",
+        }
+    )
     storage.create_strategy_code(
         "event_replay_test",
         {

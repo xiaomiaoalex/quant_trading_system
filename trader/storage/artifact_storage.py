@@ -102,6 +102,7 @@ class ArtifactStorage:
     def save_tearsheet(self, run_id: str, html_path: str) -> str:
         """Copy a generated HTML tearsheet into artifact storage. Returns artifact_ref."""
         import shutil
+
         dest = self._get_tearsheet_path(run_id)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(html_path, dest)

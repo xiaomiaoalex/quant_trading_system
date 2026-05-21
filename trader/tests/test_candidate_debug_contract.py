@@ -1,6 +1,7 @@
 """
 红测：覆盖 /strategy-candidates/{id}/debug 响应契约和 debug 失败不进入 REJECTED
 """
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
@@ -139,4 +140,7 @@ def test_debug_failure_after_success_clears_code_version():
             },
         )
         assert backtest_resp.status_code == 409
-        assert "code_version" in backtest_resp.json()["detail"] or "debug" in backtest_resp.json()["detail"].lower()
+        assert (
+            "code_version" in backtest_resp.json()["detail"]
+            or "debug" in backtest_resp.json()["detail"].lower()
+        )

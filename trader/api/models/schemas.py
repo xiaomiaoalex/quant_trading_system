@@ -113,9 +113,6 @@ class StrategyCodeDebugResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
-
-
-
 class StrategyVersion(BaseModel):
     """策略版本"""
 
@@ -382,8 +379,12 @@ class BacktestRequest(BaseModel):
     slippage_bps: float = Field(default=5.0, ge=0.0)
     benchmark: Optional[str] = None
     data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
-    candidate_id: Optional[str] = Field(default=None, description="关联的 strategy candidate ID，用于自动状态流转")
-    risk_mode: BacktestRiskMode = Field(default="risk_adjusted", description="回测风控模式: raw_only | risk_adjusted | event_replay")
+    candidate_id: Optional[str] = Field(
+        default=None, description="关联的 strategy candidate ID，用于自动状态流转"
+    )
+    risk_mode: BacktestRiskMode = Field(
+        default="risk_adjusted", description="回测风控模式: raw_only | risk_adjusted | event_replay"
+    )
 
 
 class BacktestRun(BaseModel):

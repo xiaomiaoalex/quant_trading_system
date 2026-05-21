@@ -180,7 +180,10 @@ async def get_backtest_tearsheet(run_id: str = Path(..., description="Backtest r
         if backtest.status == "COMPLETED":
             return JSONResponse(
                 status_code=202,
-                content={"message": "Tearsheet not yet generated. Retry in a few seconds.", "run_id": run_id},
+                content={
+                    "message": "Tearsheet not yet generated. Retry in a few seconds.",
+                    "run_id": run_id,
+                },
             )
         raise HTTPException(
             status_code=404,

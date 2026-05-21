@@ -8,7 +8,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
-from trader.api.models.schemas import ActionResult, Deployment, DeploymentCreateRequest, NAVPointSchema
+from trader.api.models.schemas import (
+    ActionResult,
+    Deployment,
+    DeploymentCreateRequest,
+    NAVPointSchema,
+)
 from trader.services import DeploymentService
 
 router = APIRouter(tags=["Deployments"])
@@ -80,7 +85,9 @@ async def stop_deployment(deployment_id: str = Path(..., description="Deployment
 @router.get("/v1/deployments/{deployment_id}/nav", response_model=List[NAVPointSchema])
 async def get_deployment_nav(
     deployment_id: str = Path(..., description="Deployment ID"),
-    since_ms: Optional[int] = Query(None, description="Filter points with timestamp_ms >= since_ms"),
+    since_ms: Optional[int] = Query(
+        None, description="Filter points with timestamp_ms >= since_ms"
+    ),
     limit: int = Query(500, ge=1, le=5000, description="Maximum number of points to return"),
 ):
     """

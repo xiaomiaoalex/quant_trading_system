@@ -35,7 +35,11 @@ def generate_tearsheet(
         Absolute path to the generated HTML file, or None if generation failed.
     """
     if not equity_curve or len(equity_curve) < 10:
-        logger.info("Skipping tearsheet for run %s: equity_curve too short (%d points)", run_id, len(equity_curve or []))
+        logger.info(
+            "Skipping tearsheet for run %s: equity_curve too short (%d points)",
+            run_id,
+            len(equity_curve or []),
+        )
         return None
 
     try:

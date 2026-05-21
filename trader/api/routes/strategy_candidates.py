@@ -60,7 +60,9 @@ async def delete_candidate(candidate_id: str = Path(...)):
     )
 
 
-@router.post("/v1/strategy-candidates/{candidate_id}/debug", response_model=StrategyCandidateDebugResponse)
+@router.post(
+    "/v1/strategy-candidates/{candidate_id}/debug", response_model=StrategyCandidateDebugResponse
+)
 async def debug_candidate(
     request: StrategyCandidateDebugRequest,
     candidate_id: str = Path(...),
@@ -117,7 +119,9 @@ async def debug_candidate(
             register_if_missing=True,
         )
     )
-    updated_candidate = service.mark_debug_passed(candidate_id, code_version=code_entry.code_version)
+    updated_candidate = service.mark_debug_passed(
+        candidate_id, code_version=code_entry.code_version
+    )
     return StrategyCandidateDebugResponse(
         ok=True,
         syntax_ok=True,

@@ -1,6 +1,7 @@
 """
 Tests for QuantStats tearsheet generation (Stage 4B).
 """
+
 from __future__ import annotations
 
 import time
@@ -10,10 +11,10 @@ import pytest
 
 from trader.services.backtesting.quantstats_report import generate_tearsheet
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_equity_curve(n: int = 50, initial: float = 100_000.0) -> list[dict]:
     """Simple upward-sloping equity curve for testing."""
@@ -30,6 +31,7 @@ def _make_equity_curve(n: int = 50, initial: float = 100_000.0) -> list[dict]:
 # 1. Returns None when equity_curve too short
 # ---------------------------------------------------------------------------
 
+
 def test_generate_tearsheet_skips_short_curve():
     result = generate_tearsheet([], run_id="test-run-001")
     assert result is None
@@ -41,6 +43,7 @@ def test_generate_tearsheet_skips_short_curve():
 # ---------------------------------------------------------------------------
 # 2. Returns None gracefully when quantstats not installed
 # ---------------------------------------------------------------------------
+
 
 def test_generate_tearsheet_handles_missing_quantstats():
     curve = _make_equity_curve(20)
@@ -56,6 +59,7 @@ def test_generate_tearsheet_import_error_branch():
     curve = _make_equity_curve(20)
     # Simulate ImportError by patching quantstats inside the function module
     import trader.services.backtesting.quantstats_report as mod
+
     original = __builtins__  # noqa
 
     with patch.dict("sys.modules", {"quantstats": None}):
@@ -67,6 +71,7 @@ def test_generate_tearsheet_import_error_branch():
 # ---------------------------------------------------------------------------
 # 3. Returns HTML path when quantstats available and curve is long enough
 # ---------------------------------------------------------------------------
+
 
 def test_generate_tearsheet_returns_path_when_successful(tmp_path):
     curve = _make_equity_curve(60)
@@ -108,6 +113,7 @@ def test_generate_tearsheet_default_path_uses_tempdir(tmp_path):
 # 4. ArtifactStorage tearsheet methods
 # ---------------------------------------------------------------------------
 
+
 def test_artifact_storage_tearsheet_roundtrip(tmp_path):
     """save_tearsheet copies file; get_tearsheet_path returns it."""
     from trader.storage.artifact_storage import ArtifactStorage
@@ -136,6 +142,7 @@ def test_artifact_storage_tearsheet_missing_returns_none(tmp_path):
 # ---------------------------------------------------------------------------
 # 5. BacktestReport schema accepts tearsheet_ref field
 # ---------------------------------------------------------------------------
+
 
 def test_backtest_report_schema_has_tearsheet_ref():
     from trader.api.models.schemas import BacktestReport

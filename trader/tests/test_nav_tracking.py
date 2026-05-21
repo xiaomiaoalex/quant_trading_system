@@ -14,10 +14,10 @@ import pytest
 from trader.core.domain.models.nav import NAVPoint
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_storage() -> ControlPlaneInMemoryStorage:
     return ControlPlaneInMemoryStorage()
@@ -40,6 +40,7 @@ def _make_nav_point(deployment_id: str = "dep-1", ts: int = 1000) -> dict:
 # 1. append_nav_point 写入可读取
 # ---------------------------------------------------------------------------
 
+
 def test_append_nav_point_readable():
     storage = _make_storage()
     nav = _make_nav_point()
@@ -52,6 +53,7 @@ def test_append_nav_point_readable():
 # ---------------------------------------------------------------------------
 # 2. get_nav_series since_ms 过滤
 # ---------------------------------------------------------------------------
+
 
 def test_get_nav_series_since_ms_filter():
     storage = _make_storage()
@@ -68,6 +70,7 @@ def test_get_nav_series_since_ms_filter():
 # 3. 滚动窗口截断（1001 条 → 1000）
 # ---------------------------------------------------------------------------
 
+
 def test_append_nav_point_rolling_window():
     storage = _make_storage()
     for i in range(1001):
@@ -82,6 +85,7 @@ def test_append_nav_point_rolling_window():
 # ---------------------------------------------------------------------------
 # 4. 无 positions 时 equity = 100_000
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_record_nav_snapshot_no_positions_equity():
@@ -108,6 +112,7 @@ async def test_record_nav_snapshot_no_positions_equity():
 # ---------------------------------------------------------------------------
 # 5. 有 realized_pnl 时 equity 正确
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_record_nav_snapshot_with_pnl():
@@ -145,6 +150,7 @@ async def test_record_nav_snapshot_with_pnl():
 # 6. PG 写入失败不抛异常
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_record_nav_snapshot_pg_failure_silent():
     storage = _make_storage()
@@ -171,6 +177,7 @@ async def test_record_nav_snapshot_pg_failure_silent():
 # ---------------------------------------------------------------------------
 # 7. SSE broadcast 触发
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_record_nav_snapshot_sse_broadcast():
@@ -199,6 +206,7 @@ async def test_record_nav_snapshot_sse_broadcast():
 # ---------------------------------------------------------------------------
 # 8. NAVPointSchema 字段校验
 # ---------------------------------------------------------------------------
+
 
 def test_nav_point_schema_fields():
     from trader.api.models.schemas import NAVPointSchema
@@ -230,6 +238,7 @@ def test_nav_point_schema_rejects_missing_fields():
 # 9. GET /v1/deployments/{id}/nav 返回内存数据
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_deployment_nav_endpoint_returns_memory_data():
     from httpx import ASGITransport, AsyncClient
@@ -254,6 +263,7 @@ async def test_get_deployment_nav_endpoint_returns_memory_data():
 # 10. GET /v1/deployments/{id}/nav?since_ms=X 过滤
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_deployment_nav_endpoint_since_ms_filter():
     from httpx import ASGITransport, AsyncClient
@@ -277,6 +287,7 @@ async def test_get_deployment_nav_endpoint_since_ms_filter():
 # ---------------------------------------------------------------------------
 # 11. GET /v1/deployments/{id}/nav 内存为空时降级查 PG
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_deployment_nav_fallback_to_pg():
@@ -308,6 +319,7 @@ async def test_get_deployment_nav_fallback_to_pg():
 # 12. GET /v1/deployments/{id}/nav limit 截断
 # ---------------------------------------------------------------------------
 
+
 def test_get_nav_series_limit_truncation():
     storage = _make_storage()
     for ts in [1000, 2000, 3000, 4000, 5000]:
@@ -327,6 +339,7 @@ def test_get_nav_series_limit_truncation():
 # ---------------------------------------------------------------------------
 # 13. SSE broadcast 单频道（eff_deployment_id == strategy_id 时只广播一次）
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_record_nav_snapshot_single_broadcast_when_ids_match():

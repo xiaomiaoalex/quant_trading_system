@@ -147,7 +147,9 @@ class StrategyCandidateService:
         candidate = self._require_candidate(candidate_id)
         return self._transition(candidate, "BACKTEST_PASSED", "backtest_passed")
 
-    def mark_backtest_failed(self, candidate_id: str, reason: str = "backtest_failed") -> StrategyCandidate:
+    def mark_backtest_failed(
+        self, candidate_id: str, reason: str = "backtest_failed"
+    ) -> StrategyCandidate:
         candidate = self._require_candidate(candidate_id)
         return self._transition(
             candidate,
@@ -191,7 +193,8 @@ class StrategyCandidateService:
 
                 # max_drawdown：优先使用风控后指标
                 max_drawdown_pct = float(
-                    risk_adjusted_metrics.get("max_drawdown", metrics.get("max_drawdown_pct", 0.0)) or 0.0
+                    risk_adjusted_metrics.get("max_drawdown", metrics.get("max_drawdown_pct", 0.0))
+                    or 0.0
                 )
                 if max_drawdown_pct > 25.0:
                     failed_rules.append("max_drawdown_exceeded")
@@ -206,7 +209,8 @@ class StrategyCandidateService:
 
                 # total_return：优先使用风控后指标
                 total_return = float(
-                    risk_adjusted_metrics.get("total_return", metrics.get("total_return", 0.0)) or 0.0
+                    risk_adjusted_metrics.get("total_return", metrics.get("total_return", 0.0))
+                    or 0.0
                 )
                 if total_return <= 0:
                     failed_rules.append("cost_stress_non_positive")
@@ -279,6 +283,7 @@ class StrategyCandidateService:
         if lock.locked():
             # 并发第二个请求，快速 409
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=409,
                 detail=PromotePaperError(
@@ -297,7 +302,9 @@ class StrategyCandidateService:
         # 1. 取 candidate，不存在 -> 404
         candidate_dict = self._storage.get_strategy_candidate(candidate_id)
         if candidate_dict is None:
-            raise HTTPException(status_code=404, detail=f"StrategyCandidate {candidate_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"StrategyCandidate {candidate_id} not found"
+            )
 
         current_status = str(candidate_dict.get("status", "DRAFT"))
         candidate = StrategyCandidate(**candidate_dict)
@@ -332,9 +339,7 @@ class StrategyCandidateService:
         self._append_promote_event(candidate_dict, "PROMOTE_STARTED", "promote_started")
 
         # 4. 构建 deployment_id
-        deployment_id = (
-            f"{candidate.strategy_id}__promote__{candidate_id[:8]}__paper"
-        )
+        deployment_id = f"{candidate.strategy_id}__promote__{candidate_id[:8]}__paper"
 
         # 5+6. load -> approve -> audit 在同一补偿作用域内
         # 任何一步失败都触发 _rollback_promote，确保 runtime + deployment 始终干净
@@ -385,14 +390,16 @@ class StrategyCandidateService:
             promoted_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    async def _load_strategy_runtime(
-        self, candidate: StrategyCandidate, deployment_id: str
-    ) -> str:
+    async def _load_strategy_runtime(self, candidate: StrategyCandidate, deployment_id: str) -> str:
         """先在持久化层创建 deployment 记录，再动态加载到 StrategyRunner。
 
         必须先持久化再加载：回滚时需要确认 deployment 是否存在以决定是否清理。
         """
-        from trader.api.routes.strategies import LoadStrategyRequest, get_strategy_runner, load_strategy
+        from trader.api.routes.strategies import (
+            LoadStrategyRequest,
+            get_strategy_runner,
+            load_strategy,
+        )
 
         symbols = list(
             candidate.config.get("symbols")
@@ -445,6 +452,7 @@ class StrategyCandidateService:
         unload 失败不中断后续步骤，但必须记录 warning 和 audit 事件。
         """
         import logging
+
         from trader.api.routes.strategies import get_strategy_runner
 
         logger = logging.getLogger(__name__)

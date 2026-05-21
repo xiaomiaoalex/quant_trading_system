@@ -266,7 +266,9 @@ def test_mark_backtest_failed_transitions_to_rejected():
         result = service.mark_backtest_failed(candidate_id, reason="simulated_failure")
         assert result.status == "REJECTED"
         events = result.events
-        assert any(e["to_status"] == "REJECTED" and e["reason"] == "simulated_failure" for e in events)
+        assert any(
+            e["to_status"] == "REJECTED" and e["reason"] == "simulated_failure" for e in events
+        )
 
 
 def test_validate_from_draft_is_illegal_transition():
@@ -457,7 +459,7 @@ def test_validate_blocks_raw_only_backtest():
 def test_backtest_completion_auto_promotes_candidate():
     storage = get_storage()
     with TestClient(app) as client:
-        code = '''
+        code = """
 from typing import Optional
 from trader.core.application.strategy_protocol import (
     MarketData, StrategyResourceLimits, ValidationResult, RiskLevel
@@ -497,7 +499,7 @@ class MinimalStrategy:
 
 def get_plugin():
     return MinimalStrategy()
-'''
+"""
         created = client.post(
             "/v1/strategy-candidates",
             json={
@@ -534,8 +536,8 @@ def get_plugin():
             {"status": "BACKTEST_RUNNING", "backtest_run_id": backtest_run_id},
         )
 
-        from trader.services.deployment import BacktestService
         from trader.api.models.schemas import BacktestRequest
+        from trader.services.deployment import BacktestService
 
         service = BacktestService()
         request = BacktestRequest(
@@ -553,6 +555,7 @@ def get_plugin():
         backtest = service.create_backtest(request)
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         task = loop.create_task(service._run_backtest(backtest.run_id, request))
