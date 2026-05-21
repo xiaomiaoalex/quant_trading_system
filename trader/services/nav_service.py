@@ -39,15 +39,21 @@ async def record_nav_snapshot(
 
         positions = storage.list_positions(strategy_id=strategy_id)
 
-        unrealized_pnl = sum(float(p.get("unrealized_pnl") or 0) for p in positions)
         realized_pnl = sum(float(p.get("realized_pnl") or 0) for p in positions)
-        total_pnl = unrealized_pnl + realized_pnl
 
-        # 市值 = Σ qty × mark_price（mark_price 缺失时为 0）
-        market_value = sum(
-            float(p.get("qty") or 0) * float(p.get("mark_price") or 0)
-            for p in positions
-        )
+        # 基于实时 mark_price 与持仓成本重新计算 unrealized_pnl，
+        # 确保 equity = cash + market_value 自洽
+        market_value = 0.0
+        total_cost = 0.0
+        for p in positions:
+            qty = float(p.get("qty") or 0)
+            mark_price = float(p.get("mark_price") or 0)
+            avg_cost = float(p.get("avg_cost") or 0)
+            market_value += qty * mark_price
+            total_cost += qty * avg_cost
+
+        unrealized_pnl = market_value - total_cost
+        total_pnl = realized_pnl + unrealized_pnl
         equity = _DEFAULT_INITIAL_CAPITAL + total_pnl
         cash = equity - market_value
 

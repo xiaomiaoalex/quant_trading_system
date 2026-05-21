@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -22,14 +23,20 @@ logger = logging.getLogger(__name__)
 _pg_storage: Optional[Any] = None
 _pg_init_lock: Optional[asyncio.Lock] = None
 _pg_available: Optional[bool] = None  # None=未知, True=可用, False=不可用
+_pg_last_failure_ts: float = 0.0
+_PG_RETRY_INTERVAL: float = 60.0  # 失败后 60 秒允许重试
 
 
 async def _ensure_pg() -> Optional[Any]:
-    """懒初始化 PostgreSQL 连接，失败后标记不可用跳过后续尝试。"""
-    global _pg_storage, _pg_init_lock, _pg_available
+    """懒初始化 PostgreSQL 连接，失败后按退避间隔重试。"""
+    global _pg_storage, _pg_init_lock, _pg_available, _pg_last_failure_ts
 
     if _pg_available is False:
-        return None
+        if time.monotonic() - _pg_last_failure_ts < _PG_RETRY_INTERVAL:
+            return None
+        # 超过退避间隔，允许重试
+        _pg_available = None
+
     if _pg_storage is not None and _pg_available is True:
         return _pg_storage
 
@@ -38,7 +45,10 @@ async def _ensure_pg() -> Optional[Any]:
 
     async with _pg_init_lock:
         if _pg_available is False:
-            return None
+            if time.monotonic() - _pg_last_failure_ts < _PG_RETRY_INTERVAL:
+                return None
+            _pg_available = None
+
         if _pg_storage is not None and _pg_available is True:
             return _pg_storage
         try:
@@ -52,6 +62,7 @@ async def _ensure_pg() -> Optional[Any]:
             return storage
         except Exception as exc:
             _pg_available = False
+            _pg_last_failure_ts = time.monotonic()
             logger.info("NAV store: PostgreSQL not available (%s), using memory only", exc)
             return None
 

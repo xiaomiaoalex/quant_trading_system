@@ -31,8 +31,9 @@ export function LiveNAVChart({ deploymentId, strategyId, height = 100 }: LiveNAV
     (eventType: string, raw: unknown) => {
       if (eventType !== 'nav_update') return
       const payload = raw as NavUpdatePayload
-      // 按 deployment_id 过滤：同一 strategy_id 可能有多个 deployment
-      if (!payload?.nav_point || payload.deployment_id !== deploymentId) return
+      // 兼容后端 fallback：deployment_id 不匹配时检查 strategy_id
+      if (!payload?.nav_point) return
+      if (payload.deployment_id !== deploymentId && payload.strategy_id !== strategyId) return
       const p = payload.nav_point
       setLivePoints((prev) => [
         ...prev,
