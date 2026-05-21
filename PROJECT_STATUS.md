@@ -4,9 +4,94 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-20 20:15 (北京时间)
+2026-05-21 22:07 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Stage 4/5 审查问题修复
+- 完成时间: 2026-05-21 22:07 (北京时间)
+- 状态: 已完成
+- 目标: 修复审查发现的候选回测闭环、部署准入语义、allocation 并发保护和 event_replay 时间轴问题。
+- 开发后状态:
+  - 候选回测成功后统一推进到 `BACKTEST_PASSED`，`dev_smoke/raw_only` 的不可部署限制移至 validation 阶段拒绝。
+  - `Backtests.tsx` 在 `BACKTEST_RUNNING` 期间轮询 `GET /v1/strategy-candidates/{candidate_id}`，后端异步完成后自动启用 Validate。
+  - `event_replay` equity curve 使用行情 bar 的 Unix 毫秒时间戳，不再用数组序号作为 timestamp。
+  - CapitalAllocator reservation 锁改为 portfolio-wide，覆盖跨 symbol 的组合预算和净敞口投影。
+- Issue 状态迁移:
+  - `BACKTEST_RUNNING` 异步完成后前端不刷新：`待确认` → `已验证`
+  - 成功但不可部署回测卡死在运行态：`待确认` → `已验证`
+  - allocation symbol 分片锁穿透组合级预算：`待确认` → `已验证`
+  - event_replay equity curve timestamp 非 Unix ms：`待确认` → `已验证`
+- 验证结果:
+  - `python -m py_compile trader/services/deployment.py trader/services/strategy_runner.py` → passed
+  - `python -m pytest -q trader/tests/test_candidate_backtest_risk_mode.py trader/tests/test_strategy_candidate_workflow.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` → 24 passed
+  - `npm run test -- tests/api/research.test.ts` → 2 passed
+  - `npm run typecheck`（Frontend）→ passed
+  - P0 回归集 → 99 passed
+  - `git diff --check` → passed（仅 CRLF/LF 工作区提示）
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：Stage 5 CapitalAllocator 审查返工
+- 完成时间: 2026-05-21 11:35 (北京时间)
+- 状态: 已完成
+- 目标: 响应 Stage 5 code review，补齐 allocator/management/runner 测试缺口，并修正 exposure reservation 与 `current_notional` 语义。
+- 开发后状态:
+  - 新增 `trader/tests/test_capital_allocator.py`，覆盖 `CapitalAllocator.allocate()` 的 confidence、min size、NaN/Inf、state 非有限值、net exposure、total budget、same-direction budget、opposing offset 和 config validation 分支。
+  - 新增 `trader/tests/test_allocation_management.py`，覆盖 profile 读写、runtime notional 更新/释放 clamp、missing profile no-op、trace append 两条路径。
+  - `StrategyRunner` OMS 前只写 in-flight reservation，不提前增加 storage `current_notional`；OMS 成功后才提交 committed exposure 并更新 `current_notional`。
+  - OMS 返回 falsy 或抛异常时只释放 in-flight reservation，不减少已有 committed notional。
+  - allocation 锁后续审查修正为 portfolio-wide，覆盖跨 symbol 组合预算和净敞口投影。
+  - `_allocation_state_for()` 明确 `max_notional` 为 per-deployment committed notional budget，symbol exposure 用当前 symbol 的 committed + in-flight projection。
+  - 修复 `test_crypto_risk_runtime_manager.py` 的时间窗口漂移：该测试现在固定 `TimeWindowPolicy.evaluate_now()` 为 PRIME，避免当前 UTC 处于 RESTRICTED 时先命中 `TRADING_HOURS`。
+- Issue 状态迁移:
+  - CapitalAllocator 零单元测试覆盖：`待确认` → `已验证`
+  - OMS 前 reservation 提前污染 `current_notional`：`待确认` → `已验证`
+  - total_exposure_budget 语义不清：`待确认` → `已验证`
+  - allocation 并发保护粒度：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py --tb=short` → 22 passed
+  - `python -m pytest -q trader/tests/test_capital_allocator_oms_integration.py --tb=short` → 7 passed
+  - `python -m pytest -q trader/tests/test_strategy_runner.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_api_strategy_runner_endpoints.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` → 80 passed
+  - `python -m py_compile trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py` → passed
+  - `python -m black --check trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --line-length 100` → passed
+  - `python -m isort --check-only trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --profile black` → passed
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → passed
+  - `python -m pytest -q trader/tests/test_promote_paper_workflow.py trader/tests/test_strategy_candidate_workflow.py --tb=short` → 30 passed
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py::test_runtime_pre_trade_rejection_writes_market_audit_event --tb=short` → passed
+  - `python -m pytest -q trader/tests/ --tb=short` → passed
+- 注意事项:
+  - committed symbol-side exposure 仍是当前 `StrategyRunner` 进程内 projection；进程重启后的真实 symbol-side 重建仍应在 Stage 6 NAV/持仓持久化或后续 execution/order projection 中补齐。
+  - 下一入口仍是 Stage 6 实时 NAV 追踪 + PostgreSQL `nav_points` 持久化。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：Stage 5 CapitalAllocator OMS 前置接入
+- 完成时间: 2026-05-20 20:16 (北京时间)
+- 状态: 已完成
+- 目标: 将既有 `CapitalAllocator` 接入 `StrategyRunner -> OMS` 主链路，在策略信号进入 OMS 前完成组合仓位分配、裁剪、拒绝和审计。
+- 开发后状态:
+  - `StrategyRunner.__init__` 支持注入 `capital_allocator` 与 `allocation_management`，未配置 allocation profile 时保持旧执行路径兼容。
+  - `StrategyRunner.tick()` 在 RiskMode/resource gate 之后、OMS callback 之前执行 allocation gate。
+  - `StrategyAllocationProfile` 按 `deployment_id` 每次 tick 热读取，`upsert_profile()` 对 `enabled/max_notional/max_symbol_exposure/min_confidence/allow_short` 的变更下一次信号立即生效。
+  - `CLIPPED` 决策会修改 `Signal.quantity` 后再进入 OMS；`REJECTED` 决策不会调用 OMS。
+  - approved/clipped 信号在 OMS 前通过 `asyncio.Lock` 保护的运行时 exposure 账本预留名义金额；OMS 返回 falsy 或抛异常时回滚预留。
+  - approved/clipped/rejected 均写入 `AllocationTrace`，前端 allocation trace 可展示仓位分配决策历史。
+- Issue 状态迁移:
+  - CapitalAllocator 已实现但未接 OMS 主链路：`待确认` → `已验证`
+- 验证结果:
+  - `python -m py_compile trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py` → passed
+  - `python -m pytest -q trader/tests/test_capital_allocator_oms_integration.py --tb=short` → 5 passed
+  - `python -m pytest -q trader/tests/test_strategy_runner.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_api_strategy_runner_endpoints.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` → 56 passed
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` → passed
+  - `python -m pytest -q trader/tests/test_promote_paper_workflow.py trader/tests/test_strategy_candidate_workflow.py --tb=short` → 30 passed
+  - `python -m pytest -q trader/tests/ --tb=short` → passed
+  - `python -m black --check trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --line-length 100` → passed
+  - `python -m isort --check-only trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --profile black` → passed
+  - `git diff --check` → passed
+- 注意事项:
+  - 本阶段使用进程内 runtime exposure 账本，适合当前 paper/demo runtime；跨进程/重启恢复后的真实 exposure 对账应在 Stage 6 NAV/持仓持久化或后续 PG runtime state 中补齐。
+  - 全量测试仍有仓库既有 warnings：Pydantic v2 `class Config` 弃用、QuantStats 零收益样本统计警告、onchain AsyncMock 未 await warning。
+  - 下一入口: Stage 6 实时 NAV 追踪 + PostgreSQL `nav_points` 持久化。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：阶段3 Strategy Lab Promote to Paper 前端收口
 - 完成时间: 2026-05-20 20:15 (北京时间)
@@ -55,7 +140,7 @@
   - `npm run typecheck`（Frontend）-> passed
 - 注意事项:
   - 当前 `event_replay` 使用 `FakeBroker` + `RiskEngine`，风控规则与实盘一致但 broker 为模拟
-  - `dev_smoke` + `raw_only` 不会自动晋级 `BACKTEST_PASSED`，只有 `real_feature_store` + `risk_adjusted/event_replay` 才会
+  - 该条历史记录中的准入语义已在 2026-05-21 修正：`dev_smoke` + `raw_only` 可完成回测并进入 `BACKTEST_PASSED`，但 validation 必须拒绝其部署准入
   - 后续应补 `real_feature_store` + `event_replay` 的端到端集成测试
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`
 

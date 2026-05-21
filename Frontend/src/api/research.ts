@@ -59,6 +59,10 @@ export class ResearchAPI extends APIClient {
     return this.get<StrategyCandidate[]>('/v1/strategy-candidates')
   }
 
+  async getCandidate(candidateId: string): Promise<StrategyCandidate> {
+    return this.get<StrategyCandidate>(`/v1/strategy-candidates/${candidateId}`)
+  }
+
   async createCandidate(request: StrategyCandidateCreateRequest): Promise<StrategyCandidate> {
     return this.post<StrategyCandidate>('/v1/strategy-candidates', request)
   }

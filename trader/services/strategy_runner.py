@@ -39,6 +39,14 @@ from trader.core.application.strategy_protocol import (
 )
 from trader.core.domain.models.risk_mode import RiskMode
 from trader.core.domain.models.signal import Signal, SignalType
+from trader.services.allocation_management import AllocationManagementService
+from trader.services.capital_allocator import (
+    AllocationDecision,
+    CapitalAllocator,
+    CapitalAllocatorConfig,
+    SimplePortfolioState,
+    StrategyAllocationRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +158,8 @@ class StrategyRunner:
         event_callback: Optional[Callable[[str, str, Dict[str, Any]], Any]] = None,
         max_errors_before_error_state: int = 10,
         runtime_state_storage: Optional[Any] = None,
+        capital_allocator: Optional[CapitalAllocator] = None,
+        allocation_management: Optional[AllocationManagementService] = None,
     ):
         """
         初始化策略执行器
@@ -161,6 +171,8 @@ class StrategyRunner:
             event_callback: 事件发布回调，接收 (strategy_id, event_type, payload)
             max_errors_before_error_state: 错误次数阈值，超过此值策略进入ERROR状态
             runtime_state_storage: Task 18 - 运行时状态持久化存储（必须实现 save_strategy_runtime_state, get_strategy_runtime_state, list_running_strategy_states 方法）
+            capital_allocator: 可选组合分配器；未传入时按 AllocationManagementService 中的 profile 动态构造
+            allocation_management: allocation profile/trace 服务；默认使用全局控制面存储
         """
         self._plugins: Dict[str, StrategyPlugin] = {}
         self._dynamic_modules: Dict[str, types.ModuleType] = {}
@@ -174,6 +186,11 @@ class StrategyRunner:
         self._running = True
         # Task 18: 运行时状态持久化存储
         self._runtime_state_storage = runtime_state_storage
+        self._capital_allocator = capital_allocator
+        self._allocation_management = allocation_management or AllocationManagementService()
+        self._allocation_committed_exposures: Dict[str, Dict[str, Dict[str, float]]] = {}
+        self._allocation_reservations: Dict[str, Dict[str, Dict[str, float]]] = {}
+        self._allocation_portfolio_lock = asyncio.Lock()
         # 策略级别的锁，用于保护并发更新
         self._strategy_locks: Dict[str, asyncio.Lock] = {}
         # 阶段2: RiskMode early gate 回调（可选）
@@ -186,6 +203,378 @@ class StrategyRunner:
             callback: 接收 strategy_id，返回当前 RiskMode
         """
         self._risk_mode_callback = callback
+
+    def _allocation_side_for_signal(self, signal: Signal) -> str | None:
+        if signal.signal_type in (SignalType.BUY, SignalType.LONG):
+            return "LONG"
+        if signal.signal_type == SignalType.SHORT:
+            return "SHORT"
+        return None
+
+    def _get_allocation_lock(self, symbol: str) -> asyncio.Lock:
+        del symbol
+        return self._allocation_portfolio_lock
+
+    def _symbol_side_exposure_from(
+        self,
+        exposures: Dict[str, Dict[str, Dict[str, float]]],
+        symbol: str,
+        side: str,
+    ) -> float:
+        total = 0.0
+        for deployment_exposure in exposures.values():
+            symbol_exposure = deployment_exposure.get(symbol, {})
+            total += float(symbol_exposure.get(side, 0.0))
+        return total
+
+    def _symbol_side_exposure(self, symbol: str, side: str) -> float:
+        return self._symbol_side_exposure_from(
+            self._allocation_committed_exposures, symbol, side
+        ) + self._symbol_side_exposure_from(self._allocation_reservations, symbol, side)
+
+    def _side_exposure_from(
+        self,
+        exposures: Dict[str, Dict[str, Dict[str, float]]],
+        side: str,
+    ) -> float:
+        total = 0.0
+        for deployment_exposure in exposures.values():
+            for symbol_exposure in deployment_exposure.values():
+                total += float(symbol_exposure.get(side, 0.0))
+        return total
+
+    def _side_exposure(self, side: str) -> float:
+        return self._side_exposure_from(
+            self._allocation_committed_exposures, side
+        ) + self._side_exposure_from(self._allocation_reservations, side)
+
+    def _deployment_reserved_exposure(self, deployment_id: str) -> float:
+        deployment_exposure = self._allocation_reservations.get(deployment_id, {})
+        return sum(
+            float(size)
+            for symbol_exposure in deployment_exposure.values()
+            for size in symbol_exposure.values()
+        )
+
+    def _allocation_state_for(
+        self,
+        *,
+        deployment_id: str,
+        symbol: str,
+        profile_current_notional: float | None,
+    ) -> SimplePortfolioState:
+        portfolio_long_exposure = self._side_exposure("LONG")
+        portfolio_short_exposure = self._side_exposure("SHORT")
+        symbol_long_exposure = self._symbol_side_exposure(symbol, "LONG")
+        symbol_short_exposure = self._symbol_side_exposure(symbol, "SHORT")
+        positions = {
+            symbol: {
+                "LONG": symbol_long_exposure,
+                "SHORT": symbol_short_exposure,
+            }
+        }
+        deployment_committed_notional = float(profile_current_notional or 0.0)
+        if profile_current_notional is not None:
+            total_exposure = deployment_committed_notional + self._deployment_reserved_exposure(
+                deployment_id
+            )
+        else:
+            total_exposure = portfolio_long_exposure + portfolio_short_exposure
+        return SimplePortfolioState(
+            net_exposure=portfolio_long_exposure - portfolio_short_exposure,
+            total_exposure=total_exposure,
+            long_exposure=symbol_long_exposure,
+            short_exposure=symbol_short_exposure,
+            positions=positions,
+        )
+
+    def _add_allocation_exposure(
+        self,
+        exposures: Dict[str, Dict[str, Dict[str, float]]],
+        *,
+        deployment_id: str,
+        symbol: str,
+        side: str,
+        notional: float,
+    ) -> None:
+        if notional <= 0:
+            return
+        deployment_exposure = exposures.setdefault(deployment_id, {})
+        symbol_exposure = deployment_exposure.setdefault(symbol, {"LONG": 0.0, "SHORT": 0.0})
+        symbol_exposure[side] = float(symbol_exposure.get(side, 0.0)) + float(notional)
+
+    def _subtract_allocation_exposure(
+        self,
+        exposures: Dict[str, Dict[str, Dict[str, float]]],
+        *,
+        deployment_id: str,
+        symbol: str,
+        side: str,
+        notional: float,
+    ) -> None:
+        if notional <= 0:
+            return
+        deployment_exposure = exposures.get(deployment_id)
+        if not deployment_exposure:
+            logger.warning(
+                "Allocation exposure release without deployment reservation: deployment=%s symbol=%s side=%s notional=%s",
+                deployment_id,
+                symbol,
+                side,
+                notional,
+            )
+            return
+        symbol_exposure = deployment_exposure.get(symbol)
+        if not symbol_exposure:
+            logger.warning(
+                "Allocation exposure release without symbol reservation: deployment=%s symbol=%s side=%s notional=%s",
+                deployment_id,
+                symbol,
+                side,
+                notional,
+            )
+            return
+        current = float(symbol_exposure.get(side, 0.0))
+        if current < float(notional):
+            logger.warning(
+                "Allocation exposure release exceeds reserved notional: deployment=%s symbol=%s side=%s reserved=%s release=%s",
+                deployment_id,
+                symbol,
+                side,
+                current,
+                notional,
+            )
+        symbol_exposure[side] = max(0.0, current - float(notional))
+
+    def _reserve_allocation_exposure(
+        self,
+        *,
+        deployment_id: str,
+        symbol: str,
+        side: str,
+        notional: float,
+    ) -> None:
+        self._add_allocation_exposure(
+            self._allocation_reservations,
+            deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            notional=notional,
+        )
+
+    def _commit_allocation_exposure(
+        self,
+        *,
+        deployment_id: str,
+        symbol: str,
+        side: str,
+        notional: float,
+    ) -> None:
+        self._subtract_allocation_exposure(
+            self._allocation_reservations,
+            deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            notional=notional,
+        )
+        self._add_allocation_exposure(
+            self._allocation_committed_exposures,
+            deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            notional=notional,
+        )
+        self._allocation_management.add_runtime_notional(deployment_id, float(notional))
+
+    def _release_allocation_reservation(
+        self,
+        *,
+        deployment_id: str,
+        symbol: str,
+        side: str,
+        notional: float,
+    ) -> None:
+        self._subtract_allocation_exposure(
+            self._allocation_reservations,
+            deployment_id=deployment_id,
+            symbol=symbol,
+            side=side,
+            notional=notional,
+        )
+
+    def _append_allocation_trace(
+        self,
+        *,
+        info: StrategyRuntimeInfo,
+        signal: Signal,
+        raw_requested_notional: float,
+        raw_qty: float,
+        allocated_qty: float,
+        decision: str,
+        reason: str | None,
+    ) -> None:
+        try:
+            self._allocation_management.append_trace_data(
+                info.deployment_id,
+                {
+                    "strategy_id": info.strategy_id,
+                    "symbol": signal.symbol,
+                    "raw_requested_size": raw_requested_notional,
+                    "risk_sized_qty": raw_qty,
+                    "allocated_qty": allocated_qty,
+                    "final_order_qty": allocated_qty,
+                    "allocation_decision": decision,
+                    "reject_or_clip_reason": reason,
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                "Allocation trace append failed: deployment=%s symbol=%s error=%s",
+                info.deployment_id,
+                signal.symbol,
+                exc,
+            )
+
+    def _apply_capital_allocation(
+        self,
+        *,
+        info: StrategyRuntimeInfo,
+        signal: Signal,
+    ) -> tuple[Signal | None, Dict[str, Any] | None]:
+        if self._oms_callback is None:
+            return signal, None
+        if not signal.is_open_signal():
+            return signal, None
+
+        profile = self._allocation_management.get_profile(info.deployment_id)
+        if profile is None and self._capital_allocator is None:
+            return signal, None
+
+        side = self._allocation_side_for_signal(signal)
+        if side is None:
+            return signal, None
+
+        try:
+            price = Decimal(str(signal.price))
+            raw_qty_decimal = Decimal(str(signal.quantity))
+            confidence = float(Decimal(str(signal.confidence)))
+        except Exception as exc:
+            info.blocked_reason = f"Allocation input invalid: {exc}"
+            return None, None
+
+        raw_requested_notional = float(abs(raw_qty_decimal * price))
+        raw_qty = float(raw_qty_decimal)
+
+        def reject(reason: str) -> tuple[None, None]:
+            info.blocked_reason = reason
+            self._append_allocation_trace(
+                info=info,
+                signal=signal,
+                raw_requested_notional=raw_requested_notional,
+                raw_qty=raw_qty,
+                allocated_qty=0.0,
+                decision=AllocationDecision.REJECTED.value,
+                reason=reason,
+            )
+            logger.warning(
+                "Signal rejected by CapitalAllocator: deployment=%s symbol=%s reason=%s",
+                info.deployment_id,
+                signal.symbol,
+                reason,
+            )
+            return None, None
+
+        if price <= 0 or raw_qty_decimal <= 0:
+            return reject("invalid price or quantity")
+
+        if profile is not None:
+            if profile.strategy_id and profile.strategy_id != info.strategy_id:
+                return reject(
+                    f"allocation profile strategy mismatch: {profile.strategy_id} != {info.strategy_id}"
+                )
+            if not profile.enabled:
+                return reject("allocation profile disabled")
+            if side == "SHORT" and not profile.allow_short:
+                return reject("short signals disabled by allocation profile")
+            allocator = CapitalAllocator(
+                CapitalAllocatorConfig(
+                    total_exposure_budget=float(profile.max_notional),
+                    net_exposure_limit=float(profile.max_symbol_exposure),
+                    same_direction_budget=float(profile.max_symbol_exposure),
+                    min_trade_size=0.0,
+                    confidence_threshold=float(profile.min_confidence),
+                    allow_opposing_offset=True,
+                    fail_closed=True,
+                )
+            )
+            profile_current_notional: float | None = float(profile.current_notional)
+        else:
+            allocator = self._capital_allocator
+            profile_current_notional = None
+
+        if allocator is None:
+            return signal, None
+
+        request = StrategyAllocationRequest(
+            strategy_id=info.strategy_id,
+            symbol=signal.symbol,
+            side=side,  # type: ignore[arg-type]
+            requested_size=raw_requested_notional,
+            signal_confidence=confidence,
+        )
+        allocation_result = allocator.allocate(
+            request,
+            self._allocation_state_for(
+                deployment_id=info.deployment_id,
+                symbol=signal.symbol,
+                profile_current_notional=profile_current_notional,
+            ),
+        )
+
+        if allocation_result.decision == AllocationDecision.REJECTED:
+            return reject(allocation_result.reason)
+
+        approved_notional = float(allocation_result.approved_size)
+        if approved_notional <= 0:
+            return reject("allocation approved size is zero")
+
+        final_qty = Decimal(str(approved_notional)) / price
+        if final_qty <= 0:
+            return reject("allocation final quantity is zero")
+
+        decision_value = allocation_result.decision.value
+        reason = (
+            allocation_result.reason
+            if allocation_result.decision == AllocationDecision.CLIPPED
+            else None
+        )
+        if allocation_result.decision == AllocationDecision.CLIPPED:
+            signal.quantity = final_qty
+
+        allocation_metadata = {
+            "decision": decision_value,
+            "raw_requested_notional": raw_requested_notional,
+            "allocated_notional": approved_notional,
+            "final_order_qty": float(final_qty),
+            "limiting_factor": allocation_result.limiting_factor,
+            "reason": allocation_result.reason,
+        }
+        signal.metadata["allocation"] = allocation_metadata
+        self._append_allocation_trace(
+            info=info,
+            signal=signal,
+            raw_requested_notional=raw_requested_notional,
+            raw_qty=raw_qty,
+            allocated_qty=float(final_qty),
+            decision=decision_value,
+            reason=reason,
+        )
+        return signal, {
+            "deployment_id": info.deployment_id,
+            "symbol": signal.symbol,
+            "side": side,
+            "notional": approved_notional,
+        }
 
     # 部署模式值（与策略的交易方向 mode 不冲突）
     _DEPLOYMENT_MODES = {"paper", "demo", "live", "shadow"}
@@ -843,6 +1232,8 @@ class StrategyRunner:
                     except Exception as e:
                         logger.error(f"RiskMode 检查失败: {e}")
 
+                order_rate_timestamp: float | None = None
+
                 # ==================== 资源限制检查 ====================
                 if limits:
                     current_time = time.time()
@@ -858,7 +1249,20 @@ class StrategyRunner:
                         signal = None
                     else:
                         if self._oms_callback:
-                            info.last_order_times.append(current_time)
+                            order_rate_timestamp = current_time
+
+                allocation_commit: Dict[str, Any] | None = None
+                allocation_reserved = False
+                if signal is not None:
+                    allocation_lock = self._get_allocation_lock(signal.symbol)
+                    async with allocation_lock:
+                        signal, allocation_commit = self._apply_capital_allocation(
+                            info=info,
+                            signal=signal,
+                        )
+                        if allocation_commit:
+                            self._reserve_allocation_exposure(**allocation_commit)
+                            allocation_reserved = True
 
                 # 信号通过资源限制后才计数和发布事件
                 if signal is not None:
@@ -890,7 +1294,17 @@ class StrategyRunner:
                 # ==================== OMS 执行 ====================
                 if signal is not None and self._oms_callback:
                     try:
+                        if order_rate_timestamp is not None:
+                            info.last_order_times.append(order_rate_timestamp)
                         order_result = await self._oms_callback(strategy_id, signal)
+                        if allocation_reserved and allocation_commit:
+                            allocation_lock = self._get_allocation_lock(signal.symbol)
+                            async with allocation_lock:
+                                if order_result:
+                                    self._commit_allocation_exposure(**allocation_commit)
+                                else:
+                                    self._release_allocation_reservation(**allocation_commit)
+                                allocation_reserved = False
                         # 发布订单提交事件
                         if self._event_callback and order_result:
                             # 只对有效信号类型发布事件
@@ -914,6 +1328,10 @@ class StrategyRunner:
                                 },
                             )
                     except Exception as e:
+                        if allocation_reserved and allocation_commit:
+                            allocation_lock = self._get_allocation_lock(signal.symbol)
+                            async with allocation_lock:
+                                self._release_allocation_reservation(**allocation_commit)
                         logger.error(f"OMS 执行失败: {strategy_id}, 错误: {e}")
                         signal = None
 

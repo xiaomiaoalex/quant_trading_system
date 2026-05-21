@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react'
+import { useMemo, useState, useCallback, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
 import { useBacktestList, useBacktestReport, useCreateBacktest, useLoadedStrategies } from '@/hooks'
 import { LoadingState, ErrorState } from '@/components/ui'
@@ -242,6 +242,37 @@ export function Backtests() {
     [labForm.symbols],
   )
 
+  useEffect(() => {
+    if (!candidate || candidate.status !== 'BACKTEST_RUNNING') return
+
+    let cancelled = false
+    const refreshCandidate = async () => {
+      try {
+        const latest = await researchAPI.getCandidate(candidate.candidate_id)
+        if (cancelled) return
+        setCandidate(latest)
+        if (latest.backtest_run_id) {
+          setSelectedRunId(latest.backtest_run_id)
+        }
+        if (latest.status !== 'BACKTEST_RUNNING') {
+          void refetch()
+          setLabMessage(`Backtest finished. Candidate status: ${latest.status}`)
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLabError(formatAPIError(e))
+        }
+      }
+    }
+
+    void refreshCandidate()
+    const intervalId = window.setInterval(refreshCandidate, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [candidate?.candidate_id, candidate?.status, refetch])
+
   const handleTemplateChange = useCallback((key: string) => {
     setTemplateKey(key)
     setStrategyCode(STRATEGY_TEMPLATES[key])
@@ -342,6 +373,9 @@ export function Backtests() {
         requested_by: labForm.requested_by,
       })
       setCandidate(result)
+      if (result.backtest_run_id) {
+        setSelectedRunId(result.backtest_run_id)
+      }
       setLabMessage(`Backtest submitted. Candidate status: ${result.status}`)
     } catch (e) {
       setLabError(formatAPIError(e))

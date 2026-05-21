@@ -217,7 +217,7 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 - `risk_adjusted`: 使用 VectorBTAdapterWithRisk 进行风控调整后回测
 - `event_replay`: 使用 EventDrivenRiskReplay 逐信号风控回放
 
-`dev_smoke` 只能用于开发烟测，不能作为 Promote/部署准入依据。`real_feature_store` + (`risk_adjusted` 或 `event_replay`) 是晋级 `BACKTEST_PASSED` 的必要条件。
+`dev_smoke` 只能用于开发烟测，不能作为 Promote/部署准入依据。候选回测执行成功后可晋级 `BACKTEST_PASSED`，但 `validate` 阶段必须基于 `BacktestGateResult.failed_rules` 拒绝 `dev_smoke`、`raw_only` 等不可部署证据；Promote 只允许 `VALIDATION_PASSED` 候选进入。
 
 `strategy_runner` 表示现有事件驱动策略运行器路径；`vectorbt` 表示快速向量化研究回测路径。`vectorbt` 必须通过 `DataProviderPort` 获取 OHLCV 数据；`dev_smoke` 模式可使用确定性内置数据源用于端到端烟测。
 
@@ -331,6 +331,20 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - `enabled`
 
 每次分配链路必须记录 `AllocationTrace`，包含 `raw_requested_size`、`risk_sized_qty`、`allocated_qty`、`final_order_qty`、`allocation_decision`、`reject_or_clip_reason`。
+
+`StrategyRunner` 的 OMS 前置分配契约：
+
+- 构造函数可注入 `capital_allocator: CapitalAllocator | None` 与 `allocation_management: AllocationManagementService | None`；未注入 `allocation_management` 时使用控制面默认存储。
+- 分配门禁执行顺序固定为：策略产生 `Signal` -> KillSwitch/RiskMode/资源限制 -> `CapitalAllocator` -> OMS callback。未配置 allocation profile 且未注入 allocator 时保持旧行为，不拦截信号。
+- 每个开仓信号都会按 `deployment_id` 热读取最新 `StrategyAllocationProfile`，因此 `upsert_profile()` 的 `enabled`、`max_notional`、`max_symbol_exposure`、`min_confidence`、`allow_short` 变更必须在下一次 tick 生效。
+- 信号方向映射：`BUY`/`LONG` -> allocator `LONG`，`SHORT` -> allocator `SHORT`；平仓类信号不进入 allocator。
+- `raw_requested_size` 表示原始请求名义金额 `abs(quantity * price)`；`risk_sized_qty` 表示进入 allocator 前的数量；`allocated_qty` 和 `final_order_qty` 表示 allocator 决策后的最终下单数量。
+- `allocation_decision=approved` 时按原数量进入 OMS；`clipped` 时必须先把 `Signal.quantity` 改为 `final_order_qty` 再调用 OMS；`rejected` 时不得调用 OMS。
+- `StrategyAllocationProfile.max_notional` 在 `StrategyRunner` 接入中是 **per-deployment committed notional budget**；它映射到 `CapitalAllocatorConfig.total_exposure_budget`，但不得解释为全组合总预算。组合级预算应通过单独 portfolio profile 或上层风险预算表达。
+- `StrategyAllocationProfile.current_notional` 只表示 OMS callback 成功后的 committed notional；OMS 前的 approved/clipped 信号只能写入进程内 in-flight reservation，不得提前增加 `current_notional`。
+- `CapitalAllocator` state 中 `total_exposure` = 当前 deployment 的 committed notional + in-flight reservation；`positions[symbol]` 和 same-direction exposure = 当前 symbol 的 committed exposure + in-flight reservation；无 symbol 的 net exposure 保留为当前 runtime 的全组合净敞口投影。
+- approved/clipped 的名义金额在调用 OMS 前通过 portfolio-wide `asyncio.Lock` 保护的运行时 reservation 账本预留；该锁必须覆盖跨 symbol 的 portfolio budget / net exposure 投影，避免并发信号穿透组合级限制。OMS 返回 truthy 后才提交为 committed exposure 并增加 `current_notional`，OMS 返回 falsy 或抛异常时只释放 reservation，不得修改 committed notional。
+- approved/clipped/rejected 均写入 `AllocationTrace`，其中 `reject_or_clip_reason` 只在 rejected/clipped 时必填；approved 可为 `None`。
 
 组合自动控制器输出 `PortfolioAutopilotDecision`，动作值域为 `START`、`PAUSE`、`RESUME`、`STOP`、`REDUCE_ALLOCATION`、`DISABLE_ALLOCATION`。所有自动动作必须写入 `portfolio_autopilot.decision` 事件。
 
@@ -2095,6 +2109,7 @@ audit trail 事件类型：
 ### 9.7 前端 Strategy Lab 接线契约
 
 - Strategy Lab 只能通过 `POST /v1/strategy-candidates/{candidate_id}/promote-paper` 完成候选策略晋级，不得调用已废弃的 `/promote`。
+- Strategy Lab 在候选处于 `BACKTEST_RUNNING` 时必须轮询 `GET /v1/strategy-candidates/{candidate_id}` 同步后端异步回测状态；后端标记 `BACKTEST_PASSED` 后前端必须启用 validate 主操作。
 - 前端不发送 deployment 配置请求体；`deployment_id`、`mode=paper`、runtime load 和回滚语义均以后端原子编排为准。
 - 成功后前端以 `PromotePaperResponse.deployment_id` 更新本地 `StrategyCandidate.deployment_id`，状态展示为 `APPROVED_FOR_PAPER`。
 - 失败时前端必须展示 `PromotePaperError.error_code` 与 `detail`，至少区分 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT`。

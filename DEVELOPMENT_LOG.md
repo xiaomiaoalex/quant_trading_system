@@ -25,6 +25,56 @@
 
 ## 最近记录
 
+### 2026-05-21 11:35 - Stage 5 CapitalAllocator 审查返工
+
+- 背景: Stage 5 code review 指出 allocator/management/runner 单元测试缺失、`current_notional` 与 runtime exposure 双轨污染、`total_exposure_budget` 语义不清和全局单锁扩展性问题。
+- 决策: 保留 `StrategyRunner -> CapitalAllocator -> OMS` 接入点，但把 OMS 前状态改成 in-flight reservation；只有 OMS callback 成功后才提交 committed exposure 和 storage `current_notional`。同时补齐 allocator 纯单测和 facade 测试。
+- 改动:
+  - `trader/services/strategy_runner.py`: 将 `_allocation_exposures` 拆成 `_allocation_reservations` 与 `_allocation_committed_exposures`；按 symbol 分片锁；OMS 成功 commit，OMS falsy/exception release；`CLIPPED` 使用普通 `signal.quantity = final_qty`。
+  - `trader/tests/test_capital_allocator.py`: 新增 allocator 决策分支单测，覆盖 confidence/min size/NaN/Inf/current_state/net/total/same-direction/opposing offset/config validation。
+  - `trader/tests/test_allocation_management.py`: 新增 profile 读写、notional 更新/释放、missing profile 和 trace append 测试。
+  - `trader/tests/test_capital_allocator_oms_integration.py`: 增加 OMS pending 不提前提交 notional、OMS falsy release、已有 committed notional 不被失败订单扣减等测试。
+  - `trader/tests/test_crypto_risk_runtime_manager.py`: 固定 audit 测试的 TimeWindow 为 PRIME，避免真实当前时间处于 RESTRICTED 时先触发 `TRADING_HOURS`。
+- 验证:
+  - `python -m pytest -q trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py --tb=short` -> 22 passed
+  - `python -m pytest -q trader/tests/test_capital_allocator_oms_integration.py --tb=short` -> 7 passed
+  - `python -m pytest -q trader/tests/test_strategy_runner.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_api_strategy_runner_endpoints.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` -> 80 passed
+  - `python -m py_compile trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py` -> passed
+  - `python -m black --check trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --line-length 100` -> passed
+  - `python -m isort --check-only trader/services/strategy_runner.py trader/services/allocation_management.py trader/services/capital_allocator.py trader/tests/test_capital_allocator.py trader/tests/test_allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --profile black` -> passed
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` -> passed
+  - `python -m pytest -q trader/tests/test_promote_paper_workflow.py trader/tests/test_strategy_candidate_workflow.py --tb=short` -> 30 passed
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py::test_runtime_pre_trade_rejection_writes_market_audit_event --tb=short` -> passed
+  - `python -m pytest -q trader/tests/ --tb=short` -> passed
+- 风险/遗留:
+  - committed symbol-side exposure 仍是当前 `StrategyRunner` 进程内 projection；重启恢复后需要 Stage 6 NAV/持仓持久化或 execution/order projection 重建。
+  - allocation trace 记录的是分配决策，不等同于 OMS 最终接受；如需完整链路审计，后续可追加 OMS result trace。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-20 20:16 - Stage 5 CapitalAllocator OMS 前置接入
+
+- 背景: `CapitalAllocator` 与 allocation profile/trace 已存在，但策略信号仍直接进入 OMS，缺少跨策略敞口聚合、profile 热配置和 CLIPPED/REJECTED 审计闭环。
+- 决策: 不改 Core OMS 状态机，把 allocation gate 放在 `StrategyRunner.tick()` 的 RiskMode/resource gate 之后、OMS callback 之前；未配置 profile 时保持旧行为兼容。
+- 改动:
+  - `trader/services/strategy_runner.py`: 注入 `CapitalAllocator` / `AllocationManagementService`，新增 profile 热读取、allocation decision、CLIPPED 数量裁剪、REJECTED 阻断、trace 写入和运行时 exposure 预留/回滚。
+  - `trader/services/allocation_management.py`: 新增 `get_profile()`、`add_runtime_notional()`、`append_trace_data()`，支撑 runner 主链路读取配置和写审计。
+  - `trader/tests/test_capital_allocator_oms_integration.py`: 新增 Stage 5 集成测试，覆盖 max_notional 裁剪、disabled profile 拒绝、多策略同向 net exposure 拒绝、profile 热更新和并发 OMS 前预留。
+- 验证:
+  - `python -m py_compile trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py` -> passed
+  - `python -m pytest -q trader/tests/test_capital_allocator_oms_integration.py --tb=short` -> 5 passed
+  - `python -m pytest -q trader/tests/test_strategy_runner.py trader/tests/test_strategy_runner_risk_mode_gate.py trader/tests/test_api_strategy_runner_endpoints.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` -> 56 passed
+  - `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` -> passed
+  - `python -m pytest -q trader/tests/test_promote_paper_workflow.py trader/tests/test_strategy_candidate_workflow.py --tb=short` -> 30 passed
+  - `python -m pytest -q trader/tests/ --tb=short` -> passed
+  - `python -m black --check trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --line-length 100` -> passed
+  - `python -m isort --check-only trader/services/strategy_runner.py trader/services/allocation_management.py trader/tests/test_capital_allocator_oms_integration.py --profile black` -> passed
+  - `git diff --check` -> passed
+- 风险/遗留:
+  - runtime exposure 当前为进程内账本，OMS 失败会回滚，但进程重启后的真实持仓/敞口重建还需要 Stage 6 NAV/持仓持久化或后续 PG runtime state 支持。
+  - allocation trace 当前仍走控制面存储；若要跨进程审计，应补 PG 持久化仓储。
+  - 全量测试仍有仓库既有 warnings：Pydantic v2 `class Config` 弃用、QuantStats 零收益样本统计警告、onchain AsyncMock 未 await warning。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-20 20:00 - Strategy Lab 风控回测集成修复与红测覆盖
 
 - 背景: 用户 Review 发现 7 个关键问题（3 Critical + 2 High + 1 Medium + 1 Process），涉及 debug 前后端契约不一致、risk_adjusted 未注入 RiskEngine、event_replay 使用 pass-all Mock、前端 risk_mode 未提交、debug 失败打入终态、风控报告字段缺失、文档未同步。
@@ -969,3 +1019,23 @@
   - `npm run typecheck` -> passed
 - 风险/遗留: 当前只完成前端 API 与按钮链路收口；完整浏览器 E2E 仍建议在后续联调中覆盖 `Save Draft -> Debug -> Submit Backtest Gate -> Validate -> Promote to Paper`。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-21 22:07 - Stage 4/5 审查问题修复
+
+- 背景: 代码审查发现四个离散问题：成功但不可部署的候选回测会卡在 `BACKTEST_RUNNING`，前端不会同步后端异步完成状态，allocation 按 symbol 分片锁可穿透组合级预算，`event_replay` equity curve timestamp 使用数组序号。
+- 决策: 将“回测执行成功”和“部署准入”分层处理；`BACKTEST_PASSED` 表示回测完成，`VALIDATION_PASSED` 才表示可 promote。allocation reservation 使用 portfolio-wide 锁保护组合级投影。
+- 改动:
+  - `trader/services/deployment.py`: 成功候选回测统一标记 `BACKTEST_PASSED`；`event_replay` equity curve 使用行情 bar 的 Unix 毫秒时间戳。
+  - `Frontend/src/pages/Backtests.tsx`: `BACKTEST_RUNNING` 时轮询候选详情，异步完成后刷新列表并启用下一主操作。
+  - `Frontend/src/api/research.ts`: 新增 `getCandidate()` 供 Strategy Lab 轮询。
+  - `trader/services/strategy_runner.py`: allocation reservation 锁调整为 portfolio-wide，避免跨 symbol 并发穿透组合预算。
+  - 测试补充候选 validation 拒绝、event_replay 时间戳、portfolio-wide lock 与前端 API 轮询契约。
+- 验证:
+  - `python -m py_compile trader/services/deployment.py trader/services/strategy_runner.py` -> passed
+  - `python -m pytest -q trader/tests/test_candidate_backtest_risk_mode.py trader/tests/test_strategy_candidate_workflow.py trader/tests/test_capital_allocator_oms_integration.py --tb=short` -> 24 passed
+  - `npm run test -- tests/api/research.test.ts` -> 2 passed
+  - `npm run typecheck`（Frontend）-> passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> 99 passed
+  - `git diff --check` -> passed（仅 CRLF/LF 工作区提示）
+- 风险/遗留: portfolio-wide lock 牺牲不同 symbol 并行度以保证组合级预算正确；后续若需要扩展吞吐，应引入原子组合账本或数据库 CAS，而不是回退 symbol 分片锁。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

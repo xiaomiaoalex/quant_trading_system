@@ -20,6 +20,7 @@ from trader.core.domain.models.crypto_risk import (
     LeverageBracket,
 )
 from trader.core.domain.models.signal import Signal, SignalType
+from trader.core.domain.rules.time_window_policy import TimeWindowContext, TimeWindowPeriod
 from trader.storage.in_memory import get_storage
 
 
@@ -298,6 +299,14 @@ async def test_runtime_pre_trade_rejection_writes_market_audit_event(monkeypatch
     manager = CryptoRiskRuntimeManager(pre_trade_setter=setter)
     monkeypatch.setattr(
         "trader.api.crypto_risk_runtime.BinanceFuturesRiskDataSource", lambda _c: source
+    )
+    monkeypatch.setattr(
+        "trader.core.application.risk_engine.TimeWindowPolicy.evaluate_now",
+        lambda _self: TimeWindowContext(
+            period=TimeWindowPeriod.PRIME,
+            position_coefficient=1.0,
+            allow_new_position=True,
+        ),
     )
 
     await manager.configure(

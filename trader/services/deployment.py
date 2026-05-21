@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from trader.adapters.broker.testing.fake_broker import FakeBroker, FakeBrokerConfig
 from trader.adapters.persistence.feature_store import get_feature_store
 from trader.api.models.schemas import (
     ActionResult,
@@ -16,7 +17,10 @@ from trader.api.models.schemas import (
     Deployment,
     DeploymentCreateRequest,
 )
+from trader.core.application.risk_engine import RiskConfig, RiskEngine
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.services.backtesting.backtest_risk_integration import BacktestRiskIntegration
+from trader.services.backtesting.event_driven_risk_replay import EventDrivenRiskReplay
 from trader.services.backtesting.feature_store_data_provider import FeatureStoreOHLCVDataProvider
 from trader.services.backtesting.ports import (
     OHLCV,
@@ -25,11 +29,10 @@ from trader.services.backtesting.ports import (
     DataProviderPort,
 )
 from trader.services.backtesting.vectorbt_adapter import VectorBTAdapter, VectorBTConfig
-from trader.services.backtesting.vectorbt_risk_adapter import VectorBTAdapterWithRisk, VectorBTRiskAdapterConfig
-from trader.services.backtesting.event_driven_risk_replay import EventDrivenRiskReplay
-from trader.services.backtesting.backtest_risk_integration import BacktestRiskIntegration
-from trader.core.application.risk_engine import RiskEngine, RiskConfig
-from trader.adapters.broker.testing.fake_broker import FakeBroker, FakeBrokerConfig
+from trader.services.backtesting.vectorbt_risk_adapter import (
+    VectorBTAdapterWithRisk,
+    VectorBTRiskAdapterConfig,
+)
 from trader.services.strategy_candidate import StrategyCandidateService
 from trader.services.strategy_runner import StrategyRunner
 from trader.storage.artifact_storage import get_artifact_storage
@@ -327,20 +330,7 @@ class BacktestService:
 
             if request.candidate_id:
                 try:
-                    is_valid_for_promotion = (
-                        request.data_mode == "real_feature_store"
-                        and request.risk_mode in {"risk_adjusted", "event_replay"}
-                    )
-                    if is_valid_for_promotion:
-                        StrategyCandidateService().mark_backtest_passed(request.candidate_id)
-                    else:
-                        logger.info(
-                            "Skipping auto mark_backtest_passed for candidate %s: "
-                            "data_mode=%s, risk_mode=%s (requires real_feature_store + risk_adjusted/event_replay)",
-                            request.candidate_id,
-                            request.data_mode,
-                            request.risk_mode,
-                        )
+                    StrategyCandidateService().mark_backtest_passed(request.candidate_id)
                 except Exception as cand_exc:
                     logger.warning(
                         "Auto mark_backtest_passed failed for candidate %s: %s",
@@ -516,7 +506,9 @@ class BacktestService:
             )
             # 直接通过 runner.tick 获取 Signal 对象，而不是整数信号
             signals: list[Any] = []
+            equity_timestamps_ms: list[int] = []
             for kline in klines:
+                equity_timestamps_ms.append(int(kline.timestamp.timestamp() * 1000))
                 market_data = MarketData(
                     symbol=config.symbol,
                     data_type=MarketDataType.KLINE,
@@ -537,7 +529,10 @@ class BacktestService:
             replay_result = await replay.replay(signals)
             data_quality_summary = getattr(data_provider, "last_quality_summary", None)
             return self._event_replay_result_to_simulation(
-                replay_result, request, data_quality_summary=data_quality_summary
+                replay_result,
+                request,
+                data_quality_summary=data_quality_summary,
+                equity_timestamps_ms=equity_timestamps_ms,
             )
 
         if request.risk_mode == "risk_adjusted":
@@ -674,8 +669,16 @@ class BacktestService:
             "clipped_orders": list(result.clipped_orders),
             "rejected_orders": list(result.rejected_orders),
             "rejection_reason_counts": dict(result.rejection_reason_counts),
-            "max_drawdown_before_risk": float(result.max_drawdown_before_risk) if result.max_drawdown_before_risk is not None else None,
-            "max_drawdown_after_risk": float(result.max_drawdown_after_risk) if result.max_drawdown_after_risk is not None else None,
+            "max_drawdown_before_risk": (
+                float(result.max_drawdown_before_risk)
+                if result.max_drawdown_before_risk is not None
+                else None
+            ),
+            "max_drawdown_after_risk": (
+                float(result.max_drawdown_after_risk)
+                if result.max_drawdown_after_risk is not None
+                else None
+            ),
             "risk_adjusted_metrics": dict(result.risk_adjusted_metrics),
             "risk_adjusted_equity_curve": list(result.risk_adjusted_equity_curve),
         }
@@ -693,17 +696,26 @@ class BacktestService:
         result: Any,
         request: BacktestRequest,
         data_quality_summary: Optional[Dict[str, Any]] = None,
+        equity_timestamps_ms: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         initial_capital = Decimal(str(request.initial_capital))
         final_equity = result.equity_curve[-1] if result.equity_curve else initial_capital
         total_return = final_equity - initial_capital
-        total_return_pct = float((total_return / initial_capital) * Decimal("100")) if initial_capital > 0 else 0.0
+        total_return_pct = (
+            float((total_return / initial_capital) * Decimal("100")) if initial_capital > 0 else 0.0
+        )
         max_drawdown = float(result.max_drawdown)
         max_drawdown_pct = max_drawdown * 100
-        equity_curve = [
-            {"timestamp": i, "equity": float(e)}
-            for i, e in enumerate(result.equity_curve)
-        ]
+        fallback_step_ms = 60_000
+        if equity_timestamps_ms and len(equity_timestamps_ms) > 1:
+            fallback_step_ms = max(1, equity_timestamps_ms[1] - equity_timestamps_ms[0])
+        equity_curve = []
+        for i, equity in enumerate(result.equity_curve):
+            if equity_timestamps_ms and i < len(equity_timestamps_ms):
+                timestamp_ms = equity_timestamps_ms[i]
+            else:
+                timestamp_ms = request.start_ts_ms + i * fallback_step_ms
+            equity_curve.append({"timestamp": timestamp_ms, "equity": float(equity)})
         approved_count = len(result.approved_orders)
         clipped_count = len(result.clipped_orders)
         rejected_count = len(result.rejected_orders)

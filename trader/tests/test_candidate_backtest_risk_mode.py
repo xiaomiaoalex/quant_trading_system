@@ -1,11 +1,17 @@
 """
 红测：覆盖 candidate backtest risk_mode 透传和 BACKTEST_PASSED 条件
 """
+
 from __future__ import annotations
+
+from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from trader.api.main import app
+from trader.api.models.schemas import BacktestRequest
+from trader.services.deployment import BacktestService
 from trader.storage.in_memory import get_storage
 
 
@@ -101,8 +107,8 @@ def get_plugin():
         assert backtest.get("risk_mode") == "event_replay"
 
 
-def test_dev_smoke_raw_only_does_not_auto_promote():
-    """dev_smoke + raw_only 回测完成后不能自动进入 BACKTEST_PASSED"""
+def test_dev_smoke_raw_only_completes_backtest_then_validation_rejects():
+    """dev_smoke + raw_only 可完成回测，但 validation 阶段拒绝促进资格"""
     storage = get_storage()
     with TestClient(app) as client:
         code = """
@@ -183,11 +189,6 @@ def get_plugin():
         assert backtest_resp.status_code == 200
         assert backtest_resp.json()["status"] == "BACKTEST_RUNNING"
 
-        # 手动运行回测（模拟 BacktestService._run_backtest 完成）
-        from trader.services.deployment import BacktestService
-        from trader.api.models.schemas import BacktestRequest
-
-        backtest_run_id = backtest_resp.json()["backtest_run_id"]
         service = BacktestService()
         request = BacktestRequest(
             strategy_id="no_promote_test",
@@ -204,13 +205,57 @@ def get_plugin():
         backtest = service.create_backtest(request)
 
         import asyncio
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         task = loop.create_task(service._run_backtest(backtest.run_id, request))
         loop.run_until_complete(task)
         loop.close()
 
-        # dev_smoke + raw_only 不应该自动晋级
+        # 回测完成后进入 BACKTEST_PASSED，按钮/轮询闭环可继续到 validation。
         candidate = storage.get_strategy_candidate(candidate_id)
         assert candidate is not None
-        assert candidate["status"] != "BACKTEST_PASSED"
+        assert candidate["status"] == "BACKTEST_PASSED"
+
+        # 但 dev_smoke/raw_only 仍不能通过促进前验证。
+        validated = client.post(f"/v1/strategy-candidates/{candidate_id}/validate")
+        assert validated.status_code == 200
+        payload = validated.json()
+        assert payload["status"] == "REJECTED"
+        failed_rules = payload["validation"]["failed_rules"]
+        assert "dev_smoke_backtest_not_deployable" in failed_rules
+        assert "raw_only_backtest_not_deployable" in failed_rules
+
+
+def test_event_replay_equity_curve_uses_market_data_timestamps_ms():
+    """event_replay 生成的 equity_curve timestamp 必须是 Unix 毫秒时间轴"""
+    request = BacktestRequest(
+        strategy_id="timestamp_test",
+        version=1,
+        symbols=["BTCUSDT"],
+        start_ts_ms=1700000000000,
+        end_ts_ms=1700003600000,
+        venue="BINANCE",
+        requested_by="test",
+        data_mode="dev_smoke",
+        risk_mode="event_replay",
+    )
+    replay_result = SimpleNamespace(
+        equity_curve=[Decimal("100000"), Decimal("100250")],
+        max_drawdown=Decimal("0.02"),
+        approved_orders=[],
+        clipped_orders=[],
+        rejected_orders=[],
+        rejection_reason_counts={},
+    )
+
+    simulation = BacktestService()._event_replay_result_to_simulation(
+        replay_result,
+        request,
+        equity_timestamps_ms=[1700000000000, 1700003600000],
+    )
+
+    assert [point["timestamp"] for point in simulation["equity_curve"]] == [
+        1700000000000,
+        1700003600000,
+    ]
