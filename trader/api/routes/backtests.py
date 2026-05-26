@@ -125,16 +125,16 @@ async def get_backtest_report(run_id: str = Path(..., description="Backtest run 
         if "equity_curve" in metrics:
             equity_curve = metrics["equity_curve"]
 
-    # Attach tearsheet_ref if available
+    # Attach tearsheet_ref if available (reuse backtest already fetched at line 74)
     tearsheet_ref: str | None = None
-    bt_raw = service.get_backtest(run_id)
-    if bt_raw and hasattr(bt_raw, "metrics") and isinstance(bt_raw.metrics, dict):
-        tearsheet_ref = bt_raw.metrics.get("tearsheet_ref") or (
-            backtest.metrics.get("tearsheet_ref") if backtest.metrics else None
-        )
+    if backtest.metrics:
+        if isinstance(backtest.metrics, dict):
+            tearsheet_ref = backtest.metrics.get("tearsheet_ref")
+        else:
+            tearsheet_ref = getattr(backtest.metrics, "tearsheet_ref", None)
     if not tearsheet_ref:
-        # Check storage directly
-        raw = service._storage.get_backtest(run_id) if hasattr(service, "_storage") else None
+        # Check storage directly for async-written tearsheet_ref via encapsulated service method
+        raw = service.get_backtest_raw(run_id)
         if raw:
             tearsheet_ref = raw.get("tearsheet_ref")
 

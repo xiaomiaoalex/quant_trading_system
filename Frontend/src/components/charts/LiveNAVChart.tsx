@@ -23,6 +23,8 @@ interface NavUpdatePayload {
   }
 }
 
+const MAX_LIVE_POINTS = 1000
+
 export function LiveNAVChart({ deploymentId, strategyId, height = 100 }: LiveNAVChartProps) {
   const { data: historicalData } = useDeploymentNAV(deploymentId)
   const [livePoints, setLivePoints] = useState<NAVPoint[]>([])
@@ -35,19 +37,23 @@ export function LiveNAVChart({ deploymentId, strategyId, height = 100 }: LiveNAV
       if (!payload?.nav_point) return
       if (payload.deployment_id !== deploymentId && payload.strategy_id !== strategyId) return
       const p = payload.nav_point
-      setLivePoints((prev) => [
-        ...prev,
-        {
-          deployment_id: deploymentId,
-          strategy_id: strategyId,
-          timestamp_ms: p.timestamp_ms,
-          equity: p.equity,
-          cash: p.cash ?? 0,
-          unrealized_pnl: p.unrealized_pnl ?? 0,
-          realized_pnl: p.realized_pnl ?? 0,
-          total_pnl: p.total_pnl ?? 0,
-        },
-      ])
+      setLivePoints((prev) => {
+        const next = [
+          ...prev,
+          {
+            deployment_id: deploymentId,
+            strategy_id: strategyId,
+            timestamp_ms: p.timestamp_ms,
+            equity: p.equity,
+            cash: p.cash ?? 0,
+            unrealized_pnl: p.unrealized_pnl ?? 0,
+            realized_pnl: p.realized_pnl ?? 0,
+            total_pnl: p.total_pnl ?? 0,
+          },
+        ]
+        // Rolling window: keep last MAX_LIVE_POINTS to prevent unbounded memory growth
+        return next.length > MAX_LIVE_POINTS ? next.slice(-MAX_LIVE_POINTS) : next
+      })
     },
     [deploymentId, strategyId],
   )

@@ -225,6 +225,14 @@ class BacktestService:
             return BacktestRun(**backtest)
         return None
 
+    def get_backtest_raw(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """Get raw backtest data dict for internal/storage access.
+
+        Encapsulates storage access to avoid API layer bypassing service layer.
+        Used for fields that may be written asynchronously (e.g. tearsheet_ref).
+        """
+        return self._storage.get_backtest(run_id)
+
     def list_backtests(
         self,
         status: Optional[str] = None,

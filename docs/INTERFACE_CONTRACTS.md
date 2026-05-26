@@ -1452,6 +1452,34 @@ for signal in signals:
 - 被拒订单不会进入任何成交模拟路径。
 - 被裁剪订单会以裁剪后的数量影响风控后权益曲线。
 
+#### 8.9.11 回测 RiskConfig 已知限制
+
+回测服务的 `RiskConfig` 参数在 MVP 阶段为硬编码默认值，暂不支持调用方覆盖：
+
+| 参数 | 硬编码默认值 | 说明 |
+|------|-------------|------|
+| `max_daily_loss_percent` | 5.0 | 日内最大亏损阈值 |
+| `max_drawdown_percent` | 10.0 | 最大回撤阈值 |
+| `max_positions` | 10 | 最大持仓数量 |
+| `orders_per_minute_limit` | 60 | 每分钟订单数限制 |
+
+**当前行为**：`BacktestRequest` schema 仅暴露 `risk_mode`（`raw_only` / `risk_adjusted` / `event_replay`），不暴露细粒度风控参数。调用方传入的风控参数请求会被忽略，系统使用上述硬编码默认值。
+
+**影响范围**：
+- 仅 `risk_adjusted` 和 `event_replay` 模式使用 `RiskConfig`
+- `raw_only` 模式不创建 `RiskEngine`，不受此限制影响
+
+**待办**：在后续迭代中扩展 `BacktestRequest` schema，添加可选的风控参数覆盖字段：
+```python
+class BacktestRequest(BaseModel):
+    risk_mode: BacktestRiskMode = Field(default="risk_adjusted")
+    # 未来可扩展：
+    max_daily_loss_percent: Optional[float] = None
+    max_drawdown_percent: Optional[float] = None
+    max_positions: Optional[int] = None
+    max_order_rate: Optional[int] = None
+```
+
 ### 8.10 P8 Demo Fail-Closed 演练
 
 #### 8.10.1 脚本入口

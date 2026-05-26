@@ -360,3 +360,88 @@ async def test_record_nav_snapshot_single_broadcast_when_ids_match():
     assert mock_broadcast.call_count == 1
     assert mock_broadcast.call_args[0][0] == "nav:strat-1"
     assert mock_broadcast.call_args[0][1] == "nav_update"
+
+
+# ---------------------------------------------------------------------------
+# 14. 多 deployment 持仓时 NAV 归属第一个遇到的 deployment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_record_nav_snapshot_mixed_deployment_ids():
+    """验证同一 strategy 持有多个 deployment 持仓时，NAV 归属第一个遇到的 deployment。
+
+    这是已知的语义约束：NAV 按 strategy 级别计算，但记录到 positions dict 中第一个
+    遇到的 deployment。调用方需要注意这个行为，必要时在应用层按 deployment_id 分别调用。
+    """
+    storage = _make_storage()
+
+    # 添加两个不同 deployment 的持仓
+    # 注意：upsert_position key = account_id:venue:strategy_id:instrument
+    # 两个持仓使用不同 instrument 确保不会互相覆盖
+    storage.upsert_position(
+        {
+            "strategy_id": "strat-1",
+            "symbol": "ETHUSDT",
+            "instrument": "ETHUSDT",
+            "account_id": "acc-1",
+            "venue": "BINANCE",
+            "qty": 0.5,
+            "avg_cost": 3000.0,
+            "mark_price": 3100.0,
+            "realized_pnl": 20.0,
+            "deployment_id": "dep-1",  # 第一个插入
+        }
+    )
+    storage.upsert_position(
+        {
+            "strategy_id": "strat-1",
+            "symbol": "BTCUSDT",
+            "instrument": "BTCUSDT",
+            "account_id": "acc-1",
+            "venue": "BINANCE",
+            "qty": 0.01,
+            "avg_cost": 50000.0,
+            "mark_price": 51000.0,
+            "realized_pnl": 10.0,
+            "deployment_id": "dep-2",  # 第二个插入
+        }
+    )
+
+    mock_broadcast = AsyncMock(return_value=1)
+
+    with (
+        patch("trader.storage.nav_store.append_nav_point_pg", new_callable=AsyncMock),
+        patch("trader.api.routes.sse.get_sse_manager") as mock_sse,
+    ):
+        mock_sse.return_value.broadcast = mock_broadcast
+
+        from trader.services.nav_service import record_nav_snapshot
+
+        # deployment_id=None 时，eff_deployment_id 从 positions 推断
+        await record_nav_snapshot("strat-1", storage, deployment_id=None)
+
+    # First-wins: dep-1 是第一个遇到的 deployment
+    series_dep1 = storage.get_nav_series("dep-1")
+    assert len(series_dep1) == 1, "NAV should be recorded to first-found deployment (dep-1)"
+    assert series_dep1[0]["deployment_id"] == "dep-1"
+
+    # dep-2 应该没有 NAV（持仓不在它的 series 里）
+    series_dep2 = storage.get_nav_series("dep-2")
+    assert len(series_dep2) == 0, "dep-2 should have no NAV since positions are not in its series"
+
+    # 验证广播：双频道设计，应该广播到 nav:dep-1 和 nav:strat-1
+    assert mock_broadcast.call_count == 2, "Should broadcast to both nav:dep-1 and nav:strat-1"
+
+    # 第一个广播到 nav:dep-1
+    call1_channel = mock_broadcast.call_args_list[0][0][0]
+    call1_payload = mock_broadcast.call_args_list[0][0][2]  # data is 3rd arg
+    assert call1_channel == "nav:dep-1"
+    assert call1_payload["deployment_id"] == "dep-1"
+    assert call1_payload["strategy_id"] == "strat-1"
+
+    # 第二个广播到 nav:strat-1
+    call2_channel = mock_broadcast.call_args_list[1][0][0]
+    call2_payload = mock_broadcast.call_args_list[1][0][2]  # data is 3rd arg
+    assert call2_channel == "nav:strat-1"
+    assert call2_payload["deployment_id"] == "dep-1"
