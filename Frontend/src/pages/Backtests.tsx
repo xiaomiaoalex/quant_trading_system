@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
-import { useBacktestList, useBacktestReport, useCreateBacktest, useLoadedStrategies } from '@/hooks'
+import { useBacktestList, useBacktestReport, useLoadedStrategies } from '@/hooks'
 import { LoadingState, ErrorState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
 import { PageHeader } from '@/components/layout'
@@ -198,7 +198,6 @@ export function Backtests() {
   )
   const { data: report, isLoading: isReportLoading } = useBacktestReport(selectedRunId ?? '')
   const { data: loadedStrategies, refetch: refetchLoaded } = useLoadedStrategies()
-  const { error: createError } = useCreateBacktest()
 
   const [labForm, setLabForm] = useState({
     strategy_id: 'lab_strategy',
@@ -515,9 +514,9 @@ export function Backtests() {
             </div>
           </div>
 
-          {(labError || createError) && (
+          {labError && (
             <div className="mb-4 rounded bg-red-950/20 p-2 text-sm text-red-400">
-              {labError ?? createError}
+              {labError}
             </div>
           )}
           {labMessage && (

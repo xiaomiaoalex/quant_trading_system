@@ -294,7 +294,11 @@ class StrategyCandidateService:
             )
 
         async with lock:
-            return await self._promote_to_paper_inner(candidate_id)
+            try:
+                return await self._promote_to_paper_inner(candidate_id)
+            finally:
+                # Cleanup lock after promotion completes to prevent unbounded growth
+                _promote_locks.pop(candidate_id, None)
 
     async def _promote_to_paper_inner(self, candidate_id: str) -> PromotePaperResponse:
         from fastapi import HTTPException
