@@ -3879,6 +3879,95 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 
 ---
 
+## 二十六、策略自动暂停/恢复闭环经验
+
+### 26.1 踩坑记录：deployment_id 不能靠字符串切分反推 candidate_id
+
+**场景**：
+自动暂停服务需要把运行实例暂停，并同步更新绑定的 StrategyCandidate 状态。
+
+**问题**：
+- 手工创建 deployment 的 ID 格式是 `{strategy_id}__{symbol}__{mode}__{account}`
+- promote-paper 创建 deployment 的 ID 格式是 `{strategy_id}__promote__{candidate_prefix}__paper`
+- `deployment_id.split("__")[0]` 只能得到 `strategy_id`，不是 `candidate_id`
+
+**经验**：
+- `deployment_id`、`strategy_id`、`candidate_id` 是三种不同主键，不能互相猜测
+- 控制面需要通过 storage 中的 `candidate.deployment_id` 反查绑定关系
+- 接口契约必须明确哪个字段用于运行实例控制，哪个字段用于候选生命周期
+
+### 26.2 踩坑记录：探测用 Signal 必须遵守现有领域模型
+
+**场景**：
+自动恢复探测需要构造 dummy signal 调用现有 pre-trade 风控。
+
+**问题**：
+- `Signal` 模型没有 `strategy_id` 和 `timestamp_ms` 字段
+- 给 dataclass 传入不存在字段会让探测直接失败，导致策略永远无法自动恢复
+
+**经验**：
+- 探测信号应使用 `strategy_name` 表示逻辑策略，并在 `metadata` 中标记 `auto_pause_probe`
+- 测试必须覆盖恢复探测主路径，防止“暂停可用、恢复永远失败”的半闭环
+
+### 26.3 设计模式：触发器与执行器解耦
+
+**实现模式**：
+```python
+# OMSCallback: 只上报拒绝
+await auto_pause_service.record_rejection(strategy_id, deployment_id, reason)
+
+# StrategyAutoPauseService: 负责控制面状态机
+await runner.pause(deployment_id)
+candidate -> PAUSED_BY_RISK
+append strategy_candidate.auto_paused
+broadcast strategies/strategy_update
+```
+
+**收益**：
+- OMS 下单路径不直接承担候选状态机和前端广播细节
+- 自动暂停不会改变 RiskEngine / KillSwitch 的 fail-closed 优先级
+- 并发拒绝可以在服务内集中去重，避免重复 pause 和重复 SSE
+
+---
+
+## 二十六、Account REST Snapshot 接线经验
+
+### 26.1 踩坑记录：Connector 不等于 Account Provider
+
+**场景**：
+运行日志出现 `AccountBridge REST snapshot failed: 'BinanceConnector' object has no attribute '_fetch_account'`。
+
+**问题**：
+- `BinanceConnector` 是 Public/Private stream 与 REST alignment 的协调器，并不负责暴露 Spot account REST 读取方法
+- `AccountStreamBridge` 的 REST snapshot 需要 `/v3/account` 原始 balances，旧接线把 connector 当成 account provider，导致账户状态被标记 stale
+- 账户状态 stale 会让 crypto pre-trade 风控按 fail-closed 拒单，表象容易被误判为策略或风控阈值问题
+
+**经验**：
+- Bridge 接收 callback 是对的，但 callback 必须绑定到具备账户读取能力的 broker/account provider
+- 生命周期 wiring 测试应使用“无账户接口的 fake connector + 有账户接口的 fake broker”，防止职责边界再次漂移
+- 报错链路要从后果倒推：`Crypto risk snapshot unavailable` 可能是账户快照接线失败，而不是 crypto 风控算法本身拒绝
+
+---
+
+## 二十七、Binance REST Proxy Failover 经验
+
+### 27.1 踩坑记录：Broker 能切备代理不代表 RESTAlignment 也能切
+
+**场景**：
+`.env` 配置主代理 `127.0.0.1:10808`、备代理 `127.0.0.1:7890`。诊断发现 10808 未监听、7890 可用，直连 Binance demo/futures 超时。
+
+**问题**：
+- `BinanceSpotDemoBroker` 的统一 `_request()` 有多次重试，会在 failover 阈值达到后切换到备代理
+- `RESTAlignmentCoordinator.get_server_time()` 和 `_sync_server_time_offset()` 原先只请求一次，第一次选到坏代理就直接失败
+- 启动自检日志因此显示 `Cannot connect to host 127.0.0.1:10808`，容易被误判为交易所整体不可用
+
+**经验**：
+- 所有 REST 自检、时间同步和对账路径必须复用同一 proxy failover 语义
+- 诊断时要分别测试直连、主代理、备代理，并用真实代码路径验证是否能切换
+- 本地 `.env` 中应把当前可用代理放在 `BINANCE_PROXY_URL`，不可用代理只能作为 backup 或移除
+
+---
+
 ## 二十六、候选回测闭环与组合级 reservation 经验
 
 ### 26.1 踩坑记录：不要把“回测完成”和“可部署”绑在同一个状态

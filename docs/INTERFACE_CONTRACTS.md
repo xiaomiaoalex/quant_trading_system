@@ -79,6 +79,7 @@
 - API 可以兼容外部或历史字段名，但进入 Service 前必须转换为内部标准 DTO。
 - API response 字段调整必须同步前端 hook / 页面 / 类型定义。
 - 对外兼容字段必须在模型注释或文档中标记为 legacy。
+- `AccountStreamBridge` 的 REST snapshot 校准必须由 Control Plane 注入账户快照读取回调；该回调应绑定到具备 Binance `/v3/account` 读取能力的 broker/account provider。`BinanceConnector` 只负责 Public/Private stream 协调和 REST alignment 健康检查，不得被假定暴露 `_fetch_account()`。
 
 ---
 
@@ -174,7 +175,74 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 
 候选策略删除接口为 `DELETE /v1/strategy-candidates/{candidate_id}`，仅删除研究候选实体，不删除策略模板、代码版本、回测报告或部署实例。处于 `APPROVED_FOR_PAPER`、`PAPER_RUNNING`、`PAUSED_BY_RISK` 的候选必须先停止/解除运行关系后才能删除；删除必须写入 `strategy_candidate.deleted` 审计事件。
 
-#### 8.1.1 StrategyCandidateDebugResponse
+### 8.1.1 StrategyAutoPauseService
+
+`StrategyAutoPauseService` 位于 `trader/services/strategy_auto_pause.py`，用于处理“单个运行实例被风控反复拒绝后自动休眠，风控恢复后自动恢复”的控制面闭环。
+
+触发契约：
+
+| 字段/参数 | 类型 | 语义 |
+|-----------|------|------|
+| `strategy_id` | str | 逻辑策略模板 ID，用于逐策略拒绝滑动窗口和恢复探测 Signal 的 `strategy_name` |
+| `deployment_id` | str | 运行实例 ID，用于暂停/恢复 `StrategyRunner` 与查找绑定的 `StrategyCandidate` |
+| `reason` | str | 最近一次风控拒绝原因 |
+| `window_sec` | int | 滑动窗口秒数，默认 `RISK_AUTO_PAUSE_WINDOW_SEC=60` |
+| `threshold` | int | 窗口内触发阈值，默认 `RISK_AUTO_PAUSE_THRESHOLD=10` |
+| `probe_interval_sec` | int | 后台恢复探测间隔，默认 `RISK_AUTO_PAUSE_PROBE_INTERVAL_SEC=30` |
+| `consecutive_probe_required` | int | 连续健康探测次数，默认 `2` |
+
+状态机契约：
+
+1. `OMSCallback` 在 pre-trade 风控拒绝后调用 `record_rejection(strategy_id, deployment_id, reason)`。
+2. 同一 `strategy_id` 在 `window_sec` 内拒绝次数达到 `threshold` 时，服务调用 `StrategyRunner.pause(deployment_id)`，并将绑定 candidate 转为 `PAUSED_BY_RISK`。
+3. 后台探测对暂停记录构造最小 `Signal(strategy_name=strategy_id, metadata.auto_pause_probe=true)`，调用 OMS 持有的 `_pre_trade_risk_check`。连续 `consecutive_probe_required` 次 `passed=true` 后自动 `resume`，candidate 转为 `PAPER_RUNNING`。
+4. `force_resume(deployment_id, requested_by)` 跳过探测阈值，直接恢复并清除暂停记录。
+5. 自动暂停不得降低 KillSwitch / Fail-Closed 优先级；KillSwitch 等更高优先级拒绝仍由风控链路决定。
+
+事件契约：
+
+`strategy_candidate.auto_paused`：
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `candidate_id` | str \| null | 绑定候选 ID；未找到候选时为 `null` |
+| `deployment_id` | str | 运行实例 ID |
+| `strategy_id` | str | 逻辑策略 ID |
+| `reason` | str | 最近拒绝原因 |
+| `reject_count_in_window` | int | 当前窗口内拒绝数 |
+| `window_sec` | int | 滑动窗口秒数 |
+| `threshold` | int | 触发阈值 |
+| `paused_at_ms` | int | 暂停时间 Unix ms |
+
+`strategy_candidate.auto_resumed`：
+
+| 字段 | 类型 | 语义 |
+|------|------|------|
+| `candidate_id` | str \| null | 绑定候选 ID；未找到候选时为 `null` |
+| `deployment_id` | str | 运行实例 ID |
+| `strategy_id` | str | 逻辑策略 ID |
+| `triggered_by` | str | `auto_probe` 或 `force_resume` |
+| `requested_by` | str | 自动恢复为 `auto_probe`，手动恢复为调用方标识 |
+| `probe_consecutive_pass` | int | 恢复前连续健康探测次数 |
+| `probe_required` | int | 所需连续健康探测次数 |
+| `paused_duration_ms` | int \| null | 本次暂停持续时间 |
+| `resumed_at_ms` | int | 恢复时间 Unix ms |
+
+SSE 契约：
+
+- Channel: `strategies`
+- Event type: `strategy_update`
+- `event_type`: `auto_paused` 或 `auto_resumed`
+- Payload 至少包含 `deployment_id`、`strategy_id` 和上述事件关键字段。
+
+API 契约：
+
+| 方法 | 路径 | 语义 |
+|------|------|------|
+| `GET` | `/v1/strategies/auto-paused` | 返回 `{service_running, paused_strategies}`，每项含 `deployment_id/strategy_id/last_reason/reject_count/paused_at_ms/consecutive_probe_pass/probe_required/window_sec/threshold` |
+| `POST` | `/v1/strategies/{deployment_id}/force-resume?requested_by=...` | 手动恢复一个由风控自动暂停的运行实例；服务未初始化返回 `503`，实例未自动暂停返回 `404` |
+
+#### 8.1.2 StrategyCandidateDebugResponse
 
 `POST /v1/strategy-candidates/{candidate_id}/debug` 响应契约：
 
