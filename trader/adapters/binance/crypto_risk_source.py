@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
     import aiohttp
 
 
+logger = logging.getLogger(__name__)
+
+
 BINANCE_USD_M_FUTURES_BASE_URL = "https://fapi.binance.com"
 
 
@@ -46,6 +50,7 @@ class BinanceFuturesRiskDataSourceConfig:
     recv_window_ms: int = 5000
     proxy_url: str | None = None
     max_retries: int = 2
+    initial_recv_window_ms: int = 5000
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -67,6 +72,9 @@ class BinanceFuturesRiskDataSource:
         self._config = config
         self._session = session
         self._owns_session = session is None
+        self._timestamp_offset_ms: int = 0
+        self._current_recv_window_ms: int = config.recv_window_ms
+        self._last_reset_ts: float = 0.0  # 上次重置基线时间戳
 
     async def start(self) -> None:
         await self._ensure_session()
@@ -138,10 +146,58 @@ class BinanceFuturesRiskDataSource:
         timeout = aiohttp.ClientTimeout(total=self._config.timeout)
         self._session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
 
-    def _signed_params(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _sync_server_time_offset(self) -> None:
+        """同步服务器时间偏移，降低 -1021 风险。"""
+        import aiohttp
+
+        if self._session is None:
+            return
+
+        try:
+            url = f"{self._config.base_url}/v3/time"
+            async with self._session.get(url, proxy=self._config.proxy_url) as resp:
+                if resp.status != 200:
+                    logger.warning(
+                        "[BinanceFuturesRiskDataSource] Time sync failed: status=%s", resp.status
+                    )
+                    return
+                data = await resp.json()
+                server_ms = int(data.get("serverTime", 0))
+                if server_ms <= 0:
+                    logger.warning(
+                        "[BinanceFuturesRiskDataSource] Time sync failed: invalid serverTime=%s",
+                        server_ms,
+                    )
+                    return
+                local_ms = int(time.time() * 1000)
+                self._timestamp_offset_ms = server_ms - local_ms
+                logger.info(
+                    "[BinanceFuturesRiskDataSource] Time offset synced: offset_ms=%s",
+                    self._timestamp_offset_ms,
+                )
+        except Exception as exc:
+            logger.warning("[BinanceFuturesRiskDataSource] Time sync failed: %s", exc)
+
+    async def _get_signed_timestamp(self) -> int:
+        """获取用于签名的带偏移时间戳（毫秒）。"""
+        return int(time.time() * 1000) + self._timestamp_offset_ms
+
+    def _maybe_reset_recv_window_baseline(self) -> None:
+        """每日重置 recvWindow 基线，避免持续膨胀。"""
+        now = time.time()
+        seconds_in_day = 86400
+        if now - self._last_reset_ts >= seconds_in_day:
+            self._current_recv_window_ms = self._config.initial_recv_window_ms
+            self._last_reset_ts = now
+            logger.info(
+                "[BinanceFuturesRiskDataSource] recvWindow baseline reset to %s",
+                self._current_recv_window_ms,
+            )
+
+    async def _signed_params(self, params: dict[str, Any] | None) -> dict[str, Any]:
         payload = dict(params or {})
-        payload["timestamp"] = int(time.time() * 1000)
-        payload["recvWindow"] = self._config.recv_window_ms
+        payload["timestamp"] = await self._get_signed_timestamp()
+        payload["recvWindow"] = self._current_recv_window_ms
         query = urlencode(payload, doseq=True)
         payload["signature"] = hmac.new(
             self._config.secret_key.encode("utf-8"),
@@ -159,18 +215,23 @@ class BinanceFuturesRiskDataSource:
         signed: bool,
     ) -> Any:
         await self._ensure_session()
-        assert self._session is not None
+        if self._session is None:
+            raise BinanceFuturesRiskDataSourceError("Session not initialized")
+        if self._timestamp_offset_ms == 0:
+            await self._sync_server_time_offset()
 
         headers = {"X-MBX-APIKEY": self._config.api_key} if signed else None
-        request_params = self._signed_params(params) if signed else dict(params or {})
-        query = urlencode(request_params, doseq=True)
-        url = f"{self._config.base_url}{endpoint}"
-        if query:
-            url = f"{url}?{query}"
-
         last_error: Exception | None = None
-        attempts = max(1, self._config.max_retries)
-        for attempt in range(attempts):
+
+        for attempt in range(self._config.max_retries):
+            if signed:
+                self._maybe_reset_recv_window_baseline()
+            request_params = await self._signed_params(params) if signed else dict(params or {})
+            query = urlencode(request_params, doseq=True)
+            url = f"{self._config.base_url}{endpoint}"
+            if query:
+                url = f"{url}?{query}"
+
             try:
                 async with self._session.request(
                     method,
@@ -182,14 +243,31 @@ class BinanceFuturesRiskDataSource:
                         return await resp.json()
 
                     text = await resp.text()
+                    if signed and resp.status == 400 and '"code":-1021' in text:
+                        await self._sync_server_time_offset()
+                        self._current_recv_window_ms = min(
+                            60000,
+                            max(
+                                self._current_recv_window_ms * 2,
+                                self._config.initial_recv_window_ms,
+                            ),
+                        )
+                        last_error = BinanceFuturesRiskDataSourceError(
+                            f"-1021 on attempt {attempt + 1}, retrying with new time offset"
+                        )
+                        await asyncio.sleep(0.2 * (attempt + 1))
+                        continue
                     raise BinanceFuturesRiskDataSourceError(
                         f"{method} {endpoint} failed: status={resp.status}, body={text}"
                     )
+            except BinanceFuturesRiskDataSourceError:
+                raise
             except Exception as exc:
                 last_error = exc
-                if attempt < attempts - 1:
+                if attempt < self._config.max_retries - 1:
                     await asyncio.sleep(0.2 * (attempt + 1))
+                    continue
 
         raise BinanceFuturesRiskDataSourceError(
-            f"{method} {endpoint} failed after {attempts} attempts: {last_error}"
-        )
+            f"{method} {endpoint} failed after {self._config.max_retries} attempts: {last_error}"
+        ) from last_error

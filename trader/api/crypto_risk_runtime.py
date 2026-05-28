@@ -16,16 +16,23 @@ from trader.adapters.binance.crypto_risk_source import (
 from trader.adapters.binance.funding_oi_stream import BinanceCurrentFundingOISource
 from trader.api.env_config import get_binance_env, get_binance_recv_window
 from trader.core.application.ports import BrokerPort
-from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
+from trader.core.application.risk_engine import (
+    RejectionReason,
+    RiskCheckResult,
+    RiskConfig,
+    RiskEngine,
+    RiskLevel,
+)
 from trader.core.domain.models.crypto_risk import CryptoRiskBudget
 from trader.core.domain.models.signal import Signal
+from trader.core.domain.rules.time_window_policy import TimeWindowConfig
 from trader.services.crypto_pre_trade_risk_audit import build_audited_crypto_pre_trade_risk_check
 from trader.services.crypto_risk_snapshot import (
     BinanceFundingOIMetricsSource,
     CryptoRiskSnapshotProviderConfig,
     DataSourceCryptoRiskSnapshotProvider,
     FundingOIMetricsPort,
-    build_crypto_pre_trade_risk_check,
+    build_crypto_pre_trade_risk_engine,
 )
 
 CRYPTO_RISK_ENABLED_ENV = "CRYPTO_RISK_ENABLED"
@@ -52,6 +59,7 @@ class CryptoRiskRuntimeConfig:
     futures_base_url: str = BINANCE_USD_M_FUTURES_BASE_URL
     base_symbols: tuple[str, ...] = ()
     risk_budget: CryptoRiskBudget = field(default_factory=CryptoRiskBudget)
+    time_window_config: TimeWindowConfig = field(default_factory=TimeWindowConfig.create_default)
     timeout_seconds: float = 10.0
     recv_window_ms: int = 5000
     proxy_url: str | None = None
@@ -64,6 +72,7 @@ class CryptoRiskRuntimeComponents:
     snapshot_provider: DataSourceCryptoRiskSnapshotProvider
     pre_trade_risk_check: Callable[[Signal], Awaitable[RiskCheckResult]]
     funding_oi_metrics: Optional[FundingOIMetricsPort] = None
+    risk_engine: RiskEngine | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +127,7 @@ class CryptoRiskRuntimeManager:
         self._component_builder = component_builder or build_crypto_risk_runtime_components
         self._config = CryptoRiskRuntimeConfig()
         self._components: CryptoRiskRuntimeComponents | None = None
+        self._risk_engine: RiskEngine | None = None
         self._broker: BrokerPort | None = None
         self._status = CryptoRiskRuntimeStatusData(risk_budget=self._config.risk_budget)
         self._lock = asyncio.Lock()
@@ -143,6 +153,7 @@ class CryptoRiskRuntimeManager:
                 self._config = config
                 self._broker = None
                 self._components = None
+                self._risk_engine = None
                 self._status = self._build_status(
                     config=config,
                     wired=False,
@@ -169,6 +180,7 @@ class CryptoRiskRuntimeManager:
             self._config = config
             self._broker = broker
             self._components = components
+            self._risk_engine = components.risk_engine
             self._apply_pre_trade_check(components.pre_trade_risk_check)
             self._status = self._build_status(
                 config=config,
@@ -195,6 +207,7 @@ class CryptoRiskRuntimeManager:
             old_components = self._components
             self._config = runtime_config
             self._components = None
+            self._risk_engine = None
             self._apply_pre_trade_check(
                 build_audited_crypto_pre_trade_risk_check(
                     build_crypto_risk_setup_failure_check(reason)
@@ -238,19 +251,22 @@ class CryptoRiskRuntimeManager:
                 ),
                 funding_oi_metrics=funding_oi_metrics,
             )
-            raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(
+            risk_engine = build_crypto_pre_trade_risk_engine(
                 broker=self._broker,
                 snapshot_provider=snapshot_provider,
+                risk_config=RiskConfig(time_window_config=new_config.time_window_config),
             )
             pre_trade_risk_check = build_audited_crypto_pre_trade_risk_check(
-                raw_pre_trade_risk_check
+                risk_engine.check_pre_trade
             )
             self._components = CryptoRiskRuntimeComponents(
                 source=self._components.source,
                 snapshot_provider=snapshot_provider,
                 pre_trade_risk_check=pre_trade_risk_check,
                 funding_oi_metrics=funding_oi_metrics,
+                risk_engine=risk_engine,
             )
+            self._risk_engine = risk_engine
             self._config = new_config
             self._apply_pre_trade_check(pre_trade_risk_check)
             self._status = self._build_status(
@@ -261,6 +277,36 @@ class CryptoRiskRuntimeManager:
                 updated_by=updated_by,
             )
             return self._status
+
+    def time_window_config(self) -> TimeWindowConfig:
+        if self._risk_engine is not None:
+            return self._risk_engine.get_time_window_config()
+        return self._config.time_window_config
+
+    async def update_time_window_config(
+        self,
+        config: TimeWindowConfig,
+        *,
+        updated_by: str,
+    ) -> TimeWindowConfig:
+        async with self._lock:
+            if self._config.enabled and not self._status.wired:
+                raise RuntimeError("crypto risk runtime is not wired")
+            if self._config.enabled and self._components is not None and self._risk_engine is None:
+                raise RuntimeError("crypto risk runtime has no active RiskEngine")
+
+            new_config = replace(self._config, time_window_config=config)
+            if self._risk_engine is not None:
+                self._risk_engine.update_time_window_config(config)
+            self._config = new_config
+            self._status = self._build_status(
+                config=new_config,
+                wired=self._status.wired,
+                fail_closed=self._status.fail_closed,
+                last_error=self._status.last_error,
+                updated_by=updated_by,
+            )
+            return self.time_window_config()
 
     async def probe(
         self,
@@ -331,6 +377,7 @@ class CryptoRiskRuntimeManager:
         async with self._lock:
             components = self._components
             self._components = None
+            self._risk_engine = None
             self._broker = None
             self._apply_pre_trade_check(None)
             self._status = self._build_status(
@@ -346,6 +393,7 @@ class CryptoRiskRuntimeManager:
     def reset_for_tests(self) -> None:
         self._config = CryptoRiskRuntimeConfig()
         self._components = None
+        self._risk_engine = None
         self._broker = None
         self._pre_trade_setter = None
         self._status = CryptoRiskRuntimeStatusData(risk_budget=self._config.risk_budget)
@@ -528,15 +576,17 @@ def build_crypto_risk_runtime_components(
             budget=runtime_config.risk_budget,
         ),
     )
-    raw_pre_trade_risk_check = build_crypto_pre_trade_risk_check(
+    risk_engine = build_crypto_pre_trade_risk_engine(
         broker=broker,
         snapshot_provider=snapshot_provider,
+        risk_config=RiskConfig(time_window_config=runtime_config.time_window_config),
     )
-    pre_trade_risk_check = build_audited_crypto_pre_trade_risk_check(raw_pre_trade_risk_check)
+    pre_trade_risk_check = build_audited_crypto_pre_trade_risk_check(risk_engine.check_pre_trade)
     return CryptoRiskRuntimeComponents(
         source=source,
         snapshot_provider=snapshot_provider,
         pre_trade_risk_check=pre_trade_risk_check,
+        risk_engine=risk_engine,
     )
 
 

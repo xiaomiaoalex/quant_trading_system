@@ -169,16 +169,16 @@ class TestTimeWindowConfig:
     def test_get_slot_at_prime_time(self) -> None:
         """测试获取 PRIME 时段"""
         config = TimeWindowConfig.create_default()
-        # 10:00 UTC 应该在 PRIME 时段
-        slot = config.get_slot_at(10, 0)
+        # 02:00 UTC = 10:00 北京时间，应该在 PRIME 时段
+        slot = config.get_slot_at(2, 0)
         assert slot is not None
         assert slot.period == TimeWindowPeriod.PRIME
 
     def test_get_slot_at_off_peak_time(self) -> None:
         """测试获取 OFF_PEAK 时段"""
         config = TimeWindowConfig.create_default()
-        # 18:00 UTC 应该在 OFF_PEAK 时段
-        slot = config.get_slot_at(18, 0)
+        # 10:00 UTC = 18:00 北京时间，应该在 OFF_PEAK 时段
+        slot = config.get_slot_at(10, 0)
         assert slot is not None
         assert slot.period == TimeWindowPeriod.OFF_PEAK
         assert slot.position_coefficient == 0.5
@@ -186,11 +186,33 @@ class TestTimeWindowConfig:
     def test_get_slot_at_restricted_time(self) -> None:
         """测试获取 RESTRICTED 时段"""
         config = TimeWindowConfig.create_default()
-        # 23:00 UTC 应该在 RESTRICTED 时段
-        slot = config.get_slot_at(23, 0)
+        # 15:00 UTC = 23:00 北京时间，应该在 RESTRICTED 时段
+        slot = config.get_slot_at(15, 0)
         assert slot is not None
         assert slot.period == TimeWindowPeriod.RESTRICTED
         assert slot.allow_new_position is False
+
+    def test_default_restricted_window_uses_beijing_22_to_08(self) -> None:
+        """默认禁止新开仓时段为北京时间 22:00-08:00。"""
+        config = TimeWindowConfig.create_default()
+
+        # 北京时间 13:37 = UTC 05:37，应允许新开仓。
+        daytime_slot = config.get_slot_at(5, 37)
+        assert daytime_slot is not None
+        assert daytime_slot.period != TimeWindowPeriod.RESTRICTED
+        assert daytime_slot.allow_new_position is True
+
+        # 北京时间 22:00 = UTC 14:00，开始禁止新开仓。
+        restricted_start = config.get_slot_at(14, 0)
+        assert restricted_start is not None
+        assert restricted_start.period == TimeWindowPeriod.RESTRICTED
+        assert restricted_start.allow_new_position is False
+
+        # 北京时间 08:00 = UTC 00:00，结束禁止新开仓。
+        restricted_end = config.get_slot_at(0, 0)
+        assert restricted_end is not None
+        assert restricted_end.period != TimeWindowPeriod.RESTRICTED
+        assert restricted_end.allow_new_position is True
 
     def test_get_slot_at_no_match_returns_none(self) -> None:
         """测试无匹配时段返回 None"""
@@ -212,7 +234,7 @@ class TestTimeWindowPolicy:
     def test_evaluate_prime_period(self) -> None:
         """测试评估 PRIME 时段"""
         policy = TimeWindowPolicy()
-        ctx = policy.evaluate(10, 0)  # 10:00 UTC
+        ctx = policy.evaluate(2, 0)  # 02:00 UTC = 10:00 北京时间
         assert ctx.period == TimeWindowPeriod.PRIME
         assert ctx.position_coefficient == 1.0
         assert ctx.allow_new_position is True
@@ -220,7 +242,7 @@ class TestTimeWindowPolicy:
     def test_evaluate_off_peak_period(self) -> None:
         """测试评估 OFF_PEAK 时段"""
         policy = TimeWindowPolicy()
-        ctx = policy.evaluate(18, 0)  # 18:00 UTC
+        ctx = policy.evaluate(10, 0)  # 10:00 UTC = 18:00 北京时间
         assert ctx.period == TimeWindowPeriod.OFF_PEAK
         assert ctx.position_coefficient == 0.5
         assert ctx.allow_new_position is True
@@ -228,7 +250,7 @@ class TestTimeWindowPolicy:
     def test_evaluate_restricted_period(self) -> None:
         """测试评估 RESTRICTED 时段"""
         policy = TimeWindowPolicy()
-        ctx = policy.evaluate(23, 0)  # 23:00 UTC
+        ctx = policy.evaluate(15, 0)  # 15:00 UTC = 23:00 北京时间
         assert ctx.period == TimeWindowPeriod.RESTRICTED
         assert ctx.position_coefficient == 0.0
         assert ctx.allow_new_position is False
@@ -237,16 +259,16 @@ class TestTimeWindowPolicy:
         """测试边界：时段开始时刻"""
         config = TimeWindowConfig.create_default()
         policy = TimeWindowPolicy(config)
-        # 8:00 是 PRIME 开始
-        ctx = policy.evaluate(8, 0)
+        # 0:00 UTC = 北京 08:00，是 PRIME 开始
+        ctx = policy.evaluate(0, 0)
         assert ctx.period == TimeWindowPeriod.PRIME
 
     def test_evaluate_boundary_at_end(self) -> None:
         """测试边界：时段结束时刻"""
         config = TimeWindowConfig.create_default()
         policy = TimeWindowPolicy(config)
-        # 16:00 是 PRIME 结束，OFF_PEAK 开始
-        ctx = policy.evaluate(16, 0)
+        # 8:00 UTC = 北京 16:00，是 PRIME 结束，OFF_PEAK 开始
+        ctx = policy.evaluate(8, 0)
         assert ctx.period == TimeWindowPeriod.OFF_PEAK
 
     def test_update_config(self) -> None:

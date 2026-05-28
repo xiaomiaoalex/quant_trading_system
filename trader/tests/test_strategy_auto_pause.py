@@ -16,12 +16,15 @@ class FakeRunner:
     def __init__(self) -> None:
         self.paused: list[str] = []
         self.resumed: list[str] = []
+        self.fail_resume = False
 
     async def pause(self, deployment_id: str) -> object:
         self.paused.append(deployment_id)
         return object()
 
     async def resume(self, deployment_id: str) -> object:
+        if self.fail_resume:
+            raise RuntimeError("runner still blocked")
         self.resumed.append(deployment_id)
         return object()
 
@@ -223,3 +226,32 @@ async def test_force_resume_skips_probe_and_clears_paused_state(
         event_type="strategy_candidate.auto_resumed",
     )
     assert resumed_events[0]["payload"]["requested_by"] == "operator"
+
+
+@pytest.mark.asyncio
+async def test_auto_resume_failure_keeps_paused_state_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, runner, sse, oms, strategy_id, deployment_id = _make_service(monkeypatch)
+    for i in range(3):
+        await service.record_rejection(strategy_id, deployment_id, f"reject-{i}")
+
+    runner.fail_resume = True
+    oms.healthy = True
+    await service._probe_paused_once()
+    await service._probe_paused_once()
+
+    assert service.is_paused(deployment_id)
+    assert runner.resumed == []
+    assert service.get_paused_strategies()[0]["consecutive_probe_pass"] == 2
+
+    candidate = get_storage().get_strategy_candidate("candidate-1")
+    assert candidate is not None
+    assert candidate["status"] == "PAUSED_BY_RISK"
+    assert not any(event[2]["event_type"] == "auto_resumed" for event in sse.events)
+
+    runner.fail_resume = False
+    await service._probe_paused_once()
+
+    assert not service.is_paused(deployment_id)
+    assert runner.resumed == [deployment_id]

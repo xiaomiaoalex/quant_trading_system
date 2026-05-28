@@ -190,35 +190,35 @@ class TimeWindowConfig:
         Returns:
             TimeWindowConfig: 默认配置
         """
-        # 币圈默认配置：
-        # - PRIME: 8:00-16:00 UTC (亚洲+欧洲主力时段)
-        # - OFF_PEAK: 16:00-22:00 UTC (美国时段开始前)
-        # - RESTRICTED: 22:00-8:00 UTC (深度可能不足的时段)
+        # 币圈默认配置以北京时间业务窗口为准，内部仍用 UTC 存储和评估：
+        # - PRIME: 00:00-08:00 UTC = 北京时间 08:00-16:00
+        # - OFF_PEAK: 08:00-14:00 UTC = 北京时间 16:00-22:00
+        # - RESTRICTED: 14:00-00:00 UTC = 北京时间 22:00-08:00
         return cls(
             slots=[
                 TimeWindowSlot(
                     period=TimeWindowPeriod.PRIME,
-                    start_hour=8,
+                    start_hour=0,
                     start_minute=0,
-                    end_hour=16,
+                    end_hour=8,
                     end_minute=0,
                     position_coefficient=1.0,
                     allow_new_position=True,
                 ),
                 TimeWindowSlot(
                     period=TimeWindowPeriod.OFF_PEAK,
-                    start_hour=16,
+                    start_hour=8,
                     start_minute=0,
-                    end_hour=22,
+                    end_hour=14,
                     end_minute=0,
                     position_coefficient=0.5,
                     allow_new_position=True,
                 ),
                 TimeWindowSlot(
                     period=TimeWindowPeriod.RESTRICTED,
-                    start_hour=22,
+                    start_hour=14,
                     start_minute=0,
-                    end_hour=8,
+                    end_hour=0,
                     end_minute=0,
                     position_coefficient=0.0,
                     allow_new_position=False,

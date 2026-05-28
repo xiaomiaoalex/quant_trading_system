@@ -135,12 +135,14 @@ class StrategyAutoPauseService:
             return
 
         record = self._paused[deployment_id]
-        await self._auto_resume(
+        resumed = await self._auto_resume(
             record.strategy_id,
             deployment_id,
             triggered_by="force_resume",
             requested_by=requested_by,
         )
+        if not resumed:
+            raise RuntimeError(f"Strategy {deployment_id} remains paused; runtime resume failed")
 
     def get_paused_strategies(self) -> list[dict[str, Any]]:
         """返回所有被自动暂停的策略，供 API 查询"""
@@ -271,7 +273,7 @@ class StrategyAutoPauseService:
         deployment_id: str,
         triggered_by: str,
         requested_by: str = "auto_probe",
-    ) -> None:
+    ) -> bool:
         """1) runner resume  2) candidate PAPER_RUNNING  3) SSE"""
         logger.info(
             "[AutoPause] Resuming strategy: %s (triggered_by=%s)",
@@ -279,7 +281,10 @@ class StrategyAutoPauseService:
             triggered_by,
         )
 
-        record = self._paused.pop(deployment_id, None)
+        record = self._paused.get(deployment_id)
+        if record is None:
+            logger.info("[AutoPause] Resume skipped; %s is not auto-paused", deployment_id)
+            return False
         resumed_at_ms = int(time.time() * 1000)
 
         # 1) StrategyRunner resume
@@ -289,7 +294,10 @@ class StrategyAutoPauseService:
             runner = get_strategy_runner()
             await runner.resume(deployment_id)
         except Exception as exc:
-            logger.warning("[AutoPause] runner.resume failed (non-fatal): %s", exc)
+            logger.warning("[AutoPause] runner.resume failed; keeping paused state: %s", exc)
+            return False
+
+        self._paused.pop(deployment_id, None)
 
         # 2) Candidate state: PAPER_RUNNING
         candidate_dict = self._find_candidate_by_deployment(deployment_id)
@@ -333,6 +341,7 @@ class StrategyAutoPauseService:
                 "resumed_at_ms": resumed_at_ms,
             },
         )
+        return True
 
     async def _probe_loop(self) -> None:
         """后台 30s 周期：对所有暂停策略做风险探测，连续通过 2 次则 resume。"""

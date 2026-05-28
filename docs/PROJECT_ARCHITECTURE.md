@@ -5,11 +5,19 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-27 23:59 (北京时间)
+- 最后更新: 2026-05-28 14:34 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁。
 
-### 本次变更摘要（2026-05-27）
+### 本次变更摘要（2026-05-28）
+
+1. **时间窗口热更新接入真实下单链路**: `CryptoRiskRuntimeManager` 保存 active `RiskEngine`，`/v1/risk/time-window/config` 的 GET/PUT 改为读写 runtime manager；PUT 在 runtime wired 时直接更新 active engine 的 `TimeWindowPolicy`，不再维护 risk route 私有单例。
+2. **默认时间窗口校准**: `TimeWindowConfig.create_default()` 改为北京时间业务窗口，内部 UTC 表示为 `PRIME 00:00-08:00`、`OFF_PEAK 08:00-14:00`、`RESTRICTED 14:00-00:00`，对应北京时间 `08:00-16:00`、`16:00-22:00`、`22:00-08:00`。
+3. **自动恢复一致性修复**: `StrategyAutoPauseService` 只有在 `StrategyRunner.resume(deployment_id)` 成功后才清除暂停记录、迁移 candidate 到 `PAPER_RUNNING` 并广播 `auto_resumed`；runtime 恢复失败时保持 `PAUSED_BY_RISK`，后台探测可继续重试。
+4. **成交后持仓审计修复**: `OMSCallback` 的成交回报持仓上限审计使用 `Decimal` 规范化 `qty/quantity`，避免字符串 `"0"` 被误计为未平仓持仓。
+5. **人工恢复错误语义**: `POST /v1/strategies/{deployment_id}/force-resume` 在 runtime resume 失败时返回 `409`，前端/API 不再得到“已恢复”的错误确认。
+
+### 上次变更摘要（2026-05-27）
 
 1. **StrategyAutoPauseService 闭环**: `OMSCallback` 在 pre-trade 风控拒绝后按 `strategy_id` 记录滑动窗口，达到阈值后暂停 `deployment_id`，将候选状态转为 `PAUSED_BY_RISK`，写入 `strategy_candidate.auto_paused` 并通过 SSE 广播。
 2. **自动恢复探测**: 控制面后台任务按配置周期构造最小 `Signal` 调用现有 pre-trade 风控，连续两次健康后恢复 `StrategyRunner` 并转回 `PAPER_RUNNING`，写入 `strategy_candidate.auto_resumed`。
@@ -39,7 +47,7 @@ flowchart TB
         Lifecycle["Strategy Lifecycle / Runner"]
         AutoPause["StrategyAutoPauseService\nRisk reject windows / probe resume"]
         AllocMgmt["Allocation Management\nProfiles / Traces"]
-        CryptoRuntime["Crypto Risk Runtime Config"]
+        CryptoRuntime["Crypto Risk Runtime Manager\nBudget / TimeWindow / active RiskEngine"]
         CryptoOps["Crypto Risk Ops API"]
         Monitor["Monitor / SSE / Runtime Services"]
         KillAPI["KillSwitch API"]
@@ -247,9 +255,10 @@ sequenceDiagram
 - `MarketRiskSnapshot`、`MarketInstrumentSpec`、`MarketRiskBudget` 和 `MarketRiskAuditEvent` 是 Core / Policy / Persistence 的市场无关风险契约；Crypto 风控继续保留为 specialization，通过转换方法投影到通用契约。
 - 策略只提交 `Signal` / trade intent；最终放行、拒绝、缩量建议和 KillSwitch 建议由 Policy Plane 决定。
 - `CryptoPreTradeRiskPlugin` 通过 `CryptoRiskSnapshot` 读取账户、规则、mark price、在途订单、持仓和风险预算；`DataSourceCryptoRiskSnapshotProvider` 位于 Service 层，调用 Adapter 边界清洗后的 `CryptoRiskDataSource` 构建快照，Core 计算保持无 IO。
-- `trader/api/crypto_risk_runtime.py` 位于 Control Plane，解析 `CRYPTO_RISK_*` 环境配置，默认关闭；显式启用时由 lifespan 创建 Binance USD-M source、snapshot provider，并把 `pre_trade_risk_check` late-bind 到 OMS。
+- `trader/api/crypto_risk_runtime.py` 位于 Control Plane，解析 `CRYPTO_RISK_*` 环境配置，默认关闭；显式启用时由 lifespan 创建 Binance USD-M source、snapshot provider 和 active `RiskEngine`，并把 `pre_trade_risk_check` late-bind 到 OMS。
 - 当 `CRYPTO_RISK_ENABLED=true` 但凭证缺失、配置非法或 runtime wiring 失败时，Control Plane 会注入 fail-closed risk check，后续 OMS 下单必须拒绝而不是绕过独立风控。
 - `GET /v1/risk/crypto/runtime` 暴露 runtime 状态；`PATCH /v1/risk/crypto/budget` 仅热更新 `CryptoRiskBudget` 并重建 snapshot provider / pre-trade check，不重新创建 Binance source 或泄露凭证。
+- `GET/PUT /v1/risk/time-window/config` 读写 `CryptoRiskRuntimeManager` 的时间窗口配置；runtime wired 时 PUT 直接更新 active `RiskEngine`，已注入 OMS 的 pre-trade 回调会立即使用新窗口。
 - 每次预算热更新成功后写入控制面事件流 `risk:crypto` / `crypto_risk.budget_updated`；专用审计查询与通用 `/v1/events` 共用同一来源，便于回放与运维追踪。
 - `POST /v1/risk/crypto/probe` 是 Control Plane 的只读 readiness probe；它复用已 wired 的 USD-M 风控 source 读取账户风险、mark price、交易规则、杠杆分层、持仓、在途订单和 venue health，并写入 `risk:crypto` / `crypto_risk.probe_run` 审计事件。
 - `MarketRiskAuditRepository` 负责 PG-first 风险审计持久化；`risk:crypto` 通过 `risk_audit_events` 的 `stream_key` 过滤展示，同时保留控制面内存事件投影作为 PG 不可用时的回退和旧 `/v1/events` 兼容视图。

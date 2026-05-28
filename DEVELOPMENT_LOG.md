@@ -25,6 +25,57 @@
 
 ## 最近记录
 
+### 2026-05-28 14:34 - 时间窗口配置热更新接入 active RiskEngine
+
+- 背景: 用户确认 `/v1/risk/time-window/config` 不应再只更新 `trader.api.routes.risk` 的 `_time_window_policy` 单例，而是要热更新真实下单链路里的 active `RiskEngine`。
+- 决策: 将时间窗口配置的运行时状态收敛到 `CryptoRiskRuntimeManager`；runtime components 保存 active `RiskEngine`，route 只做 DTO/domain 转换，不再保存策略单例。
+- 改动:
+  - `trader/services/crypto_risk_snapshot.py`: 新增 `build_crypto_pre_trade_risk_engine()`，保留 `build_crypto_pre_trade_risk_check()` 兼容旧调用。
+  - `trader/api/crypto_risk_runtime.py`: `CryptoRiskRuntimeConfig` 增加 manager 级 `time_window_config`；`CryptoRiskRuntimeComponents` 保存 active `RiskEngine`；新增 `time_window_config()` 与 `update_time_window_config()`，budget 热更新重建 engine 时保留时间窗口配置。
+  - `trader/api/routes/risk.py`: GET/PUT/evaluate 时间窗口接口改为读写 runtime manager，删除 route-local `_time_window_policy`。
+  - `trader/core/application/risk_engine.py`: `update_time_window_config()` 同步 `RiskConfig.time_window_config`，新增 `get_time_window_config()`。
+  - `trader/tests/test_crypto_risk_runtime_manager.py`、`trader/tests/test_crypto_risk_runtime_api.py`、`trader/tests/test_api_endpoints.py`: 覆盖 active engine 热更新、API 写入 manager 源状态和旧时间窗口 API 行为。
+- 验证:
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py::test_runtime_manager_hot_updates_active_risk_engine_time_window trader/tests/test_crypto_risk_runtime_api.py::test_put_time_window_config_updates_runtime_manager_source_of_truth --tb=short` -> 2 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py --tb=short` -> 40 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_time_window_policy.py trader/tests/test_risk_engine_layers.py --tb=short` -> 74 passed
+  - `git diff --check` -> passed
+- 风险/遗留:
+  - runtime disabled 时 manager 仍可保存 pending/default 时间窗口配置；runtime enabled 但未 wired 或缺少 active `RiskEngine` 时 PUT 返回冲突，避免假装热更新成功。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-28 14:42 - BinanceFuturesRiskDataSource 签名时间戳同步
+
+- 背景: 用户通过 POST `/v1/risk/crypto/probe` 触发探针失败，根因是 `BinanceFuturesRiskDataSource` 签名请求直接用本机时间 `time.time() * 1000`，没有像现货 `RESTAlignmentCoordinator` 那样做 server time offset sync。本机时间漂移导致 timestamp 偏差 > recv_window，Binance 返回 -1021，系统按 fail-closed 拒单。
+- 决策: 参照 `RESTAlignmentCoordinator` 的时间同步模式：启动时调用 `/v3/time` 获取 serverTime → 计算 `_timestamp_offset_ms = server_ms - local_ms` → 签名时用 `local_ts + offset`；遇到 -1021 自动重同步并扩大 recvWindow。
+- 改动:
+  - `trader/adapters/binance/crypto_risk_source.py`: 新增 `_sync_server_time_offset()`、`_get_signed_timestamp()`、`_current_recv_window_ms`；`_signed_params()` 改 async 并使用偏移时间戳；`_request()` 首次签名请求前自动同步，遇到 -1021 重同步并倍增 recvWindow。
+  - `BinanceFuturesRiskDataSourceConfig` 新增 `initial_recv_window_ms` 字段保存基准窗口值。
+  - `trader/tests/test_binance_crypto_risk_source.py`: `_FakeSession` 增加 `get()` 方法支持时间同步请求；更新现有测试增加 time sync mock response；新增 `test_signed_request_retries_and_resyncs_on_negative_1021` 覆盖 -1021 场景。
+- 验证:
+  - `python -m pytest -q trader/tests/test_binance_crypto_risk_source.py --tb=short` -> 3 passed
+  - P0 回归 `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` -> 98 passed
+- 风险/遗留:
+  - 如果 `/v3/time` 不可用（网络问题或返回非 200），`_sync_server_time_offset()` 会静默失败并使用本机时间，这是 fallback 但仍比之前好；后续可考虑在 start() 时强制同步一次。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（如涉及签名参数约定变更）
+
+### 2026-05-28 13:54 - 默认禁开仓窗口改为北京时间 22:00-08:00
+
+- 背景: 用户在北京时间 13:37 看到 `PRE_TRADE_RISK_REJECT: TRADING_HOURS: 当前时段 RESTRICTED 禁止新开仓`。排查发现默认 `TimeWindowConfig` 按 UTC `22:00-08:00` 禁开仓，和业务期望“北京时间 22:00-08:00”不一致。
+- 决策: 保持 Core 层时间窗口以 UTC 评估，不引入时区依赖；把默认业务窗口转换成 UTC 存储：`PRIME 00:00-08:00 UTC`、`OFF_PEAK 08:00-14:00 UTC`、`RESTRICTED 14:00-00:00 UTC`。
+- 改动:
+  - `trader/core/domain/rules/time_window_policy.py`: 更新默认时间窗口和注释，明确北京业务时间与 UTC 内部时间映射。
+  - `trader/tests/test_time_window_policy.py`: 更新默认窗口断言，新增北京时间 13:37/22:00/08:00 边界测试。
+  - `trader/tests/test_api_endpoints.py`: 增加默认 API 配置的 `RESTRICTED start_hour=14/end_hour=0` 断言。
+- 验证:
+  - `python -m pytest -q trader/tests/test_time_window_policy.py trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints --tb=short` -> 37 passed
+  - `python -m pytest -q trader/tests/test_risk_engine_layers.py trader/tests/test_crypto_risk_runtime_manager.py --tb=short` -> 12 passed
+  - `git diff --check` -> passed
+- 风险/遗留:
+  - 已运行的后端需要 reload/restart 后，lifespan 装配的 active `RiskEngine` 才会使用新默认值。
+  - `/v1/risk/time-window/config` 当前只更新 risk route 自己的 `TimeWindowPolicy` 单例，不会自动传播到已经注入 OMS 的 active `RiskEngine`；真正运行时热更新需要后续接入 runtime manager 或 OMS handler setter。
+- 关联文档: `PROJECT_STATUS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-21 11:35 - Stage 5 CapitalAllocator 审查返工
 
 - 背景: Stage 5 code review 指出 allocator/management/runner 单元测试缺失、`current_notional` 与 runtime exposure 双轨污染、`total_exposure_budget` 语义不清和全局单锁扩展性问题。
@@ -1099,4 +1150,20 @@
   - `cd Frontend && npx tsc --noEmit` -> passed
   - `git diff --check` -> passed
 - 风险/遗留: 自动恢复探测当前复用 OMS 持有的 pre-trade 风控回调并构造最小 BTCUSDT 买入信号；如果后续需要按策略真实交易对探测，应从 deployment runtime config 中读取 primary symbol/quantity。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-28 00:34 - PR #108 审查问题修复
+
+- 背景: 最近 PR 审查发现两个离散一致性问题：OMS 成交后持仓上限审计会把字符串 `"0"` 误计为未平仓；自动暂停服务在 `StrategyRunner.resume()` 失败时仍清除暂停记录、迁移候选状态并广播已恢复。
+- 决策: 持仓 open/flat 判断必须先用 `Decimal` 规范化，避免 Python 字符串/数字比较语义污染风控审计；自动恢复以 runtime resume 成功为提交点，失败时保持 `PAUSED_BY_RISK` 和 `_paused` 记录，让后台探测继续重试。
+- 改动:
+  - `trader/services/oms_callback.py`: 新增 `_position_is_open()`，成交回报持仓审计使用 `Decimal(str(qty)) != 0` 计算 `open_count`。
+  - `trader/services/strategy_auto_pause.py`: `_auto_resume()` 改为先调用 `runner.resume()`，成功后再清除暂停记录、写恢复事件、迁移候选状态和广播；失败返回 `False` 并保留暂停态。
+  - `trader/api/routes/strategies.py`: `force-resume` 在 runtime 恢复失败时返回 `409`，避免 API 调用方收到错误的 resumed 响应。
+  - `trader/tests/test_oms_callback_fill_idempotency.py`: 覆盖字符串 `"0"` 持仓不应触发 position limit violation。
+  - `trader/tests/test_strategy_auto_pause.py`: 覆盖 runtime resume 失败时暂停态、candidate 状态和 SSE 都保持不变，下一次探测可重试恢复。
+- 验证:
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py::test_auto_resume_failure_keeps_paused_state_for_retry trader/tests/test_oms_callback_fill_idempotency.py::test_fill_position_limit_audit_treats_string_zero_as_flat --tb=short` -> 2 passed
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` -> 18 passed
+- 风险/遗留: 持仓审计遇到无法解析的数量仍会进入现有 warning 路径并跳过本次审计；后续如需要更严格的风险告警，可单独增加 malformed position 事件。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

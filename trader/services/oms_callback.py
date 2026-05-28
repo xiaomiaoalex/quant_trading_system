@@ -120,7 +120,7 @@ class OMSCallbackHandler:
         pre_trade_risk_check: Optional[
             Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
         ] = None,
-        max_positions: int = 3,
+        max_positions: int = 10,
         auto_pause_service: Any = None,  # StrategyAutoPauseService | None
     ):
         """
@@ -816,6 +816,16 @@ class OMSCallbackHandler:
         if "_" in cl_ord_id:
             return cl_ord_id.rsplit("_", 1)[0]
         return cl_ord_id
+
+    @staticmethod
+    def _position_is_open(position: Dict[str, Any]) -> bool:
+        """Return True when a stored position has a non-zero numeric quantity."""
+        qty_raw = position.get("qty")
+        if qty_raw is None:
+            qty_raw = position.get("quantity")
+        if qty_raw is None or qty_raw == "":
+            return False
+        return Decimal(str(qty_raw)) != Decimal("0")
 
     def get_dedup_stats(self) -> Dict[str, Any]:
         """
@@ -1833,9 +1843,7 @@ def create_oms_callback(
                 if strategy_id and handler._max_positions > 0:
                     try:
                         positions = handler._storage.list_positions(strategy_id=strategy_id)
-                        open_count = sum(
-                            1 for p in positions if (p.get("qty") or p.get("quantity") or 0) != 0
-                        )
+                        open_count = sum(1 for p in positions if handler._position_is_open(p))
                         if open_count > handler._max_positions:
                             handler._publish_event(
                                 strategy_id,

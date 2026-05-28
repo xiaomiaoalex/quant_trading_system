@@ -927,16 +927,16 @@ class TestTimeWindowConfigEndpoints:
     def setup_method(self):
         """Setup for each test"""
         self.client = TestClient(app)
-        from trader.api.routes import risk
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
 
-        # Reset the time window policy singleton to avoid state pollution
-        risk._time_window_policy = None
+        # Reset the runtime manager-owned time window config to avoid state pollution.
+        get_crypto_risk_runtime_manager().reset_for_tests()
 
     def teardown_method(self):
         """Cleanup after each test"""
-        from trader.api.routes import risk
+        from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
 
-        risk._time_window_policy = None
+        get_crypto_risk_runtime_manager().reset_for_tests()
 
     def test_get_time_window_config_default(self):
         """Test getting default time window config"""
@@ -951,6 +951,9 @@ class TestTimeWindowConfigEndpoints:
         assert "RESTRICTED" in periods
         assert "OFF_PEAK" in periods
         assert "PRIME" in periods
+        restricted = next(s for s in data["slots"] if s["period"] == "RESTRICTED")
+        assert restricted["start_hour"] == 14  # 北京时间 22:00
+        assert restricted["end_hour"] == 0  # 北京时间 08:00
 
     def test_update_time_window_config(self):
         """Test updating time window config"""

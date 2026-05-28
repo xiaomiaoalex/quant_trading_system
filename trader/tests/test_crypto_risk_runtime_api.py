@@ -15,6 +15,7 @@ from trader.core.domain.models.crypto_risk import (
     CryptoRiskBudget,
     LeverageBracket,
 )
+from trader.core.domain.rules.time_window_policy import TimeWindowPeriod
 from trader.storage.in_memory import reset_storage
 
 
@@ -73,6 +74,48 @@ def test_get_crypto_risk_runtime_status_defaults_disabled() -> None:
     assert payload["fail_closed"] is False
     assert payload["execution_env"] == "demo"
     assert payload["risk_budget"]["total_notional_cap"] == "0"
+
+
+def test_put_time_window_config_updates_runtime_manager_source_of_truth() -> None:
+    client = TestClient(app)
+    manager = get_crypto_risk_runtime_manager()
+
+    response = client.put(
+        "/v1/risk/time-window/config",
+        json={
+            "slots": [
+                {
+                    "period": "RESTRICTED",
+                    "start_hour": 14,
+                    "start_minute": 0,
+                    "end_hour": 0,
+                    "end_minute": 0,
+                    "position_coefficient": 0.0,
+                    "allow_new_position": False,
+                },
+                {
+                    "period": "PRIME",
+                    "start_hour": 0,
+                    "start_minute": 0,
+                    "end_hour": 14,
+                    "end_minute": 0,
+                    "position_coefficient": 1.0,
+                    "allow_new_position": True,
+                },
+            ],
+            "default_coefficient": 1.0,
+            "updated_by": "operator",
+        },
+    )
+
+    assert response.status_code == 200
+    config = manager.time_window_config()
+    assert config.slots[0].period == TimeWindowPeriod.RESTRICTED
+    assert config.slots[0].start_hour == 14
+
+    get_response = client.get("/v1/risk/time-window/config")
+    assert get_response.status_code == 200
+    assert get_response.json()["slots"][0]["period"] == "RESTRICTED"
 
 
 def test_patch_crypto_risk_budget_requires_wired_runtime() -> None:

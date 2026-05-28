@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from trader.core.domain.models.order import OrderStatus
 from trader.services.oms_callback import create_oms_callback
 from trader.storage.in_memory import get_storage, reset_storage
 
@@ -97,3 +98,73 @@ async def test_fill_handler_uses_trade_id_when_exec_id_missing():
     assert executions[0]["exec_id"] == "777"
     assert len(fills) == 1
     assert fills[0][0] == "mybot_alpha"
+
+
+@pytest.mark.asyncio
+async def test_fill_position_limit_audit_treats_string_zero_as_flat():
+    reset_storage()
+    storage = get_storage()
+    events = []
+
+    storage.create_order(
+        {
+            "cl_ord_id": "limitbot_abcdef1234567890",
+            "strategy_id": "limitbot",
+            "instrument": "BTCUSDT",
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "qty": "1",
+            "status": OrderStatus.SUBMITTED.value,
+        }
+    )
+    storage.upsert_position(
+        {
+            "account_id": "acc",
+            "venue": "dummy_broker",
+            "strategy_id": "limitbot",
+            "instrument": "BTCUSDT",
+            "qty": "0",
+        }
+    )
+    storage.upsert_position(
+        {
+            "account_id": "acc",
+            "venue": "dummy_broker",
+            "strategy_id": "limitbot",
+            "instrument": "ETHUSDT",
+            "qty": "0.5",
+        }
+    )
+    storage.upsert_position(
+        {
+            "account_id": "acc",
+            "venue": "dummy_broker",
+            "strategy_id": "limitbot",
+            "instrument": "SOLUSDT",
+            "quantity": "1",
+        }
+    )
+
+    _, fill_handler, handler = create_oms_callback(
+        broker=_DummyBroker(),
+        live_trading_enabled=True,
+        event_callback=lambda strategy_id, event_type, payload: events.append(
+            (strategy_id, event_type, payload)
+        ),
+    )
+    handler.set_max_positions(2)
+
+    await fill_handler(
+        SimpleNamespace(
+            cl_ord_id="limitbot_abcdef1234567890",
+            side="BUY",
+            qty=1,
+            price=50000.0,
+            trade_id=123,
+            exec_id="exec-position-limit",
+            symbol="BTCUSDT",
+            commission=0.0,
+        )
+    )
+
+    assert not [event for event in events if event[1] == "strategy.position_limit_violated"]
