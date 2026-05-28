@@ -44,6 +44,21 @@
   - runtime disabled 时 manager 仍可保存 pending/default 时间窗口配置；runtime enabled 但未 wired 或缺少 active `RiskEngine` 时 PUT 返回冲突，避免假装热更新成功。
 - 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
 
+### 2026-05-28 14:42 - BinanceFuturesRiskDataSource 签名时间戳同步
+
+- 背景: 用户通过 POST `/v1/risk/crypto/probe` 触发探针失败，根因是 `BinanceFuturesRiskDataSource` 签名请求直接用本机时间 `time.time() * 1000`，没有像现货 `RESTAlignmentCoordinator` 那样做 server time offset sync。本机时间漂移导致 timestamp 偏差 > recv_window，Binance 返回 -1021，系统按 fail-closed 拒单。
+- 决策: 参照 `RESTAlignmentCoordinator` 的时间同步模式：启动时调用 `/v3/time` 获取 serverTime → 计算 `_timestamp_offset_ms = server_ms - local_ms` → 签名时用 `local_ts + offset`；遇到 -1021 自动重同步并扩大 recvWindow。
+- 改动:
+  - `trader/adapters/binance/crypto_risk_source.py`: 新增 `_sync_server_time_offset()`、`_get_signed_timestamp()`、`_current_recv_window_ms`；`_signed_params()` 改 async 并使用偏移时间戳；`_request()` 首次签名请求前自动同步，遇到 -1021 重同步并倍增 recvWindow。
+  - `BinanceFuturesRiskDataSourceConfig` 新增 `initial_recv_window_ms` 字段保存基准窗口值。
+  - `trader/tests/test_binance_crypto_risk_source.py`: `_FakeSession` 增加 `get()` 方法支持时间同步请求；更新现有测试增加 time sync mock response；新增 `test_signed_request_retries_and_resyncs_on_negative_1021` 覆盖 -1021 场景。
+- 验证:
+  - `python -m pytest -q trader/tests/test_binance_crypto_risk_source.py --tb=short` -> 3 passed
+  - P0 回归 `python -m pytest -q trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py trader/tests/test_binance_degraded_cascade.py trader/tests/test_deterministic_layer.py trader/tests/test_hard_properties.py --tb=short` -> 98 passed
+- 风险/遗留:
+  - 如果 `/v3/time` 不可用（网络问题或返回非 200），`_sync_server_time_offset()` 会静默失败并使用本机时间，这是 fallback 但仍比之前好；后续可考虑在 start() 时强制同步一次。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（如涉及签名参数约定变更）
+
 ### 2026-05-28 13:54 - 默认禁开仓窗口改为北京时间 22:00-08:00
 
 - 背景: 用户在北京时间 13:37 看到 `PRE_TRADE_RISK_REJECT: TRADING_HOURS: 当前时段 RESTRICTED 禁止新开仓`。排查发现默认 `TimeWindowConfig` 按 UTC `22:00-08:00` 禁开仓，和业务期望“北京时间 22:00-08:00”不一致。

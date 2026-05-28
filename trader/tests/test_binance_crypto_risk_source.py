@@ -48,6 +48,13 @@ class _FakeSession:
             raise AssertionError("No queued fake response")
         return self._responses.pop(0)
 
+    def get(self, url: str, **kwargs: Any) -> _FakeResponse:
+        """Support async with session.get(url) pattern used by _sync_server_time_offset."""
+        self.calls.append({"method": "GET", "url": url, "headers": None, "proxy": kwargs.get("proxy")})
+        if not self._responses:
+            raise AssertionError("No queued fake response")
+        return self._responses.pop(0)
+
     async def close(self) -> None:
         self.closed = True
 
@@ -67,6 +74,7 @@ def _source(session: _FakeSession) -> BinanceFuturesRiskDataSource:
 async def test_account_request_is_signed_and_mapped(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeSession(
         [
+            _FakeResponse(200, {"serverTime": 100300}),  # time sync response
             _FakeResponse(
                 200,
                 {
@@ -74,7 +82,7 @@ async def test_account_request_is_signed_and_mapped(monkeypatch: pytest.MonkeyPa
                     "availableBalance": "800",
                     "totalMarginBalance": "1050",
                 },
-            )
+            ),
         ]
     )
     monkeypatch.setattr(
@@ -85,12 +93,13 @@ async def test_account_request_is_signed_and_mapped(monkeypatch: pytest.MonkeyPa
     account = await _source(session).get_account_risk()
 
     assert account.margin_balance == account.equity
-    call = session.calls[0]
+    call = session.calls[1]
     assert call["method"] == "GET"
     assert call["headers"] == {"X-MBX-APIKEY": "key"}
     assert urlparse(call["url"]).path == "/fapi/v3/account"
     query = parse_qs(urlparse(call["url"]).query)
-    assert query["timestamp"] == ["100000"]
+    # timestamp = local_ms(100000) + offset(300) = 100300
+    assert query["timestamp"] == ["100300"]
     assert query["recvWindow"] == ["5000"]
     assert "signature" in query
 
@@ -99,6 +108,7 @@ async def test_account_request_is_signed_and_mapped(monkeypatch: pytest.MonkeyPa
 async def test_public_exchange_info_is_mapped_without_api_key_header() -> None:
     session = _FakeSession(
         [
+            _FakeResponse(200, {"serverTime": 100000}),
             _FakeResponse(
                 200,
                 {
@@ -128,6 +138,62 @@ async def test_public_exchange_info_is_mapped_without_api_key_header() -> None:
 
     assert specs["BTCUSDT"].qty_step == specs["BTCUSDT"].min_qty
     assert specs["BTCUSDT"].min_notional == Decimal("10")
-    call = session.calls[0]
+    call = session.calls[1]
     assert call["headers"] is None
     assert urlparse(call["url"]).path == "/fapi/v1/exchangeInfo"
+
+
+@pytest.mark.asyncio
+async def test_signed_request_retries_and_resyncs_on_negative_1021(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """-1021 时自动重同步时间并扩大 recvWindow。"""
+    session = _FakeSession(
+        [
+            _FakeResponse(200, {"serverTime": 100000}),  # initial time sync
+            _FakeResponse(400, '{"code":-1021,"msg":"Timestamp problem"}'),  # first attempt fails
+            _FakeResponse(200, {"serverTime": 100500}),  # resync with new offset
+            _FakeResponse(
+                200,
+                {
+                    "totalWalletBalance": "1000",
+                    "availableBalance": "800",
+                    "totalMarginBalance": "1050",
+                },
+            ),
+        ]
+    )
+    # max_retries=2: first attempt fails with -1021, second attempt succeeds
+    source = BinanceFuturesRiskDataSource(
+        BinanceFuturesRiskDataSourceConfig(
+            api_key="key",
+            secret_key="secret",
+            max_retries=2,
+        ),
+        session=session,
+    )
+    monkeypatch.setattr(
+        "trader.adapters.binance.crypto_risk_source.time.time",
+        lambda: 100.0,
+    )
+
+    account = await source.get_account_risk()
+
+    # 4 calls: time_sync, failed_attempt, resync, success
+    assert len(session.calls) == 4
+    # First call is time sync
+    assert session.calls[0]["url"].endswith("/v3/time")
+    # Second call is the failed signed request (recvWindow still 5000)
+    call2 = session.calls[1]
+    query2 = parse_qs(urlparse(call2["url"]).query)
+    assert query2["recvWindow"] == ["5000"]
+    # Third call is resync (gets new serverTime 100500, offset 500)
+    assert session.calls[2]["url"].endswith("/v3/time")
+    # Fourth call is retry with expanded recvWindow
+    call4 = session.calls[3]
+    query4 = parse_qs(urlparse(call4["url"]).query)
+    # recvWindow doubled: min(60000, 5000*2) = 10000
+    assert query4["recvWindow"] == ["10000"]
+    # timestamp = 100000 + 500 = 100500
+    assert query4["timestamp"] == ["100500"]
+    assert account.margin_balance == account.equity
