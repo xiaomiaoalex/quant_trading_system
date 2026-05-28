@@ -628,6 +628,15 @@ async def lifespan(app: FastAPI):
 
             set_strategy_orchestrator_connector(connector)
 
+            # C1: 主动初始化 broker 注册（确保 Monitor API 在 startup 时能查到 broker）
+            try:
+                from trader.api.routes.strategies import _create_broker
+
+                await _create_broker()
+                logger.info("[Lifespan] Broker registered on startup")
+            except Exception as exc:
+                logger.warning("[Lifespan] Initial broker registration failed (non-fatal): %s", exc)
+
             # ============================================================
             # Task 18: Runtime State Recovery
             # ============================================================
