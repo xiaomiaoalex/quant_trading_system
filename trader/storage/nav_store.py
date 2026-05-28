@@ -24,12 +24,13 @@ _pg_storage: Optional[Any] = None
 _pg_init_lock: Optional[asyncio.Lock] = None
 _pg_available: Optional[bool] = None  # None=未知, True=可用, False=不可用
 _pg_last_failure_ts: float = 0.0
+_pg_notified_once: bool = False  # D1: 首次失败打 INFO，后续只打 DEBUG
 _PG_RETRY_INTERVAL: float = 60.0  # 失败后 60 秒允许重试
 
 
 async def _ensure_pg() -> Optional[Any]:
     """懒初始化 PostgreSQL 连接，失败后按退避间隔重试。"""
-    global _pg_storage, _pg_init_lock, _pg_available, _pg_last_failure_ts
+    global _pg_storage, _pg_init_lock, _pg_available, _pg_last_failure_ts, _pg_notified_once
 
     if _pg_available is False:
         if time.monotonic() - _pg_last_failure_ts < _PG_RETRY_INTERVAL:
@@ -58,12 +59,24 @@ async def _ensure_pg() -> Optional[Any]:
             await storage.connect()
             _pg_storage = storage
             _pg_available = True
+            _pg_notified_once = False  # 重置，后续失败重新提示
             logger.info("NAV store: PostgreSQL connected")
             return storage
         except Exception as exc:
             _pg_available = False
             _pg_last_failure_ts = time.monotonic()
-            logger.info("NAV store: PostgreSQL not available (%s), using memory only", exc)
+            if not _pg_notified_once:
+                logger.info(
+                    "NAV store: PostgreSQL not available (%s), using memory only. "
+                    "Subsequent failures will be logged at DEBUG level.",
+                    exc,
+                )
+                _pg_notified_once = True
+            else:
+                logger.debug(
+                    "NAV store: PostgreSQL not available (%s), using memory only",
+                    exc,
+                )
             return None
 
 
