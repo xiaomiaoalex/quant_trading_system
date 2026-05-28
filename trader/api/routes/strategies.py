@@ -104,6 +104,7 @@ def reset_strategy_route_state_for_tests() -> None:
     global _strategy_runner_instance, _strategy_orchestrator_instance
     global _pending_orchestrator_connector, _broker_instance, _broker_lock
     global _live_trading_enabled, _oms_handler, _oms_handler_instance, _fill_handler
+    global _auto_pause_service
     global _execution_budget, _account_state, _pre_trade_risk_check
 
     _strategy_runner_instance = None
@@ -115,6 +116,7 @@ def reset_strategy_route_state_for_tests() -> None:
     _oms_handler = None
     _oms_handler_instance = None
     _fill_handler = None
+    _auto_pause_service = None
     _execution_budget = None
     _account_state = None
     _pre_trade_risk_check = None
@@ -177,6 +179,20 @@ _fill_handler: Optional[Any] = None
 _execution_budget: Optional[Any] = None
 _account_state: Optional[Any] = None
 _pre_trade_risk_check: Optional[Any] = None
+_auto_pause_service: Optional[Any] = None
+
+
+def set_auto_pause_service(svc: Any) -> None:
+    """注入 StrategyAutoPauseService 实例（在 main.py lifespan 中调用）。"""
+    global _auto_pause_service
+    _auto_pause_service = svc
+    if _oms_handler_instance is not None:
+        _oms_handler_instance.set_auto_pause_service(svc)
+
+
+def get_auto_pause_service() -> Optional[Any]:
+    """返回当前注入的 StrategyAutoPauseService（如有）。"""
+    return _auto_pause_service
 
 
 def set_execution_budget(budget: Any) -> None:
@@ -238,6 +254,7 @@ async def _get_oms_handler():
             execution_budget=_execution_budget,
             account_state=_account_state,
             pre_trade_risk_check=_pre_trade_risk_check,
+            auto_pause_service=_auto_pause_service,
         )
         _oms_handler = oms_cb
         _oms_handler_instance = handler_instance  # 保存实际 handler 实例，用于获取 metrics
@@ -261,7 +278,15 @@ def get_oms_metrics() -> Optional[Dict[str, Any]]:
 
 async def shutdown_strategy_runtime_resources() -> None:
     """关闭策略路由层持有的 Broker/OMS 资源，避免 reload 场景 session 泄漏。"""
-    global _broker_instance, _oms_handler, _oms_handler_instance, _fill_handler
+    global _broker_instance, _oms_handler, _oms_handler_instance, _fill_handler, _auto_pause_service
+    # 先停止 auto_pause 后台探测
+    if _auto_pause_service is not None:
+        try:
+            await _auto_pause_service.stop()
+        except Exception as exc:
+            logger.warning(f"[Strategies] auto_pause stop failed: {exc}")
+        _auto_pause_service = None
+
     async with _broker_lock:
         if _broker_instance is not None:
             try:
@@ -292,6 +317,46 @@ async def ensure_fill_handler_ready():
     if _fill_handler is None:
         await _get_oms_handler()
     return _fill_handler
+
+
+# ============================================================
+# E4: Auto-Pause API Endpoints (Strategy auto-pause/resume)
+# ============================================================
+
+
+@router.get("/v1/strategies/auto-paused")
+async def list_auto_paused_strategies():
+    """列出所有被自动暂停的策略及其状态。"""
+    svc = get_auto_pause_service()
+    if svc is None:
+        return {"paused_strategies": [], "service_running": False}
+    return {
+        "paused_strategies": svc.get_paused_strategies(),
+        "service_running": True,
+    }
+
+
+@router.post("/v1/strategies/{deployment_id}/force-resume")
+async def force_resume_strategy(
+    deployment_id: str,
+    requested_by: str = "manual_api",
+):
+    """手动跳过探测条件，强制恢复被自动暂停的策略。"""
+    from fastapi import HTTPException
+
+    svc = get_auto_pause_service()
+    if svc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Auto-pause service not initialized",
+        )
+    if not svc.is_paused(deployment_id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Strategy {deployment_id} is not auto-paused by risk",
+        )
+    await svc.force_resume(deployment_id, requested_by=requested_by)
+    return {"deployment_id": deployment_id, "status": "resumed", "requested_by": requested_by}
 
 
 def get_strategy_runner() -> StrategyRunner:

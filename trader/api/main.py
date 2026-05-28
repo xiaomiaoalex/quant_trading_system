@@ -235,6 +235,25 @@ def _seed_strategies() -> None:
             service.register_strategy(req)
 
 
+async def _fetch_spot_account_balances(account_provider: Any) -> list[dict]:
+    """Fetch raw Binance spot balances from an account-capable broker/provider."""
+    fetch_account = getattr(account_provider, "_fetch_account", None)
+    if not callable(fetch_account):
+        raise RuntimeError(
+            "Account REST snapshot provider must expose _fetch_account(); "
+            f"got {type(account_provider).__name__}"
+        )
+
+    account = await fetch_account()
+    balances = account.get("balances", [])
+    if not isinstance(balances, list):
+        raise RuntimeError(
+            "Account REST snapshot provider returned invalid balances payload: "
+            f"{type(balances).__name__}"
+        )
+    return balances
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _binance_connector_instance, _binance_cascade_controller
@@ -274,12 +293,15 @@ async def lifespan(app: FastAPI):
             )
             if not api_key or not secret_key:
                 await crypto_risk_manager.set_fail_closed(
-                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing",
+                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing. "
+                    "Hint: set BINANCE_API_KEY and BINANCE_SECRET_KEY in .env, "
+                    "or set CRYPTO_RISK_ENABLED=false to disable crypto risk checks.",
                     config=crypto_risk_config,
                 )
-                logger.error(
+                logger.warning(
                     "[CryptoRisk] Enabled without Binance credentials; OMS risk check "
-                    "is set to fail-closed"
+                    "is set to fail-closed. To fix: add BINANCE_API_KEY and "
+                    "BINANCE_SECRET_KEY to .env, or set CRYPTO_RISK_ENABLED=false"
                 )
         else:
             logger.info("[CryptoRisk] Runtime disabled")
@@ -416,11 +438,15 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     if crypto_risk_manager is not None:
                         await crypto_risk_manager.set_fail_closed(
-                            str(e),
+                            f"Crypto risk runtime wiring failed: {e}. "
+                            "Hint: check BINANCE_API_KEY/BINANCE_SECRET_KEY permissions and network access to futures_base_url.",
                             config=crypto_risk_config,
                         )
-                    logger.exception(
-                        "[CryptoRisk] Runtime wiring failed; OMS risk check is fail-closed"
+                    logger.warning(
+                        "[CryptoRisk] Runtime wiring failed (%s); OMS risk check is fail-closed. "
+                        "To fix: verify API key has Futures read permissions and "
+                        "CRYPTO_RISK_FUTURES_BASE_URL is reachable.",
+                        e,
                     )
                     raise
 
@@ -491,6 +517,45 @@ async def lifespan(app: FastAPI):
 
             # 存储引用用于 shutdown 清理
             _binance_cascade_controller = _cascade_controller
+
+            # E3: 初始化自动暂停服务
+            try:
+                from trader.api.routes.sse import get_sse_manager
+                from trader.api.routes.strategies import _get_oms_handler, set_auto_pause_service
+                from trader.services.strategy_auto_pause import (
+                    AutoPauseConfig,
+                    StrategyAutoPauseService,
+                )
+                from trader.services.strategy_candidate import StrategyCandidateService
+
+                auto_pause_cfg = AutoPauseConfig(
+                    window_sec=int(os.environ.get("RISK_AUTO_PAUSE_WINDOW_SEC", "60")),
+                    threshold=int(os.environ.get("RISK_AUTO_PAUSE_THRESHOLD", "10")),
+                    probe_interval_sec=int(
+                        os.environ.get("RISK_AUTO_PAUSE_PROBE_INTERVAL_SEC", "30")
+                    ),
+                )
+
+                # 确保 OMS handler 已创建
+                await _get_oms_handler()
+                from trader.api.routes.strategies import _oms_handler_instance
+
+                auto_pause_svc = StrategyAutoPauseService(
+                    oms_handler=_oms_handler_instance,
+                    sse_manager=get_sse_manager(),
+                    candidate_service=StrategyCandidateService(),
+                    config=auto_pause_cfg,
+                )
+                set_auto_pause_service(auto_pause_svc)
+                await auto_pause_svc.start()
+                logger.info(
+                    "[AutoPause] Service started: window=%ds threshold=%d probe=%ds",
+                    auto_pause_cfg.window_sec,
+                    auto_pause_cfg.threshold,
+                    auto_pause_cfg.probe_interval_sec,
+                )
+            except Exception as exc:
+                logger.warning("[Lifespan] Auto-pause service init failed (non-fatal): %s", exc)
 
             # ============================================================
             # Task 16: Startup Self-Check (fail-closed)
@@ -567,9 +632,14 @@ async def lifespan(app: FastAPI):
             _binance_connector_instance = connector
 
             # 初始 REST snapshot 校准 + 周期校准
+            from trader.api.routes.strategies import get_oms_broker
+
+            account_snapshot_provider = get_oms_broker()
+            if account_snapshot_provider is None:
+                raise RuntimeError("OMS broker is not initialized for account REST snapshot")
+
             async def _fetch_balances() -> list[dict]:
-                account = await connector._fetch_account()
-                return account.get("balances", [])
+                return await _fetch_spot_account_balances(account_snapshot_provider)
 
             await bridge.fetch_and_apply_rest_snapshot(_fetch_balances)
             bridge.start_periodic_calibration(_fetch_balances)
@@ -596,6 +666,15 @@ async def lifespan(app: FastAPI):
             from trader.api.routes.strategies import set_strategy_orchestrator_connector
 
             set_strategy_orchestrator_connector(connector)
+
+            # C1: 主动初始化 broker 注册（确保 Monitor API 在 startup 时能查到 broker）
+            try:
+                from trader.api.routes.strategies import _create_broker
+
+                await _create_broker()
+                logger.info("[Lifespan] Broker registered on startup")
+            except Exception as exc:
+                logger.warning("[Lifespan] Initial broker registration failed (non-fatal): %s", exc)
 
             # ============================================================
             # Task 18: Runtime State Recovery

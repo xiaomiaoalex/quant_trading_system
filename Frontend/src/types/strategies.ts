@@ -35,6 +35,12 @@ export interface StrategyRuntimeInfo {
   stop_reason: string | null
   config: Record<string, unknown>
   blocked_reason: string | null
+  auto_pause?: {
+    reason: string
+    paused_at_ms: number
+    reject_count_in_window: number
+    probe_consecutive_pass: number
+  }
 }
 
 export interface LoadStrategyPayload {
@@ -253,6 +259,24 @@ export interface NAVPoint {
   unrealized_pnl: number
   realized_pnl: number
   total_pnl: number
+}
+
+// E6: Auto-pause state from /v1/strategies/auto-paused
+export interface AutoPauseRecord {
+  deployment_id: string
+  strategy_id: string
+  last_reason: string
+  reject_count: number
+  paused_at_ms: number
+  consecutive_probe_pass: number
+  probe_required: number
+  window_sec: number
+  threshold: number
+}
+
+export interface AutoPausedListResponse {
+  paused_strategies: AutoPauseRecord[]
+  service_running: boolean
 }
 
 export function buildDeploymentId(

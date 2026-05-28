@@ -437,7 +437,10 @@ def get_crypto_risk_runtime_config(
     return CryptoRiskRuntimeConfig(
         enabled=True,
         execution_env=get_binance_env(source),
-        futures_base_url=_parse_base_url(source.get(CRYPTO_RISK_FUTURES_BASE_URL_ENV)),
+        futures_base_url=_parse_base_url(
+            source.get(CRYPTO_RISK_FUTURES_BASE_URL_ENV),
+            execution_env=get_binance_env(source),
+        ),
         base_symbols=_parse_symbol_list(source.get(CRYPTO_RISK_BASE_SYMBOLS_ENV)),
         risk_budget=CryptoRiskBudget(
             symbol_notional_caps=_parse_symbol_decimal_map(
@@ -903,11 +906,14 @@ def _parse_enabled(raw: str | None) -> bool:
     )
 
 
-def _parse_base_url(raw: str | None) -> str:
+def _parse_base_url(raw: str | None, execution_env: str = "demo") -> str:
     value = _parse_optional_text(raw)
-    if value is None:
-        return BINANCE_USD_M_FUTURES_BASE_URL
-    return value.rstrip("/")
+    if value is not None:
+        return value.rstrip("/")
+    # Demo/testnet modes default to testnet Futures to avoid accidentally hitting production API
+    if execution_env in ("demo", "testnet"):
+        return "https://testnet.binancefuture.com"
+    return BINANCE_USD_M_FUTURES_BASE_URL
 
 
 def _parse_symbol_list(raw: str | None) -> tuple[str, ...]:

@@ -5,11 +5,17 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-21 22:07 (北京时间)
+- 最后更新: 2026-05-27 23:59 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁。
 
-### 本次变更摘要（2026-05-20）
+### 本次变更摘要（2026-05-27）
+
+1. **StrategyAutoPauseService 闭环**: `OMSCallback` 在 pre-trade 风控拒绝后按 `strategy_id` 记录滑动窗口，达到阈值后暂停 `deployment_id`，将候选状态转为 `PAUSED_BY_RISK`，写入 `strategy_candidate.auto_paused` 并通过 SSE 广播。
+2. **自动恢复探测**: 控制面后台任务按配置周期构造最小 `Signal` 调用现有 pre-trade 风控，连续两次健康后恢复 `StrategyRunner` 并转回 `PAPER_RUNNING`，写入 `strategy_candidate.auto_resumed`。
+3. **人工覆盖入口**: 新增 `GET /v1/strategies/auto-paused` 和 `POST /v1/strategies/{deployment_id}/force-resume`，前端 Strategies 页面展示风控暂停原因、拒绝窗口和探测进度。
+
+### 上次变更摘要（2026-05-20）
 
 1. **Strategy Lab Debug 契约对齐**: 新增 `StrategyCandidateDebugResponse` 模型，debug 失败保持 `DRAFT` 状态
 2. **Risk Mode 端到端透传**: 前端 `Backtests.tsx` -> `BacktestDatasetSpec.risk_mode` -> `BacktestRequest.risk_mode` -> 回测引擎
@@ -31,6 +37,7 @@ flowchart TB
     subgraph Control["Control Plane: trader/api/, trader/services/"]
         API["FastAPI Routes"]
         Lifecycle["Strategy Lifecycle / Runner"]
+        AutoPause["StrategyAutoPauseService\nRisk reject windows / probe resume"]
         AllocMgmt["Allocation Management\nProfiles / Traces"]
         CryptoRuntime["Crypto Risk Runtime Config"]
         CryptoOps["Crypto Risk Ops API"]
@@ -73,6 +80,7 @@ flowchart TB
     end
 
     API --> Lifecycle
+    API --> AutoPause
     API --> AllocMgmt
     API --> CryptoOps
     Lifecycle --> CryptoRuntime
@@ -84,6 +92,11 @@ flowchart TB
     CryptoRuntime --> CryptoSource
     CryptoRuntime --> RiskAudit
     Lifecycle --> Gate
+    Lifecycle --> AutoPause
+    AutoPause --> Lifecycle
+    AutoPause --> Gate
+    AutoPause --> EventLog
+    AutoPause --> Monitor
     Gate --> Risk
     Risk --> CryptoGate
     CryptoGate --> CryptoSnapshot
@@ -132,12 +145,17 @@ flowchart LR
     Exchange["Binance Exchange"] -->|WS market data| Public["Public Stream"]
     Exchange -->|WS account/order events| Private["Private Stream"]
     Exchange -->|REST snapshots| Rest["REST Alignment"]
+    Exchange -->|REST account snapshot /v3/account| AccountProvider["Account Snapshot Provider\n(Binance broker)"]
 
     Public --> AdapterMap["Adapter Canonical Mapping"]
     Private --> AdapterMap
     Rest --> AdapterMap
+    Private -->|account/balance events| AccountBridge["AccountStreamBridge"]
+    AccountProvider --> AccountBridge
+    AccountBridge --> AccountState["AccountStateService / ExecutionBudget"]
 
     AdapterMap --> OMS["OMS / Core State"]
+    AccountState --> OMS
     OMS --> EventLog["Append-only Event Log"]
     EventLog --> Projectors["Projectors / Read Models"]
     Projectors --> API["FastAPI"]
@@ -151,7 +169,9 @@ flowchart LR
 ### 数据流规则
 
 - WS 负责低延迟驱动，REST 负责最终一致性校准。
+- REST Alignment 的 public 自检与时间同步必须复用统一 proxy failover；主代理不可达时需在本次请求内重试备代理，不能把单次代理连接失败误判为交易所 REST 整体不可用。
 - Adapter 将外部字段转换为内部标准字段，Core 不接收交易所原始 payload。
+- `AccountStreamBridge` 汇总 Private Stream account/balance 事件和 REST `/v3/account` 快照，写入 `AccountStateService` 并驱动 `ExecutionBudget`；REST 账户快照 provider 必须来自具备账户读取能力的 broker/account provider，不得假定 `BinanceConnector` 暴露账户读取私有方法。
 - Event Log 是状态回放真相源，读模型只是投影。
 - 控制面操作必须经过 Policy / KillSwitch，不得绕过 Core 状态机。
 
@@ -164,6 +184,7 @@ sequenceDiagram
     participant FE as Frontend/API
     participant Runner as StrategyRunner
     participant Policy as Risk/Policy Gates
+    participant AutoPause as StrategyAutoPauseService
     participant Allocator as CapitalAllocator
     participant Snapshot as Crypto Snapshot Provider
     participant OMS as OMS
@@ -178,6 +199,17 @@ sequenceDiagram
     Snapshot-->>Policy: CryptoRiskSnapshot or fail-closed error
     Policy->>Policy: exchange rules / open-order exposure / cluster exposure / margin check
     Policy-->>Runner: approve / reject / reduce
+    alt pre-trade risk rejected repeatedly
+        Runner->>AutoPause: record_rejection(strategy_id, deployment_id, reason)
+        AutoPause->>Runner: pause(deployment_id)
+        AutoPause->>Store: strategy_candidate.auto_paused
+        AutoPause-->>FE: SSE strategy_update auto_paused
+        AutoPause->>Policy: periodic probe via pre_trade_risk_check
+        Policy-->>AutoPause: consecutive healthy results
+        AutoPause->>Runner: resume(deployment_id)
+        AutoPause->>Store: strategy_candidate.auto_resumed
+        AutoPause-->>FE: SSE strategy_update auto_resumed
+    end
     Runner->>Allocator: check profile + runtime exposure
     Allocator->>Allocator: portfolio-wide lock + in-flight reservation
     Allocator-->>Runner: approved / clipped / rejected
@@ -201,6 +233,7 @@ sequenceDiagram
 ### 闭环不变性
 
 - 下单前必须经过风险、余额、预算、KillSwitch 和 CapitalAllocator gate。
+- 自动暂停只处理“同一策略运行实例被风控反复拒绝”的休眠/恢复体验，不改变 KillSwitch、RiskEngine 或 Fail-Closed 的判定优先级。
 - 开仓信号在 OMS callback 前必须按 `deployment_id` 读取最新 allocation profile；`REJECTED` 不得调用 OMS，`CLIPPED` 必须修改 `Signal.quantity` 后再进入 OMS。
 - CapitalAllocator 的 OMS 前 reservation 只存在于进程内，不得提前增加 `StrategyAllocationProfile.current_notional`；只有 OMS callback 返回 truthy 后，才提交 committed exposure 并更新 `current_notional`。
 - Allocation reservation 使用 portfolio-wide 锁；同一运行进程内所有 symbol 的分配检查、预留、提交和释放串行化，避免跨 symbol 并发穿透组合级预算或净敞口限制。

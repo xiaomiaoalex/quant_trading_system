@@ -4,9 +4,81 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-21 22:07 (北京时间)
+2026-05-27 23:59 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：Group E 策略自动暂停/恢复闭环
+- 完成时间: 2026-05-27 23:59 (北京时间)
+- 状态: 已完成
+- 目标: 接手 Group E，补齐策略被风控反复拒绝时自动暂停、前端可见、风控恢复后自动恢复和手动强制恢复的闭环。
+- 开发前状态:
+  - `StrategyAutoPauseService` 已有雏形，但风险探测 dummy `Signal` 与现有模型不匹配。
+  - 候选状态更新依赖 `deployment_id.split("__")[0]`，无法可靠定位绑定的 `candidate_id`。
+  - 前端已新增 auto-paused 查询，但部署卡片没有消费该数据，SSE 也未刷新 auto-paused 查询。
+- 开发后状态:
+  - 自动暂停按 `strategy_id` 滑动窗口计数，达到阈值后只触发一次 `runner.pause(deployment_id)`，并将绑定 candidate 转为 `PAUSED_BY_RISK`。
+  - 自动暂停/恢复分别写入 `strategy_candidate.auto_paused`、`strategy_candidate.auto_resumed`，并通过 `strategies/strategy_update` SSE 广播。
+  - 恢复探测改用合法 `Signal(strategy_name=..., metadata.auto_pause_probe=true)`，连续健康后恢复 `PAPER_RUNNING`；`force-resume` 会跳过探测直接恢复。
+  - Strategies 页面展示 `Paused by Risk` 徽章、拒绝原因、窗口拒绝次数、探测进度和 `Force Resume` 按钮。
+- Issue 状态迁移:
+  - 风控反复拒绝导致策略持续发信号且前端不可见：`待确认` → `已验证`
+  - 自动暂停并发触发可能重复 pause/SSE：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py --tb=short` → 5 passed
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 9 passed
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_snapshot_provider.py --tb=short` → 17 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` → 99 passed
+  - `cd Frontend && npx tsc --noEmit` → passed
+  - `git diff --check` → passed
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：Binance REST 代理诊断与 RESTAlignment failover 修复
+- 完成时间: 2026-05-26 21:29 (北京时间)
+- 状态: 已完成
+- 目标: 诊断 Binance REST 不通原因，并按用户要求将可用代理设为主代理，同时让 RESTAlignment 自检/时间同步在主代理失败时切换备代理。
+- 开发前状态:
+  - `.env` 主代理为 `http://127.0.0.1:10808`，该端口未监听；备代理 `http://127.0.0.1:7890` 可用。
+  - 直连 Binance demo / futures 域名超时，必须走代理；通过 7890 访问 demo spot、spot testnet、demo futures ping 均为 200。
+  - `BinanceSpotDemoBroker` 有请求级重试，能从 10808 切到 7890；`RESTAlignmentCoordinator.get_server_time()` 和 `_sync_server_time_offset()` 单次撞到坏代理即失败。
+- 开发后状态:
+  - `.env` 已改为 `BINANCE_PROXY_URL=http://127.0.0.1:7890`、`BINANCE_BACKUP_PROXY_URL=http://127.0.0.1:10808`。
+  - `RESTAlignmentCoordinator` 新增 public REST failover helper，`/v3/time` 自检和时间同步会在代理连接失败/超时时重试并重新选择代理。
+  - 新增测试覆盖主代理失败后切换备代理的 `get_server_time()` 与 `_sync_server_time_offset()` 路径。
+- Issue 状态迁移:
+  - RESTAlignment 自检单次撞坏代理导致 Binance REST 误报不可用：`待确认` → `已验证`
+- 验证结果:
+  - 诊断脚本：新 `.env` 下 `RESTAlignmentCoordinator.get_server_time()` 经 7890 返回 OK。
+  - `python -m pytest -q trader/tests/test_rest_alignment_extended.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_proxy_failover.py trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py --tb=short` → 55 passed
+  - `python -m pytest -q trader/tests/test_rest_alignment_extended.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_proxy_failover.py --tb=short` → 24 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` → 99 passed
+  - `python -m py_compile trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py` → passed
+  - `python -m black --check trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py --line-length 100` → passed
+  - `python -m isort --check-only trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py --profile black` → passed
+  - `git diff --check` → passed
+- 关联文档: `docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：Account REST snapshot provider 接线修复
+- 完成时间: 2026-05-26 17:44 (北京时间)
+- 状态: 已完成
+- 目标: 修复运行日志中 `AccountBridge REST snapshot failed: 'BinanceConnector' object has no attribute '_fetch_account'`，避免账户快照不可用导致 crypto pre-trade 风控持续 fail-closed。
+- 开发前状态:
+  - `lifespan` 在 BinanceConnector 启动后用 `connector._fetch_account()` 做账户 REST snapshot。
+  - `BinanceConnector` 只协调 Public/Private stream 和 REST alignment，不提供 `_fetch_account()`，账户校准因此失败并标记 stale。
+- 开发后状态:
+  - 新增 `_fetch_spot_account_balances(account_provider)`，显式要求 provider 暴露 Binance `/v3/account` 读取能力并校验 `balances` payload。
+  - `AccountStreamBridge` 的初始和周期 REST snapshot 改为绑定 OMS broker/account provider，不再依赖 `BinanceConnector` 私有账户接口。
+  - 新增 lifespan 回归测试，使用无 `_fetch_account` 的 fake connector 和有 `_fetch_account` 的 fake OMS broker，锁定正确接线路径。
+- Issue 状态迁移:
+  - AccountBridge 调用 `BinanceConnector._fetch_account` 导致账户快照失败：`待确认` → `已验证`
+- 验证结果:
+  - `python -m py_compile trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py` → passed
+  - `python -m black --check trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py --line-length 100` → passed
+  - `python -m isort --check-only trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py --profile black` → passed
+  - `python -m pytest -q trader/tests/test_api_lifespan_account_snapshot.py trader/tests/test_account_stream_bridge.py trader/tests/test_binance_spot_demo_broker.py --tb=short` → 17 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` → 99 passed
+  - `git diff --check` → passed
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：Stage 4/5 审查问题修复
 - 完成时间: 2026-05-21 22:07 (北京时间)

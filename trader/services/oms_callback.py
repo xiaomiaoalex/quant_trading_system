@@ -120,6 +120,8 @@ class OMSCallbackHandler:
         pre_trade_risk_check: Optional[
             Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
         ] = None,
+        max_positions: int = 3,
+        auto_pause_service: Any = None,  # StrategyAutoPauseService | None
     ):
         """
         初始化OMS回调处理器
@@ -137,6 +139,7 @@ class OMSCallbackHandler:
             account_state: 账户状态服务（可选，配合 execution_budget 使用）
             account_id: 账户标识符（用于 budget 预留和余额查询，默认 "binance_demo"）
             pre_trade_risk_check: 独立风控回调；拒绝或异常时必须在下单前 fail-closed
+            max_positions: 最大持仓数量（开仓方向）。成交回报路径会检查是否超额，超额时记录 WARNING 和事件。
         """
         self._broker = broker
         self._storage = storage or get_storage()
@@ -153,6 +156,8 @@ class OMSCallbackHandler:
         self._account_state = account_state
         self._account_id = account_id
         self._pre_trade_risk_check = pre_trade_risk_check
+        self._max_positions = max_positions
+        self._auto_pause_service = auto_pause_service
         if execution_budget is not None and account_state is None:
             logger.warning(
                 "[OMSCallback] execution_budget provided without account_state — "
@@ -218,6 +223,14 @@ class OMSCallbackHandler:
         - LIQUIDATE_AND_DISCONNECT: 阻止策略订单，允许系统强平
         """
         self._risk_mode_callback = callback
+
+    def set_max_positions(self, max_positions: int) -> None:
+        """动态更新最大持仓数量限制（从 RiskConfig 注入）。"""
+        self._max_positions = max_positions
+
+    def set_auto_pause_service(self, svc: Any) -> None:
+        """注入 StrategyAutoPauseService（自动暂停服务）。"""
+        self._auto_pause_service = svc
 
     def _get_position_lock(self, strategy_id: str, symbol: str) -> asyncio.Lock:
         key = f"{strategy_id}:{symbol}"
@@ -1595,6 +1608,7 @@ def create_oms_callback(
     pre_trade_risk_check: Optional[
         Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
     ] = None,
+    auto_pause_service: Any = None,
 ) -> tuple[Callable, Callable, "OMSCallbackHandler"]:
     """
     创建OMS回调函数和成交处理器
@@ -1626,6 +1640,7 @@ def create_oms_callback(
         account_state=account_state,
         account_id=account_id,
         pre_trade_risk_check=pre_trade_risk_check,
+        auto_pause_service=auto_pause_service,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -1650,6 +1665,24 @@ def create_oms_callback(
         ) as e:
             # 预期：业务规则拒绝（记录为 warning）
             logger.warning(f"[OMSCallback] Signal rejected by business rule: {e}")
+            # E2: 触发自动暂停服务（如果已注入）
+            if handler._auto_pause_service is not None:
+                try:
+                    deployment_id = strategy_id
+                    logical_strategy_id = (
+                        getattr(signal, "strategy_name", None)
+                        or getattr(signal, "metadata", {}).get("strategy_id")
+                        or strategy_id
+                    )
+                    asyncio.create_task(
+                        handler._auto_pause_service.record_rejection(
+                            strategy_id=str(logical_strategy_id),
+                            deployment_id=deployment_id,
+                            reason=str(e),
+                        )
+                    )
+                except Exception as ap_exc:
+                    logger.debug("[OMSCallback] auto_pause record_rejection failed: %s", ap_exc)
             return None
         except OMSCallbackError as e:
             # 基础设施错误（记录为 error）
@@ -1795,6 +1828,40 @@ def create_oms_callback(
                             )
                     except Exception as e:
                         logger.warning(f"[OMSCallback] WS Lot tracking failed: {e}")
+
+                # B2: 持仓上限审计 — 成交回报路径不阻止风控前置检查，这里做事后观测告警
+                if strategy_id and handler._max_positions > 0:
+                    try:
+                        positions = handler._storage.list_positions(strategy_id=strategy_id)
+                        open_count = sum(
+                            1 for p in positions if (p.get("qty") or p.get("quantity") or 0) != 0
+                        )
+                        if open_count > handler._max_positions:
+                            handler._publish_event(
+                                strategy_id,
+                                "strategy.position_limit_violated",
+                                {
+                                    "symbol": symbol,
+                                    "open_position_count": open_count,
+                                    "max_positions": handler._max_positions,
+                                    "cl_ord_id": cl_ord_id,
+                                    "exec_id": exec_id,
+                                    "side": side,
+                                    "qty": str(quantity),
+                                    "price": str(price),
+                                },
+                            )
+                            logger.warning(
+                                "[OMSCallback] Position limit exceeded after fill: "
+                                "strategy=%s open_positions=%d max=%d symbol=%s cl_ord_id=%s",
+                                strategy_id,
+                                open_count,
+                                handler._max_positions,
+                                symbol,
+                                cl_ord_id,
+                            )
+                    except Exception as e:
+                        logger.warning("[OMSCallback] Position limit audit failed: %s", e)
 
                 if fill_callback and strategy_id:
                     # 创建异步任务来运行协程，避免阻塞同步调用链

@@ -19,6 +19,7 @@ export const strategyKeys = {
   fills: (deploymentId: string) => [...strategyKeys.all, 'fills', deploymentId] as const,
   tradingPairs: () => [...strategyKeys.all, 'trading-pairs'] as const,
   safetyGate: () => [...strategyKeys.all, 'safety-gate'] as const,
+  autoPaused: () => [...strategyKeys.all, 'auto-paused'] as const,
 }
 
 function invalidateStrategyLists(queryClient: ReturnType<typeof useQueryClient>) {
@@ -181,6 +182,29 @@ export const useStartDeployment = useStartStrategy
 export const useStopDeployment = useStopStrategy
 export const usePauseDeployment = usePauseStrategy
 export const useResumeDeployment = useResumeStrategy
+
+// E5: Auto-pause hooks
+export function useAutoPausedStrategies() {
+  return useQuery({
+    queryKey: strategyKeys.autoPaused(),
+    queryFn: () => strategiesAPI.listAutoPausedStrategies(),
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    retry: 1,
+    throwOnError: false,
+  })
+}
+
+export function useForceResumeStrategy(deploymentId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => strategiesAPI.forceResumeStrategy(deploymentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: strategyKeys.autoPaused() })
+      queryClient.invalidateQueries({ queryKey: strategyKeys.loaded() })
+    },
+  })
+}
 export const useUnloadDeployment = useUnloadStrategy
 
 export function useUpdateStrategyParams(strategyId: string) {

@@ -1039,3 +1039,64 @@
   - `git diff --check` -> passed（仅 CRLF/LF 工作区提示）
 - 风险/遗留: portfolio-wide lock 牺牲不同 symbol 并行度以保证组合级预算正确；后续若需要扩展吞吐，应引入原子组合账本或数据库 CAS，而不是回退 symbol 分片锁。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/PLAN.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-26 17:44 - Account REST snapshot provider 接线修复
+
+- 背景: 运行日志显示 `AccountBridge REST snapshot failed: 'BinanceConnector' object has no attribute '_fetch_account'`，随后账户状态 stale，crypto pre-trade 风控因 snapshot unavailable 按 fail-closed 拒单。
+- 决策: 保持 `BinanceConnector` 的职责为 stream 协调和 REST alignment 健康检查；`AccountStreamBridge` 的 REST snapshot callback 显式绑定到具备 `/v3/account` 读取能力的 OMS broker/account provider。
+- 改动:
+  - `trader/api/main.py`: 新增 `_fetch_spot_account_balances(account_provider)`，校验 provider 暴露 `_fetch_account()` 且返回 `balances` list；lifespan 中用 `get_oms_broker()` 作为账户快照 provider。
+  - `trader/tests/test_api_lifespan_account_snapshot.py`: 新增 lifespan wiring 回归，fake connector 不暴露 `_fetch_account`，fake broker 暴露 `_fetch_account`，验证 snapshot 从 broker 获取。
+  - `docs/INTERFACE_CONTRACTS.md`: 明确 `AccountStreamBridge` REST snapshot provider 边界。
+  - `docs/PROJECT_ARCHITECTURE.md`: 补充 account snapshot provider → AccountStreamBridge → AccountState/ExecutionBudget 主数据流。
+- 验证:
+  - `python -m py_compile trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py` -> passed
+  - `python -m black --check trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py --line-length 100` -> passed
+  - `python -m isort --check-only trader/api/main.py trader/tests/test_api_lifespan_account_snapshot.py --profile black` -> passed
+  - `python -m pytest -q trader/tests/test_api_lifespan_account_snapshot.py trader/tests/test_account_stream_bridge.py trader/tests/test_binance_spot_demo_broker.py --tb=short` -> 17 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> 99 passed
+  - `git diff --check` -> passed
+- 风险/遗留: Binance demo REST 连通性和本地代理 `127.0.0.1:10808` 不可用仍属于环境问题，需要单独修复网络/代理配置；本次只修复账户快照接线。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-26 21:29 - Binance REST 代理诊断与 RESTAlignment failover 修复
+
+- 背景: 用户要求先诊断 REST 不通，再将 `.env` 主代理改为 `127.0.0.1:7890` 并补齐 RESTAlignment 的代理失败重试。诊断确认 10808 未监听、7890 可用，直连 Binance demo/futures 超时。
+- 决策: `.env` 主代理切到当前可用的 7890；RESTAlignment 的 public `/v3/time` 自检和时间同步使用与 broker 一致的请求级 proxy failover 重试，避免单次坏代理连接失败导致启动自检误报。
+- 改动:
+  - `.env`: `BINANCE_PROXY_URL=http://127.0.0.1:7890`，`BINANCE_BACKUP_PROXY_URL=http://127.0.0.1:10808`。
+  - `trader/adapters/binance/rest_alignment.py`: 新增 `_get_public_json_with_failover()`，供 `get_server_time()` 与 `_sync_server_time_offset()` 复用。
+  - `trader/tests/test_rest_alignment_extended.py`: 新增两个 failover 回归，覆盖主代理失败后切换备代理并成功返回 server time / 更新 offset。
+  - `docs/PROJECT_ARCHITECTURE.md`: 补充 REST Alignment 自检/时间同步必须复用 proxy failover 的架构约束。
+- 验证:
+  - 诊断脚本：新 `.env` 下 `RESTAlignmentCoordinator.get_server_time()` 经 7890 返回 OK。
+  - `python -m pytest -q trader/tests/test_rest_alignment_extended.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_proxy_failover.py trader/tests/test_binance_connector.py trader/tests/test_binance_private_stream.py --tb=short` -> 55 passed
+  - `python -m pytest -q trader/tests/test_rest_alignment_extended.py trader/tests/test_binance_rest_alignment.py trader/tests/test_binance_proxy_failover.py --tb=short` -> 24 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> 99 passed
+  - `python -m py_compile trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py` -> passed
+  - `python -m black --check trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py --line-length 100` -> passed
+  - `python -m isort --check-only trader/adapters/binance/rest_alignment.py trader/tests/test_rest_alignment_extended.py --profile black` -> passed
+  - `git diff --check` -> passed
+- 风险/遗留: 10808 仍不可用，只是降级为 backup；如果 7890 停止监听，系统仍会按 fail-closed/重试路径报告 REST 不可用。
+- 关联文档: `docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-27 23:59 - Group E 策略自动暂停/恢复闭环
+
+- 背景: 后端日志暴露 crypto 风控持续 fail-closed 后策略反复发信号被拒，业务侧要求“单个策略在 60 秒内被风控拒绝 >=10 次后自动进入休眠态，前端可见，风控恢复后自动恢复，并支持手动 force-resume”。
+- 决策: 复用现有 `StrategyRunner.pause()/resume()`、`StrategyCandidate` 的 `PAUSED_BY_RISK` 状态和 `strategies` SSE 通道。`OMSCallback` 只负责在风控拒绝后上报拒绝事件，自动暂停/恢复由 `StrategyAutoPauseService` 独立执行，避免在 OMS 下单路径混入控制面状态机细节。
+- 改动:
+  - `trader/services/strategy_auto_pause.py`: 实现逐策略滑动窗口拒绝计数、并发触发去重、候选 deployment 反查、`strategy_candidate.auto_paused/auto_resumed` 事件写入、后台单轮/循环恢复探测和 `force_resume()`。
+  - `trader/services/oms_callback.py`: 风控业务拒绝后异步调用 auto-pause service，使用 OMS callback 入参作为 `deployment_id`，使用 `signal.strategy_name/metadata.strategy_id` 作为逻辑 `strategy_id`。
+  - `trader/api/routes/strategies.py`: 补齐 auto-pause service 注入、测试态重置、`GET /v1/strategies/auto-paused` 与 `POST /v1/strategies/{deployment_id}/force-resume`。
+  - `Frontend/src/pages/Strategies.tsx`: 部署卡片展示 `Paused by Risk` 徽章、拒绝原因、窗口拒绝数、恢复探测进度和手动恢复按钮，并在 SSE 更新时刷新 auto-paused 查询。
+  - `Frontend/src/types/strategies.ts`: 扩展 runtime auto_pause 可选字段与 auto-paused API DTO。
+  - `trader/tests/test_strategy_auto_pause.py`: 新增阈值触发、并发拒绝、连续探测恢复和 force-resume 单元测试。
+- 验证:
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py --tb=short` -> 5 passed
+  - `python -m pytest -q trader/tests/test_oms_pretrade_risk_gate.py --tb=short` -> 9 passed
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_pretrade_risk_gate.py trader/tests/test_crypto_risk_snapshot_provider.py --tb=short` -> 17 passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> 99 passed
+  - `cd Frontend && npx tsc --noEmit` -> passed
+  - `git diff --check` -> passed
+- 风险/遗留: 自动恢复探测当前复用 OMS 持有的 pre-trade 风控回调并构造最小 BTCUSDT 买入信号；如果后续需要按策略真实交易对探测，应从 deployment runtime config 中读取 primary symbol/quantity。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
