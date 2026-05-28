@@ -686,7 +686,8 @@ async def evaluate_time_window(
     for the given time.
     """
     manager = get_crypto_risk_runtime_manager()
-    policy = TimeWindowPolicy(manager.time_window_config())
+    config = manager.time_window_config()
+    policy = TimeWindowPolicy(config)
     ctx = policy.evaluate(hour, minute)
 
     return {

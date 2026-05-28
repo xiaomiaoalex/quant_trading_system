@@ -50,7 +50,9 @@ class _FakeSession:
 
     def get(self, url: str, **kwargs: Any) -> _FakeResponse:
         """Support async with session.get(url) pattern used by _sync_server_time_offset."""
-        self.calls.append({"method": "GET", "url": url, "headers": None, "proxy": kwargs.get("proxy")})
+        self.calls.append(
+            {"method": "GET", "url": url, "headers": None, "proxy": kwargs.get("proxy")}
+        )
         if not self._responses:
             raise AssertionError("No queued fake response")
         return self._responses.pop(0)
@@ -130,7 +132,7 @@ async def test_public_exchange_info_is_mapped_without_api_key_header() -> None:
                         }
                     ]
                 },
-            )
+            ),
         ]
     )
 
@@ -197,3 +199,105 @@ async def test_signed_request_retries_and_resyncs_on_negative_1021(
     # timestamp = 100000 + 500 = 100500
     assert query4["timestamp"] == ["100500"]
     assert account.margin_balance == account.equity
+
+
+@pytest.mark.asyncio
+async def test_time_sync_failure_falls_back_to_local_time(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """时间同步失败时回退到本机时间（无偏移），并记录 warning。"""
+    import logging
+
+    session = _FakeSession(
+        [
+            _FakeResponse(500, "Internal Server Error"),  # time sync fails
+            _FakeResponse(
+                200,
+                {
+                    "totalWalletBalance": "1000",
+                    "availableBalance": "800",
+                    "totalMarginBalance": "1050",
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "trader.adapters.binance.crypto_risk_source.time.time",
+        lambda: 100.0,
+    )
+
+    account = await _source(session).get_account_risk()
+
+    # 2 calls: failed time sync, account request with local time
+    assert len(session.calls) == 2
+    assert session.calls[0]["url"].endswith("/v3/time")
+    call1 = session.calls[1]
+    query1 = parse_qs(urlparse(call1["url"]).query)
+    # No offset, uses local time directly
+    assert query1["timestamp"] == ["100000"]
+    # Warning logged for failed time sync
+    assert any("Time sync failed" in record.message for record in caplog.records)
+    assert account.margin_balance == account.equity
+
+
+@pytest.mark.asyncio
+async def test_recv_window_resets_after_24h(monkeypatch: pytest.MonkeyPatch) -> None:
+    """每日基线重置：超过 24h 后 recvWindow 恢复初始值。"""
+    session = _FakeSession(
+        [
+            _FakeResponse(200, {"serverTime": 100000}),  # initial sync
+            _FakeResponse(400, '{"code":-1021,"msg":"Timestamp"}'),  # -1021 expand to 10000
+            _FakeResponse(200, {"serverTime": 100100}),  # resync
+            _FakeResponse(
+                200,
+                {
+                    "totalWalletBalance": "1000",
+                    "availableBalance": "800",
+                    "totalMarginBalance": "1050",
+                },
+            ),
+            # Second request after 24h
+            _FakeResponse(200, {"serverTime": 100000}),  # sync (skipped if offset already set)
+            _FakeResponse(
+                200,
+                {
+                    "totalWalletBalance": "2000",
+                    "availableBalance": "1800",
+                    "totalMarginBalance": "2100",
+                },
+            ),
+        ]
+    )
+    source = BinanceFuturesRiskDataSource(
+        BinanceFuturesRiskDataSourceConfig(
+            api_key="key",
+            secret_key="secret",
+            max_retries=2,
+            initial_recv_window_ms=5000,
+        ),
+        session=session,
+    )
+
+    # First call: 100.0s -> syncs offset
+    monkeypatch.setattr(
+        "trader.adapters.binance.crypto_risk_source.time.time",
+        lambda: 100.0,
+    )
+    await source.get_account_risk()
+
+    # Second call after 24h: offset already set, -1021 expands to 10000
+    monkeypatch.setattr(
+        "trader.adapters.binance.crypto_risk_source.time.time",
+        lambda: 100.0 + 86400,  # 24h later
+    )
+    account2 = await source.get_account_risk()
+
+    # Find first account call (index 3) and second account call (index 5)
+    account_calls = [(i, c) for i, c in enumerate(session.calls) if "/fapi/v3/account" in c["url"]]
+    assert len(account_calls) >= 2
+
+    # Second request recvWindow should be reset to initial (5000) then expanded to 10000
+    idx2, call2 = account_calls[1]
+    query2 = parse_qs(urlparse(call2["url"]).query)
+    assert query2["recvWindow"] == ["10000"]
+    assert account2.margin_balance == account2.equity

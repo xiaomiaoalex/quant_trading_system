@@ -348,7 +348,7 @@ class TestRiskEngine:
 
         config = RiskConfig(
             max_daily_loss_percent=Decimal("5.0"),
-            max_positions=3,
+            max_positions=10,
             time_window_config=TimeWindowConfig(slots=[], default_coefficient=1.0),
         )
         risk_engine = RiskEngine(broker, config)

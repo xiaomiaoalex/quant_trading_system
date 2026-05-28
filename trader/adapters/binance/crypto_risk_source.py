@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -28,6 +29,9 @@ from trader.core.domain.models.crypto_risk import (
 
 if TYPE_CHECKING:
     import aiohttp
+
+
+logger = logging.getLogger(__name__)
 
 
 BINANCE_USD_M_FUTURES_BASE_URL = "https://fapi.binance.com"
@@ -70,6 +74,7 @@ class BinanceFuturesRiskDataSource:
         self._owns_session = session is None
         self._timestamp_offset_ms: int = 0
         self._current_recv_window_ms: int = config.recv_window_ms
+        self._last_reset_ts: float = 0.0  # 上次重置基线时间戳
 
     async def start(self) -> None:
         await self._ensure_session()
@@ -152,19 +157,42 @@ class BinanceFuturesRiskDataSource:
             url = f"{self._config.base_url}/v3/time"
             async with self._session.get(url, proxy=self._config.proxy_url) as resp:
                 if resp.status != 200:
+                    logger.warning(
+                        "[BinanceFuturesRiskDataSource] Time sync failed: status=%s", resp.status
+                    )
                     return
                 data = await resp.json()
                 server_ms = int(data.get("serverTime", 0))
                 if server_ms <= 0:
+                    logger.warning(
+                        "[BinanceFuturesRiskDataSource] Time sync failed: invalid serverTime=%s",
+                        server_ms,
+                    )
                     return
                 local_ms = int(time.time() * 1000)
                 self._timestamp_offset_ms = server_ms - local_ms
-        except Exception:
-            pass
+                logger.info(
+                    "[BinanceFuturesRiskDataSource] Time offset synced: offset_ms=%s",
+                    self._timestamp_offset_ms,
+                )
+        except Exception as exc:
+            logger.warning("[BinanceFuturesRiskDataSource] Time sync failed: %s", exc)
 
     async def _get_signed_timestamp(self) -> int:
         """获取用于签名的带偏移时间戳（毫秒）。"""
         return int(time.time() * 1000) + self._timestamp_offset_ms
+
+    def _maybe_reset_recv_window_baseline(self) -> None:
+        """每日重置 recvWindow 基线，避免持续膨胀。"""
+        now = time.time()
+        seconds_in_day = 86400
+        if now - self._last_reset_ts >= seconds_in_day:
+            self._current_recv_window_ms = self._config.initial_recv_window_ms
+            self._last_reset_ts = now
+            logger.info(
+                "[BinanceFuturesRiskDataSource] recvWindow baseline reset to %s",
+                self._current_recv_window_ms,
+            )
 
     async def _signed_params(self, params: dict[str, Any] | None) -> dict[str, Any]:
         payload = dict(params or {})
@@ -196,6 +224,8 @@ class BinanceFuturesRiskDataSource:
         last_error: Exception | None = None
 
         for attempt in range(self._config.max_retries):
+            if signed:
+                self._maybe_reset_recv_window_baseline()
             request_params = await self._signed_params(params) if signed else dict(params or {})
             query = urlencode(request_params, doseq=True)
             url = f"{self._config.base_url}{endpoint}"
@@ -216,7 +246,11 @@ class BinanceFuturesRiskDataSource:
                     if signed and resp.status == 400 and '"code":-1021' in text:
                         await self._sync_server_time_offset()
                         self._current_recv_window_ms = min(
-                            60000, max(self._current_recv_window_ms * 2, self._config.initial_recv_window_ms)
+                            60000,
+                            max(
+                                self._current_recv_window_ms * 2,
+                                self._config.initial_recv_window_ms,
+                            ),
                         )
                         last_error = BinanceFuturesRiskDataSourceError(
                             f"-1021 on attempt {attempt + 1}, retrying with new time offset"
