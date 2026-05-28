@@ -1100,3 +1100,19 @@
   - `git diff --check` -> passed
 - 风险/遗留: 自动恢复探测当前复用 OMS 持有的 pre-trade 风控回调并构造最小 BTCUSDT 买入信号；如果后续需要按策略真实交易对探测，应从 deployment runtime config 中读取 primary symbol/quantity。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-28 00:34 - PR #108 审查问题修复
+
+- 背景: 最近 PR 审查发现两个离散一致性问题：OMS 成交后持仓上限审计会把字符串 `"0"` 误计为未平仓；自动暂停服务在 `StrategyRunner.resume()` 失败时仍清除暂停记录、迁移候选状态并广播已恢复。
+- 决策: 持仓 open/flat 判断必须先用 `Decimal` 规范化，避免 Python 字符串/数字比较语义污染风控审计；自动恢复以 runtime resume 成功为提交点，失败时保持 `PAUSED_BY_RISK` 和 `_paused` 记录，让后台探测继续重试。
+- 改动:
+  - `trader/services/oms_callback.py`: 新增 `_position_is_open()`，成交回报持仓审计使用 `Decimal(str(qty)) != 0` 计算 `open_count`。
+  - `trader/services/strategy_auto_pause.py`: `_auto_resume()` 改为先调用 `runner.resume()`，成功后再清除暂停记录、写恢复事件、迁移候选状态和广播；失败返回 `False` 并保留暂停态。
+  - `trader/api/routes/strategies.py`: `force-resume` 在 runtime 恢复失败时返回 `409`，避免 API 调用方收到错误的 resumed 响应。
+  - `trader/tests/test_oms_callback_fill_idempotency.py`: 覆盖字符串 `"0"` 持仓不应触发 position limit violation。
+  - `trader/tests/test_strategy_auto_pause.py`: 覆盖 runtime resume 失败时暂停态、candidate 状态和 SSE 都保持不变，下一次探测可重试恢复。
+- 验证:
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py::test_auto_resume_failure_keeps_paused_state_for_retry trader/tests/test_oms_callback_fill_idempotency.py::test_fill_position_limit_audit_treats_string_zero_as_flat --tb=short` -> 2 passed
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` -> 18 passed
+- 风险/遗留: 持仓审计遇到无法解析的数量仍会进入现有 warning 路径并跳过本次审计；后续如需要更严格的风险告警，可单独增加 malformed position 事件。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

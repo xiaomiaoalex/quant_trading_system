@@ -5,11 +5,17 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-27 23:59 (北京时间)
+- 最后更新: 2026-05-28 00:34 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁。
 
-### 本次变更摘要（2026-05-27）
+### 本次变更摘要（2026-05-28）
+
+1. **自动恢复一致性修复**: `StrategyAutoPauseService` 只有在 `StrategyRunner.resume(deployment_id)` 成功后才清除暂停记录、迁移 candidate 到 `PAPER_RUNNING` 并广播 `auto_resumed`；runtime 恢复失败时保持 `PAUSED_BY_RISK`，后台探测可继续重试。
+2. **成交后持仓审计修复**: `OMSCallback` 的成交回报持仓上限审计使用 `Decimal` 规范化 `qty/quantity`，避免字符串 `"0"` 被误计为未平仓持仓。
+3. **人工恢复错误语义**: `POST /v1/strategies/{deployment_id}/force-resume` 在 runtime resume 失败时返回 `409`，前端/API 不再得到“已恢复”的错误确认。
+
+### 上次变更摘要（2026-05-27）
 
 1. **StrategyAutoPauseService 闭环**: `OMSCallback` 在 pre-trade 风控拒绝后按 `strategy_id` 记录滑动窗口，达到阈值后暂停 `deployment_id`，将候选状态转为 `PAUSED_BY_RISK`，写入 `strategy_candidate.auto_paused` 并通过 SSE 广播。
 2. **自动恢复探测**: 控制面后台任务按配置周期构造最小 `Signal` 调用现有 pre-trade 风控，连续两次健康后恢复 `StrategyRunner` 并转回 `PAPER_RUNNING`，写入 `strategy_candidate.auto_resumed`。

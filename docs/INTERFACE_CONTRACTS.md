@@ -195,8 +195,8 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 
 1. `OMSCallback` 在 pre-trade 风控拒绝后调用 `record_rejection(strategy_id, deployment_id, reason)`。
 2. 同一 `strategy_id` 在 `window_sec` 内拒绝次数达到 `threshold` 时，服务调用 `StrategyRunner.pause(deployment_id)`，并将绑定 candidate 转为 `PAUSED_BY_RISK`。
-3. 后台探测对暂停记录构造最小 `Signal(strategy_name=strategy_id, metadata.auto_pause_probe=true)`，调用 OMS 持有的 `_pre_trade_risk_check`。连续 `consecutive_probe_required` 次 `passed=true` 后自动 `resume`，candidate 转为 `PAPER_RUNNING`。
-4. `force_resume(deployment_id, requested_by)` 跳过探测阈值，直接恢复并清除暂停记录。
+3. 后台探测对暂停记录构造最小 `Signal(strategy_name=strategy_id, metadata.auto_pause_probe=true)`，调用 OMS 持有的 `_pre_trade_risk_check`。连续 `consecutive_probe_required` 次 `passed=true` 后先调用 `StrategyRunner.resume(deployment_id)`；只有 runtime resume 成功后才清除暂停记录、写 `strategy_candidate.auto_resumed`、并将 candidate 转为 `PAPER_RUNNING`。
+4. `force_resume(deployment_id, requested_by)` 跳过探测阈值，但仍必须等待 `StrategyRunner.resume(deployment_id)` 成功；若 runtime 恢复失败，暂停记录必须保留以便后台继续重试。
 5. 自动暂停不得降低 KillSwitch / Fail-Closed 优先级；KillSwitch 等更高优先级拒绝仍由风控链路决定。
 
 事件契约：
@@ -240,7 +240,7 @@ API 契约：
 | 方法 | 路径 | 语义 |
 |------|------|------|
 | `GET` | `/v1/strategies/auto-paused` | 返回 `{service_running, paused_strategies}`，每项含 `deployment_id/strategy_id/last_reason/reject_count/paused_at_ms/consecutive_probe_pass/probe_required/window_sec/threshold` |
-| `POST` | `/v1/strategies/{deployment_id}/force-resume?requested_by=...` | 手动恢复一个由风控自动暂停的运行实例；服务未初始化返回 `503`，实例未自动暂停返回 `404` |
+| `POST` | `/v1/strategies/{deployment_id}/force-resume?requested_by=...` | 手动恢复一个由风控自动暂停的运行实例；服务未初始化返回 `503`，实例未自动暂停返回 `404`，runtime resume 失败且仍保持暂停时返回 `409` |
 
 #### 8.1.2 StrategyCandidateDebugResponse
 

@@ -3879,6 +3879,40 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 
 ---
 
+## 二十六、自动暂停恢复与持仓审计一致性经验
+
+### 26.1 踩坑记录：字符串零不能直接与数字零比较
+
+**场景**：
+OMS 成交回报路径需要在成交后审计当前持仓数量是否超过 `max_positions`。
+
+**问题**：
+- 存储层可能返回 `"0"` 这样的字符串数量
+- Python 中 `"0" != 0` 为 `True`
+- 直接比较原始字段会把已平仓持仓计入 `open_position_count`
+
+**经验**：
+- 跨层读取的数值字段必须先规范化为 `Decimal`
+- open/flat 判断使用 `Decimal(str(qty)) != Decimal("0")`
+- 测试要覆盖字符串 `"0"`、字符串非零和兼容字段 `qty/quantity`
+
+### 26.2 设计模式：以 runtime resume 成功作为自动恢复提交点
+
+**场景**：
+自动暂停服务需要在风控恢复后调用 `StrategyRunner.resume()`，然后清除暂停记录、迁移 candidate 状态、广播 SSE。
+
+**问题**：
+- 如果先清除 `_paused`，再调用 runtime resume
+- 一旦 runtime resume 失败，前端/API 会看到已恢复，但实际策略仍未运行
+- 后台探测也失去暂停记录，无法继续重试
+
+**经验**：
+- 恢复流程的提交点必须是 `StrategyRunner.resume()` 成功返回
+- 失败时保留 `PAUSED_BY_RISK`、暂停记录和探测计数
+- 手动 force-resume 失败应返回冲突状态，让调用方知道策略仍处于风控暂停
+
+---
+
 ## 二十六、策略自动暂停/恢复闭环经验
 
 ### 26.1 踩坑记录：deployment_id 不能靠字符串切分反推 candidate_id

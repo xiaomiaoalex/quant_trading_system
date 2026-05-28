@@ -4,9 +4,28 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-27 23:59 (北京时间)
+2026-05-28 00:34 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：PR #108 审查问题修复
+- 完成时间: 2026-05-28 00:34 (北京时间)
+- 状态: 已完成
+- 目标: 修复最近 PR 审查发现的两个一致性问题：字符串 `"0"` 持仓被误计为未平仓、runtime resume 失败后自动暂停服务错误清除暂停态并广播已恢复。
+- 开发前状态:
+  - OMS 成交回报持仓上限审计直接比较原始 `qty/quantity` 与数字 `0`，会把字符串 `"0"` 计为 open position。
+  - `StrategyAutoPauseService._auto_resume()` 在调用 `StrategyRunner.resume()` 前就移除 `_paused` 记录，且 resume 失败后仍迁移 candidate 并广播 `auto_resumed`。
+- 开发后状态:
+  - OMS 持仓审计通过 `Decimal` 规范化数量，仅非零数值计入 `open_position_count`。
+  - 自动恢复先成功执行 `StrategyRunner.resume()`，再清除暂停记录、写 `strategy_candidate.auto_resumed`、迁移 `PAPER_RUNNING` 和 SSE 广播；失败时保持 `PAUSED_BY_RISK` 以便继续探测重试。
+  - `force-resume` 在 runtime resume 失败时返回 `409`，避免 API/前端误认为已经恢复。
+- Issue 状态迁移:
+  - 字符串零持仓误触发 position_limit_violated：`待确认` → `已验证`
+  - 自动恢复失败后丢失 paused 状态：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py::test_auto_resume_failure_keeps_paused_state_for_retry trader/tests/test_oms_callback_fill_idempotency.py::test_fill_position_limit_audit_treats_string_zero_as_flat --tb=short` → 2 passed
+  - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` → 18 passed
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：Group E 策略自动暂停/恢复闭环
 - 完成时间: 2026-05-27 23:59 (北京时间)

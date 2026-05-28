@@ -355,7 +355,10 @@ async def force_resume_strategy(
             status_code=404,
             detail=f"Strategy {deployment_id} is not auto-paused by risk",
         )
-    await svc.force_resume(deployment_id, requested_by=requested_by)
+    try:
+        await svc.force_resume(deployment_id, requested_by=requested_by)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"deployment_id": deployment_id, "status": "resumed", "requested_by": requested_by}
 
 
