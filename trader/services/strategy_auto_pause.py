@@ -21,9 +21,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from trader.core.domain.models.signal import Signal
-    from trader.core.domain.models.order import OrderSide
     from trader.api.routes.sse import SSEManager
+    from trader.core.domain.models.order import OrderSide
+    from trader.core.domain.models.signal import Signal
 
 logger = logging.getLogger(__name__)
 

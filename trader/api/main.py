@@ -521,10 +521,7 @@ async def lifespan(app: FastAPI):
             # E3: 初始化自动暂停服务
             try:
                 from trader.api.routes.sse import get_sse_manager
-                from trader.api.routes.strategies import (
-                    _get_oms_handler,
-                    set_auto_pause_service,
-                )
+                from trader.api.routes.strategies import _get_oms_handler, set_auto_pause_service
                 from trader.services.strategy_auto_pause import (
                     AutoPauseConfig,
                     StrategyAutoPauseService,
@@ -558,9 +555,7 @@ async def lifespan(app: FastAPI):
                     auto_pause_cfg.probe_interval_sec,
                 )
             except Exception as exc:
-                logger.warning(
-                    "[Lifespan] Auto-pause service init failed (non-fatal): %s", exc
-                )
+                logger.warning("[Lifespan] Auto-pause service init failed (non-fatal): %s", exc)
 
             # ============================================================
             # Task 16: Startup Self-Check (fail-closed)

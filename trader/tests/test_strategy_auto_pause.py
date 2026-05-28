@@ -5,8 +5,8 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from trader.core.application.risk_engine import RiskCheckResult, RiskLevel
 from trader.api.routes import strategies as strategy_routes
+from trader.core.application.risk_engine import RiskCheckResult, RiskLevel
 from trader.services.strategy_auto_pause import AutoPauseConfig, StrategyAutoPauseService
 from trader.services.strategy_candidate import StrategyCandidateService
 from trader.storage.in_memory import get_storage
