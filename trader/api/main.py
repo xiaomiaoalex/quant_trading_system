@@ -293,12 +293,15 @@ async def lifespan(app: FastAPI):
             )
             if not api_key or not secret_key:
                 await crypto_risk_manager.set_fail_closed(
-                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing",
+                    "CRYPTO_RISK_ENABLED=true but Binance API credentials are missing. "
+                    "Hint: set BINANCE_API_KEY and BINANCE_SECRET_KEY in .env, "
+                    "or set CRYPTO_RISK_ENABLED=false to disable crypto risk checks.",
                     config=crypto_risk_config,
                 )
-                logger.error(
+                logger.warning(
                     "[CryptoRisk] Enabled without Binance credentials; OMS risk check "
-                    "is set to fail-closed"
+                    "is set to fail-closed. To fix: add BINANCE_API_KEY and "
+                    "BINANCE_SECRET_KEY to .env, or set CRYPTO_RISK_ENABLED=false"
                 )
         else:
             logger.info("[CryptoRisk] Runtime disabled")
@@ -435,11 +438,15 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     if crypto_risk_manager is not None:
                         await crypto_risk_manager.set_fail_closed(
-                            str(e),
+                            f"Crypto risk runtime wiring failed: {e}. "
+                            "Hint: check BINANCE_API_KEY/BINANCE_SECRET_KEY permissions and network access to futures_base_url.",
                             config=crypto_risk_config,
                         )
-                    logger.exception(
-                        "[CryptoRisk] Runtime wiring failed; OMS risk check is fail-closed"
+                    logger.warning(
+                        "[CryptoRisk] Runtime wiring failed (%s); OMS risk check is fail-closed. "
+                        "To fix: verify API key has Futures read permissions and "
+                        "CRYPTO_RISK_FUTURES_BASE_URL is reachable.",
+                        e,
                     )
                     raise
 
