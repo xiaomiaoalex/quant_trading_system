@@ -123,36 +123,84 @@ class RESTAlignmentCoordinator:
         """解析代理配置（支持主备自动切换）。"""
         return self._proxy_failover.select_proxy(self._config.proxy_url)
 
+    async def _get_public_json_with_failover(
+        self,
+        endpoint: str,
+        *,
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        """GET a public REST endpoint with proxy failover retries."""
+        if self._session is None:
+            raise RuntimeError("RESTAlignmentCoordinator not started")
+
+        import aiohttp
+
+        url = f"{self._config.base_url}{endpoint}"
+        last_error: Optional[BaseException] = None
+
+        for attempt in range(1, max_retries + 1):
+            proxy = self._resolve_proxy()
+            try:
+                async with self._session.get(
+                    url,
+                    proxy=proxy,
+                    timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
+                ) as resp:
+                    self._proxy_failover.report_success(proxy)
+                    if resp.status != 200:
+                        raise RuntimeError(f"GET {endpoint} failed with status {resp.status}")
+                    return await resp.json()
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                self._proxy_failover.report_failure(proxy)
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                logger.warning(
+                    "[RESTAlignment] Public REST retry %s/%s failed: endpoint=%s proxy=%s error=%s",
+                    attempt,
+                    max_retries,
+                    endpoint,
+                    proxy,
+                    exc,
+                )
+                await asyncio.sleep(min(0.5 * attempt, 2.0))
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                logger.warning(
+                    "[RESTAlignment] Public REST retry %s/%s returned non-OK: "
+                    "endpoint=%s proxy=%s error=%s",
+                    attempt,
+                    max_retries,
+                    endpoint,
+                    proxy,
+                    exc,
+                )
+                await asyncio.sleep(min(0.5 * attempt, 2.0))
+
+        raise RuntimeError(
+            f"GET {endpoint} failed after {max_retries} retries: {last_error}"
+        ) from last_error
+
     async def _sync_server_time_offset(self) -> None:
         """同步服务器时间偏移，降低 -1021 风险。"""
         if self._session is None:
             return
-        import aiohttp
 
-        url = f"{self._config.base_url}/v3/time"
-        proxy = self._resolve_proxy()
         try:
-            async with self._session.get(
-                url,
-                proxy=proxy,
-                timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
-            ) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json()
-                server_ms = int(data.get("serverTime", 0))
-                if server_ms <= 0:
-                    return
-                local_ms = int(time.time() * 1000)
-                self._timestamp_offset_ms = server_ms - local_ms
-                logger.info(
-                    "[RESTAlignment] Time offset synced: offset_ms=%s",
-                    self._timestamp_offset_ms,
-                )
-                self._proxy_failover.report_success(proxy)
+            data = await self._get_public_json_with_failover("/v3/time")
+            server_ms = int(data.get("serverTime", 0))
+            if server_ms <= 0:
+                return
+            local_ms = int(time.time() * 1000)
+            self._timestamp_offset_ms = server_ms - local_ms
+            logger.info(
+                "[RESTAlignment] Time offset synced: offset_ms=%s",
+                self._timestamp_offset_ms,
+            )
         except Exception as e:
             # 时间同步失败不应阻断主流程，但需要可观测。
-            self._proxy_failover.report_failure(proxy)
             logger.warning("[RESTAlignment] Time sync failed: %s", e)
             return
 
@@ -166,21 +214,8 @@ class RESTAlignmentCoordinator:
         Raises:
             Exception: 如果请求失败
         """
-        import aiohttp
-
-        if self._session is None:
-            raise RuntimeError("RESTAlignmentCoordinator not started")
-        url = f"{self._config.base_url}/v3/time"
-        proxy = self._resolve_proxy()
-        async with self._session.get(
-            url,
-            proxy=proxy,
-            timeout=aiohttp.ClientTimeout(total=self._config.alignment_timeout),
-        ) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"GET /v3/time failed with status {resp.status}")
-            data = await resp.json()
-            return int(data["serverTime"])
+        data = await self._get_public_json_with_failover("/v3/time")
+        return int(data["serverTime"])
 
     async def stop(self) -> None:
         """停止协调器"""
