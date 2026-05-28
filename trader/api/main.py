@@ -235,6 +235,25 @@ def _seed_strategies() -> None:
             service.register_strategy(req)
 
 
+async def _fetch_spot_account_balances(account_provider: Any) -> list[dict]:
+    """Fetch raw Binance spot balances from an account-capable broker/provider."""
+    fetch_account = getattr(account_provider, "_fetch_account", None)
+    if not callable(fetch_account):
+        raise RuntimeError(
+            "Account REST snapshot provider must expose _fetch_account(); "
+            f"got {type(account_provider).__name__}"
+        )
+
+    account = await fetch_account()
+    balances = account.get("balances", [])
+    if not isinstance(balances, list):
+        raise RuntimeError(
+            "Account REST snapshot provider returned invalid balances payload: "
+            f"{type(balances).__name__}"
+        )
+    return balances
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _binance_connector_instance, _binance_cascade_controller
@@ -567,9 +586,14 @@ async def lifespan(app: FastAPI):
             _binance_connector_instance = connector
 
             # 初始 REST snapshot 校准 + 周期校准
+            from trader.api.routes.strategies import get_oms_broker
+
+            account_snapshot_provider = get_oms_broker()
+            if account_snapshot_provider is None:
+                raise RuntimeError("OMS broker is not initialized for account REST snapshot")
+
             async def _fetch_balances() -> list[dict]:
-                account = await connector._fetch_account()
-                return account.get("balances", [])
+                return await _fetch_spot_account_balances(account_snapshot_provider)
 
             await bridge.fetch_and_apply_rest_snapshot(_fetch_balances)
             bridge.start_periodic_calibration(_fetch_balances)
