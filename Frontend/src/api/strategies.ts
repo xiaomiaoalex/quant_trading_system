@@ -2,6 +2,7 @@
 
 import { APIClient } from './client'
 import type {
+  AutoPausedListResponse,
   LoadStrategyPayload,
   NAVPoint,
   RegisteredStrategy,
@@ -169,6 +170,22 @@ export class StrategiesAPI extends APIClient {
       enabled,
       confirmed,
     })
+  }
+
+  // E4: Auto-pause endpoints
+  async listAutoPausedStrategies(): Promise<AutoPausedListResponse> {
+    return this.get<AutoPausedListResponse>('/v1/strategies/auto-paused')
+  }
+
+  async forceResumeStrategy(
+    deploymentId: string,
+    requestedBy = 'manual_console',
+  ): Promise<{ deployment_id: string; status: string; requested_by: string }> {
+    return this.post(
+      `/v1/strategies/${deploymentId}/force-resume`,
+      undefined,
+      { params: { requested_by: requestedBy } },
+    )
   }
 }
 

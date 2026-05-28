@@ -1640,6 +1640,7 @@ def create_oms_callback(
         account_state=account_state,
         account_id=account_id,
         pre_trade_risk_check=pre_trade_risk_check,
+        auto_pause_service=auto_pause_service,
     )
 
     async def oms_callback(strategy_id: str, signal: Signal) -> Optional[Dict[str, Any]]:
@@ -1664,6 +1665,24 @@ def create_oms_callback(
         ) as e:
             # 预期：业务规则拒绝（记录为 warning）
             logger.warning(f"[OMSCallback] Signal rejected by business rule: {e}")
+            # E2: 触发自动暂停服务（如果已注入）
+            if handler._auto_pause_service is not None:
+                try:
+                    deployment_id = strategy_id
+                    logical_strategy_id = (
+                        getattr(signal, "strategy_name", None)
+                        or getattr(signal, "metadata", {}).get("strategy_id")
+                        or strategy_id
+                    )
+                    asyncio.create_task(
+                        handler._auto_pause_service.record_rejection(
+                            strategy_id=str(logical_strategy_id),
+                            deployment_id=deployment_id,
+                            reason=str(e),
+                        )
+                    )
+                except Exception as ap_exc:
+                    logger.debug("[OMSCallback] auto_pause record_rejection failed: %s", ap_exc)
             return None
         except OMSCallbackError as e:
             # 基础设施错误（记录为 error）

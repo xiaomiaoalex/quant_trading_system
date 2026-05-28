@@ -518,6 +518,50 @@ async def lifespan(app: FastAPI):
             # 存储引用用于 shutdown 清理
             _binance_cascade_controller = _cascade_controller
 
+            # E3: 初始化自动暂停服务
+            try:
+                from trader.api.routes.sse import get_sse_manager
+                from trader.api.routes.strategies import (
+                    _get_oms_handler,
+                    set_auto_pause_service,
+                )
+                from trader.services.strategy_auto_pause import (
+                    AutoPauseConfig,
+                    StrategyAutoPauseService,
+                )
+                from trader.services.strategy_candidate import StrategyCandidateService
+
+                auto_pause_cfg = AutoPauseConfig(
+                    window_sec=int(os.environ.get("RISK_AUTO_PAUSE_WINDOW_SEC", "60")),
+                    threshold=int(os.environ.get("RISK_AUTO_PAUSE_THRESHOLD", "10")),
+                    probe_interval_sec=int(
+                        os.environ.get("RISK_AUTO_PAUSE_PROBE_INTERVAL_SEC", "30")
+                    ),
+                )
+
+                # 确保 OMS handler 已创建
+                await _get_oms_handler()
+                from trader.api.routes.strategies import _oms_handler_instance
+
+                auto_pause_svc = StrategyAutoPauseService(
+                    oms_handler=_oms_handler_instance,
+                    sse_manager=get_sse_manager(),
+                    candidate_service=StrategyCandidateService(),
+                    config=auto_pause_cfg,
+                )
+                set_auto_pause_service(auto_pause_svc)
+                await auto_pause_svc.start()
+                logger.info(
+                    "[AutoPause] Service started: window=%ds threshold=%d probe=%ds",
+                    auto_pause_cfg.window_sec,
+                    auto_pause_cfg.threshold,
+                    auto_pause_cfg.probe_interval_sec,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Lifespan] Auto-pause service init failed (non-fatal): %s", exc
+                )
+
             # ============================================================
             # Task 16: Startup Self-Check (fail-closed)
             # ============================================================

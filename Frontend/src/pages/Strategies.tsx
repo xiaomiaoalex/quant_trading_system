@@ -13,8 +13,11 @@ import {
   useTradingPairs,
   useUnloadStrategy,
   useStrategyFills,
+  useAutoPausedStrategies,
+  useForceResumeStrategy,
 } from '@/hooks'
 import type {
+  AutoPauseRecord,
   DeploymentMode,
   LoadStrategyPayload,
   RegisteredStrategy,
@@ -84,15 +87,17 @@ const ACTION_CONFIG: Record<
 
 function RuntimeActions(props: {
   runtime: StrategyRuntimeInfo
+  autoPauseRecord?: AutoPauseRecord
   onMessage: (message: string) => void
   onError: (message: string) => void
 }) {
-  const { runtime, onMessage, onError } = props
+  const { runtime, autoPauseRecord, onMessage, onError } = props
   const startMutation = useStartStrategy(runtime.deployment_id)
   const stopMutation = useStopStrategy(runtime.deployment_id)
   const pauseMutation = usePauseStrategy(runtime.deployment_id)
   const resumeMutation = useResumeStrategy(runtime.deployment_id)
   const unloadMutation = useUnloadStrategy(runtime.deployment_id)
+  const forceResumeMutation = useForceResumeStrategy(runtime.deployment_id)
 
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
 
@@ -176,6 +181,23 @@ function RuntimeActions(props: {
             >
               Resume
             </button>
+            {autoPauseRecord && (
+              <button
+                disabled={forceResumeMutation.isPending}
+                onClick={async () => {
+                  try {
+                    await forceResumeMutation.mutateAsync()
+                    onMessage(`Force-resumed: ${runtime.deployment_id}`)
+                  } catch (e) {
+                    onError(String(e))
+                  }
+                }}
+                className="rounded bg-orange-900/30 px-2 py-1 text-xs text-orange-300 hover:bg-orange-900/50 disabled:opacity-50"
+                title="跳过自动恢复探测，立即恢复策略"
+              >
+                Force Resume
+              </button>
+            )}
             <button
               disabled={isPending}
               onClick={() => handle('stop')}
@@ -236,6 +258,11 @@ export function Strategies() {
         exact: true,
         refetchType: 'active',
       })
+      queryClient.invalidateQueries({
+        queryKey: strategyKeys.autoPaused(),
+        exact: true,
+        refetchType: 'active',
+      })
     },
     { debug: true },
   )
@@ -249,7 +276,16 @@ export function Strategies() {
   } = useStrategyRegistry()
   const { data: loadedStrategies = [], refetch: refetchLoaded } = useLoadedStrategies()
   const { data: tradingPairsData, isLoading: isLoadingPairs, refetch: refetchPairs } = useTradingPairs()
+  const { data: autoPausedData } = useAutoPausedStrategies()
   const loadMutation = useLoadStrategy()
+
+  const autoPausedMap = useMemo(() => {
+    const map = new Map<string, AutoPauseRecord>()
+    for (const rec of autoPausedData?.paused_strategies ?? []) {
+      map.set(rec.deployment_id, rec)
+    }
+    return map
+  }, [autoPausedData])
 
   const [detailStrategy, setDetailStrategy] = useState<RegisteredStrategy | null>(null)
   const [showDeployDialog, setShowDeployDialog] = useState(false)
@@ -455,7 +491,15 @@ export function Strategies() {
                       ) : (
                         <div className="space-y-3">
                           {runtimes.map((runtime) => {
+                            const autoPauseRecord = autoPausedMap.get(runtime.deployment_id)
                             const statusConfig = STRATEGY_STATUS_DISPLAY[runtime.status]
+                            const statusLabel = autoPauseRecord ? 'Paused by Risk' : statusConfig.label
+                            const statusColor = autoPauseRecord
+                              ? 'text-orange-300'
+                              : statusConfig.color
+                            const statusBgColor = autoPauseRecord
+                              ? 'bg-orange-950/50'
+                              : statusConfig.bgColor
                             return (
                               <div key={runtime.deployment_id} className="rounded-lg border border-gray-700 bg-gray-900/60 p-3">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -478,13 +522,44 @@ export function Strategies() {
                                   <span
                                     className={clsx(
                                       'inline-flex rounded-full px-2 py-0.5 text-xs font-medium',
-                                      statusConfig.color,
-                                      statusConfig.bgColor,
+                                      statusColor,
+                                      statusBgColor,
                                     )}
                                   >
-                                    {statusConfig.label}
+                                    {statusLabel}
                                   </span>
                                 </div>
+                                {autoPauseRecord && (
+                                  <div className="mt-3 rounded-md border border-orange-900/40 bg-orange-950/20 p-3">
+                                    <div className="text-xs font-medium text-orange-200">Risk auto-pause</div>
+                                    <div className="mt-2 grid gap-2 text-xs text-orange-100/80 sm:grid-cols-2">
+                                      <div>
+                                        <span className="text-orange-300/70">Reason</span>
+                                        <div className="mt-0.5 break-words font-mono text-orange-100">
+                                          {autoPauseRecord.last_reason}
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <span className="text-orange-300/70">Reject window</span>
+                                        <div className="mt-0.5 text-orange-100">
+                                          {autoPauseRecord.window_sec}s / {autoPauseRecord.reject_count} rejects
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <span className="text-orange-300/70">Recovery probes</span>
+                                        <div className="mt-0.5 text-orange-100">
+                                          {autoPauseRecord.consecutive_probe_pass}/{autoPauseRecord.probe_required} passed
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <span className="text-orange-300/70">Paused at</span>
+                                        <div className="mt-0.5 text-orange-100">
+                                          {new Date(autoPauseRecord.paused_at_ms).toLocaleTimeString('en-US', { hour12: false })}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
                                 {runtime.status === 'running' && (
                                   <div className="mt-2">
                                     <LiveNAVChart
@@ -497,6 +572,7 @@ export function Strategies() {
                                 <div className="mt-3">
                                   <RuntimeActions
                                     runtime={runtime}
+                                    autoPauseRecord={autoPauseRecord}
                                     onMessage={handleMutationMessage}
                                     onError={handleMutationError}
                                   />
