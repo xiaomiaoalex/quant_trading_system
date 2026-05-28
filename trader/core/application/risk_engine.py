@@ -114,7 +114,7 @@ class RiskConfig:
 
     # 仓位控制
     max_position_percent: Decimal = Decimal("10.0")  # 单币种最大仓位比例
-    max_positions: int = 3  # 最大持仓币种数
+    max_positions: int = 10  # 最大持仓币种数
 
     # 频率控制
     max_order_rate: int = 100  # 每分钟最大订单数
@@ -602,6 +602,7 @@ class RiskEngine:
         Args:
             config: 新的时间窗口配置
         """
+        self._config.time_window_config = config
         self._time_window_policy.update_config(config)
         logger.info("[RiskEngine] 时间窗口配置已热更新")
 
@@ -623,6 +624,15 @@ class RiskEngine:
             TimeWindowContext: 当前时间窗口上下文
         """
         return self._time_window_policy.evaluate_now()
+
+    def get_time_window_config(self) -> TimeWindowConfig:
+        """
+        获取当前生效的时间窗口配置。
+
+        Returns:
+            TimeWindowConfig: 当前 RiskEngine 使用的时间窗口配置
+        """
+        return self._time_window_policy.config
 
     def register_pre_trade_plugin(self, plugin: PreTradeRiskPlugin) -> None:
         """注册交易前风控插件"""

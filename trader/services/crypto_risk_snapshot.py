@@ -182,12 +182,27 @@ def build_crypto_pre_trade_risk_check(
     risk_config: RiskConfig | None = None,
     plugin_config: CryptoPreTradeRiskConfig | None = None,
 ) -> Callable[[Signal], Awaitable[RiskCheckResult]]:
-    engine = RiskEngine(
+    engine = build_crypto_pre_trade_risk_engine(
+        broker=broker,
+        snapshot_provider=snapshot_provider,
+        risk_config=risk_config,
+        plugin_config=plugin_config,
+    )
+    return engine.check_pre_trade
+
+
+def build_crypto_pre_trade_risk_engine(
+    *,
+    broker: BrokerPort,
+    snapshot_provider: CryptoRiskSnapshotProvider,
+    risk_config: RiskConfig | None = None,
+    plugin_config: CryptoPreTradeRiskConfig | None = None,
+) -> RiskEngine:
+    return RiskEngine(
         broker,
         config=risk_config,
         pre_trade_plugins=[CryptoPreTradeRiskPlugin(snapshot_provider, plugin_config)],
     )
-    return engine.check_pre_trade
 
 
 class BinanceFundingOIMetricsSource:

@@ -488,8 +488,8 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 | `CryptoRiskDataSource` | Service Protocol | 从 Adapter/账户源读取已标准化的账户、规则、持仓、在途订单、mark price |
 | `DataSourceCryptoRiskSnapshotProvider` | Service | 聚合 `CryptoRiskDataSource` 输出为 `CryptoRiskSnapshot`，缺关键数据必须 fail-closed |
 | `BinanceFuturesRiskDataSource` | Adapter | 调用 Binance USD-M REST，使用 mapper 将原始字段转换为内部 DTO |
-| `CryptoRiskRuntimeConfig` | Control Plane config | 从环境变量解析数字货币风控启用状态、Binance USD-M base URL、基础 symbols 与预算 |
-| `CryptoRiskRuntimeComponents` | Control Plane runtime wiring | 持有 concrete source、snapshot provider 与注入 OMS 的 `pre_trade_risk_check` |
+| `CryptoRiskRuntimeConfig` | Control Plane config | 从环境变量解析数字货币风控启用状态、Binance USD-M base URL、基础 symbols、预算与 manager 级时间窗口配置 |
+| `CryptoRiskRuntimeComponents` | Control Plane runtime wiring | 持有 concrete source、snapshot provider、active `RiskEngine` 与注入 OMS 的 `pre_trade_risk_check` |
 | `CryptoRiskRuntimeStatus` | API DTO | 暴露当前是否 enabled/wired/fail_closed、`execution_env`、base URL、基础 symbols、预算和最近错误 |
 | `CryptoRiskBudgetUpdateRequest` | API DTO | 运行时热更新风险预算；未填写字段沿用当前值，symbol cap 使用内部标准 symbol |
 | `CryptoRiskProbeRequest` | API DTO | 只读联通性检查请求，字段为 `symbols` 与 `requested_by` |
@@ -516,6 +516,10 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - `GET /v1/risk/crypto/runtime` 返回当前 runtime 状态；不得暴露 API key、secret 或签名参数。返回字段包含 `execution_env`，用于区分当前执行环境（本仓库默认 `demo`）和 USD-M 风控 source URL。
 - `PATCH /v1/risk/crypto/budget` 只允许更新 `CryptoRiskBudget`，不改变交易所 base URL、凭证或 source 连接；runtime 未启用或未成功 wired 时必须返回冲突/失败，不得假装热更新成功。
 - 热更新预算必须重新构建 snapshot provider / pre-trade risk check 并通过 `set_pre_trade_risk_check()` late-bind 到已存在 OMS handler；更新失败必须保持旧 check 或切换为 fail-closed，不能产生空风控。
+- `build_crypto_pre_trade_risk_engine()` 构建真实 `RiskEngine`，`build_crypto_pre_trade_risk_check()` 仅保留为返回 `engine.check_pre_trade` 的兼容入口；需要运行时热更新的控制面必须持有 `RiskEngine` 实例。
+- `RiskEngine.update_time_window_config()` 必须同时更新内部 `TimeWindowPolicy` 和 `RiskConfig.time_window_config`；`RiskEngine.get_time_window_config()` 返回当前 active policy 配置。
+- `GET /v1/risk/time-window/config` 与 `PUT /v1/risk/time-window/config` 的状态源是 `CryptoRiskRuntimeManager`，API route 不得再维护自己的 `_time_window_policy` 单例。
+- `PUT /v1/risk/time-window/config` 在 runtime 已 wired 时必须调用 active `RiskEngine.update_time_window_config()`，使已注入 OMS 的 `pre_trade_risk_check` 立即使用新时间窗口；runtime enabled 但未 wired 或缺少 active `RiskEngine` 时必须返回冲突/失败，不得只更新展示配置。
 - 预算热更新成功后必须写入控制面事件流：`stream_key=risk:crypto`、`event_type=crypto_risk.budget_updated`，payload 至少包含 `updated_by`、`previous_budget`、`new_budget`、`runtime_before`、`runtime_after`。
 - `GET /v1/risk/crypto/budget/audit` 返回上述预算变更审计事件；该查询与通用 `/v1/events?stream_key=risk:crypto` 保持同一事件来源。
 - `POST /v1/risk/crypto/probe` 是只读 readiness probe，只允许调用账户风险、mark price、instrument spec、leverage bracket、持仓、在途订单和 venue health 的读取方法；不得下单、撤单、调整杠杆或修改 runtime 配置。

@@ -25,6 +25,42 @@
 
 ## 最近记录
 
+### 2026-05-28 14:34 - 时间窗口配置热更新接入 active RiskEngine
+
+- 背景: 用户确认 `/v1/risk/time-window/config` 不应再只更新 `trader.api.routes.risk` 的 `_time_window_policy` 单例，而是要热更新真实下单链路里的 active `RiskEngine`。
+- 决策: 将时间窗口配置的运行时状态收敛到 `CryptoRiskRuntimeManager`；runtime components 保存 active `RiskEngine`，route 只做 DTO/domain 转换，不再保存策略单例。
+- 改动:
+  - `trader/services/crypto_risk_snapshot.py`: 新增 `build_crypto_pre_trade_risk_engine()`，保留 `build_crypto_pre_trade_risk_check()` 兼容旧调用。
+  - `trader/api/crypto_risk_runtime.py`: `CryptoRiskRuntimeConfig` 增加 manager 级 `time_window_config`；`CryptoRiskRuntimeComponents` 保存 active `RiskEngine`；新增 `time_window_config()` 与 `update_time_window_config()`，budget 热更新重建 engine 时保留时间窗口配置。
+  - `trader/api/routes/risk.py`: GET/PUT/evaluate 时间窗口接口改为读写 runtime manager，删除 route-local `_time_window_policy`。
+  - `trader/core/application/risk_engine.py`: `update_time_window_config()` 同步 `RiskConfig.time_window_config`，新增 `get_time_window_config()`。
+  - `trader/tests/test_crypto_risk_runtime_manager.py`、`trader/tests/test_crypto_risk_runtime_api.py`、`trader/tests/test_api_endpoints.py`: 覆盖 active engine 热更新、API 写入 manager 源状态和旧时间窗口 API 行为。
+- 验证:
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py::test_runtime_manager_hot_updates_active_risk_engine_time_window trader/tests/test_crypto_risk_runtime_api.py::test_put_time_window_config_updates_runtime_manager_source_of_truth --tb=short` -> 2 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py --tb=short` -> 40 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_time_window_policy.py trader/tests/test_risk_engine_layers.py --tb=short` -> 74 passed
+  - `git diff --check` -> passed
+- 风险/遗留:
+  - runtime disabled 时 manager 仍可保存 pending/default 时间窗口配置；runtime enabled 但未 wired 或缺少 active `RiskEngine` 时 PUT 返回冲突，避免假装热更新成功。
+- 关联文档: `PROJECT_STATUS.md`、`docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-05-28 13:54 - 默认禁开仓窗口改为北京时间 22:00-08:00
+
+- 背景: 用户在北京时间 13:37 看到 `PRE_TRADE_RISK_REJECT: TRADING_HOURS: 当前时段 RESTRICTED 禁止新开仓`。排查发现默认 `TimeWindowConfig` 按 UTC `22:00-08:00` 禁开仓，和业务期望“北京时间 22:00-08:00”不一致。
+- 决策: 保持 Core 层时间窗口以 UTC 评估，不引入时区依赖；把默认业务窗口转换成 UTC 存储：`PRIME 00:00-08:00 UTC`、`OFF_PEAK 08:00-14:00 UTC`、`RESTRICTED 14:00-00:00 UTC`。
+- 改动:
+  - `trader/core/domain/rules/time_window_policy.py`: 更新默认时间窗口和注释，明确北京业务时间与 UTC 内部时间映射。
+  - `trader/tests/test_time_window_policy.py`: 更新默认窗口断言，新增北京时间 13:37/22:00/08:00 边界测试。
+  - `trader/tests/test_api_endpoints.py`: 增加默认 API 配置的 `RESTRICTED start_hour=14/end_hour=0` 断言。
+- 验证:
+  - `python -m pytest -q trader/tests/test_time_window_policy.py trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints --tb=short` -> 37 passed
+  - `python -m pytest -q trader/tests/test_risk_engine_layers.py trader/tests/test_crypto_risk_runtime_manager.py --tb=short` -> 12 passed
+  - `git diff --check` -> passed
+- 风险/遗留:
+  - 已运行的后端需要 reload/restart 后，lifespan 装配的 active `RiskEngine` 才会使用新默认值。
+  - `/v1/risk/time-window/config` 当前只更新 risk route 自己的 `TimeWindowPolicy` 单例，不会自动传播到已经注入 OMS 的 active `RiskEngine`；真正运行时热更新需要后续接入 runtime manager 或 OMS handler setter。
+- 关联文档: `PROJECT_STATUS.md`、`docs/PROJECT_ARCHITECTURE.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 2026-05-21 11:35 - Stage 5 CapitalAllocator 审查返工
 
 - 背景: Stage 5 code review 指出 allocator/management/runner 单元测试缺失、`current_notional` 与 runtime exposure 双轨污染、`total_exposure_budget` 语义不清和全局单锁扩展性问题。

@@ -4,6 +4,42 @@
 
 ---
 
+## 四十七、时间窗口风控默认时区经验（2026-05-28）
+
+### 47.1 踩坑记录：UTC 默认值会把北京时间下午误判成禁开仓
+
+**问题描述**：
+默认 `TimeWindowPolicy` 使用 UTC 评估，但旧默认把 `RESTRICTED` 配成 `22:00-08:00 UTC`。实际业务预期是北京时间 `22:00-08:00` 禁止新开仓，因此北京时间下午 13:37 会被换算成 UTC 05:37 并错误拒单。
+
+**解决方案**：
+- 默认配置仍在 Core 层使用 UTC 存储和计算
+- 将业务窗口转换为 UTC：北京时间 `22:00-08:00` = UTC `14:00-00:00`
+- 同步调整 `PRIME/OFF_PEAK`，保持 24 小时窗口连续：UTC `00:00-08:00`、`08:00-14:00`、`14:00-00:00`
+- 测试同时断言北京时间 13:37 允许新开仓、22:00 开始禁开仓、08:00 结束禁开仓
+
+**经验**：
+- 时间窗口配置必须在注释和测试里同时写清“业务时区”和“内部时区”
+- 对跨时区风控，边界测试应使用真实业务时间样例，而不是只测 UTC 小时
+- 禁开仓默认值属于风控行为，不只是显示配置，改动后必须跑 RiskEngine 相关回归
+
+### 47.2 踩坑记录：配置 API 单例不等于 active 风控实例
+
+**问题描述**：
+旧版 `/v1/risk/time-window/config` 维护的是 `trader.api.routes.risk` 里的 `_time_window_policy` 单例；OMS pre-trade 下单链路使用的是 lifespan 装配并注入的 `RiskEngine`，该实例内部持有另一个 `TimeWindowPolicy`。因此调用 route 的 PUT 端点只能改变该 route 查询/评估看到的配置，不会自动改已经注入 OMS 的 active `RiskEngine`。
+
+**解决方案**：
+- `CryptoRiskRuntimeManager` 保存 active `RiskEngine`，不再只保存 `check_pre_trade` callable
+- `build_crypto_pre_trade_risk_engine()` 负责构建可被 runtime manager 持有的真实 engine，旧 `build_crypto_pre_trade_risk_check()` 作为兼容入口保留
+- `/v1/risk/time-window/config` 的 GET/PUT 改为读写 runtime manager；PUT 在 runtime wired 时调用 active `RiskEngine.update_time_window_config()`
+- route 中不再保留 `_time_window_policy` 单例，`evaluate` 只用 manager 当前配置创建临时 evaluator
+
+**经验**：
+- 配置热更新必须明确写入真实执行实例，而不是只更新 API route 的展示/测试对象
+- active runtime 和 control-plane config cache 分离时，文档和接口要标明传播边界
+- runtime manager 应保存“可更新的执行对象”或受控 wrapper；只保存裸 callable 会让后续热更新找不到真实状态
+
+---
+
 ## 四十六、CapitalAllocator 审查返工经验（2026-05-21）
 
 ### 46.1 踩坑记录：OMS 前预留不能污染 committed notional

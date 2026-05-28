@@ -120,7 +120,7 @@ class OMSCallbackHandler:
         pre_trade_risk_check: Optional[
             Callable[[Signal], Awaitable[RiskCheckResult] | RiskCheckResult]
         ] = None,
-        max_positions: int = 3,
+        max_positions: int = 10,
         auto_pause_service: Any = None,  # StrategyAutoPauseService | None
     ):
         """

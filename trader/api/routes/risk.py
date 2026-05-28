@@ -640,38 +640,8 @@ async def recover_pending_effects():
 
 # ==================== Time Window Config Endpoints ====================
 
-# Singleton TimeWindowPolicy instance with async-safe initialization
-_time_window_policy: TimeWindowPolicy | None = None
-_time_window_lock: asyncio.Lock = asyncio.Lock()
 
-
-async def _get_time_window_policy() -> TimeWindowPolicy:
-    """
-    获取或创建 TimeWindowPolicy 单例（async-safe）。
-
-    这是模块级别的单例，用于存储和管理时间窗口配置。
-    使用双检锁保证线程安全。
-    """
-    global _time_window_policy
-    if _time_window_policy is None:
-        async with _time_window_lock:
-            # Double-check after acquiring lock
-            if _time_window_policy is None:
-                _time_window_policy = TimeWindowPolicy()
-    return _time_window_policy
-
-
-@router.get("/v1/risk/time-window/config", response_model=TimeWindowConfigSchema)
-async def get_time_window_config():
-    """
-    Get current time window configuration.
-
-    Returns the current time window configuration including all slots
-    and the default coefficient.
-    """
-    policy = await _get_time_window_policy()
-    config = policy.config
-
+def _time_window_config_to_schema(config: TWConfig) -> TimeWindowConfigSchema:
     return TimeWindowConfigSchema(
         slots=[
             TimeWindowSlotSchema(
@@ -689,6 +659,18 @@ async def get_time_window_config():
     )
 
 
+@router.get("/v1/risk/time-window/config", response_model=TimeWindowConfigSchema)
+async def get_time_window_config():
+    """
+    Get current time window configuration.
+
+    Returns the current time window configuration including all slots
+    and the default coefficient.
+    """
+    manager = get_crypto_risk_runtime_manager()
+    return _time_window_config_to_schema(manager.time_window_config())
+
+
 @router.get("/v1/risk/time-window/evaluate")
 async def evaluate_time_window(
     hour: int = Query(..., ge=0, le=23), minute: int = Query(..., ge=0, le=59)
@@ -703,7 +685,8 @@ async def evaluate_time_window(
     Returns the period, position_coefficient, and allow_new_position
     for the given time.
     """
-    policy = await _get_time_window_policy()
+    manager = get_crypto_risk_runtime_manager()
+    policy = TimeWindowPolicy(manager.time_window_config())
     ctx = policy.evaluate(hour, minute)
 
     return {
@@ -724,8 +707,6 @@ async def update_time_window_config(request: TimeWindowConfigUpdateRequest):
     The configuration change is validated and applied atomically.
     On successful update, returns the new configuration.
     """
-    policy = await _get_time_window_policy()
-
     # Convert schema to domain model
     # Note: period validation is handled by Pydantic's Literal type at request parsing time,
     # but we add defensive handling for ValueError from TimeWindowPeriod enum conversion
@@ -751,10 +732,14 @@ async def update_time_window_config(request: TimeWindowConfigUpdateRequest):
         default_coefficient=request.default_coefficient,
     )
 
-    # Update the policy with async-safe locking
-    # Note: We use the same _time_window_lock to ensure atomic updates
-    async with _time_window_lock:
-        policy.update_config(new_config)
+    manager = get_crypto_risk_runtime_manager()
+    try:
+        updated_config = await manager.update_time_window_config(
+            new_config,
+            updated_by=request.updated_by,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     logger.info(
         "TimeWindowConfig updated",
@@ -766,18 +751,4 @@ async def update_time_window_config(request: TimeWindowConfigUpdateRequest):
     )
 
     # Return the new configuration
-    return TimeWindowConfigSchema(
-        slots=[
-            TimeWindowSlotSchema(
-                period=s.period.value,
-                start_hour=s.start_hour,
-                start_minute=s.start_minute,
-                end_hour=s.end_hour,
-                end_minute=s.end_minute,
-                position_coefficient=s.position_coefficient,
-                allow_new_position=s.allow_new_position,
-            )
-            for s in policy.config.slots
-        ],
-        default_coefficient=policy.config.default_coefficient,
-    )
+    return _time_window_config_to_schema(updated_config)

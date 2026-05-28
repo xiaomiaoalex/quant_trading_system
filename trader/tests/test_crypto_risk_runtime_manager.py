@@ -20,7 +20,12 @@ from trader.core.domain.models.crypto_risk import (
     LeverageBracket,
 )
 from trader.core.domain.models.signal import Signal, SignalType
-from trader.core.domain.rules.time_window_policy import TimeWindowContext, TimeWindowPeriod
+from trader.core.domain.rules.time_window_policy import (
+    TimeWindowConfig,
+    TimeWindowContext,
+    TimeWindowPeriod,
+    TimeWindowSlot,
+)
 from trader.storage.in_memory import get_storage
 
 
@@ -204,6 +209,61 @@ async def test_runtime_manager_hot_updates_budget_and_replaces_check_without_res
     assert source.start_count == 1
     assert setter.call_count == 2
     assert setter.call_args_list[-1].args[0] is not initial_check
+
+
+@pytest.mark.asyncio
+async def test_runtime_manager_hot_updates_active_risk_engine_time_window(monkeypatch) -> None:
+    source = FakeRiskSource()
+    setter = MagicMock()
+    manager = CryptoRiskRuntimeManager(pre_trade_setter=setter)
+    monkeypatch.setattr(
+        "trader.api.crypto_risk_runtime.BinanceFuturesRiskDataSource", lambda _c: source
+    )
+    await manager.configure(
+        broker=_risk_engine_broker(),
+        api_key="key",
+        secret_key="secret",
+        config=_config(),
+        updated_by="test",
+    )
+
+    active_check = setter.call_args.args[0]
+    restricted_config = TimeWindowConfig(
+        slots=[
+            TimeWindowSlot(
+                period=TimeWindowPeriod.RESTRICTED,
+                start_hour=0,
+                start_minute=0,
+                end_hour=23,
+                end_minute=59,
+                position_coefficient=0.0,
+                allow_new_position=False,
+            )
+        ],
+        default_coefficient=1.0,
+    )
+
+    updated_config = await manager.update_time_window_config(
+        restricted_config,
+        updated_by="operator",
+    )
+
+    assert updated_config.slots[0].period == TimeWindowPeriod.RESTRICTED
+    assert manager.time_window_config().slots[0].allow_new_position is False
+
+    result = await active_check(
+        Signal(
+            signal_id="signal-time-window-hot-update",
+            strategy_name="momentum",
+            signal_type=SignalType.LONG,
+            symbol="BTCUSDT",
+            quantity=Decimal("0.01"),
+            price=Decimal("50000"),
+        )
+    )
+
+    assert result.passed is False
+    assert result.rejection_reason == RejectionReason.TRADING_HOURS
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,47 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-05-28 00:34 (北京时间)
+2026-05-28 14:34 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：时间窗口配置热更新接入 active RiskEngine
+- 完成时间: 2026-05-28 14:34 (北京时间)
+- 状态: 已完成
+- 目标: 移除 `/v1/risk/time-window/config` 的 route-local `_time_window_policy`，让 GET/PUT 读写 `CryptoRiskRuntimeManager`，并在 runtime wired 时热更新真实下单链路中的 active `RiskEngine`。
+- 开发前状态:
+  - `/v1/risk/time-window/config` 只更新 risk route 自己的 `TimeWindowPolicy` 单例。
+  - lifespan 注入 OMS 的 `RiskEngine` 独立持有另一个 `TimeWindowPolicy`，API 显示配置和真实拦单配置可能脱节。
+- 开发后状态:
+  - `CryptoRiskRuntimeManager` 保存 active `RiskEngine`，`CryptoRiskRuntimeComponents` 记录 source、snapshot provider、pre-trade check 和 engine。
+  - `PUT /v1/risk/time-window/config` 调用 runtime manager；runtime wired 时直接调用 active `RiskEngine.update_time_window_config()`，已注入 OMS 的 pre-trade check 立即使用新窗口。
+  - `GET /v1/risk/time-window/config` 和 `/evaluate` 均从 runtime manager 当前配置读取；risk route 不再保留 `_time_window_policy` 单例。
+- Issue 状态迁移:
+  - 时间窗口 API 热更新不影响 active OMS pre-trade `RiskEngine`：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_crypto_risk_runtime_manager.py::test_runtime_manager_hot_updates_active_risk_engine_time_window trader/tests/test_crypto_risk_runtime_api.py::test_put_time_window_config_updates_runtime_manager_source_of_truth --tb=short` → 2 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py --tb=short` → 40 passed
+  - `python -m pytest -q trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints trader/tests/test_crypto_risk_runtime_manager.py trader/tests/test_crypto_risk_runtime_api.py trader/tests/test_crypto_risk_runtime_config.py trader/tests/test_time_window_policy.py trader/tests/test_risk_engine_layers.py --tb=short` → 74 passed
+  - `git diff --check` → passed
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 本次任务：默认禁开仓窗口改为北京时间 22:00-08:00
+- 完成时间: 2026-05-28 13:54 (北京时间)
+- 状态: 已完成
+- 目标: 将 crypto pre-trade 默认时间窗口从 UTC 夜间禁开仓调整为北京时间业务窗口，避免北京时间下午被误判为 `RESTRICTED`。
+- 开发前状态:
+  - `TimeWindowConfig.create_default()` 使用 `RESTRICTED 22:00-08:00 UTC`，北京时间 13:37 对应 UTC 05:37，会被禁止新开仓。
+  - `/v1/risk/time-window/config` 管理的是 risk route 的 `TimeWindowPolicy` 单例；active OMS pre-trade `RiskEngine` 持有独立 policy，route 热更新不会自动同步到已注入的风控实例。
+- 开发后状态:
+  - 默认窗口改为 `PRIME 00:00-08:00 UTC`、`OFF_PEAK 08:00-14:00 UTC`、`RESTRICTED 14:00-00:00 UTC`，对应北京时间 `08:00-16:00`、`16:00-22:00`、`22:00-08:00`。
+  - 新增测试锁定北京时间 13:37 允许新开仓、北京时间 22:00 开始禁开仓、北京时间 08:00 结束禁开仓。
+- Issue 状态迁移:
+  - 北京时间下午被默认时间窗口误拒为 `TRADING_HOURS/RESTRICTED`：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_time_window_policy.py trader/tests/test_api_endpoints.py::TestTimeWindowConfigEndpoints --tb=short` → 37 passed
+  - `python -m pytest -q trader/tests/test_risk_engine_layers.py trader/tests/test_crypto_risk_runtime_manager.py --tb=short` → 12 passed
+  - `git diff --check` → passed
+- 关联文档: `docs/PROJECT_ARCHITECTURE.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：PR #108 审查问题修复
 - 完成时间: 2026-05-28 00:34 (北京时间)
