@@ -20,6 +20,96 @@ def _profile_request(strategy_id: str = "strategy-a") -> StrategyAllocationProfi
     )
 
 
+def test_absolute_profile_sets_effective_budget_for_legacy_payload() -> None:
+    service = AllocationManagementService(ControlPlaneInMemoryStorage())
+
+    created = service.upsert_profile("deploy-a", _profile_request())
+
+    assert created.allocation_mode == "ABSOLUTE_NOTIONAL"
+    assert created.configured_notional == 1_000.0
+    assert created.effective_max_notional == 1_000.0
+    assert created.max_notional == 1_000.0
+    assert created.basis_nav is None
+
+
+def test_percent_profile_uses_manual_nav_and_hard_cap() -> None:
+    service = AllocationManagementService(ControlPlaneInMemoryStorage())
+
+    created = service.upsert_profile(
+        "deploy-a",
+        StrategyAllocationProfileUpdateRequest(
+            strategy_id="strategy-a",
+            allocation_mode="PERCENT_OF_NAV",
+            target_weight=0.25,
+            nav_source="manual",
+            manual_nav=10_000.0,
+            hard_cap_notional=2_000.0,
+            max_symbol_exposure=500.0,
+            max_portfolio_weight=0.25,
+            min_confidence=0.6,
+            allow_short=True,
+            enabled=True,
+        ),
+    )
+
+    assert created.basis_nav == 10_000.0
+    assert created.configured_notional == 2_500.0
+    assert created.effective_max_notional == 2_000.0
+    assert created.max_notional == 2_000.0
+    assert created.remaining_notional == 2_000.0
+
+
+def test_percent_profile_without_nav_fails_closed() -> None:
+    service = AllocationManagementService(ControlPlaneInMemoryStorage())
+
+    try:
+        service.upsert_profile(
+            "deploy-a",
+            StrategyAllocationProfileUpdateRequest(
+                strategy_id="strategy-a",
+                allocation_mode="PERCENT_OF_NAV",
+                target_weight=0.2,
+                nav_source="paper_nav",
+                max_symbol_exposure=500.0,
+                max_portfolio_weight=0.2,
+            ),
+        )
+    except ValueError as exc:
+        assert "basis NAV" in str(exc)
+    else:
+        raise AssertionError("percent allocation without NAV should fail closed")
+
+
+def test_profile_update_appends_audit_event() -> None:
+    storage = ControlPlaneInMemoryStorage()
+    service = AllocationManagementService(storage)
+
+    service.upsert_profile("deploy-a", _profile_request())
+    service.upsert_profile(
+        "deploy-a",
+        StrategyAllocationProfileUpdateRequest(
+            strategy_id="strategy-a",
+            allocation_mode="PERCENT_OF_NAV",
+            target_weight=0.1,
+            nav_source="manual",
+            manual_nav=20_000.0,
+            max_symbol_exposure=500.0,
+            max_portfolio_weight=0.1,
+        ),
+    )
+
+    events = storage.list_events(stream_key="allocation:profiles")
+    assert [event["event_type"] for event in events] == [
+        "allocation.profile_updated",
+        "allocation.profile_updated",
+    ]
+    payload = events[-1]["payload"]
+    assert payload["deployment_id"] == "deploy-a"
+    assert payload["old_profile"]["allocation_mode"] == "ABSOLUTE_NOTIONAL"
+    assert payload["new_profile"]["allocation_mode"] == "PERCENT_OF_NAV"
+    assert payload["new_profile"]["effective_max_notional"] == 2_000.0
+
+
 def test_get_profile_returns_none_for_missing_deployment() -> None:
     service = AllocationManagementService(ControlPlaneInMemoryStorage())
 

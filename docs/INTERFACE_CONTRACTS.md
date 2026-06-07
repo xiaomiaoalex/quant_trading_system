@@ -405,7 +405,15 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 
 - `strategy_id`
 - `deployment_id`
+- `allocation_mode`: `ABSOLUTE_NOTIONAL` 或 `PERCENT_OF_NAV`
 - `max_notional`
+- `target_weight`
+- `hard_cap_notional`
+- `nav_source`: `account_equity`、`paper_nav` 或 `manual`
+- `manual_nav`
+- `basis_nav`
+- `configured_notional`
+- `effective_max_notional`
 - `max_symbol_exposure`
 - `max_portfolio_weight`
 - `min_confidence`
@@ -413,13 +421,25 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - `priority`
 - `enabled`
 
+字段语义：
+
+- `deployment_id` 是仓位预算主键；同一 `strategy_id` 的不同运行实例必须独立配置预算。
+- `allocation_mode=ABSOLUTE_NOTIONAL` 时，旧字段 `max_notional` 仍表示该 deployment 的最终 committed notional budget。
+- `StrategyAllocationProfileUpdateRequest.max_notional` 在比例模式可为 `null` 或省略；绝对金额模式缺失时必须返回 422。
+- `allocation_mode=PERCENT_OF_NAV` 时，后端必须用 `basis_nav * target_weight` 计算 `configured_notional`，再受 `hard_cap_notional` 裁剪得到 `effective_max_notional`。
+- 为兼容现有 `CapitalAllocator` 和旧前端，`StrategyAllocationProfile.max_notional` 始终等于后端解析后的 `effective_max_notional`，不得由前端直接计算后信任。
+- `basis_nav` 必须来自可验证来源：`manual_nav`、指定 deployment 的最新 paper NAV，或 deployment 绑定账户的 account equity；比例模式无法取得合法 NAV 时必须 fail-closed 并拒绝保存 profile。
+- `manual_nav` 仅允许作为显式人工输入的 NAV 来源，不得被系统静默填充。
+- `configured_notional` 表示模式计算出的原始目标额度，`effective_max_notional` 表示裁剪后的 OMS 前置执行额度。
+- 每次 profile 更新必须写入 `allocation.profile_updated` 控制面事件，payload 至少包含 `deployment_id`、`strategy_id`、`old_profile`、`new_profile`、`allocation_mode`、`basis_nav`、`effective_max_notional`、`updated_by`。
+
 每次分配链路必须记录 `AllocationTrace`，包含 `raw_requested_size`、`risk_sized_qty`、`allocated_qty`、`final_order_qty`、`allocation_decision`、`reject_or_clip_reason`。
 
 `StrategyRunner` 的 OMS 前置分配契约：
 
 - 构造函数可注入 `capital_allocator: CapitalAllocator | None` 与 `allocation_management: AllocationManagementService | None`；未注入 `allocation_management` 时使用控制面默认存储。
 - 分配门禁执行顺序固定为：策略产生 `Signal` -> KillSwitch/RiskMode/资源限制 -> `CapitalAllocator` -> OMS callback。未配置 allocation profile 且未注入 allocator 时保持旧行为，不拦截信号。
-- 每个开仓信号都会按 `deployment_id` 热读取最新 `StrategyAllocationProfile`，因此 `upsert_profile()` 的 `enabled`、`max_notional`、`max_symbol_exposure`、`min_confidence`、`allow_short` 变更必须在下一次 tick 生效。
+- 每个开仓信号都会按 `deployment_id` 热读取最新 `StrategyAllocationProfile`，因此 `upsert_profile()` 的 `enabled`、`allocation_mode`、`target_weight`、`max_notional/effective_max_notional`、`max_symbol_exposure`、`min_confidence`、`allow_short` 变更必须在下一次 tick 生效。
 - 信号方向映射：`BUY`/`LONG` -> allocator `LONG`，`SHORT` -> allocator `SHORT`；平仓类信号不进入 allocator。
 - `raw_requested_size` 表示原始请求名义金额 `abs(quantity * price)`；`risk_sized_qty` 表示进入 allocator 前的数量；`allocated_qty` 和 `final_order_qty` 表示 allocator 决策后的最终下单数量。
 - `allocation_decision=approved` 时按原数量进入 OMS；`clipped` 时必须先把 `Signal.quantity` 改为 `final_order_qty` 再调用 OMS；`rejected` 时不得调用 OMS。

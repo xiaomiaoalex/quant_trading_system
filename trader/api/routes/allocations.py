@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 
 from trader.api.models.schemas import (
     AllocationTrace,
@@ -23,7 +23,10 @@ async def upsert_allocation(
     request: StrategyAllocationProfileUpdateRequest,
     deployment_id: str = Path(...),
 ):
-    return AllocationManagementService().upsert_profile(deployment_id, request)
+    try:
+        return AllocationManagementService().upsert_profile(deployment_id, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post(

@@ -413,6 +413,12 @@ class ControlPlaneInMemoryStorage:
             "updated_at": now,
         }
         profile.setdefault("current_notional", 0.0)
+        profile.setdefault("allocation_mode", "ABSOLUTE_NOTIONAL")
+        profile.setdefault("configured_notional", float(profile.get("max_notional", 0.0)))
+        profile.setdefault("effective_max_notional", float(profile.get("max_notional", 0.0)))
+        profile["max_notional"] = float(
+            profile.get("effective_max_notional", profile.get("max_notional", 0.0))
+        )
         profile["remaining_notional"] = max(
             0.0,
             float(profile.get("max_notional", 0.0)) - float(profile.get("current_notional", 0.0)),

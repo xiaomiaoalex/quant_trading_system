@@ -5,9 +5,15 @@
 
 ## 文档状态
 
-- 最后更新: 2026-05-28 14:34 (北京时间)
+- 最后更新: 2026-06-07 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile。
+
+### 本次变更摘要（2026-06-07）
+
+1. **策略仓位预算模式升级**: `StrategyAllocationProfile` 支持 `ABSOLUTE_NOTIONAL` 与 `PERCENT_OF_NAV`；比例模式由 Control Plane 使用可验证 NAV 解析出 `effective_max_notional`，再交给 OMS 前置 `CapitalAllocator` 执行。
+2. **Profile 更新审计**: 每次 allocation profile upsert 写入 `allocation.profile_updated` 控制面事件，记录旧值、新值、预算模式、NAV 基准和最终有效额度。
+3. **前端配置收口**: Portfolio Allocation 页面改为预算工作台，前端只提交配置意图，后端负责计算与校验最终执行额度。
 
 ### 本次变更摘要（2026-05-28）
 
@@ -46,7 +52,7 @@ flowchart TB
         API["FastAPI Routes"]
         Lifecycle["Strategy Lifecycle / Runner"]
         AutoPause["StrategyAutoPauseService\nRisk reject windows / probe resume"]
-        AllocMgmt["Allocation Management\nProfiles / Traces"]
+        AllocMgmt["Allocation Management\nProfiles / NAV budget / Traces"]
         CryptoRuntime["Crypto Risk Runtime Manager\nBudget / TimeWindow / active RiskEngine"]
         CryptoOps["Crypto Risk Ops API"]
         Monitor["Monitor / SSE / Runtime Services"]
@@ -243,6 +249,7 @@ sequenceDiagram
 - 下单前必须经过风险、余额、预算、KillSwitch 和 CapitalAllocator gate。
 - 自动暂停只处理“同一策略运行实例被风控反复拒绝”的休眠/恢复体验，不改变 KillSwitch、RiskEngine 或 Fail-Closed 的判定优先级。
 - 开仓信号在 OMS callback 前必须按 `deployment_id` 读取最新 allocation profile；`REJECTED` 不得调用 OMS，`CLIPPED` 必须修改 `Signal.quantity` 后再进入 OMS。
+- allocation profile 的比例预算只能在 Control Plane 解析为 `effective_max_notional` 后进入 Policy Plane；前端计算值仅作展示，不得作为 OMS 前置执行依据。
 - CapitalAllocator 的 OMS 前 reservation 只存在于进程内，不得提前增加 `StrategyAllocationProfile.current_notional`；只有 OMS callback 返回 truthy 后，才提交 committed exposure 并更新 `current_notional`。
 - Allocation reservation 使用 portfolio-wide 锁；同一运行进程内所有 symbol 的分配检查、预留、提交和释放串行化，避免跨 symbol 并发穿透组合级预算或净敞口限制。
 - OMS 返回 falsy 或抛异常时只释放 in-flight reservation，不得减少已有 committed notional。

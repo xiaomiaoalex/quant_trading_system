@@ -131,6 +131,14 @@ export interface StrategyAllocationProfile {
   max_notional: number
   max_symbol_exposure: number
   max_portfolio_weight: number
+  allocation_mode: 'ABSOLUTE_NOTIONAL' | 'PERCENT_OF_NAV'
+  target_weight?: number | null
+  hard_cap_notional?: number | null
+  nav_source: 'account_equity' | 'paper_nav' | 'manual'
+  manual_nav?: number | null
+  basis_nav?: number | null
+  configured_notional: number
+  effective_max_notional: number
   min_confidence: number
   allow_short: boolean
   priority: number
@@ -142,13 +150,19 @@ export interface StrategyAllocationProfile {
 
 export interface StrategyAllocationProfileUpdateRequest {
   strategy_id: string
-  max_notional: number
+  max_notional?: number | null
   max_symbol_exposure: number
   max_portfolio_weight: number
+  allocation_mode?: 'ABSOLUTE_NOTIONAL' | 'PERCENT_OF_NAV'
+  target_weight?: number | null
+  hard_cap_notional?: number | null
+  nav_source?: 'account_equity' | 'paper_nav' | 'manual'
+  manual_nav?: number | null
   min_confidence?: number
   allow_short?: boolean
   priority?: number
   enabled?: boolean
+  updated_by?: string
 }
 
 export interface AllocationTrace {
