@@ -445,6 +445,7 @@ async def project_benchmark_from_config(
 
     # Convert list of dicts to dict[str, Decimal]
     constituents_dict: dict[str, Decimal] = {}
+    period_returns_by_symbol: dict[str, Decimal] = {}
     for item in constituents:
         symbol = item.get("symbol", "")
         if not symbol:
@@ -455,10 +456,12 @@ async def project_benchmark_from_config(
         try:
             weight_str = str(item.get("weight", "0"))
             constituents_dict[symbol] = Decimal(weight_str)
+            if "period_return" in item:
+                period_returns_by_symbol[symbol] = Decimal(str(item["period_return"]))
         except DecimalException as exc:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid weight value for symbol {symbol}: {exc}",
+                detail=f"Invalid numeric value for symbol {symbol}: {exc}",
             ) from exc
 
     projector = BenchmarkConstituentProjector()
@@ -469,6 +472,7 @@ async def project_benchmark_from_config(
             period_start_ms=period_start_ms,
             period_end_ms=period_end_ms,
             period_return=period_return,
+            period_returns=period_returns_by_symbol,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -544,7 +548,7 @@ async def generate_initial_weights(
 def _serialize(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _serialize(asdict(value))
     if isinstance(value, dict):
         return {key: _serialize(item) for key, item in value.items()}

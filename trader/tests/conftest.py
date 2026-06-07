@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from collections.abc import Iterator
+from types import ModuleType
 
 import pytest
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ _BASE_ENV = {
     key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key) for key in _TRACKED_ENV_KEYS
 }
 try:
-    _REAL_ASYNCPG = importlib.import_module("asyncpg")
+    _REAL_ASYNCPG: ModuleType | None = importlib.import_module("asyncpg")
 except Exception:
     _REAL_ASYNCPG = None
 

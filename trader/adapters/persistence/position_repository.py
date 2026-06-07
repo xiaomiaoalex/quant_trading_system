@@ -48,6 +48,11 @@ class PositionRepository:
             self._postgres_storage._connected = False
         self._clear_postgres_state()
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
     async def _ensure_postgres(self) -> bool:
         current_loop = asyncio.get_running_loop()
         if self._loop is not current_loop:
@@ -77,7 +82,7 @@ class PositionRepository:
                 return False
 
     async def _ensure_tables(self) -> None:
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS position_lots (
@@ -141,7 +146,7 @@ class PositionRepository:
 
     async def save_lot(self, lot_data: Dict[str, Any]) -> bool:
         if await self._ensure_postgres():
-            async with self._postgres_storage._pool.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO position_lots
@@ -180,7 +185,7 @@ class PositionRepository:
         closed_at: Optional[datetime] = None,
     ) -> bool:
         if await self._ensure_postgres():
-            async with self._postgres_storage._pool.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 await conn.execute(
                     """
                     UPDATE position_lots
@@ -210,7 +215,7 @@ class PositionRepository:
         if open_only:
             query += " AND NOT is_closed"
         query += " ORDER BY filled_at ASC"
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             rows = await conn.fetch(query, strategy_id, symbol)
         return [dict(row) for row in rows]
 
@@ -222,7 +227,7 @@ class PositionRepository:
         last_event_seq: int = 0,
     ) -> bool:
         if await self._ensure_postgres():
-            async with self._postgres_storage._pool.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO strategy_positions_proj
@@ -245,7 +250,7 @@ class PositionRepository:
     async def get_position_projection(self, aggregate_id: str) -> Optional[Dict[str, Any]]:
         if not await self._ensure_postgres():
             return None
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT aggregate_id, state, version, last_event_seq, updated_at FROM strategy_positions_proj WHERE aggregate_id=$1",
                 aggregate_id,
@@ -274,7 +279,7 @@ class PositionRepository:
             query += " AND state->>'strategy_id' = $1"
             params.append(strategy_id)
         query += " ORDER BY updated_at DESC"
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             rows = await conn.fetch(query, *params)
         results = []
         for row in rows:
@@ -297,7 +302,7 @@ class PositionRepository:
         details: Optional[Dict[str, Any]] = None,
     ) -> bool:
         if await self._ensure_postgres():
-            async with self._postgres_storage._pool.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO reconciliation_log
@@ -340,7 +345,7 @@ class PositionRepository:
             query += f" AND status = ${len(params)}"
         query += f" ORDER BY created_at DESC LIMIT ${len(params) + 1}"
         params.append(limit)
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             rows = await conn.fetch(query, *params)
         results: List[Dict[str, Any]] = []
         for row in rows:

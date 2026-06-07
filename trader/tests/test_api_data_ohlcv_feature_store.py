@@ -33,7 +33,7 @@ def _reset_version(symbol: str, version: str) -> None:
     for key in list(storage.feature_values_by_key):
         if key.startswith(f"{symbol}:ohlcv:{version}:"):
             del storage.feature_values_by_key[key]
-    get_feature_store()._ensure_postgres = AsyncMock(return_value=False)
+    get_feature_store()._ensure_postgres = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
 
 def test_import_ohlcv_writes_feature_store_and_updates_catalog():

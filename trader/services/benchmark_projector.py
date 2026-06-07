@@ -180,6 +180,7 @@ class BenchmarkConstituentProjector:
         period_start_ms: int,
         period_end_ms: int,
         period_return: str = "0",
+        period_returns: dict[str, Decimal] | None = None,
     ) -> BenchmarkProjectorResult:
         """Project benchmark weights from configuration.
 
@@ -189,6 +190,8 @@ class BenchmarkConstituentProjector:
             period_start_ms: Period start timestamp in milliseconds
             period_end_ms: Period end timestamp in milliseconds
             period_return: Default period return for all constituents (default "0")
+            period_returns: Optional symbol-specific period returns. When present,
+                values override the default period_return for matching symbols.
 
         Returns:
             BenchmarkProjectorResult with projected/duplicates/failed counts
@@ -201,10 +204,15 @@ class BenchmarkConstituentProjector:
 
         # Parse default period return
         default_period_return = Decimal(period_return)
+        period_returns = period_returns or {}
 
         # Convert to BenchmarkConstituent list
         const_list = [
-            BenchmarkConstituent(symbol=symbol, weight=weight, period_return=default_period_return)
+            BenchmarkConstituent(
+                symbol=symbol,
+                weight=weight,
+                period_return=period_returns.get(symbol, default_period_return),
+            )
             for symbol, weight in constituents.items()
         ]
 
@@ -472,6 +480,7 @@ async def project_benchmark_from_config(
     period_start_ms: int,
     period_end_ms: int,
     period_return: str = "0",
+    period_returns: dict[str, Decimal] | None = None,
 ) -> BenchmarkProjectorResult:
     """Project benchmark weights from configuration.
 
@@ -484,6 +493,7 @@ async def project_benchmark_from_config(
         period_start_ms=period_start_ms,
         period_end_ms=period_end_ms,
         period_return=period_return,
+        period_returns=period_returns,
     )
 
 

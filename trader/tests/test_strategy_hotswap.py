@@ -69,7 +69,7 @@ class FakeStrategyPlugin:
         version: str = "1.0.0",
         risk_level: RiskLevel = RiskLevel.LOW,
         resource_limits: Optional[StrategyResourceLimits] = None,
-        validate_result: ValidationResult = None,
+        validate_result: ValidationResult | None = None,
     ):
         self.strategy_id = name
         self.name = name

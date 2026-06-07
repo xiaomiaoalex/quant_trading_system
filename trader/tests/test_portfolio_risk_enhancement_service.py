@@ -457,6 +457,7 @@ class TestPortfolioRiskEnhancementService:
 
         assert result.regime == VolatilityRegime.NORMAL
         assert result.adjusted_exposure is not None
+        assert result.worst_case_stress is not None
         assert result.adjusted_exposure < result.worst_case_stress.stressed_exposure
 
 
@@ -509,6 +510,8 @@ class TestBacktestLiveConsistency:
         result_live = service.evaluate(positions, symbol_clusters, mark_prices)
         result_backtest = service.evaluate(positions, symbol_clusters, mark_prices)
 
+        assert result_live.worst_case_stress is not None
+        assert result_backtest.worst_case_stress is not None
         assert result_live.worst_case_stress.loss == result_backtest.worst_case_stress.loss
         assert (
             result_live.concentration.has_violations == result_backtest.concentration.has_violations

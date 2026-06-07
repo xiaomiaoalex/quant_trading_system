@@ -27,7 +27,7 @@ from trader.core.domain.signals.price_volume_signals import (
 def make_volume_sample(
     ts_ms: int,
     volume: float,
-    quote_volume: float = None,
+    quote_volume: float | None = None,
     trade_count: int = 100,
 ) -> VolumeSample:
     """创建成交量样本"""
@@ -45,9 +45,9 @@ def make_price_volume_sample(
     ts_ms: int,
     close_price: float,
     volume: float,
-    open_price: float = None,
-    high_price: float = None,
-    low_price: float = None,
+    open_price: float | None = None,
+    high_price: float | None = None,
+    low_price: float | None = None,
 ) -> PriceVolumeSample:
     """创建价量样本"""
     if open_price is None:

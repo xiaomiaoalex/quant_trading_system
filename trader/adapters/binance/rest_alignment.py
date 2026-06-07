@@ -123,6 +123,11 @@ class RESTAlignmentCoordinator:
         """解析代理配置（支持主备自动切换）。"""
         return self._proxy_failover.select_proxy(self._config.proxy_url)
 
+    def _session_or_raise(self) -> "aiohttp.ClientSession":
+        if self._session is None:
+            raise RuntimeError("REST alignment session is not initialized")
+        return self._session
+
     async def _get_public_json_with_failover(
         self,
         endpoint: str,
@@ -396,7 +401,7 @@ class RESTAlignmentCoordinator:
 
             try:
                 proxy = self._resolve_proxy()
-                async with self._session.request(
+                async with self._session_or_raise().request(
                     method,
                     url,
                     headers=headers,

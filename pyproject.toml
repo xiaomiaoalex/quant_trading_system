@@ -74,6 +74,23 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["code"]
 
+[tool.mypy]
+python_version = "3.12"
+disable_error_code = ["import-not-found", "import-untyped"]
+
+[[tool.mypy.overrides]]
+module = [
+    "anthropic",
+    "asyncpg",
+    "fnvhash",
+    "openai",
+    "pandas",
+    "psutil",
+    "seaborn",
+    "vectorbt",
+]
+ignore_missing_imports = true
+
 [[tool.uv.index]]
 url = "http://mirrors.cloud.aliyuncs.com/pypi/simple"
 default = true

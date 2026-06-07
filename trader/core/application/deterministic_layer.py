@@ -539,13 +539,18 @@ def cas_apply_order(
             if update.filled_qty <= order.filled_qty:
                 return []
 
-        if has_exch_ts and vv.last_exchange_ts_ms and exch_ts <= vv.last_exchange_ts_ms:
-            return []
+        if has_exch_ts:
+            exchange_event_ts = exch_ts
+            if exchange_event_ts is None:
+                return []
+            if vv.last_exchange_ts_ms and exchange_event_ts <= vv.last_exchange_ts_ms:
+                return []
 
     if (new_rank > old_rank) and update.source == "REST" and (not accept_override):
         if (
             has_exch_ts
             and vv.last_exchange_ts_ms
+            and exch_ts is not None
             and exch_ts + ALLOWED_SKEW_MS < vv.last_exchange_ts_ms
         ):
             return []
@@ -555,7 +560,7 @@ def cas_apply_order(
 
     vv.last_status_rank = max(old_rank, new_rank)
 
-    if has_exch_ts:
+    if has_exch_ts and exch_ts is not None:
         vv.last_exchange_ts_ms = max(vv.last_exchange_ts_ms, exch_ts)
     vv.last_local_ts_ms = update.local_receive_ts_ms
     vv.last_source = update.source
@@ -659,9 +664,9 @@ class DeterministicApplier:
         out: List[Any] = []
         items = self._pending.pop_all(broker_order_id)
         for it in items:
-            if it.kind == "order":
+            if it.kind == "order" and isinstance(it.payload, RawOrderUpdate):
                 out.extend(await self.apply_order_update(it.payload))
-            else:
+            elif it.kind == "fill" and isinstance(it.payload, RawFillUpdate):
                 out.extend(await self.apply_fill_update(it.payload))
         return out
 

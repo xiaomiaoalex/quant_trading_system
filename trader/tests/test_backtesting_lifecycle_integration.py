@@ -49,8 +49,8 @@ class MockBacktestResult:
         self.profit_factor = Decimal(str(profit_factor))
         self.num_trades = num_trades
         self.final_capital = Decimal("115000")
-        self.equity_curve = []
-        self.trades = []
+        self.equity_curve: list[dict[str, Any]] = []
+        self.trades: list[dict[str, Any]] = []
 
 
 class TestAutoApprovalRules(unittest.TestCase):

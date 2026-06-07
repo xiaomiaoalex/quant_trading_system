@@ -47,6 +47,11 @@ class KillSwitchRepository:
             self._postgres_storage._connected = False
         self._clear_postgres_state()
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
     async def _ensure_postgres(self) -> bool:
         current_loop = asyncio.get_running_loop()
         if self._loop is not current_loop:
@@ -78,7 +83,7 @@ class KillSwitchRepository:
                 return False
 
     async def _ensure_tables(self) -> None:
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS killswitch_log (
@@ -114,7 +119,7 @@ class KillSwitchRepository:
             )
 
         ts_ms = int(time.time() * 1000)
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO killswitch_log (scope, level, reason, updated_by, previous_level, ts_ms)
@@ -188,7 +193,7 @@ class KillSwitchRepository:
             query += " AND scope = $1"
         query += f" ORDER BY ts_ms DESC LIMIT ${len(params) + 1}"
         params.append(limit)
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             rows = await conn.fetch(query, *params)
         return [dict(row) for row in rows]
 

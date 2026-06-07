@@ -376,8 +376,9 @@ class FakeWebSocket:
             asyncio.create_task(delayed_pong())
             return waiter
 
-        if self._ping_pong_script.get_error():
-            waiter.set_exception(self._ping_pong_script.get_error())
+        error = self._ping_pong_script.get_error()
+        if error is not None:
+            waiter.set_exception(error)
             return waiter
 
         waiter.set_result(None)

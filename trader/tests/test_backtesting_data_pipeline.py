@@ -49,7 +49,7 @@ class MockDataPoint:
 
 def create_test_data(start: datetime, days: int, interval_hours: int = 1) -> List[Dict[str, Any]]:
     """Create test OHLCV data"""
-    data = []
+    data: List[Dict[str, Any]] = []
     current = start
     price = 100.0
 
@@ -64,7 +64,7 @@ def create_test_data(start: datetime, days: int, interval_hours: int = 1) -> Lis
                 "volume": 1000.0,
             }
         )
-        price = data[-1]["close"]
+        price = float(data[-1]["close"])
         current += timedelta(hours=interval_hours)
 
     return data

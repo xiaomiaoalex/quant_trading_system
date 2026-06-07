@@ -282,7 +282,7 @@ def get_order_ownership_registry() -> OrderOwnershipRegistry:
         from trader.api.env_config import get_system_order_namespace_prefix
 
         prefix = get_system_order_namespace_prefix()
-        external_prefixes = []  # 可从环境变量扩展
+        external_prefixes: list[str] = []  # 可从环境变量扩展
         _global_registry = OrderOwnershipRegistry(
             namespace_prefix=prefix,
             external_prefixes=external_prefixes,

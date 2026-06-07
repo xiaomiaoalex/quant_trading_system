@@ -3926,6 +3926,119 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 
 ---
 
+## 二十六、mypy 技术债归零经验
+
+### 26.1 踩坑记录：`_ensure_*()` 不等于类型收窄
+
+**场景**：
+多个 PG-first repository 先调用 `_ensure_postgres()` 或 `_ensure_storage()`，随后直接访问 `self._postgres` / `self._storage`。
+
+**问题**：
+- 运行时逻辑已经保证非空，但 mypy 无法从有副作用的方法调用推导实例属性一定非空
+- 继续直接访问会形成大量 `union-attr` / `arg-type` 噪音
+
+**经验**：
+- 使用 `_postgres_or_raise()` / `_storage_or_raise()` 返回非空局部变量
+- 后续 SQL、事务和 projector 逻辑只使用该局部变量
+- 这样既保留 fail-closed 防御，也让类型契约可见
+
+### 26.2 踩坑记录：Decimal 聚合必须提供 Decimal 起始值
+
+**场景**：
+Performance accounting 和风险测试中存在 `sum(Decimal(... ) for ...)`。
+
+**问题**：
+- Python 默认起始值是 `0`，类型为 `int`
+- mypy 会把结果推断为 `Decimal | int` 或触发 operator 类型错误
+
+**经验**：
+- Decimal 聚合统一使用 `sum(values, Decimal("0"))`
+- 测试输入中涉及资金、权重、仓位上限的字段也应直接使用 `Decimal(...)`
+
+### 26.3 设计模式：测试 fake 的类型边界局部化
+
+**场景**：
+测试 fake 需要模拟 aiohttp session、websocket、manager 或 source，对象通常只实现协议的一小部分。
+
+**经验**：
+- 在测试调用点使用 `cast(Any, fake)` 表达“这里是测试替身边界”
+- 不在生产代码或整个测试模块上使用宽泛 ignore
+- monkeypatch 方法赋值优先用 fixture；确需直接赋值时使用局部 `# type: ignore[method-assign]`
+
+### 26.4 设计模式：第三方 stub 噪音与内部类型债分离
+
+**场景**：
+`mypy trader/` 同时报告第三方库缺失 stub 和仓库内部 Optional/Any/DTO 错误。
+
+**经验**：
+- `pyproject.toml` 只屏蔽第三方 `import-not-found/import-untyped` 噪音
+- 不对仓库内部包启用 `ignore_errors`
+- 每轮清理用全量 mypy 验证，避免局部 `--follow-imports=skip` 掩盖跨模块错误
+
+---
+
+## 二十六、mypy 技术债阶段性清理经验
+
+### 26.1 踩坑记录：PG-first 仓储的运行时非空事实不会自动传递给 mypy
+
+**场景**：
+多处 repository 在 `await _ensure_postgres()` 返回 True 后直接访问 `self._postgres_storage` 或 `self._storage`。
+
+**问题**：
+- 运行时逻辑能保证连接已初始化，但 mypy 仍看到 `PostgreSQLStorage | None`
+- 直接散落 `assert self._postgres_storage is not None` 会重复且容易遗漏
+
+**经验**：
+- 每个仓储类提供 `_postgres_or_raise()` / `_storage_or_raise()`，集中表达“初始化失败即异常”的 fail-closed 语义
+- `PostgreSQLStorage.acquire()` 自身也应检查 `_pool is None`，避免未连接时返回不明确错误
+
+### 26.2 设计模式：先消噪，再清源码类型债
+
+**场景**：
+初始 `mypy trader/` 同时包含第三方库缺 stub、生产代码类型债和测试辅助对象类型债。
+
+**经验**：
+- 对 `asyncpg`、`pandas`、`seaborn`、`vectorbt` 等第三方 IO/分析边界，先通过 mypy 配置压掉 `import-not-found/import-untyped` 噪音
+- 仓库内部错误不使用 `ignore_errors`，按错误簇逐步清理
+- 全量门禁未清零前，保留错误数基线，避免阶段性修复被误读为完成
+
+### 26.3 Core Plane 类型收窄不得改变确定性规则
+
+**场景**：
+`deterministic_layer` 中 `has_exch_ts = exch_ts is not None` 的布尔别名无法让 mypy 推导 `exch_ts` 非空。
+
+**经验**：
+- 在 Core Plane 中优先做局部变量收窄和 `isinstance` 收窄，避免为了类型通过改写状态机规则
+- pending buffer 的 `payload: object` 应按 `kind + isinstance` 双重判断后再分派，保持异常/未知 payload fail-closed
+
+---
+
+## 二十六、Performance API 路由挂载与配置字段保真
+
+### 26.1 踩坑记录：route module 存在不代表主 app 可达
+
+**场景**：
+PR #110 新增了 `trader/api/routes/performance.py` 和多个 `/v1/performance/...` 端点，但没有在 `trader/api/main.py` include router，也没有加入 `trader/api/routes/__init__.py` 聚合入口。
+
+**问题**：
+- 单独导入 route module 时端点存在，主 FastAPI app 路由表中却没有这些路径
+- 使用 `TestClient(app)` 或真实服务访问会得到 404
+- 只测 service/projector 会漏掉 Control Plane 接线问题
+
+**经验**：
+- 新增 API route 必须同时测试 `trader.api.main.app.routes`
+- Review/CI 不应只验证 route module 或 service 层，应覆盖主 app 可达性
+
+### 26.2 设计模式：默认值与 per-symbol override 分层
+
+**场景**：
+`POST /v1/performance/benchmark/config` 支持全局 `period_return`，同时文档示例允许 `constituents[].period_return`。
+
+**经验**：
+- 全局字段只能作为默认值，不能覆盖更具体的 per-symbol 配置
+- Service 层接口应显式表达 override 映射，如 `period_returns: dict[str, Decimal] | None`
+- 测试必须读取最终 persistence DTO，确认字段没有在 API -> Service -> Repository 链路中丢失
+
 ## 二十六、自动暂停恢复与持仓审计一致性经验
 
 ### 26.1 踩坑记录：字符串零不能直接与数字零比较

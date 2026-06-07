@@ -11,7 +11,7 @@ Three-level health check:
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
 
@@ -135,13 +135,13 @@ async def dependency_check():
     )
 
 
-_heartbeat_service: Optional[object] = None
-_connection_manager: Optional[object] = None
-_connector_getter: Optional[callable] = None
+_heartbeat_service: Any | None = None
+_connection_manager: Any | None = None
+_connector_getter: Callable[[], Any] | None = None
 
 
 def configure_heartbeat(
-    heartbeat_service: object, connection_manager: object, connector_getter: callable
+    heartbeat_service: Any, connection_manager: Any, connector_getter: Callable[[], Any]
 ) -> None:
     """配置心跳服务依赖"""
     global _heartbeat_service, _connection_manager, _connector_getter

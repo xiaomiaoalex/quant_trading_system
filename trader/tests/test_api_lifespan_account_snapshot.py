@@ -1,6 +1,7 @@
 """Tests for API lifespan account REST snapshot wiring."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -82,7 +83,7 @@ class _FakeBridge:
             self.snapshot_balances = await fetch_balances()
             return True
         except Exception as exc:
-            self.snapshot_error = exc
+            self.snapshot_error = cast(Any, exc)
             return False
 
     def start_periodic_calibration(self, fetch_balances) -> None:
@@ -155,7 +156,7 @@ async def test_lifespan_rest_snapshot_uses_oms_broker_not_connector(monkeypatch)
         _FakeCascadeController,
     )
 
-    async with api_main.lifespan(SimpleNamespace()):
+    async with api_main.lifespan(cast(Any, SimpleNamespace())):
         bridge = _FakeBridge.instances[0]
         assert bridge.snapshot_error is None
         assert bridge.snapshot_balances == [{"asset": "USDT", "free": "123", "locked": "0"}]

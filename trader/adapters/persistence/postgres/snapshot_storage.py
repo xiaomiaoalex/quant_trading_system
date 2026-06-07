@@ -242,14 +242,14 @@ class PostgresSnapshotStorage:
             FROM control_plane_snapshots
             WHERE stream_key = $1
         """
-        params = [stream_key]
+        params: list[Any] = [stream_key]
 
         if since_ts_ms is not None:
-            query += " AND ts_ms >= $${len(params) + 1}"
+            query += f" AND ts_ms >= ${len(params) + 1}"
             params.append(since_ts_ms)
 
         if until_ts_ms is not None:
-            query += " AND ts_ms <= $${len(params) + 1}"
+            query += f" AND ts_ms <= ${len(params) + 1}"
             params.append(until_ts_ms)
 
         query += " ORDER BY ts_ms DESC LIMIT $" + str(len(params) + 1)

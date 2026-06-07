@@ -91,6 +91,29 @@
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`docs/PROJECT_ARCHITECTURE.md`、
   `Frontend/frontend_docs/contract_endpoints.md`、`Frontend/frontend_docs/contract_models.md`、
   `DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+### 本次任务：mypy 技术债集中清理归零
+- 完成时间: 2026-06-07 (北京时间)
+- 状态: 已完成
+- 目标: 集中清理仓库 Python 类型技术债，使 `mypy trader/` 从历史失败基线恢复为全量通过，并保留第三方库类型噪音与仓库内部类型债的边界。
+- 开发前状态:
+  - 初始 `mypy trader/` 基线为 486 errors / 114 files。
+  - 阶段性清理后仍存在 312 errors，主要集中在测试 fake/monkeypatch、Persistence Optional storage、Binance stream/session narrowing、API DTO narrowing、回测与 performance accounting 数值类型。
+- 开发后状态:
+  - `mypy trader/` 已通过，输出 `Success: no issues found in 389 source files`。
+  - `pyproject.toml` 仅隔离第三方 `import-not-found/import-untyped` 噪音，未对仓库内部模块使用全局 `ignore_errors`。
+  - Persistence、Binance adapters、Core deterministic/reconciliation、Backtesting、Services/API 与测试 fake 的 Optional/Decimal/Any 边界均已显式收窄。
+  - Performance execution projector 使用明确的 `ExecutionRepository.list_executions_for_projection()` 游标读取契约，避免对内部列表和排序语义做隐式假设。
+- Issue 状态迁移:
+  - 仓库 mypy 技术债阻塞全量类型检查：`待确认` → `已验证`
+- 验证结果:
+  - `mypy trader/` → `Success: no issues found in 389 source files`
+  - `python -m black --check --line-length 100 trader/` → passed
+  - `python -m isort --check-only --profile black trader/` → passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` → passed
+  - Strategy/chat、Binance、Persistence/reconciler、Backtesting、Portfolio risk、Signals/committee、API/feature store 等目标子集均已通过
+  - `python -m pytest -q trader/tests --tb=short` → 124 秒超时，未获得失败用例明细，不能视为全量测试通过
+  - Portfolio proposal PostgreSQL 测试在未配置 PostgreSQL 时 skip，memory store 测试通过
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：时间窗口配置热更新接入 active RiskEngine
 - 完成时间: 2026-05-28 14:34 (北京时间)
@@ -3166,3 +3189,18 @@ Phase 6 解决了"风控规则分散"的问题，Phase 7 要解决"风控是否�
 - 开发后状态：`Order`、`BrokerOrder`、OMS 和对账 Core DTO 统一为 `cl_ord_id/qty/filled_qty`；Binance Adapter 在边界完成 legacy 字段转换；新订单事件写 schema v2，Replay 继续兼容 schema v1。
 - 已验证：订单/事件/对账/Binance 目标回归与 P0 回归集通过。
 - 遗留：历史 PostgreSQL read model 的 legacy 字段迁移留待独立数据库迁移任务处理。
+### 2026-06-05 17:38 +08:00 - PR #110 审查问题修复
+
+- 开发前状态：PR #110 已合入，但 performance router 未挂载到主 FastAPI app，`/v1/performance/benchmark/*` 与 `/v1/performance/initial-weights` 在主 app 路由表中不可达；config benchmark 的 per-symbol `period_return` 未按接口说明落库；接口契约与架构文档缺少新增 Performance Benchmark Projector 说明。
+- 开发后状态：`trader.api.main.app` 已挂载 `performance.router`；`BenchmarkConstituentProjector.project_from_config()` 支持 `period_returns` 覆盖默认 `period_return`；`/v1/performance/benchmark/config` 会保留 `constituents[].period_return`；接口契约、架构、经验总结与开发日志已同步。
+- 已验证：新增回归覆盖主 app 路由挂载和 per-symbol period return 保留；`python -m pytest -q trader/tests/test_benchmark_projector.py --tb=short` 通过。
+- Issue 状态：PR #110 review findings 从“待确认”移至“已验证修复”。
+- 下一步计划影响：不改变 Phase 7 优先级；Performance Benchmark Projector 可继续作为 performance attribution 的数据准备入口，但后续仍建议补 API TestClient 端到端测试和 PostgreSQL 集成覆盖。
+
+### 2026-06-06 21:21 +08:00 - mypy 技术债阶段性集中清理
+
+- 开发前状态：`mypy trader/` 基线为 486 errors / 114 files，主要集中在 PG-first 仓储 Optional storage、缺第三方 stub、Projector 注解、Core deterministic layer None 收窄、回测 data pipeline 空容器推断。
+- 开发后状态：新增 mypy 主配置并禁用第三方 `import-not-found/import-untyped` 噪音；PG-first 仓储统一使用 `_postgres_or_raise()` / `_storage_or_raise()` 收窄已初始化连接；`deterministic_layer`、`data_pipeline`、Postgres event/projector 链路完成局部 mypy 清零；全量基线降至 312 errors。
+- 已验证：`python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short` -> 39 passed；已修改的 13 个核心/仓储/回测源码文件局部 mypy -> passed；`mypy trader/` 仍失败但错误数降至 312。
+- Issue 状态：mypy 技术债从“未分层”推进到“PG-first/Projector/Core deterministic 已阶段性收敛”；剩余主要集中在 tests、performance、Binance stream、API routes、strategy runner 等模块。
+- 下一步计划影响：建议继续按错误簇推进，优先处理源码高频模块，再决定是否将 `trader/tests/` 纳入独立 mypy profile，避免测试辅助对象拖慢生产代码类型门禁。

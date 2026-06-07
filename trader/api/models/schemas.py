@@ -7,7 +7,7 @@ This module defines all request/response models for the API endpoints.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -356,8 +356,8 @@ class DeploymentRuntime(BaseModel):
 # ==================== Backtest Models ====================
 
 
-BacktestEngine = Literal["strategy_runner", "vectorbt"]
-BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
+BacktestEngine: TypeAlias = Literal["strategy_runner", "vectorbt"]
+BacktestRiskMode: TypeAlias = Literal["raw_only", "risk_adjusted", "event_replay"]
 
 
 class BacktestRequest(BaseModel):
@@ -470,9 +470,6 @@ StrategyCandidateStatus = Literal[
     "STOPPED",
     "REJECTED",
 ]
-
-
-BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
 
 
 class BacktestDatasetSpec(BaseModel):

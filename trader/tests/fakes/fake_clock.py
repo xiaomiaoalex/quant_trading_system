@@ -75,7 +75,7 @@ class FakeClock:
             current_time = self._current_time
             wake_at = current_time + seconds
 
-        future = asyncio.Future()
+        future: asyncio.Future[None] = asyncio.Future()
 
         task_info = {
             "wake_at": wake_at,
@@ -203,6 +203,8 @@ class ClockContext:
 
     def real_sleep(self, seconds: float):
         """提供真正的 asyncio.sleep（不被 patch）"""
+        if self._real_asyncio_sleep is None:
+            raise RuntimeError("ClockContext is not active")
         return self._real_asyncio_sleep(seconds)
 
     def __exit__(self, exc_type, exc_val, exc_tb):

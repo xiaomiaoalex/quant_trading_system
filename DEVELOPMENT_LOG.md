@@ -1274,3 +1274,60 @@
 - 主代理独立重跑真实 BTC/ETH 2026-09 下载与回测：PASS；隔离库 qts_history_e2e_review_final，两币各 43,200 条、无缺口，均 COMPLETED；新服务实例回读两任务成功和完整行情。
 - 详细审核问题、修复、实际验证、数据集/run_id、hash 和限制见 docs/reviews/BINANCE_SPOT_HISTORY_REVIEW.md。
 - 全量 Python 既有失败仅按实现者报告保留，未将其标为主代理独立验证通过。
+### 2026-06-05 17:38 - PR #110 审查问题修复
+
+- 背景: 最近 PR #110 审查发现 performance benchmark API route module 未挂载到主 FastAPI app，导致 PR 摘要承诺的 `/v1/performance/benchmark/*` 与 `/v1/performance/initial-weights` 端点实际 404；同时 `benchmark/config` 文档允许 per-symbol `period_return`，实现却统一使用全局默认值。
+- 决策: 先用 TDD 复现主 app 路由缺失和 per-symbol return 丢失；修复保持现有 `period_return` 默认值兼容，只新增 `period_returns` override 映射，不重做请求体形状。
+- 改动:
+  - `trader/api/routes/__init__.py`、`trader/api/main.py`: 导入并挂载 `performance.router`。
+  - `trader/services/benchmark_projector.py`: `project_from_config()` 与 module-level convenience function 增加 `period_returns`，按 symbol 覆盖全局默认 return。
+  - `trader/api/routes/performance.py`: 解析 `constituents[].period_return` 并传递到 projector，非法数值返回 400。
+  - `trader/tests/test_benchmark_projector.py`: 新增主 app 路由挂载回归和 per-symbol period return 保真回归。
+  - `docs/INTERFACE_CONTRACTS.md`: 新增 Performance Benchmark Projector API/DTO/幂等键契约。
+  - `docs/PROJECT_ARCHITECTURE.md`: 新增 Performance Benchmark Projector 数据流与边界约束。
+- 验证:
+  - 红测复现: `python -m pytest -q trader/tests/test_benchmark_projector.py::test_performance_router_is_mounted_on_main_app trader/tests/test_benchmark_projector.py::test_benchmark_projector_preserves_symbol_period_returns --tb=short` -> 2 failed（修复前）
+  - 修复后同命令 -> 2 passed
+  - `python -m pytest -q trader/tests/test_benchmark_projector.py --tb=short` -> 9 passed
+- 风险/遗留: 新端点仍主要由 service/projector 测试覆盖，建议后续增加 `TestClient` 级 API 契约测试和 PostgreSQL 集成测试，覆盖真实请求体、PG unique/upsert 与 Brinson 读取链路。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-06-06 21:21 - mypy 技术债阶段性集中清理
+
+- 背景: 用户创建目标要求集中修复仓库 mypy 技术债。初始 `mypy trader/` 基线为 486 errors / 114 files，噪音与真实类型债混杂。
+- 决策: 先消除第三方 stub 噪音，再按错误簇清理 PG-first 仓储 Optional storage、Projector 注解、Core deterministic layer None 收窄和回测 data pipeline 容器推断；不通过 `ignore_errors` 屏蔽仓库内部错误。
+- 改动:
+  - `pyproject.toml`: 新增 `[tool.mypy]`，禁用第三方 `import-not-found/import-untyped` 错误码，并保留常见外部库 overrides。
+  - 多个 PG-first repository: 新增 `_postgres_or_raise()` / `_storage_or_raise()`，将 `_ensure_postgres()` 后的隐含非空连接状态显式化。
+  - `trader/adapters/persistence/postgres/*`: `acquire()` 增加未连接防御，event store 返回 ID 增加非空校验，projector 补齐 `Enum/json/TYPE_CHECKING` 与事件类型列表修正。
+  - `trader/core/application/deterministic_layer.py`: 对 exchange timestamp 和 pending payload 做显式类型收窄，保持 CAS 单调规则不变。
+  - `trader/services/backtesting/data_pipeline.py`: 补齐空容器类型、`asyncio.gather` exception 收窄和 mock price 数值收窄。
+- 验证:
+  - `mypy trader/`：486 errors -> 312 errors（仍失败）。
+  - `mypy` 已修改核心/仓储/回测 13 个源码文件（`--follow-imports=skip`）-> passed。
+  - `python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short` -> 39 passed。
+  - `python -m pytest -q trader/tests/test_deterministic_layer.py trader/tests/test_postgres_storage.py trader/tests/test_postgres_projectors.py --tb=short` -> 超时；未按仓库说明启动 Docker/Postgres，不能视为通过。
+- 风险/遗留: 全量 mypy 仍有 312 errors，剩余集中在 tests、performance attribution、Binance stream/session narrowing、API route DTO narrowing、strategy runner 和 fake broker；PG 集成测试需在 Docker Postgres 可用后重跑。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-06-07 - mypy 技术债集中清理归零
+
+- 背景: 延续上一阶段 486 errors -> 312 errors 的 mypy 清理目标，继续处理仓库内部真实类型债，目标是让 `mypy trader/` 全量通过，同时避免用仓库级 `ignore_errors` 掩盖问题。
+- 决策: 保留 `pyproject.toml` 对第三方 `import-not-found/import-untyped` 的隔离；仓库内部错误按错误簇修复。对 Optional storage/session 使用局部 helper 或显式 guard 收窄；测试 fake 和 monkeypatch 边界使用局部 `cast(Any, ...)` 或精确 `# type: ignore[method-assign]`，不扩大到模块级忽略。
+- 改动:
+  - `pyproject.toml`: 固化 Python 3.12 mypy 配置和外部库 overrides，将第三方 stub 噪音与内部类型错误分离。
+  - Persistence/PG-first 仓储: 补齐 `_postgres_or_raise()`、`_storage_or_raise()`、pool acquire 非空校验、SQL 参数/返回值类型和 Decimal/时间戳收窄。
+  - `trader/adapters/persistence/execution_repository.py`: 增加 `list_executions_for_projection(after_ts_ms, after_execution_id, limit)`，`PerformanceExecutionProjector` 通过显式游标契约读取 execution facts。
+  - Binance/IO adapters: 对 aiohttp session、websocket、REST alignment、funding/OI、public/private stream 和 announcement/onchain stream 做显式非空 guard。
+  - Core/Services/API: 修正 deterministic payload、event deserialize、reconciliation kill-switch 调用、performance accounting Decimal 聚合、route DTO/TypeAlias、strategy runtime optional connector 和 validation gate reason 类型。
+  - Tests/fakes: 修正 fake clock/http/ws/strategy 类型，补齐 Decimal 字面量、非空断言、局部 cast 和 method assignment ignore，保持测试行为不变。
+- 验证:
+  - `mypy trader/` -> `Success: no issues found in 389 source files`
+  - `python -m black --check --line-length 100 trader/` -> passed
+  - `python -m isort --check-only --profile black trader/` -> passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> passed
+  - Strategy/chat、Binance、Persistence/reconciler、Backtesting、Portfolio risk、Signals/committee、API/feature store 等目标子集 -> passed
+  - `python -m pytest -q trader/tests --tb=short` -> 124 秒超时，无失败明细，未标记为通过
+  - Portfolio proposal PostgreSQL 测试因未配置 PostgreSQL skip；memory store 测试通过
+- 风险/遗留: 全量 pytest 仍需在更长超时时间或 CI 环境中重跑；PostgreSQL 集成路径需启动 Docker/Postgres 后单独验证。当前 mypy 已清零，但后续新增测试 fake/monkeypatch 仍应优先局部收窄，避免重新积累类型债。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

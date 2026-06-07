@@ -58,9 +58,12 @@ async def record_nav_snapshot(
         cash = equity - market_value
 
         # 推断 deployment_id
-        eff_deployment_id = deployment_id or next(
-            (p.get("deployment_id") for p in positions if p.get("deployment_id")),
-            strategy_id,
+        eff_deployment_id = str(
+            deployment_id
+            or next(
+                (p.get("deployment_id") for p in positions if p.get("deployment_id")),
+                strategy_id,
+            )
         )
 
         nav = NAVPoint(

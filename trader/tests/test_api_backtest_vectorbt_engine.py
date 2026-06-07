@@ -32,7 +32,7 @@ async def _seed_ohlcv_feature_store(version: str, start_ts_ms: int, points: int 
         del storage.feature_values_by_key[key]
 
     store = get_feature_store()
-    store._ensure_postgres = AsyncMock(return_value=False)
+    store._ensure_postgres = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
     price = 100.0
     for i in range(points):

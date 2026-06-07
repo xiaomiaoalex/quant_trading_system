@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -74,7 +74,8 @@ async def test_signed_request_uses_time_offset(monkeypatch: pytest.MonkeyPatch) 
     broker = _build_broker()
     broker._time_offset_synced = True
     broker._time_offset_ms = -1_000
-    broker._session = _FakeSession([_FakeResponse(200, {"ok": True})])
+    fake_session = _FakeSession([_FakeResponse(200, {"ok": True})])
+    broker._session = cast(Any, fake_session)
 
     monkeypatch.setattr(
         "trader.adapters.broker.binance_spot_demo_broker.time.time",
@@ -84,7 +85,7 @@ async def test_signed_request_uses_time_offset(monkeypatch: pytest.MonkeyPatch) 
     data = await broker._request("GET", "/v3/account", signed=True)
     assert data == {"ok": True}
 
-    call = broker._session.calls[0]
+    call = fake_session.calls[0]
     query = parse_qs(urlparse(call["url"]).query)
     expected_ts = str(99_000 - broker._timestamp_safety_margin_ms)
     assert query["timestamp"] == [expected_ts]
@@ -97,7 +98,7 @@ async def test_signed_request_resyncs_on_1021_and_retries(monkeypatch: pytest.Mo
     broker = _build_broker()
     broker._time_offset_synced = True
     broker._time_offset_ms = 0
-    broker._session = _FakeSession(
+    fake_session = _FakeSession(
         [
             _FakeResponse(
                 400,
@@ -109,6 +110,7 @@ async def test_signed_request_resyncs_on_1021_and_retries(monkeypatch: pytest.Mo
             _FakeResponse(200, {"ok": True}),
         ]
     )
+    broker._session = cast(Any, fake_session)
 
     async def _fake_refresh_time_offset() -> int:
         broker._time_offset_ms = -1_200
@@ -123,10 +125,10 @@ async def test_signed_request_resyncs_on_1021_and_retries(monkeypatch: pytest.Mo
 
     data = await broker._request("GET", "/v3/account", signed=True)
     assert data == {"ok": True}
-    assert len(broker._session.calls) == 2
+    assert len(fake_session.calls) == 2
 
-    first_query = parse_qs(urlparse(broker._session.calls[0]["url"]).query)
-    second_query = parse_qs(urlparse(broker._session.calls[1]["url"]).query)
+    first_query = parse_qs(urlparse(fake_session.calls[0]["url"]).query)
+    second_query = parse_qs(urlparse(fake_session.calls[1]["url"]).query)
     expected_first = str(100_000 - broker._timestamp_safety_margin_ms)
     expected_second = str(98_800 - broker._timestamp_safety_margin_ms)
     assert first_query["timestamp"] == [expected_first]

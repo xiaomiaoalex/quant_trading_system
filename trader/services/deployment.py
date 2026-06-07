@@ -79,6 +79,19 @@ class _DevSmokeOHLCVProvider(DataProviderPort):
             interval=interval,
         )
 
+    async def get_features(
+        self,
+        symbol: str,
+        feature_names: List[str],
+        start_date: datetime,
+        end_date: datetime,
+    ) -> Dict[str, List[Any]]:
+        del symbol, start_date, end_date
+        return {feature_name: [] for feature_name in feature_names}
+
+    async def get_symbols(self) -> List[str]:
+        return list(self._request.symbols)
+
 
 class _StrategyRunnerVectorBTBridge:
     """Adapts StrategyRunner ticks to VectorBT numeric entry/exit signals."""
@@ -216,7 +229,11 @@ class BacktestService:
         task = loop.create_task(self._run_backtest(run_id, request))
         with self._task_lock:
             self._tasks[run_id] = task
-        task.add_done_callback(lambda _t, rid=run_id: self._cleanup_task(rid))
+
+        def _cleanup_completed_task(_task: asyncio.Task[Any], rid: str = run_id) -> None:
+            self._cleanup_task(rid)
+
+        task.add_done_callback(_cleanup_completed_task)
 
         return BacktestRun(**backtest)
 
@@ -514,8 +531,8 @@ class BacktestService:
         risk_engine = RiskEngine(
             broker=fake_broker,
             config=RiskConfig(
-                max_daily_loss_percent=5.0,
-                max_drawdown_percent=10.0,
+                max_daily_loss_percent=Decimal("5.0"),
+                max_drawdown_percent=Decimal("10.0"),
                 max_positions=10,
                 max_order_rate=60,
             ),

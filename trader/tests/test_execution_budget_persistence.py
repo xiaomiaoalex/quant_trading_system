@@ -175,7 +175,9 @@ class TestPersistReservations:
         svc._repository = mock_repo
         svc.accept_reservation("ord1")
 
-        assert svc.get_reservation("ord1").status == ACCEPTED
+        reservation = svc.get_reservation("ord1")
+        assert reservation is not None
+        assert reservation.status == ACCEPTED
 
     def test_release_reservation_calls_delete_reservation(self) -> None:
         """release_reservation 时调用 repository.delete_reservation"""
@@ -197,7 +199,9 @@ class TestPersistReservations:
         svc._repository = mock_repo
         svc.release_reservation("ord1", "filled")
 
-        assert svc.get_reservation("ord1").status == "TERMINAL"
+        reservation = svc.get_reservation("ord1")
+        assert reservation is not None
+        assert reservation.status == "TERMINAL"
 
     def test_expire_stale_reservations_calls_delete(self) -> None:
         """expire_stale_reservations 删除过期条目时调用 repository.delete_reservation"""
@@ -219,4 +223,6 @@ class TestPersistReservations:
         svc._repository = mock_repo
         count = svc.expire_stale_reservations(now_ms=200)
         assert count == 1
-        assert svc.get_reservation("ord1").status == "EXPIRED"
+        reservation = svc.get_reservation("ord1")
+        assert reservation is not None
+        assert reservation.status == "EXPIRED"

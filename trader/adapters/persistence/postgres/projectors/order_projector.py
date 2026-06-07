@@ -26,10 +26,14 @@ Order Projector - 订单投影
 - created_at 索引（用于时间排序）
 """
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    import asyncpg
 
 from trader.adapters.persistence.postgres.projectors.base import Projectable
 from trader.core.domain.models.events import EventType
@@ -196,7 +200,7 @@ class OrderProjector(Projectable):
             pool=pool,
             table_name="orders_proj",
             snapshot_table_name="orders_snapshots",
-            event_types=[et.value for et in self.EVENT_TYPES],
+            event_types=list(self.EVENT_TYPES),
         )
 
     def get_projection_id_field(self) -> str:

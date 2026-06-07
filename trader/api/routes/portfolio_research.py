@@ -204,12 +204,12 @@ async def list_runs(
 
         return [
             CommitteeRunSummary(
-                run_id=r.get("run_id"),
-                research_request=r.get("research_request", "")[:100],
-                status=r.get("status"),
+                run_id=str(r.get("run_id") or ""),
+                research_request=str(r.get("research_request") or "")[:100],
+                status=str(r.get("status") or ""),
                 sleeve_count=len(r.get("sleeve_proposals", [])),
                 final_status=r.get("final_status"),
-                created_at=r.get("created_at"),
+                created_at=str(r.get("created_at") or ""),
             )
             for r in runs
         ]

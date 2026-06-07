@@ -77,10 +77,10 @@ class MockStreamEvent:
         event_type: str = "POSITION_OPENED",
         aggregate_id: str = "123",
         aggregate_type: str = "Position",
-        timestamp: datetime = None,
-        ts_ms: int = None,
-        data: Dict[str, Any] = None,
-        metadata: Dict[str, Any] = None,
+        timestamp: datetime | None = None,
+        ts_ms: int | None = None,
+        data: Dict[str, Any] | None = None,
+        metadata: Dict[str, Any] | None = None,
         schema_version: int = 1,
     ):
         self.event_id = event_id
@@ -239,7 +239,7 @@ class TestPositionProjectorStateTransitions:
 
     def _create_opened_event(self, **kwargs) -> MockStreamEvent:
         """创建开仓事件"""
-        defaults = {
+        defaults: Dict[str, Any] = {
             "stream_key": "Position-123",
             "seq": 0,
             "event_type": EventType.POSITION_OPENED.value,
@@ -258,7 +258,7 @@ class TestPositionProjectorStateTransitions:
 
     def _create_increased_event(self, **kwargs) -> MockStreamEvent:
         """创建加仓事件"""
-        defaults = {
+        defaults: Dict[str, Any] = {
             "stream_key": "Position-123",
             "seq": 1,
             "event_type": EventType.POSITION_INCREASED.value,
@@ -276,7 +276,7 @@ class TestPositionProjectorStateTransitions:
 
     def _create_decreased_event(self, **kwargs) -> MockStreamEvent:
         """创建减仓事件"""
-        defaults = {
+        defaults: Dict[str, Any] = {
             "stream_key": "Position-123",
             "seq": 2,
             "event_type": EventType.POSITION_DECREASED.value,
@@ -294,7 +294,7 @@ class TestPositionProjectorStateTransitions:
 
     def _create_closed_event(self, **kwargs) -> MockStreamEvent:
         """创建平仓事件"""
-        defaults = {
+        defaults: Dict[str, Any] = {
             "stream_key": "Position-123",
             "seq": 3,
             "event_type": EventType.POSITION_CLOSED.value,

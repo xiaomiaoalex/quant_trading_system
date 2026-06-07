@@ -21,6 +21,8 @@ POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading
 """
 
 import os
+from collections.abc import AsyncGenerator
+from decimal import Decimal
 
 import pytest
 
@@ -73,7 +75,7 @@ def store(postgres_storage) -> PostgresPortfolioProposalStore:
 
 
 @pytest.fixture
-async def initialized_store(store) -> PostgresPortfolioProposalStore:
+async def initialized_store(store) -> AsyncGenerator[PostgresPortfolioProposalStore, None]:
     """初始化并返回 store"""
     await store.initialize()
     yield store
@@ -118,13 +120,13 @@ def portfolio_proposal() -> ProposalModel:
     """创建测试用 Portfolio 提案"""
     sleeve = SleeveData(
         sleeve_id="sleeve-1",
-        capital_cap=1000.0,
+        capital_cap=Decimal("1000.0"),
         weight=0.5,
-        max_position_size=100.0,
+        max_position_size=Decimal("100.0"),
     )
     return ProposalModel.create_portfolio(
         sleeves=[sleeve],
-        capital_caps={"sleeve-1": 1000.0},
+        capital_caps={"sleeve-1": Decimal("1000.0")},
         risk_explanation="Medium risk",
         feature_version="v1.0",
         prompt_version="p1.0",

@@ -87,7 +87,7 @@ class PublicStreamManager(BaseStreamFSM):
         # 注意：不要覆盖 BaseStreamFSM._config（其类型是 StreamConfig）
         # 否则基类重连风暴检测会读取不到字段（max_reconnect_per_window/reconnect_window_seconds）。
         self._public_config = config or PublicStreamConfig()
-        self._ws: Optional[ws_client.WebSocketClientProtocol] = None
+        self._ws: Any | None = None
         self._session: Optional[aiohttp.ClientSession] = None
 
         self._last_pong_ts = time.time()
@@ -128,7 +128,7 @@ class PublicStreamManager(BaseStreamFSM):
         query = "streams=" + "/".join(streams)
         return urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
 
-    def _resolve_proxy(self) -> str | bool | None:
+    def _resolve_proxy(self) -> str | None:
         """解析代理配置（支持主备自动切换）。"""
         return self._proxy_failover.select_proxy(self._public_config.proxy_url)
 
@@ -277,8 +277,11 @@ class PublicStreamManager(BaseStreamFSM):
 
     async def _receive_loop(self) -> None:
         """接收消息循环"""
+        ws = self._ws
+        if ws is None:
+            return
         try:
-            async for message in self._ws:
+            async for message in ws:
                 if not self._running:
                     break
 

@@ -57,12 +57,18 @@ class EventService:
         stream_events: List[StreamEvent] = []
         for seq, event in enumerate(raw_events):
             ts_ms = int(event.get("ts_ms", 0))
-            payload = event.get("payload")
-            if not isinstance(payload, dict):
-                payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+            raw_payload = event.get("payload")
+            raw_data = event.get("data")
+            payload_data: dict[str, Any]
+            if isinstance(raw_payload, dict):
+                payload_data = raw_payload
+            elif isinstance(raw_data, dict):
+                payload_data = raw_data
+            else:
+                payload_data = {}
             aggregate_id = str(
-                payload.get("client_order_id")
-                or payload.get("cl_ord_id")
+                payload_data.get("client_order_id")
+                or payload_data.get("cl_ord_id")
                 or event.get("stream_key")
                 or request.stream_key
             )
@@ -76,7 +82,7 @@ class EventService:
                     aggregate_type="ORDER",
                     timestamp=datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc),
                     ts_ms=ts_ms,
-                    data=payload,
+                    data=payload_data,
                     metadata={"trace_id": event.get("trace_id")},
                     schema_version=int(event.get("schema_version", 1)),
                 )

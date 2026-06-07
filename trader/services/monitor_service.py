@@ -303,7 +303,7 @@ class MonitorService:
 
     def get_snapshot(
         self,
-        positions: List[Any] = None,
+        positions: List[Any] | None = None,
         open_orders_count: int = 0,
         pending_orders_count: int = 0,
         daily_pnl: str = "0",

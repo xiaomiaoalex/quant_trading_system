@@ -53,9 +53,9 @@ class MockBacktestResult:
         self.profit_factor = Decimal(str(profit_factor))
         self.num_trades = num_trades
         self.final_capital = Decimal(str(final_capital))
-        self.equity_curve = []
-        self.trades = []
-        self.metrics = {}
+        self.equity_curve: list[dict[str, Any]] = []
+        self.trades: list[dict[str, Any]] = []
+        self.metrics: dict[str, Any] = {}
 
 
 def create_mock_data(start: datetime, days: int, start_price: float = 100) -> List[Dict[str, Any]]:

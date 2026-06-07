@@ -110,19 +110,19 @@ class EventStoreWithFallback:
         from trader.core.domain.models.events import DomainEvent, EventType
 
         # Create a domain event from the fields
-        # Safely convert event_type string to EventType enum, fall back to string if invalid
+        # Safely convert event_type string to EventType enum.
+        event_type_enum = EventType.ORDER_CREATED
         try:
             event_type_enum = EventType(event_type) if isinstance(event_type, str) else event_type
         except ValueError:
-            # Invalid EventType string, use as-is (memory store accepts string event types)
+            # Invalid EventType strings cannot be represented by DomainEvent.
             logger.warning(
                 "EVENT_STORE_INVALID_EVENT_TYPE",
                 extra={
                     "event_type": str(event_type),
-                    "falling_back_to_string": True,
+                    "falling_back_to_default": EventType.ORDER_CREATED.value,
                 },
             )
-            event_type_enum = event_type
 
         domain_event = DomainEvent(
             event_id=event_id or str(uuid.uuid4()),

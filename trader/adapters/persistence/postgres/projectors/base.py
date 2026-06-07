@@ -28,12 +28,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol
 
 if TYPE_CHECKING:
     import asyncpg
 
-    from trader.adapters.persistence.postgres.event_store import StreamEvent
+    from trader.adapters.persistence.postgres.event_store import PostgresEventStore, StreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -682,7 +683,7 @@ class Projectable(ABC):
                 "issues": [],
             }
 
-        issues = []
+        issues: list[str] = []
         proj_seq = projection["last_event_seq"]
 
         # TODO: 可以进一步验证事件数量和状态正确性

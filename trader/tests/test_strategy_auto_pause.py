@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
@@ -93,7 +94,7 @@ def _make_service(
     oms = FakeOMS()
     service = StrategyAutoPauseService(
         oms_handler=oms,
-        sse_manager=sse,
+        sse_manager=cast(Any, sse),
         candidate_service=StrategyCandidateService(storage),
         config=AutoPauseConfig(
             window_sec=60,

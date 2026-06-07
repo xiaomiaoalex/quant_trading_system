@@ -293,9 +293,9 @@ class TestConcentrationRisk:
             ),
         ]
 
-        total_long = sum(p.notional for p in positions if p.qty > 0)
-        total_short = sum(abs(p.notional) for p in positions if p.qty < 0)
-        total_notional = sum(abs(p.notional) for p in positions)
+        total_long = sum((p.notional for p in positions if p.qty > 0), Decimal("0"))
+        total_short = sum((abs(p.notional) for p in positions if p.qty < 0), Decimal("0"))
+        total_notional = sum((abs(p.notional) for p in positions), Decimal("0"))
 
         long_concentration = total_long / total_notional if total_notional > 0 else Decimal("0")
         short_concentration = total_short / total_notional if total_notional > 0 else Decimal("0")

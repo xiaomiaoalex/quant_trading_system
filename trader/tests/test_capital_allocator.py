@@ -189,4 +189,10 @@ def test_config_rejects_invalid_thresholds(kwargs: dict[str, float]) -> None:
         **kwargs,
     }
     with pytest.raises(ValueError):
-        CapitalAllocatorConfig(**config_kwargs)
+        CapitalAllocatorConfig(
+            total_exposure_budget=config_kwargs["total_exposure_budget"],
+            net_exposure_limit=config_kwargs["net_exposure_limit"],
+            same_direction_budget=config_kwargs["same_direction_budget"],
+            min_trade_size=config_kwargs.get("min_trade_size", 10.0),
+            confidence_threshold=config_kwargs.get("confidence_threshold", 0.5),
+        )

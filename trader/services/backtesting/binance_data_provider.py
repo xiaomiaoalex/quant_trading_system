@@ -77,9 +77,9 @@ class BinanceDataProvider:
         params = {
             "symbol": symbol.upper(),
             "interval": interval,
-            "startTime": int(start_date.timestamp() * 1000),
-            "endTime": int(end_date.timestamp() * 1000),
-            "limit": 1000,
+            "startTime": str(int(start_date.timestamp() * 1000)),
+            "endTime": str(int(end_date.timestamp() * 1000)),
+            "limit": "1000",
         }
 
         url = f"{self._config.base_url}/v3/klines"

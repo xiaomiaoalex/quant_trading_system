@@ -5,6 +5,7 @@ Tests for Chat API endpoints using TestClient.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,17 +35,17 @@ class MockChatSession:
         self,
         session_id: str = "test-session-001",
         status: str = "active",
-        created_at: datetime = None,
-        updated_at: datetime = None,
+        created_at: datetime | None = None,
+        updated_at: datetime | None = None,
         message_count: int = 0,
         has_strategy: bool = False,
-        metadata: dict = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self.session_id = session_id
         self.status = MockSessionStatus(status)
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or datetime.now(timezone.utc)
-        self.messages = []
+        self.messages: list[Any] = []
         self.context = MagicMock()
         self.context.current_strategy = None
         self.metadata = metadata or {}
@@ -58,8 +59,8 @@ class MockChatMessage:
         message_id: str = "msg-001",
         role: str = "user",
         content: str = "Test message",
-        timestamp: datetime = None,
-        attachments: list = None,
+        timestamp: datetime | None = None,
+        attachments: list[Any] | None = None,
     ):
         self.message_id = message_id
         self.role = MockMessageRole(role)
@@ -74,10 +75,10 @@ class MockChatResponse:
     def __init__(
         self,
         response_id: str = "resp-001",
-        message: MockChatMessage = None,
-        suggestions: list = None,
+        message: MockChatMessage | None = None,
+        suggestions: list[Any] | None = None,
         status: str = "success",
-        metadata: dict = None,
+        metadata: dict[str, Any] | None = None,
     ):
         self.response_id = response_id
         self.message = message or MockChatMessage(role="assistant")
@@ -94,7 +95,7 @@ class MockRegistrationResult:
         success: bool = True,
         strategy_id: str = "strategy-001",
         entry_id: str = "entry-001",
-        error: str = None,
+        error: str | None = None,
     ):
         self.success = success
         self.strategy_id = strategy_id

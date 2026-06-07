@@ -488,7 +488,8 @@ class BacktestRiskReplayEngine:
             self._equity_curve.append(self._equity)
 
             total_exposure = sum(
-                pos["qty"] * pos["avg_price"] for pos in positions.values() if pos["qty"] > 0
+                (pos["qty"] * pos["avg_price"] for pos in positions.values() if pos["qty"] > 0),
+                Decimal("0"),
             )
             if total_exposure > self._max_exposure:
                 self._max_exposure = total_exposure
@@ -745,6 +746,8 @@ class BacktestRiskReplayEngine:
 
         qty = effective_qty if effective_qty is not None else signal.quantity
         side = self._get_order_side(signal)
+        if side is None:
+            side = OrderSide.BUY
         ts_ms = self._get_signal_timestamp(signal)
 
         commission = qty * price * self._config.commission_rate
@@ -895,7 +898,8 @@ class BacktestRiskReplayEngine:
         positions: dict[str, dict[str, Decimal]],
     ) -> AccountSnapshot:
         total_position_value = sum(
-            pos["qty"] * pos["avg_price"] for pos in positions.values() if pos["qty"] > 0
+            (pos["qty"] * pos["avg_price"] for pos in positions.values() if pos["qty"] > 0),
+            Decimal("0"),
         )
         return AccountSnapshot(
             timestamp_ms=ts_ms,

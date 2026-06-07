@@ -31,7 +31,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 
 if TYPE_CHECKING:
     import asyncpg
@@ -172,18 +172,20 @@ class PostgreSQLStorage:
             await self._pool.close()
         self._connected = False
 
-    def acquire(self):
+    def acquire(self) -> Any:
         """
         Acquire a connection from the pool.
 
         Returns:
             asyncpg Pool acquire context manager
         """
+        if self._pool is None:
+            raise RuntimeError("PostgreSQL storage is not connected")
         return self._pool.acquire()
 
     async def _initialize_schema(self) -> None:
         """Initialize database schema"""
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS event_log (
@@ -538,7 +540,7 @@ class PostgreSQLStorage:
         timestamp = event.timestamp or datetime.now(timezone.utc)
         ts_ms = int(timestamp.timestamp() * 1000)
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             try:
                 # Use atomic CTE with advisory lock to prevent race condition
                 # Use pg_advisory_xact_lock(hashtext(stream_key)) to ensure exclusive access.
@@ -585,6 +587,8 @@ class PostgreSQLStorage:
                 )
 
                 stored_event_id = row["event_id"] if row else None
+                if stored_event_id is None:
+                    raise RuntimeError("PostgreSQL save_event did not return an event_id")
 
                 if stored_event_id == event_id:
                     logger.debug(
@@ -638,7 +642,7 @@ class PostgreSQLStorage:
         Returns:
             event_id of the stored event
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO event_log (event_id, event_type, aggregate_id, aggregate_type, timestamp, data, metadata)
@@ -679,7 +683,7 @@ class PostgreSQLStorage:
             List of stored events
         """
         query = "SELECT event_id, event_type, aggregate_id, aggregate_type, timestamp, data, metadata FROM event_log WHERE 1=1"
-        params = []
+        params: list[Any] = []
         param_count = 0
 
         if aggregate_id:
@@ -700,7 +704,7 @@ class PostgreSQLStorage:
         query += f" ORDER BY timestamp ASC LIMIT ${param_count + 1}"
         params.append(limit)
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             rows = await conn.fetch(query, *params)
 
         return [
@@ -732,7 +736,7 @@ class PostgreSQLStorage:
         Returns:
             snapshot_id of the stored snapshot
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO snapshots (snapshot_id, stream_key, aggregate_id, aggregate_type, timestamp, state)
@@ -763,7 +767,7 @@ class PostgreSQLStorage:
         Returns:
             Latest snapshot or None if not found
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT snapshot_id, stream_key, aggregate_id, aggregate_type, timestamp, state
@@ -789,7 +793,7 @@ class PostgreSQLStorage:
     async def reconstruct_state(
         self,
         stream_key: str,
-        projection_fn: callable = None,
+        projection_fn: Callable[[dict[str, Any], StoredEvent], dict[str, Any]] | None = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Reconstruct aggregate state from snapshot + events.
@@ -868,7 +872,7 @@ class PostgreSQLStorage:
         data = json.dumps(event_data)
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self.acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO risk_events (event_id, dedup_key, scope, reason, recommended_level, ingested_at, data)
@@ -917,7 +921,7 @@ class PostgreSQLStorage:
         ingested_at = event_data.get("ingested_at") or datetime.now(timezone.utc)
         data = json.dumps(event_data)
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             async with conn.transaction():
 
                 async def _execute_step(step_name: str, operation, **context: Any):
@@ -1016,7 +1020,7 @@ class PostgreSQLStorage:
         Returns:
             StoredRiskEvent or None if not found
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT event_id, dedup_key, scope, reason, recommended_level, ingested_at, data
@@ -1060,7 +1064,7 @@ class PostgreSQLStorage:
         dedup_key = upgrade_data.get("dedup_key", "")
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
@@ -1085,7 +1089,7 @@ class PostgreSQLStorage:
         Returns:
             StoredUpgradeRecord or None if not found
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT upgrade_key, scope, level, reason, dedup_key, recorded_at
@@ -1127,7 +1131,7 @@ class PostgreSQLStorage:
         dedup_key = upgrade_data.get("dedup_key", "")
         recorded_at = upgrade_data.get("recorded_at", datetime.now(timezone.utc))
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             marker = await conn.fetchval(
                 """
                 INSERT INTO risk_upgrades (upgrade_key, scope, level, reason, dedup_key, recorded_at)
@@ -1146,7 +1150,7 @@ class PostgreSQLStorage:
 
     async def clear(self) -> None:
         """Clear all events, snapshots, risk_events and risk_upgrades (for testing)"""
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute("DELETE FROM event_log")
             await conn.execute("DELETE FROM snapshots")
             await conn.execute("DELETE FROM risk_events")
@@ -1164,7 +1168,7 @@ class PostgreSQLStorage:
             - is_first_upgrade: True if this is the first time recording this upgrade_key
             - is_first_effect: True if this is the first time recording this effect
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             async with conn.transaction():
                 upgrade_marker = await conn.fetchval(
                     """
@@ -1198,7 +1202,7 @@ class PostgreSQLStorage:
 
     async def mark_effect_applied(self, upgrade_key: str) -> None:
         """Mark side-effect as successfully applied"""
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE risk_upgrade_effects 
@@ -1210,7 +1214,7 @@ class PostgreSQLStorage:
 
     async def mark_effect_failed(self, upgrade_key: str, error: str) -> None:
         """Mark side-effect as failed with error message"""
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE risk_upgrade_effects 
@@ -1223,7 +1227,7 @@ class PostgreSQLStorage:
 
     async def get_pending_effects(self) -> List[Dict[str, Any]]:
         """Get all pending or failed effects for recovery"""
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             rows = await conn.fetch(
                 """
                 SELECT upgrade_key, scope, level, status, attempts, last_error, updated_at
@@ -1274,7 +1278,7 @@ class PostgreSQLStorage:
         venue = execution_data.get("venue")
 
         try:
-            async with self._pool.acquire() as conn:
+            async with self.acquire() as conn:
                 await conn.execute(
                     """
                     INSERT INTO executions 
@@ -1313,7 +1317,7 @@ class PostgreSQLStorage:
         Returns:
             Execution dict or None if not found
         """
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT execution_id, cl_ord_id, exec_id, symbol, side, quantity, price, 
@@ -1354,7 +1358,7 @@ class PostgreSQLStorage:
             FROM executions
             WHERE 1=1
         """
-        params = []
+        params: list[Any] = []
         param_count = 0
 
         if cl_ord_id:
@@ -1375,7 +1379,7 @@ class PostgreSQLStorage:
         query += f" ORDER BY ts_ms DESC LIMIT ${param_count + 1}"
         params.append(limit)
 
-        async with self._pool.acquire() as conn:
+        async with self.acquire() as conn:
             rows = await conn.fetch(query, *params)
 
         return [dict(row) for row in rows]
@@ -1467,7 +1471,7 @@ async def _get_pool(timeout: float = 2.0) -> Optional["asyncpg.Pool"]:
     user = os.getenv("POSTGRES_USER", "trader")
     password = os.getenv("POSTGRES_PASSWORD", "")
 
-    conn_args = {"min_size": 1, "max_size": 2}
+    conn_args: dict[str, Any] = {"min_size": 1, "max_size": 2}
     if connection_string:
         conn_args["dsn"] = connection_string
     else:

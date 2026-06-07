@@ -222,7 +222,7 @@ class BinanceFundingOIMetricsSource:
         self,
         current_source: Optional["BinanceCurrentFundingOISource"] = None,
         feature_store: Optional[Any] = None,
-        budget: CryptoRiskBudget = None,
+        budget: Optional[CryptoRiskBudget] = None,
     ) -> None:
         self._current_source = current_source
         self._feature_store = feature_store

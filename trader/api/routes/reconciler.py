@@ -333,7 +333,7 @@ async def trigger_reconciliation(
             if ownership in (OrderOwnership.EXTERNAL, OrderOwnership.UNKNOWN):
                 skipped_order_ids.add(ex_order.cl_ord_id)
             # 将归属信息附加到订单对象上（通过临时属性）
-            ex_order._ownership = ownership.value
+            setattr(ex_order, "_ownership", ownership.value)
 
     report = reconciler.reconcile(local_orders, exchange_orders, skipped_order_ids)
 

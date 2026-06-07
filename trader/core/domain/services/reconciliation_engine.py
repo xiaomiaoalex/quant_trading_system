@@ -298,8 +298,8 @@ class ReconciliationEngine:
             if self._kill_switch_upgrader:
                 try:
                     self._kill_switch_upgrader(
-                        reason=f"RECONCILIATION_DISCREPANCY: {outcome.symbol}",
-                        scope="GLOBAL",
+                        f"RECONCILIATION_DISCREPANCY: {outcome.symbol}",
+                        "GLOBAL",
                     )
                 except Exception as e:
                     logger.error(f"[Reconciliation] Failed to upgrade KillSwitch: {e}")

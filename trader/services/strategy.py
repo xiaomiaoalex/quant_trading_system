@@ -46,9 +46,9 @@ class StrategyService:
 
     def get_version(self, strategy_id: str, version: int) -> Optional[StrategyVersion]:
         """Get a specific strategy version"""
-        version = self._storage.get_strategy_version(strategy_id, version)
-        if version:
-            return StrategyVersion(**version)
+        version_data = self._storage.get_strategy_version(strategy_id, version)
+        if version_data:
+            return StrategyVersion(**version_data)
         return None
 
     def list_versions(self, strategy_id: str) -> List[StrategyVersion]:

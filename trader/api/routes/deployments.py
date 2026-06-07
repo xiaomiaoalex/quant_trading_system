@@ -4,7 +4,7 @@ Deployment API Routes
 Deployment (run instance) management endpoints.
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
@@ -127,7 +127,7 @@ async def get_deployment_nav(
 @router.post("/v1/deployments/{deployment_id}/params", response_model=Deployment)
 async def update_deployment_params(
     deployment_id: str = Path(..., description="Deployment ID"),
-    params: dict = None,
+    params: dict[str, Any] | None = None,
 ):
     """
     Update deployment params.

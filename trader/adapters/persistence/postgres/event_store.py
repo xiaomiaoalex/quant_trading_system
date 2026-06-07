@@ -206,6 +206,9 @@ class PostgresEventStore:
                 )
                 raise
 
+        if not isinstance(stored_event_id, str):
+            raise RuntimeError("PostgresEventStore.save_event did not return an event_id")
+
         # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
         return stored_event_id
 
@@ -485,6 +488,9 @@ class PostgresEventStore:
                     },
                 )
                 raise
+
+        if not isinstance(stored_event_id, str):
+            raise RuntimeError("PostgresEventStore.save_domain_event did not return an event_id")
 
         # Return the actual stored event_id (may differ from caller's event_id if conflict occurred)
         return stored_event_id

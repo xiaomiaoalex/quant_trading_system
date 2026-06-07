@@ -256,7 +256,7 @@ class BackoffControllerAsync:
 
         is_coroutine = inspect.iscoroutinefunction(coro_or_func)
 
-        last_error = None
+        last_error: BaseException | None = None
         for attempt in range(max_retries):
             try:
                 if is_coroutine:
@@ -275,4 +275,6 @@ class BackoffControllerAsync:
                     delay = self._controller.next_delay(task_name, retry_after_s)
                     await asyncio.sleep(delay)
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"[Backoff] Task {task_name} failed without recording an exception")

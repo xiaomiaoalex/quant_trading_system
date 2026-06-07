@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -202,7 +203,7 @@ class ProbeRiskSource:
 
 class CapturingMarketRiskAuditRepository:
     def __init__(self) -> None:
-        self.appended = []
+        self.appended: list[dict[str, Any]] = []
 
     async def append(self, event):
         record = event.to_record()

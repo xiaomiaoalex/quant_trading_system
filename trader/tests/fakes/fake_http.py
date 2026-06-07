@@ -172,7 +172,7 @@ class FakeHTTPClient:
     ) -> None:
         """注入时间函数"""
         self._now_fn = now_fn
-        self._now_fn_ns = now_fn_ns or now_fn_ns
+        self._now_fn_ns = now_fn_ns or time.perf_counter_ns
 
     @property
     def now(self) -> float:

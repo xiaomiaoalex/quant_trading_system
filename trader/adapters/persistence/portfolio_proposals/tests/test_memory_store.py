@@ -5,6 +5,8 @@ In-Memory Store Tests - 内存存储测试
 此模块测试 InMemoryPortfolioProposalStore。
 """
 
+from decimal import Decimal
+
 import pytest
 
 from trader.adapters.persistence.portfolio_proposals.memory_store import (
@@ -49,13 +51,13 @@ def portfolio_proposal() -> ProposalModel:
     """创建测试用 Portfolio 提案"""
     sleeve = SleeveData(
         sleeve_id="sleeve-1",
-        capital_cap=1000.0,
+        capital_cap=Decimal("1000.0"),
         weight=0.5,
-        max_position_size=100.0,
+        max_position_size=Decimal("100.0"),
     )
     return ProposalModel.create_portfolio(
         sleeves=[sleeve],
-        capital_caps={"sleeve-1": 1000.0},
+        capital_caps={"sleeve-1": Decimal("1000.0")},
         risk_explanation="Medium risk",
         feature_version="v1.0",
         prompt_version="p1.0",

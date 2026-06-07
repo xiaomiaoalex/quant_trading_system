@@ -6,6 +6,7 @@ Unit Tests for Funding/OI Stream Adapter
 
 import asyncio
 import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,8 +35,8 @@ class MockFeatureStore:
         feature_name: str,
         version: str,
         ts_ms: int,
-        value: any,
-        meta: dict = None,
+        value: Any,
+        meta: dict[str, Any] | None = None,
     ):
         self._write_feature_calls.append(
             {

@@ -83,6 +83,11 @@ class RiskEventRepository:
         self._loop = None
         self._init_lock = None
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
     async def _ensure_postgres(self) -> bool:
         """确保 PostgreSQL 可用"""
         current_loop = asyncio.get_running_loop()
@@ -132,7 +137,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.save_risk_event(event_data)
+                return await self._postgres_or_raise().save_risk_event(event_data)
             except Exception as e:
                 logger.warning(f"PostgreSQL save_risk_event failed: {e}, falling back to in-memory")
 
@@ -161,7 +166,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                stored = await self._postgres_storage.get_risk_event(dedup_key)
+                stored = await self._postgres_or_raise().get_risk_event(dedup_key)
                 if stored:
                     full_data = stored.data if isinstance(stored.data, dict) else {}
                     return {
@@ -188,7 +193,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                await self._postgres_storage.save_upgrade_record(upgrade_key, upgrade_data)
+                await self._postgres_or_raise().save_upgrade_record(upgrade_key, upgrade_data)
                 return
             except Exception as e:
                 logger.warning(
@@ -213,7 +218,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                stored = await self._postgres_storage.get_upgrade_record(upgrade_key)
+                stored = await self._postgres_or_raise().get_upgrade_record(upgrade_key)
                 if stored:
                     return {
                         "upgrade_key": stored.upgrade_key,
@@ -247,7 +252,9 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                result = await self._postgres_storage.try_record_upgrade(upgrade_key, upgrade_data)
+                result = await self._postgres_or_raise().try_record_upgrade(
+                    upgrade_key, upgrade_data
+                )
                 return result
             except Exception as e:
                 logger.warning(
@@ -267,7 +274,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.try_record_upgrade_with_effect(
+                return await self._postgres_or_raise().try_record_upgrade_with_effect(
                     upgrade_key, scope, level, reason, dedup_key
                 )
             except Exception as e:
@@ -283,7 +290,7 @@ class RiskEventRepository:
         """Mark side-effect as successfully applied"""
         if await self._ensure_postgres():
             try:
-                await self._postgres_storage.mark_effect_applied(upgrade_key)
+                await self._postgres_or_raise().mark_effect_applied(upgrade_key)
                 return
             except Exception as e:
                 logger.warning(
@@ -296,7 +303,7 @@ class RiskEventRepository:
         """Mark side-effect as failed with error message"""
         if await self._ensure_postgres():
             try:
-                await self._postgres_storage.mark_effect_failed(upgrade_key, error)
+                await self._postgres_or_raise().mark_effect_failed(upgrade_key, error)
                 return
             except Exception as e:
                 logger.warning(
@@ -309,7 +316,7 @@ class RiskEventRepository:
         """Get all pending or failed effects for recovery"""
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.get_pending_effects()
+                return await self._postgres_or_raise().get_pending_effects()
             except Exception as e:
                 logger.warning(
                     f"PostgreSQL get_pending_effects failed: {e}, falling back to in-memory"
@@ -328,7 +335,7 @@ class RiskEventRepository:
         """
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.ingest_event_with_upgrade(
+                return await self._postgres_or_raise().ingest_event_with_upgrade(
                     event_data, upgrade_key, upgrade_level
                 )
             except Exception as e:
