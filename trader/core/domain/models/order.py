@@ -10,7 +10,7 @@ Order - 订单领域模型
       REJECTED  CANCELLED     CANCELLED
 
 关键概念：
-- client_order_id: 客户端生成的唯一ID，用于幂等性保证
+- cl_ord_id: 客户端生成的唯一ID，用于幂等性保证
 - broker_order_id: 券商分配的订单ID
 - 状态转换必须通过事件记录，确保可审计和回放
 """
@@ -68,7 +68,7 @@ class Order:
 
     # 核心标识
     order_id: str  # 系统生成的唯一订单ID
-    client_order_id: str  # 客户端订单ID（用于幂等）
+    cl_ord_id: str  # 客户端订单ID（用于幂等）
     broker_order_id: Optional[str] = None  # 券商订单ID
 
     # 订单内容
@@ -78,9 +78,9 @@ class Order:
     time_in_force: OrderTimeInForce = OrderTimeInForce.GTC  # 时效
 
     # 价格和数量
-    quantity: Decimal = Decimal("0")  # 委托数量
+    qty: Decimal = Decimal("0")  # 委托数量
     price: Optional[Decimal] = None  # 委托价格（限价单）
-    filled_quantity: Decimal = field(default_factory=lambda: Decimal("0"))  # 已成交数量
+    filled_qty: Decimal = field(default_factory=lambda: Decimal("0"))  # 已成交数量
     average_price: Decimal = field(default_factory=lambda: Decimal("0"))  # 成交均价
 
     # 状态
@@ -108,15 +108,15 @@ class Order:
             object.__setattr__(self, "order_id", str(uuid.uuid4()))
 
         # 生成客户端订单ID（如果未提供）
-        if not self.client_order_id:
+        if not self.cl_ord_id:
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
             object.__setattr__(
-                self, "client_order_id", f"{self.strategy_name}_{timestamp}_{uuid.uuid4().hex[:8]}"
+                self, "cl_ord_id", f"{self.strategy_name}_{timestamp}_{uuid.uuid4().hex[:8]}"
             )
 
         # 确保Decimal类型
-        if isinstance(self.quantity, (int, float)):
-            object.__setattr__(self, "quantity", Decimal(str(self.quantity)))
+        if isinstance(self.qty, (int, float)):
+            object.__setattr__(self, "qty", Decimal(str(self.qty)))
         if self.price and isinstance(self.price, (int, float)):
             object.__setattr__(self, "price", Decimal(str(self.price)))
 
@@ -152,12 +152,12 @@ class Order:
 
     def get_remaining_quantity(self) -> Decimal:
         """获取剩余未成交数量"""
-        return self.quantity - self.filled_quantity
+        return self.qty - self.filled_qty
 
     def get_order_value(self) -> Decimal:
         """获取订单名义金额"""
         price = self.average_price if self.average_price > 0 else (self.price or Decimal("0"))
-        return self.filled_quantity * price
+        return self.filled_qty * price
 
     # ==================== 状态转换方法 ====================
 
@@ -189,24 +189,22 @@ class Order:
         if fill_price <= 0:
             raise ValueError(f"成交价格必须为正数: {fill_price}")
 
-        old_filled = self.filled_quantity
+        old_filled = self.filled_qty
         old_avg = self.average_price
 
-        self.filled_quantity += fill_quantity
+        self.filled_qty += fill_quantity
 
-        if self.filled_quantity > self.quantity:
-            raise ValueError(
-                f"超量成交: filled_quantity={self.filled_quantity} > order_quantity={self.quantity}"
-            )
+        if self.filled_qty > self.qty:
+            raise ValueError(f"超量成交: filled_qty={self.filled_qty} > order_qty={self.qty}")
 
         if old_filled == 0 or old_avg == 0:
             self.average_price = fill_price
         else:
             total_value = (old_avg * old_filled) + (fill_price * fill_quantity)
-            self.average_price = total_value / self.filled_quantity
+            self.average_price = total_value / self.filled_qty
 
         # 更新状态
-        if self.filled_quantity >= self.quantity:
+        if self.filled_qty >= self.qty:
             self.status = OrderStatus.FILLED
             self.filled_at = datetime.now(timezone.utc)
         else:
@@ -231,7 +229,7 @@ class Order:
 
     def __repr__(self) -> str:
         return (
-            f"Order({self.client_order_id}, {self.symbol}, "
-            f"{self.side.value}, {self.quantity}@{self.price or 'MARKET'}, "
+            f"Order({self.cl_ord_id}, {self.symbol}, "
+            f"{self.side.value}, {self.qty}@{self.price or 'MARKET'}, "
             f"status={self.status.value})"
         )

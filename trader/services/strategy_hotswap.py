@@ -997,15 +997,13 @@ class StrategyHotSwapper:
                                 success = False
                                 if self._order_manager:
                                     success = await self._order_manager.cancel_order(
-                                        order.client_order_id
+                                        order.cl_ord_id
                                     )
                                 elif self._cancel_order:
-                                    success = self._cancel_order(order.client_order_id)
+                                    success = self._cancel_order(order.cl_ord_id)
 
                                 if success:
-                                    self._current_swap.order_cancellations.append(
-                                        order.client_order_id
-                                    )
+                                    self._current_swap.order_cancellations.append(order.cl_ord_id)
 
                         # 等待订单取消确认（简单等待）
                         await asyncio.sleep(0.1)

@@ -95,6 +95,7 @@ class DomainEvent:
     aggregate_id: str = ""  # 聚合根ID（如订单ID）
     aggregate_type: str = ""  # 聚合根类型（如Order）
     aggregate_version: int = 1  # 聚合根版本（乐观锁）
+    schema_version: int = 1  # 事件字段契约版本
 
     # 时间
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -118,6 +119,7 @@ class DomainEvent:
                 "aggregate_id": self.aggregate_id,
                 "aggregate_type": self.aggregate_type,
                 "aggregate_version": self.aggregate_version,
+                "schema_version": self.schema_version,
                 "timestamp": self.timestamp.isoformat(),
                 "data": self._serialize_data(),
                 "metadata": self.metadata,
@@ -151,6 +153,7 @@ class DomainEvent:
             aggregate_id=data["aggregate_id"],
             aggregate_type=data["aggregate_type"],
             aggregate_version=data.get("aggregate_version", 1),
+            schema_version=data.get("schema_version", 1),
             timestamp=datetime.fromisoformat(data["timestamp"]),
             data=deserialized_data,
             metadata=data.get("metadata", {}),
@@ -201,14 +204,15 @@ def create_order_created_event(order) -> DomainEvent:
         aggregate_id=order.order_id,
         aggregate_type="Order",
         data={
-            "client_order_id": order.client_order_id,
+            "cl_ord_id": order.cl_ord_id,
             "symbol": order.symbol,
             "side": order.side.value,
             "order_type": order.order_type.value,
-            "quantity": order.quantity,
+            "qty": order.qty,
             "price": order.price,
             "strategy_name": order.strategy_name,
         },
+        schema_version=2,
     )
 
 
@@ -219,12 +223,13 @@ def create_order_filled_event(order) -> DomainEvent:
         aggregate_id=order.order_id,
         aggregate_type="Order",
         data={
-            "client_order_id": order.client_order_id,
+            "cl_ord_id": order.cl_ord_id,
             "symbol": order.symbol,
             "side": order.side.value,
-            "filled_quantity": order.filled_quantity,
+            "filled_qty": order.filled_qty,
             "average_price": order.average_price,
         },
+        schema_version=2,
     )
 
 

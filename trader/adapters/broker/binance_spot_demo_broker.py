@@ -533,12 +533,12 @@ class BinanceSpotDemoBroker(BrokerPort):
 
         return BrokerOrder(
             broker_order_id=str(data.get("orderId", "")),
-            client_order_id=str(data.get("clientOrderId", "")),
+            cl_ord_id=str(data.get("clientOrderId", "")),
             symbol=str(data.get("symbol", "")),
             side=self._parse_order_side(str(data.get("side", ""))),
             order_type=self._parse_order_type(str(data.get("type", ""))),
-            quantity=Decimal(str(data.get("origQty", "0"))),
-            filled_quantity=Decimal(str(data.get("executedQty", "0"))),
+            qty=Decimal(str(data.get("origQty", "0"))),
+            filled_qty=Decimal(str(data.get("executedQty", "0"))),
             average_price=Decimal(str(avg_price_raw)),
             status=self._parse_order_status(str(data.get("status", ""))),
             created_at=datetime.fromtimestamp(transact_time / 1000, tz=timezone.utc),
@@ -549,9 +549,9 @@ class BinanceSpotDemoBroker(BrokerPort):
         symbol: str,
         side: Union[OrderSide, str],
         order_type: Union[OrderType, str],
-        quantity: Decimal,
+        qty: Decimal,
         price: Optional[Decimal] = None,
-        client_order_id: Optional[str] = None,
+        cl_ord_id: Optional[str] = None,
     ) -> BrokerOrder:
         if not self._connected:
             raise ConnectionError("Broker not connected")
@@ -566,8 +566,8 @@ class BinanceSpotDemoBroker(BrokerPort):
             "type": order_type_value,
         }
 
-        if client_order_id:
-            params["newClientOrderId"] = client_order_id
+        if cl_ord_id:
+            params["newClientOrderId"] = cl_ord_id
 
         # Task 21: MARKET BUY orders must use quoteOrderQty (quote asset amount)
         # MARKET SELL orders use quantity (base asset amount)
@@ -578,20 +578,20 @@ class BinanceSpotDemoBroker(BrokerPort):
                     # For MARKET BUY without price, we need the quote amount
                     # This should not happen if OMS sends price for pre-check
                     raise ValueError("MARKET BUY requires a price for quoteOrderQty calculation")
-                quote_qty = quantity * price
+                quote_qty = qty * price
                 params["quoteOrderQty"] = str(quote_qty)
             else:
                 # SELL uses quantity (base asset)
-                params["quantity"] = str(quantity)
+                params["quantity"] = str(qty)
         elif order_type_value == "LIMIT":
             if price is None:
                 raise ValueError("LIMIT order requires price")
-            params["quantity"] = str(quantity)
+            params["quantity"] = str(qty)
             params["price"] = str(price)
             params["timeInForce"] = "GTC"
         else:
             # For other order types (STOP_LOSS, etc.)
-            params["quantity"] = str(quantity)
+            params["quantity"] = str(qty)
 
         if order_type_value not in {
             "MARKET",
@@ -608,7 +608,7 @@ class BinanceSpotDemoBroker(BrokerPort):
 
     async def cancel_order(
         self,
-        client_order_id: str,
+        cl_ord_id: str,
         broker_order_id: Optional[str] = None,
         symbol: str = "BTCUSDT",
     ) -> bool:
@@ -622,14 +622,14 @@ class BinanceSpotDemoBroker(BrokerPort):
         if broker_order_id:
             params["orderId"] = broker_order_id
         else:
-            params["origClientOrderId"] = client_order_id
+            params["origClientOrderId"] = cl_ord_id
 
         await self._request("DELETE", "/v3/order", params=params, signed=True)
         return True
 
     async def get_order(
         self,
-        client_order_id: str,
+        cl_ord_id: str,
         broker_order_id: Optional[str] = None,
         symbol: str = "BTCUSDT",
     ) -> Optional[BrokerOrder]:
@@ -643,7 +643,7 @@ class BinanceSpotDemoBroker(BrokerPort):
         if broker_order_id:
             params["orderId"] = broker_order_id
         else:
-            params["origClientOrderId"] = client_order_id
+            params["origClientOrderId"] = cl_ord_id
 
         try:
             data = await self._request("GET", "/v3/order", params=params, signed=True)

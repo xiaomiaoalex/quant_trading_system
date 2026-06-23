@@ -28,14 +28,14 @@ class MockOrder:
     """模拟订单"""
 
     order_id: str = "order_123"
-    client_order_id: str = "client_001"
+    cl_ord_id: str = "client_001"
     symbol: str = "BTCUSDT"
     side: SimpleEnum = field(default_factory=lambda: SimpleEnum("BUY"))
     order_type: SimpleEnum = field(default_factory=lambda: SimpleEnum("LIMIT"))
-    quantity: Decimal = field(default_factory=lambda: Decimal("1.0"))
+    qty: Decimal = field(default_factory=lambda: Decimal("1.0"))
     price: Decimal = field(default_factory=lambda: Decimal("50000.0"))
     strategy_name: str = "test_strategy"
-    filled_quantity: Decimal = field(default_factory=lambda: Decimal("1.0"))
+    filled_qty: Decimal = field(default_factory=lambda: Decimal("1.0"))
     average_price: Decimal = field(default_factory=lambda: Decimal("50000.0"))
 
 

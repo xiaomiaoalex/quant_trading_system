@@ -16,7 +16,11 @@ from trader.core.application.reconciler import (
 
 
 def make_local(
-    cl_ord_id: str, status: str, created_at: datetime = None, filled_quantity: str = "0.0", **kwargs
+    cl_ord_id: str,
+    status: str,
+    created_at: datetime | None = None,
+    filled_qty: str = "0.0",
+    **kwargs,
 ) -> LocalOrderSnapshot:
     if created_at is None:
         created_at = datetime.now(timezone.utc) - timedelta(seconds=120)
@@ -24,8 +28,8 @@ def make_local(
         cl_ord_id=cl_ord_id,
         status=status,
         symbol="BTCUSDT",
-        quantity="1.0",
-        filled_quantity=filled_quantity,
+        qty="1.0",
+        filled_qty=filled_qty,
         created_at=created_at,
         updated_at=datetime.now(timezone.utc),
         **kwargs,
@@ -33,14 +37,14 @@ def make_local(
 
 
 def make_exchange(
-    cl_ord_id: str, status: str, filled_quantity: str = "0.0", **kwargs
+    cl_ord_id: str, status: str, filled_qty: str = "0.0", **kwargs
 ) -> ExchangeOrderSnapshot:
     return ExchangeOrderSnapshot(
         cl_ord_id=cl_ord_id,
         status=status,
         symbol="BTCUSDT",
-        quantity="1.0",
-        filled_quantity=filled_quantity,
+        qty="1.0",
+        filled_qty=filled_qty,
         updated_at=datetime.now(timezone.utc),
         **kwargs,
     )
@@ -65,8 +69,8 @@ class TestReconcilerNoDrift:
 
     def test_matching_orders_with_fill(self):
         r = Reconciler()
-        local = [make_local("order-1", "FILLED", filled_quantity="1.0")]
-        exchange = [make_exchange("order-1", "FILLED", filled_quantity="1.0")]
+        local = [make_local("order-1", "FILLED", filled_qty="1.0")]
+        exchange = [make_exchange("order-1", "FILLED", filled_qty="1.0")]
         report = r.reconcile(local, exchange)
         assert len(report.drifts) == 0
 
@@ -128,21 +132,21 @@ class TestReconcilerDiverged:
         assert report.diverged_count == 1
         assert report.drifts[0].drift_type == DriftType.DIVERGED
 
-    def test_diverged_filled_quantity(self):
+    def test_diverged_filled_qty(self):
         r = Reconciler(grace_period_sec=10.0)
         local = [
             make_local(
                 "order-1",
                 "SUBMITTED",
                 created_at=datetime.now(timezone.utc) - timedelta(seconds=20),
-                filled_quantity="0.5",
+                filled_qty="0.5",
             )
         ]
-        exchange = [make_exchange("order-1", "SUBMITTED", filled_quantity="1.0")]
+        exchange = [make_exchange("order-1", "SUBMITTED", filled_qty="1.0")]
         report = r.reconcile(local, exchange)
         assert report.diverged_count == 1
-        assert report.drifts[0].filled_quantity == "0.5"
-        assert report.drifts[0].exchange_filled_quantity == "1.0"
+        assert report.drifts[0].filled_qty == "0.5"
+        assert report.drifts[0].exchange_filled_qty == "1.0"
 
     def test_diverged_within_grace_period(self):
         r = Reconciler(grace_period_sec=60.0)
@@ -167,7 +171,7 @@ class TestReconcilerMixed:
         local = [
             make_local("order-1", "SUBMITTED", created_at=now - timedelta(seconds=20)),
             make_local(
-                "order-2", "FILLED", created_at=now - timedelta(seconds=20), filled_quantity="1.0"
+                "order-2", "FILLED", created_at=now - timedelta(seconds=20), filled_qty="1.0"
             ),
         ]
         exchange = [

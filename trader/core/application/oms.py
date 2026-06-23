@@ -102,11 +102,11 @@ class OMS:
         symbol: str,
         side: OrderSide,
         order_type: OrderType,
-        quantity: Decimal,
+        qty: Decimal,
         price: Optional[Decimal] = None,
         strategy_name: str = "",
         metadata: Optional[Dict] = None,
-        client_order_id: Optional[str] = None,
+        cl_ord_id: Optional[str] = None,
     ) -> Order:
         """
         创建订单
@@ -117,11 +117,11 @@ class OMS:
         # 创建订单对象
         order = Order(
             order_id="",  # 将由系统生成
-            client_order_id=client_order_id or "",
+            cl_ord_id=cl_ord_id or "",
             symbol=symbol,
             side=side,
             order_type=order_type,
-            quantity=quantity,
+            qty=qty,
             price=price,
             strategy_name=strategy_name,
             metadata=metadata or {},
@@ -129,7 +129,7 @@ class OMS:
         )
 
         # 保存到缓存和存储
-        self._orders[order.client_order_id] = order
+        self._orders[order.cl_ord_id] = order
         await self._storage.save_order(order)
 
         # 发布事件
@@ -137,10 +137,10 @@ class OMS:
 
         self._stats["orders_created"] += 1
 
-        logger.info(f"[OMS] 订单创建: {order.client_order_id}")
+        logger.info(f"[OMS] 订单创建: {order.cl_ord_id}")
         return order
 
-    async def submit_order(self, client_order_id: str) -> Order:
+    async def submit_order(self, cl_ord_id: str) -> Order:
         """
         提交订单到券商
 
@@ -150,13 +150,13 @@ class OMS:
         3. 状态更新
         4. 事件记录
         """
-        order = self._get_order(client_order_id)
+        order = self._get_order(cl_ord_id)
 
         if not order:
-            raise OrderNotFoundError(f"订单不存在: {client_order_id}")
+            raise OrderNotFoundError(f"订单不存在: {cl_ord_id}")
 
         if order.status != OrderStatus.PENDING:
-            logger.warning(f"[OMS] 订单状态错误: {order.client_order_id}, 状态: {order.status}")
+            logger.warning(f"[OMS] 订单状态错误: {order.cl_ord_id}, 状态: {order.status}")
             return order
 
         try:
@@ -164,23 +164,23 @@ class OMS:
                 symbol=order.symbol,
                 side=order.side,
                 order_type=order.order_type,
-                quantity=order.quantity,
+                qty=order.qty,
                 price=order.price,
-                client_order_id=order.client_order_id,
+                cl_ord_id=order.cl_ord_id,
             )
 
             order.submit()
             order.broker_order_id = broker_order.broker_order_id
 
             if broker_order.status == OrderStatus.FILLED:
-                order.fill(broker_order.filled_quantity, broker_order.average_price)
+                order.fill(broker_order.filled_qty, broker_order.average_price)
                 self._stats["orders_filled"] += 1
 
             await self._storage.save_order(order)
             await self._publish_order_event(order, EventType.ORDER_SUBMITTED)
 
             self._stats["orders_submitted"] += 1
-            logger.info(f"[OMS] 订单提交成功: {client_order_id}")
+            logger.info(f"[OMS] 订单提交成功: {cl_ord_id}")
 
             await self._trigger_handler("on_order_submitted", order)
 
@@ -213,24 +213,24 @@ class OMS:
             await self._trigger_handler("on_order_rejected", order)
             return order
 
-    async def cancel_order(self, client_order_id: str) -> bool:
+    async def cancel_order(self, cl_ord_id: str) -> bool:
         """
         撤销订单
         """
-        order = self._get_order(client_order_id)
+        order = self._get_order(cl_ord_id)
 
         if not order:
-            logger.warning(f"[OMS] 撤销订单失败，订单不存在: {client_order_id}")
+            logger.warning(f"[OMS] 撤销订单失败，订单不存在: {cl_ord_id}")
             return False
 
         # 检查是否可以撤销
         if not order.can_cancel():
-            logger.warning(f"[OMS] 订单不可撤销: {client_order_id}, 状态: {order.status}")
+            logger.warning(f"[OMS] 订单不可撤销: {cl_ord_id}, 状态: {order.status}")
             return False
 
         try:
             success = await self._broker.cancel_order(
-                client_order_id=client_order_id, broker_order_id=order.broker_order_id
+                cl_ord_id=cl_ord_id, broker_order_id=order.broker_order_id
             )
 
             if success:
@@ -239,7 +239,7 @@ class OMS:
                 await self._publish_order_event(order, EventType.ORDER_CANCELLED)
 
                 self._stats["orders_cancelled"] += 1
-                logger.info(f"[OMS] 订单撤销成功: {client_order_id}")
+                logger.info(f"[OMS] 订单撤销成功: {cl_ord_id}")
 
                 # 触发回调
                 await self._trigger_handler("on_order_cancelled", order)
@@ -247,24 +247,24 @@ class OMS:
             return success
 
         except Exception as e:
-            logger.error(f"[OMS] 撤销订单失败: {client_order_id}, 错误: {e}")
+            logger.error(f"[OMS] 撤销订单失败: {cl_ord_id}, 错误: {e}")
             return False
 
-    async def sync_order(self, client_order_id: str) -> Order:
+    async def sync_order(self, cl_ord_id: str) -> Order:
         """
         同步订单状态
 
         从券商获取最新订单状态，更新本地订单。
         用于对账和恢复。
         """
-        order = self._get_order(client_order_id)
+        order = self._get_order(cl_ord_id)
 
         if not order:
-            raise OrderNotFoundError(f"订单不存在: {client_order_id}")
+            raise OrderNotFoundError(f"订单不存在: {cl_ord_id}")
 
         # 查询券商
         broker_order = await self._broker.get_order(
-            client_order_id=client_order_id, broker_order_id=order.broker_order_id
+            cl_ord_id=cl_ord_id, broker_order_id=order.broker_order_id
         )
 
         if not broker_order:
@@ -275,7 +275,7 @@ class OMS:
 
         if broker_order.status != order.status:
             if broker_order.status == OrderStatus.FILLED:
-                order.fill(broker_order.filled_quantity, broker_order.average_price)
+                order.fill(broker_order.filled_qty, broker_order.average_price)
                 self._stats["orders_filled"] += 1
                 await self._trigger_handler("on_order_filled", order)
             elif broker_order.status == OrderStatus.CANCELLED:
@@ -296,21 +296,21 @@ class OMS:
 
     # ==================== 查询操作 ====================
 
-    def _get_order(self, client_order_id: str) -> Optional[Order]:
-        return self._orders.get(client_order_id)
+    def _get_order(self, cl_ord_id: str) -> Optional[Order]:
+        return self._orders.get(cl_ord_id)
 
-    def _get_order_lock(self, client_order_id: str) -> asyncio.Lock:
-        if client_order_id not in self._order_locks:
-            self._order_locks[client_order_id] = asyncio.Lock()
-        return self._order_locks[client_order_id]
+    def _get_order_lock(self, cl_ord_id: str) -> asyncio.Lock:
+        if cl_ord_id not in self._order_locks:
+            self._order_locks[cl_ord_id] = asyncio.Lock()
+        return self._order_locks[cl_ord_id]
 
-    def get_order(self, client_order_id: str) -> Optional[Order]:
+    def get_order(self, cl_ord_id: str) -> Optional[Order]:
         """获取订单"""
-        return self._get_order(client_order_id)
+        return self._get_order(cl_ord_id)
 
-    async def get_order_from_storage(self, client_order_id: str) -> Optional[Order]:
+    async def get_order_from_storage(self, cl_ord_id: str) -> Optional[Order]:
         """从存储获取订单"""
-        return await self._storage.get_order(client_order_id)
+        return await self._storage.get_order(cl_ord_id)
 
     def get_pending_orders(self) -> List[Order]:
         """获取待处理订单"""
@@ -330,27 +330,27 @@ class OMS:
     # ==================== 事件处理 ====================
 
     async def handle_broker_callback(self, broker_order_data: Dict) -> None:
-        client_order_id = broker_order_data.get("client_order_id")
-        if not client_order_id:
+        cl_ord_id = broker_order_data.get("cl_ord_id")
+        if not cl_ord_id:
             return
 
-        order = self._get_order(client_order_id)
+        order = self._get_order(cl_ord_id)
         if not order:
-            logger.warning(f"[OMS] 收到未知订单回调: {client_order_id}")
+            logger.warning(f"[OMS] 收到未知订单回调: {cl_ord_id}")
             return
 
         status = broker_order_data.get("status")
-        filled_qty = Decimal(str(broker_order_data.get("filled_quantity", 0)))
+        filled_qty = Decimal(str(broker_order_data.get("filled_qty", 0)))
         avg_price = Decimal(str(broker_order_data.get("average_price", 0)))
 
         if order.is_terminal():
             logger.warning(
-                f"[OMS] 订单已终态，忽略回调: client_order_id={client_order_id}, "
+                f"[OMS] 订单已终态，忽略回调: cl_ord_id={cl_ord_id}, "
                 f"current_status={order.status}, callback_status={status}"
             )
             return
 
-        lock = self._get_order_lock(client_order_id)
+        lock = self._get_order_lock(cl_ord_id)
         async with lock:
             if status == "FILLED" and order.status != OrderStatus.FILLED:
                 order.fill(filled_qty, avg_price)
@@ -360,9 +360,7 @@ class OMS:
                 self._stats["orders_filled"] += 1
                 await self._trigger_handler("on_order_filled", order)
 
-                logger.info(
-                    f"[OMS] 订单成交: {client_order_id}, 数量: {filled_qty}, 价格: {avg_price}"
-                )
+                logger.info(f"[OMS] 订单成交: {cl_ord_id}, 数量: {filled_qty}, 价格: {avg_price}")
 
             elif status == "PARTIALLY_FILLED" and order.status in (
                 OrderStatus.SUBMITTED,
@@ -372,7 +370,7 @@ class OMS:
                 await self._storage.save_order(order)
                 await self._publish_order_event(order, EventType.ORDER_PARTIALLY_FILLED)
 
-                logger.info(f"[OMS] 订单部分成交: {client_order_id}, 数量: {filled_qty}")
+                logger.info(f"[OMS] 订单部分成交: {cl_ord_id}, 数量: {filled_qty}")
 
             elif status == "CANCELLED":
                 order.cancel()
@@ -401,11 +399,11 @@ class OMS:
             aggregate_id=order.order_id,
             aggregate_type="Order",
             data={
-                "client_order_id": order.client_order_id,
+                "cl_ord_id": order.cl_ord_id,
                 "symbol": order.symbol,
                 "side": order.side.value,
-                "quantity": order.quantity,
-                "filled_quantity": order.filled_quantity,
+                "qty": order.qty,
+                "filled_qty": order.filled_qty,
                 "average_price": order.average_price,
                 "status": order.status.value,
             },
@@ -475,13 +473,13 @@ class OMS:
         all_orders = pending_orders + open_orders + partial_orders
 
         for order in all_orders:
-            self._orders[order.client_order_id] = order
+            self._orders[order.cl_ord_id] = order
 
         # 尝试与券商同步
         for order in open_orders + partial_orders:
             try:
-                await self.sync_order(order.client_order_id)
+                await self.sync_order(order.cl_ord_id)
             except Exception as e:
-                logger.error(f"[OMS] 同步订单失败: {order.client_order_id}, 错误: {e}")
+                logger.error(f"[OMS] 同步订单失败: {order.cl_ord_id}, 错误: {e}")
 
         logger.info(f"[OMS] 订单恢复完成，共 {len(all_orders)} 个未完成订单")

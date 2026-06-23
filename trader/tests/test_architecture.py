@@ -74,27 +74,27 @@ class TestOrder:
         """测试创建订单"""
         order = Order(
             order_id="",
-            client_order_id="test_001",
+            cl_ord_id="test_001",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.5"),
+            qty=Decimal("0.5"),
             strategy_name="test_strategy",
         )
 
         assert order.status == OrderStatus.PENDING
-        assert order.client_order_id == "test_001"
-        assert order.quantity == Decimal("0.5")
+        assert order.cl_ord_id == "test_001"
+        assert order.qty == Decimal("0.5")
 
     def test_order_fill(self):
         """测试订单成交"""
         order = Order(
             order_id="test_001",
-            client_order_id="cli_001",
+            cl_ord_id="cli_001",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0"),
+            qty=Decimal("1.0"),
         )
 
         # 先提交订单才能成交
@@ -104,23 +104,23 @@ class TestOrder:
         # 模拟部分成交
         order.fill(Decimal("0.5"), Decimal("50000"))
         assert order.status == OrderStatus.PARTIALLY_FILLED
-        assert order.filled_quantity == Decimal("0.5")
+        assert order.filled_qty == Decimal("0.5")
         assert order.average_price == Decimal("50000")
 
         # 模拟完全成交
         order.fill(Decimal("0.5"), Decimal("50100"))
         assert order.status == OrderStatus.FILLED
-        assert order.filled_quantity == Decimal("1.0")
+        assert order.filled_qty == Decimal("1.0")
 
     def test_order_fill_invalid_state(self):
         """测试订单在非 SUBMITTED/PARTIALLY_FILLED 状态不允许成交"""
         order = Order(
             order_id="test_002",
-            client_order_id="cli_002",
+            cl_ord_id="cli_002",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0"),
+            qty=Decimal("1.0"),
         )
 
         # PENDING 状态直接 fill 应抛出 ValueError
@@ -129,7 +129,7 @@ class TestOrder:
 
         # 验证状态未变
         assert order.status == OrderStatus.PENDING
-        assert order.filled_quantity == Decimal("0")
+        assert order.filled_qty == Decimal("0")
 
         # 提交后再 fill 应成功
         order.submit()
@@ -140,11 +140,11 @@ class TestOrder:
         """测试订单状态转换"""
         order = Order(
             order_id="test_001",
-            client_order_id="cli_001",
+            cl_ord_id="cli_001",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("1.0"),
+            qty=Decimal("1.0"),
         )
 
         # PENDING -> SUBMITTED
@@ -218,11 +218,11 @@ class TestFakeBroker:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
-            client_order_id="test_001",
+            qty=Decimal("0.1"),
+            cl_ord_id="test_001",
         )
 
-        assert order.client_order_id == "test_001"
+        assert order.cl_ord_id == "test_001"
         assert order.status == OrderStatus.SUBMITTED
 
     @pytest.mark.asyncio
@@ -236,20 +236,20 @@ class TestFakeBroker:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
-            client_order_id="idempotent_test",
+            qty=Decimal("0.1"),
+            cl_ord_id="idempotent_test",
         )
 
         order2 = await broker.place_order(
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
-            client_order_id="idempotent_test",
+            qty=Decimal("0.1"),
+            cl_ord_id="idempotent_test",
         )
 
         # 应该返回同一个订单
-        assert order1.client_order_id == order2.client_order_id
+        assert order1.cl_ord_id == order2.cl_ord_id
 
     @pytest.mark.asyncio
     async def test_cancel_order(self):
@@ -261,10 +261,10 @@ class TestFakeBroker:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
+            qty=Decimal("0.1"),
         )
 
-        success = await broker.cancel_order(order.client_order_id)
+        success = await broker.cancel_order(order.cl_ord_id)
         assert success is True
 
 
@@ -290,20 +290,20 @@ class TestOMS:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
+            qty=Decimal("0.1"),
             strategy_name="test_strategy",
         )
 
         assert order.status == OrderStatus.PENDING
 
         # 提交订单
-        await oms.submit_order(order.client_order_id)
+        await oms.submit_order(order.cl_ord_id)
 
         # 等待成交回调
         await asyncio.sleep(0.5)
 
         # 验证订单状态
-        order = oms.get_order(order.client_order_id)
+        order = oms.get_order(order.cl_ord_id)
         assert order.status in [OrderStatus.SUBMITTED, OrderStatus.FILLED]
 
     @pytest.mark.asyncio
@@ -321,7 +321,7 @@ class TestOMS:
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.MARKET,
-            quantity=Decimal("0.1"),
+            qty=Decimal("0.1"),
             strategy_name="test_strategy",
         )
 
@@ -330,7 +330,7 @@ class TestOMS:
         await oms.recover()
 
         # 订单应该从存储中恢复
-        recovered = oms.get_order(order.client_order_id)
+        recovered = oms.get_order(order.cl_ord_id)
         assert recovered is not None
 
 
