@@ -24,7 +24,7 @@ async def upsert_allocation(
     deployment_id: str = Path(...),
 ):
     try:
-        return AllocationManagementService().upsert_profile(deployment_id, request)
+        return await AllocationManagementService().upsert_profile_async(deployment_id, request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

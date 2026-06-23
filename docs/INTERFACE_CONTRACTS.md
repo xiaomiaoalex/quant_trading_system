@@ -429,7 +429,9 @@ Data 页面与研究级回测共享同一 FeatureStore 数据入口：
 - `allocation_mode=PERCENT_OF_NAV` 时，后端必须用 `basis_nav * target_weight` 计算 `configured_notional`，再受 `hard_cap_notional` 裁剪得到 `effective_max_notional`。
 - 为兼容现有 `CapitalAllocator` 和旧前端，`StrategyAllocationProfile.max_notional` 始终等于后端解析后的 `effective_max_notional`，不得由前端直接计算后信任。
 - `basis_nav` 必须来自可验证来源：`manual_nav`、指定 deployment 的最新 paper NAV，或 deployment 绑定账户的 account equity；比例模式无法取得合法 NAV 时必须 fail-closed 并拒绝保存 profile。
+- `nav_source=paper_nav` 的 API 写入路径必须先读控制面内存 NAV series，再 fallback 到 `nav_points` PostgreSQL 持久化读模型；deployment_id 查不到且 deployment 绑定 `strategy_id` 时，可以按 strategy_id 兼容回查。
 - `manual_nav` 仅允许作为显式人工输入的 NAV 来源，不得被系统静默填充。
+- 前端创建新 profile 时 `allow_short` 默认必须为 `false`；只有用户显式勾选后才允许发送 `allow_short=true`。
 - `configured_notional` 表示模式计算出的原始目标额度，`effective_max_notional` 表示裁剪后的 OMS 前置执行额度。
 - 每次 profile 更新必须写入 `allocation.profile_updated` 控制面事件，payload 至少包含 `deployment_id`、`strategy_id`、`old_profile`、`new_profile`、`allocation_mode`、`basis_nav`、`effective_max_notional`、`updated_by`。
 

@@ -643,6 +643,8 @@ flowchart LR
 - 研究级 VectorBT 回测和 Data 页面必须共享同一个 `feature_version` 语义，导入、覆盖查询、回测报告和审计中的版本名必须一致。
 - Binance OHLCV worker 只写研究数据，不下单、不调用 OMS、不改变策略运行状态；遇到 FeatureStore key 冲突时不得覆盖旧值，只记录 conflicts 和 last_error。
 - 策略信号进入 OMS 前必须经过仓位分配与风险裁剪，分配结果写入 `AllocationTrace`。
+- `PERCENT_OF_NAV` allocation profile 的 `paper_nav` 来源属于 Control Plane 写入校验：先读内存 NAV series，缺失时读 `nav_points` PostgreSQL 持久化读模型，仍缺失则 fail-closed 返回 422。
+- 前端 Portfolio Allocation 新建 profile 默认 long-only，`allow_short=true` 只能来自用户显式勾选。
 - Portfolio Runtime Controller 第一版面向 paper/shadow 自动运行，所有启停/降仓决策写入审计事件。
 
 ---

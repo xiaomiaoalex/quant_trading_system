@@ -37,7 +37,7 @@ export function PortfolioAllocation() {
   const [maxSymbolExposure, setMaxSymbolExposure] = useState(10000)
   const [maxPortfolioWeight, setMaxPortfolioWeight] = useState(20)
   const [minConfidence, setMinConfidence] = useState(50)
-  const [allowShort, setAllowShort] = useState(true)
+  const [allowShort, setAllowShort] = useState(false)
   const [enabled, setEnabled] = useState(true)
   const [priority, setPriority] = useState(100)
   const [error, setError] = useState<string | null>(null)
