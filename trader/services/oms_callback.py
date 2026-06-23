@@ -1172,13 +1172,13 @@ class OMSCallbackHandler:
                     symbol=signal.symbol,
                     side=side,
                     order_type=order_type,
-                    quantity=quantity,
+                    qty=quantity,
                     price=(
                         signal.price
                         if order_type == OrderType.LIMIT
                         else (reference_price if side == OrderSide.BUY else None)
                     ),
-                    client_order_id=cl_ord_id,
+                    cl_ord_id=cl_ord_id,
                 )
             except BrokerBusinessError as e:
                 # 业务拒单（如交易所 insufficient balance）→ 释放 budget reservation
@@ -1217,9 +1217,8 @@ class OMSCallbackHandler:
                 "side": side.value,
                 "order_type": order_type.value,
                 "qty": str(quantity),
-                "quantity": str(quantity),
                 "tif": "GTC",
-                "filled_qty": str(broker_order.filled_quantity),
+                "filled_qty": str(broker_order.filled_qty),
                 "avg_price": str(broker_order.average_price),
                 "status": broker_order.status.value,
                 "strategy_id": strategy_id,
@@ -1243,7 +1242,7 @@ class OMSCallbackHandler:
             self._storage.create_order(order_data)
 
             # ==================== 如果有成交，保存成交记录 ====================
-            if broker_order.filled_quantity > 0:
+            if broker_order.filled_qty > 0:
                 # 释放 budget reservation（已成交，预算可回收）
                 if self._execution_budget is not None:
                     try:
@@ -1264,14 +1263,13 @@ class OMSCallbackHandler:
                         "cl_ord_id": cl_ord_id,
                         "exec_id": exec_id,
                         "ts_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
-                        "fill_qty": str(broker_order.filled_quantity),
+                        "fill_qty": str(broker_order.filled_qty),
                         "fill_price": str(broker_order.average_price),
                         "fee": None,
                         "fee_currency": None,
                         # 兼容旧字段
                         "symbol": signal.symbol,
                         "side": side.value,
-                        "quantity": str(broker_order.filled_quantity),
                         "price": str(broker_order.average_price),
                         "strategy_id": strategy_id,
                         "venue": str(self._broker.broker_name),
@@ -1288,7 +1286,7 @@ class OMSCallbackHandler:
                                 strategy_id,
                                 signal.symbol,
                                 side.value,
-                                Decimal(str(broker_order.filled_quantity)),
+                                Decimal(str(broker_order.filled_qty)),
                                 broker_order.average_price,
                                 fee_qty=fee_qty,
                             )
@@ -1383,14 +1381,14 @@ class OMSCallbackHandler:
                             cl_ord_id,
                             signal.symbol,
                             side.value,
-                            float(broker_order.filled_quantity),
+                            float(broker_order.filled_qty),
                             float(broker_order.average_price),
                         )
                         if inspect.isawaitable(fill_result):
                             await fill_result
                         logger.info(
                             f"[OMSCallback] on_fill called: strategy={strategy_id}, "
-                            f"order={cl_ord_id}, qty={broker_order.filled_quantity}, "
+                            f"order={cl_ord_id}, qty={broker_order.filled_qty}, "
                             f"price={broker_order.average_price}"
                         )
                     except Exception as e:
@@ -1399,7 +1397,7 @@ class OMSCallbackHandler:
             # ==================== 发布成功事件 ====================
             event_type = (
                 "strategy.order.filled"
-                if broker_order.filled_quantity > 0
+                if broker_order.filled_qty > 0
                 else "strategy.order.submitted"
             )
             self._publish_event(
@@ -1409,8 +1407,8 @@ class OMSCallbackHandler:
                     "order_id": cl_ord_id,
                     "symbol": signal.symbol,
                     "side": side.value,
-                    "quantity": str(quantity),
-                    "filled_qty": str(broker_order.filled_quantity),
+                    "qty": str(quantity),
+                    "filled_qty": str(broker_order.filled_qty),
                     "avg_price": str(broker_order.average_price),
                     "status": broker_order.status.value,
                 },
@@ -1419,7 +1417,7 @@ class OMSCallbackHandler:
             logger.info(
                 f"[OMSCallback] Order submitted: cl_ord_id={cl_ord_id}, "
                 f"symbol={signal.symbol}, side={side.value}, qty={quantity}, "
-                f"filled={broker_order.filled_quantity}"
+                f"filled={broker_order.filled_qty}"
             )
 
             # Task 19: Track successful submission
@@ -1439,8 +1437,8 @@ class OMSCallbackHandler:
                             "strategy_id": strategy_id,
                             "symbol": signal.symbol,
                             "side": side.value,
-                            "quantity": str(quantity),
-                            "filled_qty": str(broker_order.filled_quantity),
+                            "qty": str(quantity),
+                            "filled_qty": str(broker_order.filled_qty),
                             "status": broker_order.status.value,
                         },
                     )
@@ -1457,7 +1455,7 @@ class OMSCallbackHandler:
                 pass  # SSE broadcast is non-critical, don't fail order processing
 
             # Stage 6: NAV snapshot（非阻塞，best-effort）
-            if broker_order.filled_quantity > 0:
+            if broker_order.filled_qty > 0:
                 try:
                     from trader.services.nav_service import record_nav_snapshot
 
@@ -1475,7 +1473,7 @@ class OMSCallbackHandler:
                 "order_id": cl_ord_id,
                 "broker_order_id": broker_order.broker_order_id,
                 "status": broker_order.status.value,
-                "filled_qty": str(broker_order.filled_quantity),
+                "filled_qty": str(broker_order.filled_qty),
                 "avg_price": str(broker_order.average_price),
             }
 

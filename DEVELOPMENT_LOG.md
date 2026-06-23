@@ -662,6 +662,13 @@
   - 全仓 mypy 当前不是干净基线，后续若要把类型检查作为 CI 门禁，需要先单独收敛既有类型债
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
 
+### 2026-06-23 - 订单内部命名收口
+
+- 背景: Core、OMS 与订单事件混用 `client_order_id/quantity` 和 `cl_ord_id/qty`，掩盖了幂等键边界。
+- 改动: Core、Service 与 Broker DTO 统一为 `cl_ord_id/qty/filled_qty`；Binance 原始字段仅在 Adapter 转换；新事件使用 schema v2，Replay 兼容 schema v1。
+- 验证: 订单命名目标回归、P0 回归、Black 和目标 mypy 均通过。
+- 遗留: PostgreSQL 历史投影的 legacy 字段通过独立 schema migration 演进，不重写历史 Event Log。
+
 ### 2026-05-12 - P6 Risk Mode 状态机
 
 - 背景: P5 只能控制单笔订单，无法控制账户运行模式。需要一个状态机来管理整体风险模式，支持单调升级和人工干预。

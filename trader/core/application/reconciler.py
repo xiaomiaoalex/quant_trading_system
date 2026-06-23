@@ -8,8 +8,8 @@ from typing import Any, Callable, Dict, List, Optional, Set
 logger = logging.getLogger(__name__)
 
 
-def _normalize_quantity(value: str) -> Decimal:
-    """Normalize quantity string to Decimal for precise comparison."""
+def _normalize_qty(value: str) -> Decimal:
+    """Normalize an order quantity string to Decimal for precise comparison."""
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
@@ -33,9 +33,9 @@ class OrderDrift:
     exchange_updated_at: Optional[datetime] = None
     grace_period_remaining_sec: Optional[float] = None
     symbol: Optional[str] = None
-    quantity: Optional[str] = None
-    filled_quantity: Optional[str] = None
-    exchange_filled_quantity: Optional[str] = None
+    qty: Optional[str] = None
+    filled_qty: Optional[str] = None
+    exchange_filled_qty: Optional[str] = None
     # 订单归属类型（用于区分 OWNED/EXTERNAL/UNKNOWN）
     ownership: Optional[str] = None  # "OWNED" / "EXTERNAL" / "UNKNOWN"
 
@@ -68,8 +68,8 @@ class LocalOrderSnapshot:
     cl_ord_id: str
     status: str
     symbol: str
-    quantity: str
-    filled_quantity: str
+    qty: str
+    filled_qty: str
     created_at: datetime
     updated_at: datetime
 
@@ -79,8 +79,8 @@ class ExchangeOrderSnapshot:
     cl_ord_id: str
     status: str
     symbol: str
-    quantity: str
-    filled_quantity: str
+    qty: str
+    filled_qty: str
     updated_at: datetime
 
 
@@ -175,8 +175,8 @@ class Reconciler:
             detected_at=now,
             local_updated_at=local.updated_at,
             symbol=local.symbol,
-            quantity=local.quantity,
-            filled_quantity=local.filled_quantity,
+            qty=local.qty,
+            filled_qty=local.filled_qty,
             grace_period_remaining_sec=grace_remaining,
         )
 
@@ -189,8 +189,8 @@ class Reconciler:
             detected_at=now,
             exchange_updated_at=exchange.updated_at,
             symbol=exchange.symbol,
-            quantity=exchange.quantity,
-            filled_quantity=exchange.filled_quantity,
+            qty=exchange.qty,
+            filled_qty=exchange.filled_qty,
         )
 
     def _check_diverged(
@@ -199,8 +199,8 @@ class Reconciler:
         exchange: ExchangeOrderSnapshot,
         now: datetime,
     ) -> Optional[OrderDrift]:
-        local_qty = _normalize_quantity(local.filled_quantity)
-        exchange_qty = _normalize_quantity(exchange.filled_quantity)
+        local_qty = _normalize_qty(local.filled_qty)
+        exchange_qty = _normalize_qty(exchange.filled_qty)
         if local.status == exchange.status and local_qty == exchange_qty:
             return None
 
@@ -214,9 +214,9 @@ class Reconciler:
             local_updated_at=local.updated_at,
             exchange_updated_at=exchange.updated_at,
             symbol=local.symbol,
-            quantity=local.quantity,
-            filled_quantity=local.filled_quantity,
-            exchange_filled_quantity=exchange.filled_quantity,
+            qty=local.qty,
+            filled_qty=local.filled_qty,
+            exchange_filled_qty=exchange.filled_qty,
             grace_period_remaining_sec=grace_remaining,
         )
 

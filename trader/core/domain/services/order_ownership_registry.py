@@ -11,7 +11,7 @@ Order Ownership Registry
 
 归属识别机制：
 1. 命名空间前缀：订单 ID 带系统前缀（如 QTS1_）
-2. 归属注册表：client_order_id -> strategy/source/created_at
+2. 归属注册表：cl_ord_id -> strategy/source/created_at
 3. 启动回填：从本地已有订单/事件回填注册表（覆盖历史策略）
 
 架构约束：
@@ -42,7 +42,7 @@ class OrderOwnership(str, Enum):
 class OrderOrigin:
     """订单来源信息"""
 
-    client_order_id: str
+    cl_ord_id: str
     strategy_id: Optional[str]  # None 表示来源未知或历史遗留
     source: str  # "local" / "exchange" / "event_backfill" / "manual"
     created_at: datetime
@@ -52,7 +52,7 @@ class OrderOrigin:
 
 class OrderOwnershipRegistry:
     """
-    订单归属注册表 - 维护 client_order_id -> OrderOrigin 映射
+    订单归属注册表 - 维护 cl_ord_id -> OrderOrigin 映射
 
     核心职责：
     1. 记录订单归属（来自哪个策略/来源）
@@ -79,7 +79,7 @@ class OrderOwnershipRegistry:
         self._namespace_prefix = namespace_prefix or self.DEFAULT_NAMESPACE_PREFIX
         self._external_prefixes = set(external_prefixes or [])
 
-        # 归属注册表：client_order_id -> OrderOrigin
+        # 归属注册表：cl_ord_id -> OrderOrigin
         self._origins: Dict[str, OrderOrigin] = {}
 
         # 前缀缓存：加速前缀匹配判断
@@ -91,7 +91,7 @@ class OrderOwnershipRegistry:
 
     def record_order_origin(
         self,
-        client_order_id: str,
+        cl_ord_id: str,
         strategy_id: Optional[str],
         source: str,
         created_at: Optional[datetime] = None,
@@ -102,14 +102,14 @@ class OrderOwnershipRegistry:
 
         幂等：重复调用不影响结果。
         """
-        if not client_order_id:
+        if not cl_ord_id:
             return
 
         now = datetime.now(timezone.utc)
         created = created_at if created_at is not None else now
 
         origin = OrderOrigin(
-            client_order_id=client_order_id,
+            cl_ord_id=cl_ord_id,
             strategy_id=strategy_id,
             source=source,
             created_at=created,
@@ -117,26 +117,25 @@ class OrderOwnershipRegistry:
         )
 
         # 幂等：重复注册只保留最早的 created_at
-        existing = self._origins.get(client_order_id)
+        existing = self._origins.get(cl_ord_id)
         if existing is not None:
             if existing.created_at <= origin.created_at:
                 return  # 不覆盖更早的记录
 
-        self._origins[client_order_id] = origin
+        self._origins[cl_ord_id] = origin
 
         # 清除前缀缓存（注册表变更）
         self._owned_prefixes_cache = None
 
         logger.debug(
-            f"[OrderOwnership] recorded: {client_order_id} -> "
-            f"strategy={strategy_id}, source={source}"
+            f"[OrderOwnership] recorded: {cl_ord_id} -> " f"strategy={strategy_id}, source={source}"
         )
 
-    def get_order_origin(self, client_order_id: str) -> Optional[OrderOrigin]:
+    def get_order_origin(self, cl_ord_id: str) -> Optional[OrderOrigin]:
         """获取订单来源信息"""
-        return self._origins.get(client_order_id)
+        return self._origins.get(cl_ord_id)
 
-    def is_owned_order(self, client_order_id: Optional[str]) -> bool:
+    def is_owned_order(self, cl_ord_id: Optional[str]) -> bool:
         """
         快速判断订单是否为本系统订单。
 
@@ -146,24 +145,24 @@ class OrderOwnershipRegistry:
         3. 在外部前缀列表中 -> EXTERNAL
         4. 其他 -> UNKNOWN（保守处理，不视为 OWNED）
         """
-        if not client_order_id:
+        if not cl_ord_id:
             return False
 
         # 检查是否已注册
-        if client_order_id in self._origins:
-            origin = self._origins[client_order_id]
+        if cl_ord_id in self._origins:
+            origin = self._origins[cl_ord_id]
             # 已注册的订单：如果 strategy_id 为 None（历史遗留），视为 EXTERNAL
             if origin.strategy_id is None:
                 return False
             return True
 
         # 快速前缀匹配
-        if client_order_id.startswith(self._namespace_prefix):
+        if cl_ord_id.startswith(self._namespace_prefix):
             return True
 
         # 外部前缀匹配
         for prefix in self._external_prefixes:
-            if client_order_id.startswith(prefix):
+            if cl_ord_id.startswith(prefix):
                 return False
 
         # 未注册的订单，默认视为 UNKNOWN（保守）
@@ -171,7 +170,7 @@ class OrderOwnershipRegistry:
         # 用户需要通过 record_order_origin 或前缀配置来声明归属
         return False
 
-    def classify_order(self, client_order_id: Optional[str]) -> OrderOwnership:
+    def classify_order(self, cl_ord_id: Optional[str]) -> OrderOwnership:
         """
         对订单进行归属分类。
 
@@ -180,22 +179,22 @@ class OrderOwnershipRegistry:
         - EXTERNAL: 外部订单，只统计不告警
         - UNKNOWN: 未识别，保守处理
         """
-        if not client_order_id:
+        if not cl_ord_id:
             return OrderOwnership.UNKNOWN
 
         # 已注册的订单
-        origin = self._origins.get(client_order_id)
+        origin = self._origins.get(cl_ord_id)
         if origin is not None:
             if origin.strategy_id is None:
                 return OrderOwnership.EXTERNAL
             return OrderOwnership.OWNED
 
         # 前缀匹配
-        if client_order_id.startswith(self._namespace_prefix):
+        if cl_ord_id.startswith(self._namespace_prefix):
             return OrderOwnership.OWNED
 
         for prefix in self._external_prefixes:
-            if client_order_id.startswith(prefix):
+            if cl_ord_id.startswith(prefix):
                 return OrderOwnership.EXTERNAL
 
         return OrderOwnership.UNKNOWN
@@ -249,7 +248,7 @@ class OrderOwnershipRegistry:
                         pass
 
             self.record_order_origin(
-                client_order_id=cl_ord_id,
+                cl_ord_id=cl_ord_id,
                 strategy_id=strategy_id,
                 source="event_backfill",
                 created_at=created_at,

@@ -3913,6 +3913,17 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
 
+### 25.5 字段改名的事件回放兼容模式
+
+**场景**：订单字段从 legacy `client_order_id/quantity/filled_quantity` 收口为
+`cl_ord_id/qty/filled_qty`。
+
+**模式**：新写入使用提升后的 `schema_version=2` 和规范字段；回放读取器同时接受 v1
+旧字段，并在读取时归一化，绝不批量重写既有 Event Log。
+
+**收益**：新链路只有一种内部语言，同时保留历史事件可重放性与
+`cl_ord_id + exec_id` 幂等语义。
+
 ---
 
 ## 二十六、自动暂停恢复与持仓审计一致性经验

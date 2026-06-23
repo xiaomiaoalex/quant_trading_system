@@ -47,11 +47,11 @@ class ReconcilerService:
 
         local_orders = [
             LocalOrderSnapshot(
-                cl_ord_id=o["client_order_id"],
+                cl_ord_id=o.get("cl_ord_id") or o["client_order_id"],
                 status=o["status"],
                 symbol=o.get("symbol", ""),
-                quantity=str(o.get("quantity", "0")),
-                filled_quantity=str(o.get("filled_quantity", "0")),
+                qty=str(o.get("qty", o.get("quantity", "0"))),
+                filled_qty=str(o.get("filled_qty", o.get("filled_quantity", "0"))),
                 created_at=o.get("created_at", datetime.now(timezone.utc)),
                 updated_at=o.get("updated_at", datetime.now(timezone.utc)),
             )
@@ -60,11 +60,11 @@ class ReconcilerService:
 
         exchange_orders = [
             ExchangeOrderSnapshot(
-                cl_ord_id=o["client_order_id"],
+                cl_ord_id=o.get("cl_ord_id") or o["client_order_id"],
                 status=o["status"],
                 symbol=o.get("symbol", ""),
-                quantity=str(o.get("quantity", "0")),
-                filled_quantity=str(o.get("filled_quantity", "0")),
+                qty=str(o.get("qty", o.get("quantity", "0"))),
+                filled_qty=str(o.get("filled_qty", o.get("filled_quantity", "0"))),
                 updated_at=o.get("updated_at", datetime.now(timezone.utc)),
             )
             for o in exchange_raw
@@ -135,9 +135,9 @@ class ReconcilerService:
                 "local_status": drift.local_status,
                 "exchange_status": drift.exchange_status,
                 "symbol": drift.symbol,
-                "quantity": drift.quantity,
-                "filled_quantity": drift.filled_quantity,
-                "exchange_filled_quantity": drift.exchange_filled_quantity,
+                "qty": drift.qty,
+                "filled_qty": drift.filled_qty,
+                "exchange_filled_qty": drift.exchange_filled_qty,
                 "detected_at": drift.detected_at.isoformat(),
             },
         }

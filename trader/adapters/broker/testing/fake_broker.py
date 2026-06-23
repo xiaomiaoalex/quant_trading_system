@@ -20,7 +20,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from trader.core.application.ports import (
     BrokerAccount,
@@ -56,7 +56,7 @@ class FakeBroker(BrokerPort):
     可以模拟各种网络异常和边界情况，用于测试OMS的健壮性。
     """
 
-    def __init__(self, config: FakeBrokerConfig = None):
+    def __init__(self, config: Optional[FakeBrokerConfig] = None):
         self._config = config or FakeBrokerConfig()
         self._connected = False
 
@@ -69,7 +69,7 @@ class FakeBroker(BrokerPort):
         }
 
         # 回调
-        self._callbacks: List[callable] = []
+        self._callbacks: List[Callable[[Dict[str, Any]], Awaitable[None]]] = []
 
         # 统计
         self._stats = {
@@ -138,9 +138,9 @@ class FakeBroker(BrokerPort):
         symbol: str,
         side: OrderSide,
         order_type: OrderType,
-        quantity: Decimal,
+        qty: Decimal,
         price: Optional[Decimal] = None,
-        client_order_id: Optional[str] = None,
+        cl_ord_id: Optional[str] = None,
     ) -> BrokerOrder:
         """模拟下单"""
         await asyncio.sleep(self._config.latency_ms / 1000)
@@ -153,17 +153,17 @@ class FakeBroker(BrokerPort):
         broker_order_id = f"fake_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
 
         # 检查重复订单
-        if client_order_id and client_order_id in self._orders:
+        if cl_ord_id and cl_ord_id in self._orders:
             # 返回已存在的订单（幂等）
-            existing = self._orders[client_order_id]
+            existing = self._orders[cl_ord_id]
             return BrokerOrder(
                 broker_order_id=existing["broker_order_id"],
-                client_order_id=client_order_id,
+                cl_ord_id=cl_ord_id,
                 symbol=existing["symbol"],
                 side=OrderSide(existing["side"]),
                 order_type=OrderType(existing["order_type"]),
-                quantity=Decimal(str(existing["quantity"])),
-                filled_quantity=Decimal(str(existing["filled_quantity"])),
+                qty=Decimal(str(existing["qty"])),
+                filled_qty=Decimal(str(existing["filled_qty"])),
                 average_price=Decimal(str(existing["average_price"])),
                 status=OrderStatus(existing["status"]),
                 created_at=existing["created_at"],
@@ -190,21 +190,23 @@ class FakeBroker(BrokerPort):
             raise BrokerBusinessError("模拟订单拒绝：资金不足")
 
         # 创建订单
-        order_data = {
+        cl_ord_id_value = cl_ord_id or f"cli_{broker_order_id}"
+        created_at = datetime.now(timezone.utc)
+        order_data: Dict[str, Any] = {
             "broker_order_id": broker_order_id,
-            "client_order_id": client_order_id or f"cli_{broker_order_id}",
+            "cl_ord_id": cl_ord_id_value,
             "symbol": symbol,
             "side": side.value,
             "order_type": order_type.value,
-            "quantity": float(quantity),
+            "qty": float(qty),
             "price": float(price) if price else None,
-            "filled_quantity": 0.0,
+            "filled_qty": 0.0,
             "average_price": 0.0,
             "status": "SUBMITTED",
-            "created_at": datetime.now(timezone.utc),
+            "created_at": created_at,
         }
 
-        self._orders[order_data["client_order_id"]] = order_data
+        self._orders[cl_ord_id_value] = order_data
         self._stats["orders_submitted"] += 1
 
         # 模拟成交（异步回调）
@@ -212,15 +214,15 @@ class FakeBroker(BrokerPort):
 
         return BrokerOrder(
             broker_order_id=broker_order_id,
-            client_order_id=order_data["client_order_id"],
+            cl_ord_id=cl_ord_id_value,
             symbol=symbol,
             side=side,
             order_type=order_type,
-            quantity=quantity,
-            filled_quantity=Decimal("0"),
+            qty=qty,
+            filled_qty=Decimal("0"),
             average_price=Decimal("0"),
             status=OrderStatus.SUBMITTED,
-            created_at=order_data["created_at"],
+            created_at=created_at,
         )
 
     async def _simulate_fill(self, order_data: Dict) -> None:
@@ -228,17 +230,17 @@ class FakeBroker(BrokerPort):
         # 延迟后触发
         await asyncio.sleep(0.1)
 
-        if order_data["client_order_id"] not in self._orders:
+        if order_data["cl_ord_id"] not in self._orders:
             return  # 订单可能已被撤销
 
-        quantity = Decimal(str(order_data["quantity"]))
+        qty = Decimal(str(order_data["qty"]))
         price = Decimal(str(order_data.get("price", 50000)))  # 默认价格
 
         # 模拟部分成交或完全成交
         if random.random() < self._config.partial_fill_rate:
             # 部分成交
-            fill_qty = quantity * Decimal("0.5")
-            order_data["filled_quantity"] = float(fill_qty)
+            fill_qty = qty * Decimal("0.5")
+            order_data["filled_qty"] = float(fill_qty)
             order_data["average_price"] = float(price)
             order_data["status"] = "PARTIALLY_FILLED"
 
@@ -246,7 +248,7 @@ class FakeBroker(BrokerPort):
             asyncio.create_task(self._simulate_remaining_fill(order_data))
         else:
             # 完全成交
-            order_data["filled_quantity"] = float(quantity)
+            order_data["filled_qty"] = float(qty)
             order_data["average_price"] = float(price)
             order_data["status"] = "FILLED"
 
@@ -263,15 +265,11 @@ class FakeBroker(BrokerPort):
         """模拟剩余成交"""
         await asyncio.sleep(0.1)
 
-        if order_data["client_order_id"] not in self._orders:
+        if order_data["cl_ord_id"] not in self._orders:
             return
 
-        remaining = Decimal(str(order_data["quantity"])) - Decimal(
-            str(order_data["filled_quantity"])
-        )
-        order_data["filled_quantity"] = float(
-            Decimal(str(order_data["filled_quantity"])) + remaining
-        )
+        remaining = Decimal(str(order_data["qty"])) - Decimal(str(order_data["filled_qty"]))
+        order_data["filled_qty"] = float(Decimal(str(order_data["filled_qty"])) + remaining)
         order_data["status"] = "FILLED"
 
         await self._emit_callback(order_data)
@@ -284,20 +282,18 @@ class FakeBroker(BrokerPort):
             except Exception:
                 pass
 
-    def register_callback(self, callback: callable) -> None:
+    def register_callback(self, callback: Callable[[Dict[str, Any]], Awaitable[None]]) -> None:
         """注册订单状态回调"""
         self._callbacks.append(callback)
 
-    async def cancel_order(
-        self, client_order_id: str, broker_order_id: Optional[str] = None
-    ) -> bool:
+    async def cancel_order(self, cl_ord_id: str, broker_order_id: Optional[str] = None) -> bool:
         """模拟撤单"""
         await asyncio.sleep(self._config.latency_ms / 1000)
 
-        if client_order_id not in self._orders:
+        if cl_ord_id not in self._orders:
             return False
 
-        order = self._orders[client_order_id]
+        order = self._orders[cl_ord_id]
 
         if order["status"] in ["FILLED", "CANCELLED"]:
             return False
@@ -307,23 +303,23 @@ class FakeBroker(BrokerPort):
         return True
 
     async def get_order(
-        self, client_order_id: str, broker_order_id: Optional[str] = None
+        self, cl_ord_id: str, broker_order_id: Optional[str] = None
     ) -> Optional[BrokerOrder]:
         """查询订单"""
         await asyncio.sleep(self._config.latency_ms / 1000)
 
-        if client_order_id not in self._orders:
+        if cl_ord_id not in self._orders:
             return None
 
-        order = self._orders[client_order_id]
+        order = self._orders[cl_ord_id]
         return BrokerOrder(
             broker_order_id=order["broker_order_id"],
-            client_order_id=order["client_order_id"],
+            cl_ord_id=order["cl_ord_id"],
             symbol=order["symbol"],
             side=OrderSide(order["side"]),
             order_type=OrderType(order["order_type"]),
-            quantity=Decimal(str(order["quantity"])),
-            filled_quantity=Decimal(str(order["filled_quantity"])),
+            qty=Decimal(str(order["qty"])),
+            filled_qty=Decimal(str(order["filled_qty"])),
             average_price=Decimal(str(order["average_price"])),
             status=OrderStatus(order["status"]),
             created_at=order["created_at"],
@@ -340,12 +336,12 @@ class FakeBroker(BrokerPort):
                     result.append(
                         BrokerOrder(
                             broker_order_id=order["broker_order_id"],
-                            client_order_id=order["client_order_id"],
+                            cl_ord_id=order["cl_ord_id"],
                             symbol=order["symbol"],
                             side=OrderSide(order["side"]),
                             order_type=OrderType(order["order_type"]),
-                            quantity=Decimal(str(order["quantity"])),
-                            filled_quantity=Decimal(str(order["filled_quantity"])),
+                            qty=Decimal(str(order["qty"])),
+                            filled_qty=Decimal(str(order["filled_qty"])),
                             average_price=Decimal(str(order["average_price"])),
                             status=OrderStatus(order["status"]),
                             created_at=order["created_at"],
@@ -382,7 +378,7 @@ class FakeBroker(BrokerPort):
 
     # ==================== 测试辅助方法 ====================
 
-    def set_balance(self, total: Decimal, available: Decimal = None) -> None:
+    def set_balance(self, total: Decimal, available: Optional[Decimal] = None) -> None:
         """设置账户余额（用于测试）"""
         self._account["total_equity"] = total
         self._account["available_cash"] = available if available is not None else total

@@ -90,9 +90,9 @@ def _drift_to_response(drift: OrderDrift) -> DriftResponse:
         exchange_status=drift.exchange_status,
         detected_at=drift.detected_at.isoformat(),
         symbol=drift.symbol,
-        quantity=drift.quantity,
-        filled_quantity=drift.filled_quantity,
-        exchange_filled_quantity=drift.exchange_filled_quantity,
+        quantity=drift.qty,
+        filled_quantity=drift.filled_qty,
+        exchange_filled_quantity=drift.exchange_filled_qty,
         grace_period_remaining_sec=drift.grace_period_remaining_sec,
         ownership=drift.ownership,
     )
@@ -164,7 +164,7 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
                 broker_orders = [
                     order
                     for order in broker_orders
-                    if _matches_client_order_id_prefix(order.client_order_id, prefixes)
+                    if _matches_client_order_id_prefix(order.cl_ord_id, prefixes)
                 ]
                 logger.info(
                     "EXCHANGE_ORDERS_PREFIX_FILTER_APPLIED",
@@ -177,11 +177,11 @@ async def _fetch_exchange_orders() -> List[ExchangeOrderSnapshot]:
 
             exchange_orders: List[ExchangeOrderSnapshot] = [
                 ExchangeOrderSnapshot(
-                    cl_ord_id=order.client_order_id,
+                    cl_ord_id=order.cl_ord_id,
                     status=order.status.value,
                     symbol=order.symbol,
-                    quantity=str(order.quantity),
-                    filled_quantity=str(order.filled_quantity),
+                    qty=str(order.qty),
+                    filled_qty=str(order.filled_qty),
                     updated_at=order.created_at,
                 )
                 for order in broker_orders
@@ -250,8 +250,8 @@ async def trigger_reconciliation(
                 cl_ord_id=o.cl_ord_id,
                 status=o.status,
                 symbol=o.instrument,
-                quantity=o.qty,
-                filled_quantity=o.filled_qty,
+                qty=o.qty,
+                filled_qty=o.filled_qty,
                 created_at=(
                     datetime.fromtimestamp(o.created_ts_ms / 1000, tz=timezone.utc)
                     if o.created_ts_ms
@@ -296,11 +296,11 @@ async def trigger_reconciliation(
         # 带参模式：使用前端提交的数据
         local_orders = [
             LocalOrderSnapshot(
-                cl_ord_id=o["client_order_id"],
+                cl_ord_id=o.get("cl_ord_id") or o["client_order_id"],
                 status=o["status"],
                 symbol=o.get("symbol", ""),
-                quantity=str(o.get("quantity", "0")),
-                filled_quantity=str(o.get("filled_quantity", "0")),
+                qty=str(o.get("qty", o.get("quantity", "0"))),
+                filled_qty=str(o.get("filled_qty", o.get("filled_quantity", "0"))),
                 created_at=_parse_datetime(o.get("created_at")),
                 updated_at=_parse_datetime(o.get("updated_at")),
             )
@@ -309,11 +309,11 @@ async def trigger_reconciliation(
 
         exchange_orders = [
             ExchangeOrderSnapshot(
-                cl_ord_id=o["client_order_id"],
+                cl_ord_id=o.get("cl_ord_id") or o["client_order_id"],
                 status=o["status"],
                 symbol=o.get("symbol", ""),
-                quantity=str(o.get("quantity", "0")),
-                filled_quantity=str(o.get("filled_quantity", "0")),
+                qty=str(o.get("qty", o.get("quantity", "0"))),
+                filled_qty=str(o.get("filled_qty", o.get("filled_quantity", "0"))),
                 updated_at=_parse_datetime(o.get("updated_at")),
             )
             for o in (request.exchange_orders or [])

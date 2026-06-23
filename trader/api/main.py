@@ -868,16 +868,16 @@ async def lifespan(app: FastAPI):
                     broker_orders = [
                         order
                         for order in broker_orders
-                        if order.client_order_id
-                        and any(order.client_order_id.startswith(prefix) for prefix in prefixes)
+                        if order.cl_ord_id
+                        and any(order.cl_ord_id.startswith(prefix) for prefix in prefixes)
                     ]
                 return [
                     {
-                        "client_order_id": order.client_order_id,
+                        "client_order_id": order.cl_ord_id,
                         "status": order.status.value,
                         "symbol": order.symbol,
-                        "quantity": str(order.quantity),
-                        "filled_quantity": str(order.filled_quantity),
+                        "quantity": str(order.qty),
+                        "filled_quantity": str(order.filled_qty),
                         "updated_at": order.created_at,
                     }
                     for order in broker_orders

@@ -3074,3 +3074,11 @@ Phase 6 解决了"风控规则分散"的问题，Phase 7 要解决"风控是否�
 | p0-gate | ✅ | |
 | control-gate | ✅ | |
 | postgres-integration | ✅ | |
+
+## 最近操作记录
+
+### 2026-06-23 +08:00 - 订单内部命名收口（cl_ord_id / qty）
+
+- 开发后状态：`Order`、`BrokerOrder`、OMS 和对账 Core DTO 统一为 `cl_ord_id/qty/filled_qty`；Binance Adapter 在边界完成 legacy 字段转换；新订单事件写 schema v2，Replay 继续兼容 schema v1。
+- 已验证：订单/事件/对账/Binance 目标回归与 P0 回归集通过。
+- 遗留：历史 PostgreSQL read model 的 legacy 字段迁移留待独立数据库迁移任务处理。

@@ -227,8 +227,8 @@ class ShadowState:
     """
     影子状态：存储所有订单的当前状态。
 
-    orders_by_cl: client_order_id -> ShadowOrder
-    orders_by_broker_id: broker_order_id -> client_order_id (反向索引)
+    orders_by_cl: cl_ord_id -> ShadowOrder
+    orders_by_broker_id: broker_order_id -> cl_ord_id (反向索引)
     """
 
     orders_by_cl: Dict[str, ShadowOrder] = field(default_factory=dict)
@@ -427,7 +427,7 @@ def resolve_cl_ord_id(
     update: Union["RawOrderUpdate", "RawFillUpdate"], shadow: ShadowState
 ) -> Optional[str]:
     """
-    解析 client_order_id。
+    解析 cl_ord_id。
     支持 RawOrderUpdate 和 RawFillUpdate 两种类型。
     如果 cl_ord_id 为空，尝试通过 broker_order_id 映射。
     """

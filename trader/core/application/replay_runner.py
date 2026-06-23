@@ -198,7 +198,7 @@ def convert_stream_event_to_raw_update(event: StreamEvent) -> Optional[RawOrderU
             avg_price = price_val
 
     # 解析cl_ord_id
-    cl_ord_id = data.get("client_order_id") or event.aggregate_id
+    cl_ord_id = data.get("cl_ord_id") or data.get("client_order_id") or event.aggregate_id
 
     # 解析broker_order_id
     broker_order_id = data.get("broker_order_id")

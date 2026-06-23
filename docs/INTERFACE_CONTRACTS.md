@@ -144,6 +144,21 @@ AI 在改动涉及接口、命名、DTO、事件或跨层调用时，必须先�
 - `qty` 是内部数量字段；API legacy 的 `quantity` 必须在边界转换。
 - Core Plane 不允许引入外部字段名或原始交易所 payload。
 
+### 7.1 订单字段迁移（schema v2）
+
+订单领域模型、`BrokerPort`、OMS 命令和订单领域事件的规范字段为
+`cl_ord_id`、`qty` 和 `filled_qty`。新写入的订单事件必须使用这些字段，并标记
+`schema_version=2`。
+
+- Core / Service / Persistence 内部 DTO 不得再新增 `client_order_id`、`quantity` 或
+  `filled_quantity` 作为订单字段。
+- Adapter / API 边界可接收或输出 legacy `client_order_id` / `quantity`；转换必须在边界
+  完成，进入 Core 前只能传递规范字段。
+- 历史 schema v1 事件可含 `client_order_id`、`quantity`、`filled_quantity`。回放读取器
+  必须兼容它们，并在内存中归一化为 `cl_ord_id`、`qty`、`filled_qty`；不得重写既有 Event Log。
+- 此次迁移不改变订单幂等语义：订单键仍为 `cl_ord_id`，成交键仍为
+  `(cl_ord_id, exec_id)`。
+
 ---
 
 ## 8. 研究到运行工作流接口

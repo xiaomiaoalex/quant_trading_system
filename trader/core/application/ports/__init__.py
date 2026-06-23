@@ -54,12 +54,12 @@ class BrokerOrder:
     """券商订单响应"""
 
     broker_order_id: str
-    client_order_id: str
+    cl_ord_id: str
     symbol: str
     side: OrderSide
     order_type: OrderType
-    quantity: Decimal
-    filled_quantity: Decimal
+    qty: Decimal
+    filled_qty: Decimal
     average_price: Decimal
     status: Any  # OrderStatus
     created_at: datetime
@@ -115,9 +115,9 @@ class BrokerPort(ABC):
         symbol: str,
         side: OrderSide,
         order_type: OrderType,
-        quantity: Decimal,
+        qty: Decimal,
         price: Optional[Decimal] = None,
-        client_order_id: Optional[str] = None,
+        cl_ord_id: Optional[str] = None,
     ) -> BrokerOrder:
         """
         下单
@@ -126,9 +126,9 @@ class BrokerPort(ABC):
             symbol: 交易标的
             side: 买卖方向
             order_type: 订单类型
-            quantity: 委托数量
+            qty: 委托数量
             price: 委托价格（限价单）
-            client_order_id: 客户端订单ID（用于幂等）
+            cl_ord_id: 客户端订单ID（用于幂等）
 
         Returns:
             BrokerOrder: 券商订单响应
@@ -136,15 +136,13 @@ class BrokerPort(ABC):
         pass
 
     @abstractmethod
-    async def cancel_order(
-        self, client_order_id: str, broker_order_id: Optional[str] = None
-    ) -> bool:
+    async def cancel_order(self, cl_ord_id: str, broker_order_id: Optional[str] = None) -> bool:
         """撤单"""
         pass
 
     @abstractmethod
     async def get_order(
-        self, client_order_id: str, broker_order_id: Optional[str] = None
+        self, cl_ord_id: str, broker_order_id: Optional[str] = None
     ) -> Optional[BrokerOrder]:
         """查询订单状态"""
         pass
