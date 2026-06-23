@@ -568,13 +568,19 @@ class PromotePaperError(BaseModel):
 
 class StrategyAllocationProfileUpdateRequest(BaseModel):
     strategy_id: str
-    max_notional: float = Field(..., ge=0.0)
+    max_notional: Optional[float] = Field(default=None, ge=0.0)
     max_symbol_exposure: float = Field(..., ge=0.0)
     max_portfolio_weight: float = Field(..., ge=0.0, le=1.0)
+    allocation_mode: Literal["ABSOLUTE_NOTIONAL", "PERCENT_OF_NAV"] = "ABSOLUTE_NOTIONAL"
+    target_weight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hard_cap_notional: Optional[float] = Field(default=None, ge=0.0)
+    nav_source: Literal["account_equity", "paper_nav", "manual"] = "account_equity"
+    manual_nav: Optional[float] = Field(default=None, gt=0.0)
     min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     allow_short: bool = False
     priority: int = Field(default=100, ge=0)
     enabled: bool = True
+    updated_by: Optional[str] = None
 
 
 class StrategyAllocationProfile(BaseModel):
@@ -583,6 +589,14 @@ class StrategyAllocationProfile(BaseModel):
     max_notional: float
     max_symbol_exposure: float
     max_portfolio_weight: float
+    allocation_mode: Literal["ABSOLUTE_NOTIONAL", "PERCENT_OF_NAV"] = "ABSOLUTE_NOTIONAL"
+    target_weight: Optional[float] = None
+    hard_cap_notional: Optional[float] = None
+    nav_source: Literal["account_equity", "paper_nav", "manual"] = "account_equity"
+    manual_nav: Optional[float] = None
+    basis_nav: Optional[float] = None
+    configured_notional: float = 0.0
+    effective_max_notional: float = 0.0
     min_confidence: float = 0.5
     allow_short: bool = False
     priority: int = 100

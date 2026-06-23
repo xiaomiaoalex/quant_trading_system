@@ -413,6 +413,12 @@ class ControlPlaneInMemoryStorage:
             "updated_at": now,
         }
         profile.setdefault("current_notional", 0.0)
+        profile.setdefault("allocation_mode", "ABSOLUTE_NOTIONAL")
+        profile.setdefault("configured_notional", float(profile.get("max_notional", 0.0)))
+        profile.setdefault("effective_max_notional", float(profile.get("max_notional", 0.0)))
+        profile["max_notional"] = float(
+            profile.get("effective_max_notional", profile.get("max_notional", 0.0))
+        )
         profile["remaining_notional"] = max(
             0.0,
             float(profile.get("max_notional", 0.0)) - float(profile.get("current_notional", 0.0)),
@@ -762,6 +768,31 @@ class ControlPlaneInMemoryStorage:
         if since_ts_ms:
             executions = [e for e in executions if e.get("ts_ms", 0) >= since_ts_ms]
         return executions[:limit]
+
+    def list_executions_for_projection(
+        self,
+        *,
+        after_ts_ms: Optional[int] = None,
+        after_execution_id: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """List executions after a projection cursor in deterministic ascending order."""
+        cursor = (after_ts_ms, after_execution_id or "")
+        executions = sorted(
+            self.executions,
+            key=lambda item: (int(item.get("ts_ms") or 0), str(item.get("execution_id") or "")),
+        )
+        if after_ts_ms is not None:
+            executions = [
+                item
+                for item in executions
+                if (
+                    int(item.get("ts_ms") or 0),
+                    str(item.get("execution_id") or ""),
+                )
+                > cursor
+            ]
+        return list(executions[:limit])
 
     def get_execution_dedup_stats(self) -> Dict[str, int]:
         """

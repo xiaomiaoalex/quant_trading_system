@@ -1204,6 +1204,50 @@ class TestPortfolioEndpoints:
         assert "unrealized_pnl" in data
 
 
+class TestAllocationEndpoints:
+    """Test allocation profile API endpoints."""
+
+    def setup_method(self):
+        reset_storage()
+        self.client = TestClient(app)
+
+    def test_upsert_absolute_allocation_profile(self):
+        response = self.client.put(
+            "/v1/allocations/deploy-a",
+            json={
+                "strategy_id": "strategy-a",
+                "max_notional": 1000.0,
+                "max_symbol_exposure": 500.0,
+                "max_portfolio_weight": 0.2,
+                "min_confidence": 0.6,
+                "allow_short": True,
+                "enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deployment_id"] == "deploy-a"
+        assert data["allocation_mode"] == "ABSOLUTE_NOTIONAL"
+        assert data["effective_max_notional"] == 1000.0
+
+    def test_percent_allocation_without_nav_returns_422(self):
+        response = self.client.put(
+            "/v1/allocations/deploy-a",
+            json={
+                "strategy_id": "strategy-a",
+                "allocation_mode": "PERCENT_OF_NAV",
+                "target_weight": 0.2,
+                "nav_source": "paper_nav",
+                "max_symbol_exposure": 500.0,
+                "max_portfolio_weight": 0.2,
+            },
+        )
+
+        assert response.status_code == 422
+        assert "basis NAV" in response.json()["detail"]
+
+
 class TestEventEndpoints:
     """Test event API endpoints"""
 

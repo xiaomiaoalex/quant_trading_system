@@ -46,6 +46,11 @@ class ExecutionRepository:
             self._postgres_storage._connected = False
         self._clear_postgres_state()
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
     async def _ensure_postgres(self) -> bool:
         current_loop = asyncio.get_running_loop()
         if self._loop is not current_loop:
@@ -82,7 +87,7 @@ class ExecutionRepository:
         """Strict PG-first write. Raises when PG is unavailable."""
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.create_execution(execution_data)
+                return await self._postgres_or_raise().create_execution(execution_data)
             except Exception:
                 logger.exception(
                     "PostgreSQL save_execution failed: cl_ord_id=%s exec_id=%s",
@@ -99,7 +104,7 @@ class ExecutionRepository:
         """Best-effort write for dev/test paths without configured PG."""
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.create_execution(execution_data)
+                return await self._postgres_or_raise().create_execution(execution_data)
             except Exception as exc:
                 logger.warning("PostgreSQL save_execution failed, falling back to memory: %s", exc)
 
@@ -117,7 +122,7 @@ class ExecutionRepository:
     async def get_execution(self, cl_ord_id: str, exec_id: str) -> Optional[Dict[str, Any]]:
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.get_execution(cl_ord_id, exec_id)
+                return await self._postgres_or_raise().get_execution(cl_ord_id, exec_id)
             except Exception as exc:
                 logger.warning("PostgreSQL get_execution failed, falling back to memory: %s", exc)
         return self._memory_storage.execution_by_key.get(f"{cl_ord_id}:{exec_id}")
@@ -131,7 +136,7 @@ class ExecutionRepository:
     ) -> List[Dict[str, Any]]:
         if await self._ensure_postgres():
             try:
-                return await self._postgres_storage.list_executions(
+                return await self._postgres_or_raise().list_executions(
                     cl_ord_id=cl_ord_id,
                     strategy_id=strategy_id,
                     since_ts_ms=since_ts_ms,
@@ -141,6 +146,32 @@ class ExecutionRepository:
                 logger.warning("PostgreSQL list_executions failed, falling back to memory: %s", exc)
         return self._memory_storage.list_executions(
             cl_ord_id=cl_ord_id, since_ts_ms=since_ts_ms, limit=limit
+        )
+
+    async def list_executions_for_projection(
+        self,
+        *,
+        after_ts_ms: Optional[int] = None,
+        after_execution_id: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """List executions after a projection cursor in deterministic order."""
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_or_raise().list_executions_for_projection(
+                    after_ts_ms=after_ts_ms,
+                    after_execution_id=after_execution_id,
+                    limit=limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PostgreSQL list_executions_for_projection failed, falling back to memory: %s",
+                    exc,
+                )
+        return self._memory_storage.list_executions_for_projection(
+            after_ts_ms=after_ts_ms,
+            after_execution_id=after_execution_id,
+            limit=limit,
         )
 
 

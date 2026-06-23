@@ -28,8 +28,8 @@
 |------|------|------|------|
 | Stage 4A | 前端 Stage 3 闭环 + 图表可视化 | ✅ 已完成 | Recharts 图表、状态驱动按钮、promote 错误差异化 |
 | Stage 4B | QuantStats 回测撕页集成 | ✅ 已完成 | tearsheet 后处理、artifact/API/frontend 下载入口 |
-| Stage 5 | CapitalAllocator OMS 接入 | ✅ 已完成（含审查返工） | `StrategyRunner` OMS 前置 allocation gate、热配置、trace 审计、portfolio-wide reservation lock、OMS 成功后提交 committed notional |
-| Stage 6 | 实时 NAV 追踪 + PostgreSQL 持久化 | 未开始 | 下一入口，需新增 `NAVPoint`、`nav_points` 表、SSE 与前端净值曲线 |
+| Stage 5 | CapitalAllocator OMS 接入 | ✅ 已完成（含审查返工 + 2026-06-07 预算模式升级与审查修复） | `StrategyRunner` OMS 前置 allocation gate、热配置、trace 审计、profile 更新审计、绝对金额/NAV比例预算、paper NAV 持久化 fallback、portfolio-wide reservation lock、OMS 成功后提交 committed notional |
+| Stage 6 | 实时 NAV 追踪 + PostgreSQL 持久化 | 未开始 | 下一入口；`NAVPoint/nav_points` 基础读写已可供 allocation 校验 fallback，仍需完善前端净值曲线、生产化恢复与完整验收 |
 
 ---
 
