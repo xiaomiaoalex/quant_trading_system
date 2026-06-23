@@ -1270,6 +1270,39 @@ class PostgreSQLStorage:
 
         return [dict(row) for row in rows]
 
+    async def list_executions_for_projection(
+        self,
+        *,
+        after_ts_ms: Optional[int] = None,
+        after_execution_id: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """List executions after a projection cursor in deterministic ascending order."""
+        query = """
+            SELECT execution_id, cl_ord_id, exec_id, symbol, side, quantity, price,
+                   fee, fee_currency, ts_ms, strategy_id, venue, created_at
+            FROM executions
+            WHERE 1=1
+        """
+        params: list[Any] = []
+
+        if after_ts_ms is not None:
+            query += """
+                AND (
+                    ts_ms > $1
+                    OR (ts_ms = $1 AND execution_id > $2)
+                )
+            """
+            params.extend([after_ts_ms, after_execution_id or ""])
+
+        query += f" ORDER BY ts_ms ASC, execution_id ASC LIMIT ${len(params) + 1}"
+        params.append(limit)
+
+        async with self.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+
+        return [dict(row) for row in rows]
+
 
 def is_postgres_available() -> bool:
     """

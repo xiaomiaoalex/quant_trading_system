@@ -649,6 +649,45 @@ flowchart LR
 
 ---
 
+## 6.1 Performance Benchmark Projector 数据流
+
+```mermaid
+flowchart LR
+    API["Control Plane\nperformance router"] --> Service["BenchmarkConstituentProjector\nInitialWeightGenerator"]
+    Service --> PerfSvc["PerformanceService\n契约校验/DTO 构造"]
+    PerfSvc --> Repo["PerformanceRepository"]
+    Repo --> PG["PostgreSQL\nperformance_benchmark_holdings\nperformance_portfolio_holding_facts"]
+
+    Binance["Binance REST\n/api/v3/ticker/24hr"] --> Service
+    Config["Explicit Config\nsymbol/weight/period_return"] --> API
+```
+
+**边界约束**：
+
+- `trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，Control Plane 端点不能只存在于孤立 route module。
+- Binance ticker 读取属于 Adapter/Service 边界 IO；Core domain models 只保存标准字段 `symbol`、`weight`、`period_return`、`metadata`。
+- `BenchmarkHolding` 写入幂等键为 `(benchmark_id, symbol, period_start_ms, period_end_ms)`；`PortfolioHoldingFact` 写入幂等键为 `(run_id, symbol, period_start_ms, period_end_ms)`。
+- 显式 config 中的 `constituents[].period_return` 必须按 symbol 传递到 persistence，用于后续 Brinson/归因计算；全局 `period_return` 只作为默认值。
+
+## 6.2 Performance Execution Projection 数据流
+
+```mermaid
+flowchart LR
+    ExecRepo["ExecutionRepository"] --> CursorRead["list_executions_for_projection\n(ts_ms, execution_id) ASC"]
+    CursorRead --> Projector["PerformanceExecutionProjector"]
+    Projector --> PerfSvc["PerformanceService.record_fill"]
+    PerfSvc --> PerfRepo["PerformanceRepository"]
+    PerfRepo --> Cursor["projection_cursor\nlast_ts_ms + last_execution_id"]
+```
+
+**边界约束**：
+
+- Execution projection 是 Persistence -> Service 的只读投影链路，不得改变 OMS/event sourcing 真理来源。
+- `list_executions_for_projection()` 必须在内存和 PostgreSQL 实现中按 `(ts_ms, execution_id)` 升序过滤、排序和 `LIMIT`，避免历史积压超过 batch size 时跳过旧 execution facts。
+- `PerformanceExecutionProjector` 只能根据成功投影的 execution 推进 cursor；失败时停止当前 batch，保留未处理记录供下一轮重试。
+
+---
+
 ## 7. 架构变更更新规则
 
 以下情况必须更新本文档：

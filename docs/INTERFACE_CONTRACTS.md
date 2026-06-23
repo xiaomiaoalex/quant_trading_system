@@ -2250,3 +2250,145 @@ audit trail 事件类型：
 - 前端不发送 deployment 配置请求体；`deployment_id`、`mode=paper`、runtime load 和回滚语义均以后端原子编排为准。
 - 成功后前端以 `PromotePaperResponse.deployment_id` 更新本地 `StrategyCandidate.deployment_id`，状态展示为 `APPROVED_FOR_PAPER`。
 - 失败时前端必须展示 `PromotePaperError.error_code` 与 `detail`，至少区分 `INVALID_STATE`、`PROMOTE_LOAD_FAILED`、`PROMOTE_CONFLICT`。
+
+## 10. Performance Benchmark Projector API 契约
+
+Performance benchmark projector 属于 Control Plane API -> Service -> Persistence 的写入链路，用于为 Brinson/归因计算准备基准成分和期初组合权重事实。
+
+### 10.1 API 路由挂载
+
+`trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，以下端点必须出现在主应用路由表中：
+
+- `POST /v1/performance/benchmark/project`
+- `POST /v1/performance/benchmark/config`
+- `POST /v1/performance/initial-weights`
+
+### 10.2 BenchmarkHolding
+
+```python
+@dataclass(slots=True)
+class BenchmarkHolding:
+    holding_id: str
+    benchmark_id: str
+    symbol: str
+    period_start_ms: int
+    period_end_ms: int
+    weight: Decimal
+    period_return: Decimal
+    source: str = "manual"
+    quality: str = "complete"
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+幂等键：`(benchmark_id, symbol, period_start_ms, period_end_ms)`。
+
+### 10.3 PortfolioHoldingFact
+
+```python
+@dataclass(slots=True)
+class PortfolioHoldingFact:
+    holding_id: str
+    run_id: str
+    symbol: str
+    period_start_ms: int
+    period_end_ms: int
+    weight: Decimal
+    period_return: Decimal
+    source: str = "performance_service"
+    quality: str = "complete"
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+幂等键：`(run_id, symbol, period_start_ms, period_end_ms)`。
+
+### 10.4 `POST /v1/performance/benchmark/config`
+
+用途：从显式配置写入 benchmark holdings。
+
+Query:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `benchmark_id` | str | 基准唯一标识 |
+
+Body:
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `constituents` | list[dict] | 必填 | 每项包含 `symbol`、`weight`，可选 `period_return` |
+| `period_days` | int | 1 | 生成 `[now-period_days, now]` 归因周期 |
+| `period_return` | str | `"0"` | 未提供 per-symbol return 时的默认值 |
+
+`constituents[].period_return` 优先级高于全局 `period_return`，必须按 symbol 保留到 `BenchmarkHolding.period_return`，不得静默覆盖为默认值。
+
+响应：
+
+```python
+{
+    "benchmark_id": str,
+    "projected": int,
+    "duplicates": int,
+    "failed": int,
+    "period_start_ms": int,
+    "period_end_ms": int,
+}
+```
+
+### 10.5 `POST /v1/performance/benchmark/project`
+
+用途：按 `source` 生成基准成分。
+
+- `source=config`：使用控制面内置 demo constituents。
+- `source=binance_ticker`：Adapter 边界调用 Binance `/api/v3/ticker/24hr`，按 USDT 交易对 quote volume 归一化权重。
+
+外部 Binance 字段（如 `quoteVolume`）只能保存在 Adapter/Service 边界的 metadata 中，不得泄漏为 Core 标准字段名。
+
+### 10.6 `POST /v1/performance/initial-weights`
+
+用途：从配置写入 `PortfolioHoldingFact`，`benchmark_id` 参数当前作为 `run_id` 使用。
+
+写入前必须通过 `PerformanceService._require_run(run_id)` 校验 run 存在；失败应返回 4xx/5xx，不得写入孤儿 holding facts。
+
+## 11. Performance Execution Projection 契约
+
+Performance execution projection 属于 Persistence -> Service 投影读取链路，用于从 execution facts 增量构建绩效运行记录。投影读取必须通过 repository 明确方法完成，不得依赖底层内存列表或数据库默认排序。
+
+### 11.1 `ExecutionRepository.list_executions_for_projection`
+
+签名：
+
+```python
+async def list_executions_for_projection(
+    self,
+    *,
+    after_ts_ms: int,
+    after_execution_id: str,
+    limit: int,
+) -> list[ExecutionRecord]:
+    ...
+```
+
+契约：
+
+- 返回 `(ts_ms, execution_id)` 严格大于游标 `(after_ts_ms, after_execution_id)` 的 execution records。
+- 返回结果必须按 `(ts_ms, execution_id)` 升序排列。
+- `limit` 控制单批返回数量；调用方不得假设 repository 会返回超过 `limit` 的记录。
+- 游标字段必须使用内部标准字段 `ts_ms` 与 `execution_id`，不得使用交易所外部字段名。
+
+### 11.2 ExecutionRecord 标准字段
+
+用于绩效投影的 execution record 至少包含以下标准字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `execution_id` | str | 内部 execution fact 唯一 ID |
+| `ts_ms` | int | 事件时间戳，毫秒 |
+| `cl_ord_id` | str | 内部客户订单 ID |
+| `exec_id` | str | 交易所成交 ID 或适配器归一化成交 ID |
+| `strategy_id` | str | 策略 ID |
+
+### 11.3 兼容策略
+
+- 内存实现和 PostgreSQL 实现必须提供专用 cursor 读取路径，按 `(ts_ms, execution_id)` 升序在存储层过滤并限量；不得复用面向列表页的倒序 `list_executions()` 结果后再截断排序。
+- `PerformanceExecutionProjector` 只依赖 `list_executions_for_projection()` 的游标契约，不读取 repository 私有字段。
+- 该方法是只读投影接口，不改变 event sourcing 真理来源，也不引入新的跨层写入路径。
