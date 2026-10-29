@@ -26,9 +26,20 @@ export interface BacktestLabForm {
   interval: string
 }
 
-/** 数据集是否满足回测准入（已发布 + 已持久化 + 无缺口）。 */
+/**
+ * 数据集是否满足回测准入（前端防御）。
+ *
+ * 与后端 `HistoryDatasetResolver` 的判定保持一致：已发布 + 已持久化 +
+ * 无缺口 + 有效行数等于预期行数。后端门禁仍是最终判断。
+ */
 export function isDatasetEligible(dataset: HistoryDataset): boolean {
-  return dataset.status === 'PUBLISHED' && dataset.persistence_ok && dataset.backtest_eligible
+  return (
+    dataset.status === 'PUBLISHED' &&
+    dataset.persistence_ok &&
+    dataset.backtest_eligible &&
+    dataset.gap_count === 0 &&
+    dataset.row_count === dataset.expected_points
+  )
 }
 
 /**

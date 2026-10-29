@@ -203,6 +203,47 @@ class HistoryDatasetStore:
             rows = await conn.fetch(query, *params)
             return [dict(row) for row in rows]
 
+    async def find_succeeded_job_by_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+        """按 dataset_id 反查关联的成功任务（用于重复提交时复用原任务）。"""
+        storage = self._require_storage()
+        async with storage.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM history_ingest_jobs
+                WHERE dataset_id = $1 AND status = 'SUCCEEDED'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                dataset_id,
+            )
+            return dict(row) if row is not None else None
+
+    async def find_active_job(
+        self,
+        *,
+        source: str,
+        symbol: str,
+        interval: str,
+        month: str,
+    ) -> Optional[Dict[str, Any]]:
+        """查找同 (source, symbol, interval, month) 的活动任务（QUEUED / RUNNING）。"""
+        storage = self._require_storage()
+        async with storage.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM history_ingest_jobs
+                WHERE source = $1 AND symbol = $2 AND interval = $3 AND month = $4
+                  AND status IN ('QUEUED', 'RUNNING')
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                source,
+                symbol,
+                interval,
+                month,
+            )
+            return dict(row) if row is not None else None
+
     async def list_queued_jobs(self, limit: int = 10) -> List[Dict[str, Any]]:
         storage = self._require_storage()
         async with storage.acquire() as conn:

@@ -13,6 +13,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
+from trader.adapters.market_data.binance_vision import ArchiveNotFoundError
 from trader.api.main import app
 from trader.core.domain.services.ohlcv_archive import (
     KlineBar,
@@ -117,18 +118,20 @@ def test_create_history_job_rejects_conflicting_interval(history_backend):
     assert response.status_code == 422
 
 
-def test_create_history_job_reports_missing_archive(history_backend, monkeypatch):
+def test_create_history_job_does_not_probe_remote_archive(history_backend, monkeypatch):
+    """提交路径不做任何远程 HTTP：归档缺失由 worker 下载阶段判定（ARCHIVE_NOT_FOUND）。"""
     monkeypatch.setattr(
         HistoryIngestionService,
         "_get_archive_client",
-        lambda self: FakeArchiveClient(exists=False),
+        lambda self: FakeArchiveClient(download_error=ArchiveNotFoundError("missing")),
     )
     with TestClient(app) as client:
         response = client.post(
             "/v1/data/history/jobs",
             json={"symbol": "BTCUSDT", "month": MONTH_STR},
         )
-    assert response.status_code == 404
+    assert response.status_code == 202
+    assert response.json()["status"] == "QUEUED"
 
 
 def test_list_history_jobs_returns_progress_fields(history_backend):
@@ -227,3 +230,59 @@ def test_get_history_dataset_returns_404_for_unknown_dataset(history_backend):
     with TestClient(app) as client:
         response = client.get("/v1/data/history/datasets/hds_missing")
     assert response.status_code == 404
+
+
+def test_get_history_dataset_finds_dataset_beyond_list_limit(history_backend):
+    """详情按 id 直接查询：即使数据集数量超过列表上限（500）也能访问。"""
+    template = {
+        "source": "binance_vision",
+        "market": "spot",
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "month": MONTH_STR,
+        "version": 1,
+        "feature_version": "binance_spot_1m_BTCUSDT_2026-09_aaaaaaaaaaaa",
+        "archive_path": "/tmp/a.zip",
+        "archive_sha256": "a" * 64,
+        "official_sha256": "a" * 64,
+        "source_url": "https://example/a.zip",
+        "checksum_url": "https://example/a.zip.CHECKSUM",
+        "row_count": 43200,
+        "expected_points": 43200,
+        "gap_count": 0,
+        "first_ts_ms": month_bounds_ms(YEAR, MONTH)[0],
+        "last_ts_ms": month_bounds_ms(YEAR, MONTH)[1] - 60_000,
+        "quality": {"complete": True},
+        "status": "PUBLISHED",
+        "persistence_ok": True,
+        "backtest_eligible": True,
+        "created_at": "2026-10-29T00:00:00Z",
+        "published_at": "2026-10-29T00:00:00Z",
+    }
+    for index in range(600):
+        history_backend.datasets[f"hds_{index:04d}"] = {
+            **template,
+            "dataset_id": f"hds_{index:04d}",
+        }
+
+    with TestClient(app) as client:
+        response = client.get("/v1/data/history/datasets/hds_0000")
+
+    assert response.status_code == 200
+    assert response.json()["dataset_id"] == "hds_0000"
+
+
+def test_get_history_dataset_returns_503_when_store_unavailable(history_backend, monkeypatch):
+    from trader.adapters.persistence.history_dataset_store import HistoryStoreUnavailableError
+
+    async def _unavailable(self, dataset_id: str):
+        raise HistoryStoreUnavailableError("postgres down")
+
+    monkeypatch.setattr(
+        HistoryIngestionService,
+        "get_dataset",
+        _unavailable,
+    )
+    with TestClient(app) as client:
+        response = client.get("/v1/data/history/datasets/hds_test")
+    assert response.status_code == 503

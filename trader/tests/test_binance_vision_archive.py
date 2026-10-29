@@ -42,14 +42,12 @@ class FakeArchiveHttp:
         checksum_text: str = "",
         zip_status: int = 200,
         checksum_status: int = 200,
-        head_status: int = 200,
         download_error: Exception | None = None,
     ) -> None:
         self._zip_bytes = zip_bytes
         self._checksum_text = checksum_text
         self._zip_status = zip_status
         self._checksum_status = checksum_status
-        self._head_status = head_status
         self._download_error = download_error
         self.requested_urls: list[str] = []
 
@@ -68,10 +66,6 @@ class FakeArchiveHttp:
         with open(destination, "wb") as handle:
             handle.write(self._zip_bytes)
         return len(self._zip_bytes)
-
-    async def head_status(self, url: str) -> int:
-        self.requested_urls.append(url)
-        return self._head_status
 
 
 def _csv_rows(count: int, start_ms: int = 1704067200000) -> str:
@@ -146,7 +140,11 @@ async def test_download_verifies_checksum_and_returns_hash(tmp_path):
 @pytest.mark.asyncio
 async def test_download_rejects_checksum_mismatch(tmp_path):
     payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
-    http = FakeArchiveHttp(zip_bytes=payload, checksum_text=f"{'0' * 64}  x.zip\n")
+    http = FakeArchiveHttp(
+        zip_bytes=payload,
+        checksum_text=f"{'0' * 64}  BTCUSDT-1m-2026-09.zip\n",
+    )
+
     client = _client(http, str(tmp_path))
 
     ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
@@ -166,7 +164,7 @@ async def test_download_reports_missing_archive(tmp_path):
 @pytest.mark.asyncio
 async def test_download_reports_network_failure(tmp_path):
     http = FakeArchiveHttp(
-        checksum_text=f"{'a' * 64}  x.zip\n",
+        checksum_text=f"{'a' * 64}  BTCUSDT-1m-2026-09.zip\n",
         download_error=ArchiveDownloadError("timeout"),
     )
     client = _client(http, str(tmp_path))
@@ -179,7 +177,10 @@ async def test_download_reports_network_failure(tmp_path):
 async def test_commit_moves_temp_file_to_versioned_path(tmp_path):
     payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
     digest = hashlib.sha256(payload).hexdigest()
-    http = FakeArchiveHttp(zip_bytes=payload, checksum_text=f"{digest}  x.zip\n")
+    http = FakeArchiveHttp(
+        zip_bytes=payload,
+        checksum_text=f"{digest}  BTCUSDT-1m-2026-09.zip\n",
+    )
     client = _client(http, str(tmp_path))
 
     ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
@@ -194,33 +195,102 @@ async def test_commit_moves_temp_file_to_versioned_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_commit_does_not_overwrite_existing_archive(tmp_path):
+async def test_commit_reuses_existing_archive_with_same_hash(tmp_path):
     payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
     digest = hashlib.sha256(payload).hexdigest()
-    http = FakeArchiveHttp(zip_bytes=payload, checksum_text=f"{digest}  x.zip\n")
+    http = FakeArchiveHttp(
+        zip_bytes=payload,
+        checksum_text=f"{digest}  BTCUSDT-1m-2026-09.zip\n",
+    )
     client = _client(http, str(tmp_path))
 
     ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
     downloaded = await client.download(ref)
     first = client.commit(downloaded, version=1)
-    with open(first, "wb") as handle:
-        handle.write(b"original")
 
     downloaded2 = await client.download(ref)
     second = client.commit(downloaded2, version=1)
 
     assert second == first
-    with open(first, "rb") as handle:
-        assert handle.read() == b"original"
+    assert sha256_file(first) == digest
 
 
 @pytest.mark.asyncio
-async def test_exists_probe_uses_checksum_url(tmp_path):
-    http = FakeArchiveHttp(head_status=200)
+async def test_commit_refuses_to_overwrite_archive_with_different_hash(tmp_path):
+    payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
+    digest = hashlib.sha256(payload).hexdigest()
+    http = FakeArchiveHttp(
+        zip_bytes=payload,
+        checksum_text=f"{digest}  BTCUSDT-1m-2026-09.zip\n",
+    )
     client = _client(http, str(tmp_path))
+
     ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
-    assert await client.exists(ref) is True
-    assert http.requested_urls[-1] == ref.checksum_url
+    downloaded = await client.download(ref)
+    target = client.commit(downloaded, version=1)
+    with open(target, "wb") as handle:
+        handle.write(b"tampered")
+
+    downloaded2 = await client.download(ref)
+    with pytest.raises(ArchiveChecksumMismatch):
+        client.commit(downloaded2, version=1)
+
+    with open(target, "rb") as handle:
+        assert handle.read() == b"tampered"
+
+
+@pytest.mark.asyncio
+async def test_commit_restores_missing_checksum_file(tmp_path):
+    payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
+    digest = hashlib.sha256(payload).hexdigest()
+    official_text = f"{digest}  BTCUSDT-1m-2026-09.zip\n"
+    http = FakeArchiveHttp(zip_bytes=payload, checksum_text=official_text)
+    client = _client(http, str(tmp_path))
+
+    ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
+    downloaded = await client.download(ref)
+    target = client.commit(downloaded, version=1)
+    checksum_path = f"{target}.CHECKSUM"
+
+    # 崩溃窗口：归档已落盘但 CHECKSUM 丢失
+    os.remove(checksum_path)
+
+    downloaded2 = await client.download(ref)
+    client.commit(downloaded2, version=1)
+
+    assert os.path.exists(checksum_path)
+    with open(checksum_path, "r", encoding="utf-8") as handle:
+        assert handle.read() == official_text
+
+
+@pytest.mark.asyncio
+async def test_commit_keeps_official_checksum_text_verbatim(tmp_path):
+    payload = _make_zip("BTCUSDT-1m-2026-09.csv", _csv_rows(3))
+    digest = hashlib.sha256(payload).hexdigest()
+    official_text = f"{digest}  BTCUSDT-1m-2026-09.zip\n"
+    http = FakeArchiveHttp(zip_bytes=payload, checksum_text=official_text)
+    client = _client(http, str(tmp_path))
+
+    ref = build_archive_ref("BTCUSDT", "1m", "2026-09")
+    downloaded = await client.download(ref)
+    target = client.commit(downloaded, version=1)
+
+    with open(f"{target}.CHECKSUM", "r", encoding="utf-8") as handle:
+        assert handle.read() == official_text
+    assert downloaded.official_file_name == "BTCUSDT-1m-2026-09.zip"
+
+
+def test_parse_checksum_matches_expected_file_name():
+    text = f"{'1' * 64}  other-file.zip\n{'2' * 64}  BTCUSDT-1m-2026-09.zip\n"
+    digest, file_name = parse_checksum(text, expected_file_name="BTCUSDT-1m-2026-09.zip")
+    assert digest == "2" * 64
+    assert file_name == "BTCUSDT-1m-2026-09.zip"
+
+
+def test_parse_checksum_rejects_missing_expected_file_name():
+    text = f"{'1' * 64}  other-file.zip\n"
+    with pytest.raises(ArchiveChecksumMismatch):
+        parse_checksum(text, expected_file_name="BTCUSDT-1m-2026-09.zip")
 
 
 def test_read_klines_from_archive_parses_expected_member(tmp_path):
@@ -260,4 +330,9 @@ def test_parse_klines_csv_skips_header_row():
 
 def test_parse_checksum_rejects_invalid_content():
     with pytest.raises(ArchiveChecksumMismatch):
-        parse_checksum("not-a-hash  file.zip\n")
+        parse_checksum("not-a-hash  file.zip\n", expected_file_name="file.zip")
+
+
+def test_parse_checksum_rejects_empty_content():
+    with pytest.raises(ArchiveChecksumMismatch):
+        parse_checksum("\n", expected_file_name="file.zip")

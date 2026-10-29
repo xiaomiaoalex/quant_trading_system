@@ -93,6 +93,11 @@ class DownloadedArchive:
     size_bytes: int
     sha256: str
     official_sha256: str
+    official_checksum_text: str = ""
+    """官方 .CHECKSUM 原文（原样保留，不改写）。"""
+
+    official_file_name: str = ""
+    """官方 CHECKSUM 中记录的文件名（与本地版本化文件名可能不同）。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,15 +192,6 @@ class AiohttpArchiveHttpClient:
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             raise ArchiveDownloadError(f"Failed to fetch {url}: {exc}") from exc
 
-    async def head_status(self, url: str) -> int:
-        """轻量探测：返回 HEAD 状态码（用于判断归档是否存在）。"""
-        session = await self._ensure_session()
-        try:
-            async with session.head(url) as response:
-                return response.status
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            raise ArchiveDownloadError(f"Failed to probe {url}: {exc}") from exc
-
     async def download_to_file(self, url: str, destination: str) -> int:
         """流式下载到本地文件，返回写入字节数。"""
         session = await self._ensure_session()
@@ -278,7 +274,11 @@ class BinanceVisionArchiveClient:
                 f"Checksum request failed with status {checksum_response.status}: "
                 f"{ref.checksum_url}"
             )
-        official_sha = parse_checksum(checksum_response.body.decode("utf-8", errors="replace"))
+        official_text = checksum_response.body.decode("utf-8", errors="replace")
+        official_sha, official_file_name = parse_checksum(
+            official_text,
+            expected_file_name=f"{ref.file_stem}.zip",
+        )
 
         temp_path = os.path.join(temp_dir, f"{ref.file_stem}.{uuid.uuid4().hex[:8]}.part")
         try:
@@ -304,6 +304,8 @@ class BinanceVisionArchiveClient:
             size_bytes=size,
             sha256=actual_sha.lower(),
             official_sha256=official_sha.lower(),
+            official_checksum_text=official_text,
+            official_file_name=official_file_name,
         )
 
     def commit(
@@ -312,22 +314,53 @@ class BinanceVisionArchiveClient:
         version: int,
         official_checksum_text: Optional[str] = None,
     ) -> str:
-        """把临时文件原子提交为版本化归档文件，返回最终路径。"""
+        """
+        把临时文件原子提交为版本化归档文件，返回最终路径。
+
+        语义：
+        - 目标文件不存在：原子落盘（os.replace），并**原子**写入官方 CHECKSUM 原文
+        - 目标文件已存在且 SHA-256 一致：复用该文件，并补写缺失的 CHECKSUM（崩溃窗口恢复）
+        - 目标文件已存在但 SHA-256 不一致：抛错，**绝不覆盖**已发布版本的证据
+        """
         ref = downloaded.ref
         target = self.archive_path(ref.symbol, ref.interval, ref.month, version)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        if os.path.exists(target):
-            # 目标文件已存在（同一 hash 的重复任务），直接复用，不覆盖。
-            _safe_remove(downloaded.temp_path)
-            return target
-        os.replace(downloaded.temp_path, target)
         checksum_target = self.checksum_path(ref.symbol, ref.interval, ref.month, version)
-        checksum_text = official_checksum_text or (
-            f"{downloaded.official_sha256}  {ref.file_stem}.zip\n"
-        )
-        with open(checksum_target, "w", encoding="utf-8") as handle:
-            handle.write(checksum_text)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+
+        if os.path.exists(target):
+            existing_sha = sha256_file(target)
+            if existing_sha.lower() != downloaded.sha256.lower():
+                raise ArchiveChecksumMismatch(
+                    f"Refusing to overwrite existing archive {target}: "
+                    f"expected sha256 {downloaded.sha256.lower()}, found {existing_sha.lower()}"
+                )
+            # 同一 hash：复用已落盘文件，并补写缺失的 CHECKSUM（崩溃窗口恢复）
+            _safe_remove(downloaded.temp_path)
+            if not os.path.exists(checksum_target):
+                self._write_checksum(checksum_target, downloaded, official_checksum_text)
+            return target
+
+        os.replace(downloaded.temp_path, target)
+        self._write_checksum(checksum_target, downloaded, official_checksum_text)
         return target
+
+    def _write_checksum(
+        self,
+        checksum_target: str,
+        downloaded: DownloadedArchive,
+        official_checksum_text: Optional[str],
+    ) -> None:
+        """原子写入 CHECKSUM 侧车文件（临时文件 + replace，避免半成品）。"""
+        ref = downloaded.ref
+        checksum_text = official_checksum_text or downloaded.official_checksum_text
+        if not checksum_text:
+            checksum_text = f"{downloaded.official_sha256}  {ref.file_stem}.zip" + "\n"
+        temp_path = f"{checksum_target}.{uuid.uuid4().hex[:8]}.tmp"
+        with open(temp_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(checksum_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, checksum_target)
 
     def read_klines(self, archive_path: str, ref: ArchiveRef) -> List[KlineBar]:
         """
@@ -337,20 +370,15 @@ class BinanceVisionArchiveClient:
         """
         return read_klines_from_archive(archive_path, ref)
 
-    async def exists(self, ref: ArchiveRef) -> bool:
-        """
-        探测归档是否存在（HEAD 官方 CHECKSUM 地址）。
-
-        网络异常时抛 ArchiveDownloadError，由调用方决定如何降级。
-        """
-        status = await self._http.head_status(ref.checksum_url)
-        return status < 400
-
     async def close(self) -> None:
         """关闭底层 HTTP 会话。"""
         close = getattr(self._http, "close", None)
         if callable(close):
             await close()
+
+    def discard(self, downloaded: DownloadedArchive) -> None:
+        """丢弃已下载但未提交的临时文件（复用已有数据集时调用，避免残留）。"""
+        _safe_remove(downloaded.temp_path)
 
 
 def read_klines_from_archive(archive_path: str, ref: ArchiveRef) -> List[KlineBar]:
@@ -389,17 +417,41 @@ def parse_klines_csv(text: str) -> List[KlineBar]:
     return bars
 
 
-def parse_checksum(text: str) -> str:
-    """解析 ``sha256sum`` 格式的 CHECKSUM 文件内容。"""
+def parse_checksum(text: str, expected_file_name: str) -> tuple[str, str]:
+    """
+    解析 ``sha256sum`` 格式的 CHECKSUM 文件内容。
+
+    按**预期文件名**匹配对应行（不取任意第一个 token），避免多文件校验和格式下取错行。
+
+    Returns:
+        Tuple of (sha256, official_file_name)
+
+    Raises:
+        ArchiveChecksumMismatch: 找不到预期文件名的行 / 哈希格式非法
+    """
+    fallback: Optional[tuple[str, str]] = None
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        token = line.split()[0].lower()
+        parts = line.split()
+        token = parts[0].lower()
         if len(token) != 64:
             raise ArchiveChecksumMismatch(f"Invalid CHECKSUM content: {raw_line!r}")
-        int(token, 16)  # 校验是否为合法 hex
-        return token
+        try:
+            int(token, 16)  # 校验是否为合法 hex
+        except ValueError as exc:
+            raise ArchiveChecksumMismatch(f"Invalid CHECKSUM content: {raw_line!r}") from exc
+        file_name = parts[1].lstrip("*") if len(parts) > 1 else ""
+        if file_name == expected_file_name:
+            return token, file_name
+        if fallback is None:
+            fallback = (token, file_name)
+    if fallback is not None:
+        raise ArchiveChecksumMismatch(
+            f"CHECKSUM does not contain an entry for '{expected_file_name}' "
+            f"(found '{fallback[1] or '<unnamed>'}')"
+        )
     raise ArchiveChecksumMismatch("CHECKSUM file is empty")
 
 

@@ -112,6 +112,17 @@ def _make_store(dsn: str) -> HistoryDatasetStore:
     return store
 
 
+async def _strict_store(dsn: str) -> FeatureStore:
+    """构造一个直连隔离库的严格模式 FeatureStore。"""
+    from trader.adapters.persistence.postgres import PostgreSQLStorage
+
+    store = FeatureStore(storage=None, strict=True)
+    store._postgres_storage = PostgreSQLStorage(connection_string=dsn)
+    await store._postgres_storage.connect()
+    store._use_postgres = True
+    return store
+
+
 @skip_if_no_asyncpg
 @skip_if_no_postgres
 async def test_history_job_and_dataset_survive_store_restart(isolated_dsn):
@@ -361,6 +372,158 @@ async def test_feature_store_bulk_write_is_idempotent_and_detects_conflicts(isol
 
 @skip_if_no_asyncpg
 @skip_if_no_postgres
+async def test_feature_store_bulk_write_concurrent_same_value_is_idempotent(isolated_dsn):
+    """并发写入同值：不得报错，总行数为 1，计数真实。"""
+    store_a = await _strict_store(isolated_dsn)
+    store_b = await _strict_store(isolated_dsn)
+    try:
+        feature_version = build_feature_version(
+            "BTCUSDT", MONTH_STR, (RUN_ID + "a").ljust(64, "0")[:64]
+        )
+        start_ms, _ = month_bounds_ms(YEAR, MONTH)
+        rows = [(start_ms, {"open": "1.0", "high": "2.0", "low": "0.5", "close": "1.5"})]
+
+        results = await asyncio.gather(
+            store_a.write_features_bulk("BTCUSDT", "ohlcv", feature_version, rows),
+            store_b.write_features_bulk("BTCUSDT", "ohlcv", feature_version, rows),
+        )
+        created_counts = sorted(created for created, _ in results)
+        duplicate_counts = sorted(duplicates for _, duplicates in results)
+        assert created_counts == [0, 1]
+        assert duplicate_counts == [0, 1]
+
+        points = await store_a.read_feature_range(
+            symbol="BTCUSDT",
+            feature_name="ohlcv",
+            start_time=start_ms,
+            end_time=start_ms + 60_000,
+            version=feature_version,
+        )
+        assert len(points) == 1
+    finally:
+        await store_a._postgres_storage.disconnect()
+        await store_b._postgres_storage.disconnect()
+
+
+@skip_if_no_asyncpg
+@skip_if_no_postgres
+async def test_feature_store_bulk_write_concurrent_different_value_raises_conflict(isolated_dsn):
+    """并发写入异值：必须有一个失败并抛冲突，且不得静默吞掉写入。"""
+    store_a = await _strict_store(isolated_dsn)
+    store_b = await _strict_store(isolated_dsn)
+    try:
+        feature_version = build_feature_version(
+            "BTCUSDT", MONTH_STR, (RUN_ID + "b").ljust(64, "0")[:64]
+        )
+        start_ms, _ = month_bounds_ms(YEAR, MONTH)
+        value_a = {"open": "1.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+        value_b = {"open": "9.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+
+        outcomes = await asyncio.gather(
+            store_a.write_features_bulk("BTCUSDT", "ohlcv", feature_version, [(start_ms, value_a)]),
+            store_b.write_features_bulk("BTCUSDT", "ohlcv", feature_version, [(start_ms, value_b)]),
+            return_exceptions=True,
+        )
+
+        successes = [item for item in outcomes if not isinstance(item, Exception)]
+        failures = [item for item in outcomes if isinstance(item, Exception)]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert isinstance(failures[0], FeatureVersionConflictError)
+
+        points = await store_a.read_feature_range(
+            symbol="BTCUSDT",
+            feature_name="ohlcv",
+            start_time=start_ms,
+            end_time=start_ms + 60_000,
+            version=feature_version,
+        )
+        assert len(points) == 1
+    finally:
+        await store_a._postgres_storage.disconnect()
+        await store_b._postgres_storage.disconnect()
+
+
+@skip_if_no_asyncpg
+@skip_if_no_postgres
+async def test_feature_store_bulk_write_rolls_back_entire_batch_on_conflict(isolated_dsn):
+    """批次中任一行冲突 → 整批回滚（无部分写入）。"""
+    store = await _strict_store(isolated_dsn)
+    try:
+        feature_version = build_feature_version(
+            "ETHUSDT", MONTH_STR, (RUN_ID + "c").ljust(64, "0")[:64]
+        )
+        start_ms, _ = month_bounds_ms(YEAR, MONTH)
+        good = {"open": "1.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+        bad = {"open": "9.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+
+        await store.write_features_bulk("ETHUSDT", "ohlcv", feature_version, [(start_ms, good)])
+
+        conflicting_batch = [
+            (start_ms + 60_000, good),  # 新行
+            (start_ms, bad),  # 与已有行冲突
+        ]
+        with pytest.raises(FeatureVersionConflictError):
+            await store.write_features_bulk("ETHUSDT", "ohlcv", feature_version, conflicting_batch)
+
+        points = await store.read_feature_range(
+            symbol="ETHUSDT",
+            feature_name="ohlcv",
+            start_time=start_ms,
+            end_time=start_ms + 5 * 60_000,
+            version=feature_version,
+        )
+        # 只有最初那一行；批次中的新行被回滚
+        assert len(points) == 1
+        assert points[0].ts_ms == start_ms
+    finally:
+        await store._postgres_storage.disconnect()
+
+
+@skip_if_no_asyncpg
+@skip_if_no_postgres
+async def test_feature_store_bulk_write_handles_intra_batch_duplicates(isolated_dsn):
+    """批内重复：同 ts 同值折叠为 duplicate；同 ts 异值直接抛冲突。"""
+    store = await _strict_store(isolated_dsn)
+    try:
+        feature_version = build_feature_version(
+            "ETHUSDT", MONTH_STR, (RUN_ID + "d").ljust(64, "0")[:64]
+        )
+        start_ms, _ = month_bounds_ms(YEAR, MONTH)
+        value = {"open": "1.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+        other = {"open": "9.0", "high": "2.0", "low": "0.5", "close": "1.5"}
+
+        created, duplicates = await store.write_features_bulk(
+            "ETHUSDT",
+            "ohlcv",
+            feature_version,
+            [(start_ms, value), (start_ms, value)],
+        )
+        assert created == 1
+        assert duplicates == 1
+
+        with pytest.raises(FeatureVersionConflictError):
+            await store.write_features_bulk(
+                "ETHUSDT",
+                "ohlcv",
+                feature_version,
+                [(start_ms + 60_000, value), (start_ms + 60_000, other)],
+            )
+
+        points = await store.read_feature_range(
+            symbol="ETHUSDT",
+            feature_name="ohlcv",
+            start_time=start_ms,
+            end_time=start_ms + 5 * 60_000,
+            version=feature_version,
+        )
+        assert len(points) == 1
+    finally:
+        await store._postgres_storage.disconnect()
+
+
+@skip_if_no_asyncpg
+@skip_if_no_postgres
 async def test_feature_store_strict_mode_fails_closed_without_postgres(monkeypatch):
     from trader.adapters.persistence import feature_store as feature_store_module
 
@@ -380,6 +543,16 @@ async def test_feature_store_strict_mode_fails_closed_without_postgres(monkeypat
         )
 
     memory_keys = store._memory_storage.feature_values_by_key
+    assert not any(key.startswith("BTCUSDT:ohlcv:") for key in memory_keys)
+
+    # 批量写入同样必须 fail-closed，不得回退内存
+    with pytest.raises(FeatureStoreStrictError):
+        await store.write_features_bulk(
+            "BTCUSDT",
+            "ohlcv",
+            "binance_spot_1m_BTCUSDT_2026-09_bbbbbbbbbbbb",
+            [(1_700_000_000_000, {"open": "1.0", "high": "2.0", "low": "0.5", "close": "1.5"})],
+        )
     assert not any(key.startswith("BTCUSDT:ohlcv:") for key in memory_keys)
 
 

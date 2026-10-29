@@ -62,6 +62,15 @@ describe('history dataset form binding', () => {
     expect(isDatasetEligible(dataset({ status: 'PENDING' }))).toBe(false)
   })
 
+  it('treats datasets with gaps as ineligible', () => {
+    expect(isDatasetEligible(dataset({ gap_count: 3 }))).toBe(false)
+  })
+
+  it('treats datasets whose row count does not match the expectation as ineligible', () => {
+    expect(isDatasetEligible(dataset({ row_count: 43199 }))).toBe(false)
+    expect(isDatasetEligible(dataset({ expected_points: 44640 }))).toBe(false)
+  })
+
   it('fills symbol, range, version and interval from the queried dataset', () => {
     const form = applyDatasetToLabForm(baseForm(), dataset())
 

@@ -1226,3 +1226,51 @@
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`docs/PROJECT_ARCHITECTURE.md`、
   `Frontend/frontend_docs/contract_endpoints.md`、`Frontend/frontend_docs/contract_models.md`、
   `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
+### 2026-10-29 19:05 - 历史归档通路第 1 轮审核修复（R1–R10）
+
+- 背景: 首次独立只读审核未发现 P0，但提出 1 个 P1 与若干 P2/P3 边界与测试缺口。
+  核心问题是「提交路径依赖远端可用性」与「批量写入并发冲突可被静默吞掉」。
+- 决策:
+  - **提交路径不做任何远程 HTTP**：归档是否存在由 worker 下载阶段判定（`ARCHIVE_NOT_FOUND` → 任务 FAILED），
+    POST 正常返回 202。这样 202 不会被远端 HEAD 阻塞（最长 60s），归档被官方修订 / 移除时也不会把
+    「已有可用数据集」的重复提交误判成 404。
+  - **重复提交复用既有任务行**：已发布数据集优先用其登记时的 `job_id` 关联任务，其次按 `dataset_id` 反查成功任务；
+    不再每次新建 SUCCEEDED 行。
+  - **批量写入必须可检测并发冲突**：`INSERT ... ON CONFLICT DO NOTHING RETURNING` + 写后回读 `value_hash` 比对，
+    绝不采用会覆盖旧值的 `DO UPDATE`；冲突整批回滚（无部分写入），计数真实。
+  - **不覆盖已发布版本的证据**：`commit()` 复用既有归档前校验 SHA-256，不同即抛错；CHECKSUM 原子写并可在崩溃窗口恢复。
+  - **官方 CHECKSUM 原文保留**：按预期 zip 文件名匹配解析（不取任意第一个 token），原文原样保存，
+    本地 `-vN` 文件名与官方名的差异记录在 quality / provenance，不伪造改写。
+- 改动:
+  - `trader/services/history_data_ingestion.py`: `submit_job` 去掉远程探测 + 复用关联任务；新增 `_find_associated_job`、
+    `get_dataset`；数据集 quality 记录 `official_file_name` / `local_archive_name`。
+  - `trader/adapters/persistence/history_dataset_store.py`: 新增 `find_succeeded_job_by_dataset`、`find_active_job`。
+  - `trader/api/routes/data_history.py`: 数据集详情改用 `get_dataset` 直查；移除提交阶段 404 映射。
+  - `trader/adapters/market_data/binance_vision.py`: 移除 `exists()` / `head_status`；
+    `parse_checksum` 按文件名匹配；`commit()` 校验 hash、原子写 CHECKSUM、崩溃窗口补写；保留官方原文。
+  - `trader/adapters/persistence/feature_store.py`: 重写 `write_features_bulk`（批内归并 + 单事务插入 + 回读校验）。
+  - `trader/services/backtesting/history_dataset_provider.py`: 删除无引用的 `utc_datetime`。
+  - `trader/services/backtesting/history_dataset_resolver.py`: provenance 增加官方 / 本地归档名。
+  - `Frontend/src/utils/historyDataset.ts`: `isDatasetEligible` 补 `gap_count` 与 `row_count/expected_points` 校验。
+  - 测试：新增 / 修正适配器（R5/R6/R7）、服务（R1/R4/R8）、API（R1/R2）、PG 并发与回滚（R3）用例。
+- 验证:
+  - `python -m pytest -q trader/tests/test_ohlcv_archive_domain.py trader/tests/test_binance_vision_archive.py trader/tests/test_history_data_ingestion.py trader/tests/test_backtest_dataset_resolution.py trader/tests/test_api_data_history.py --tb=short` -> 全部通过
+  - `python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short` -> 12 passed（真实 PostgreSQL 隔离库）
+  - `cd Frontend && npm run typecheck` -> passed；`npx vitest run` -> 90 passed
+  - `python -m isort --check-only --profile black trader/`、`python -m black --check --line-length 100 trader/`、
+    `python scripts/check_core_no_io.py` -> 全部通过
+- 风险/遗留:
+  - 本轮不修复既有全量测试中的 32 failures + 1 error（`client_order_id -> cl_ord_id` 命名收口遗留，与基线一致）。
+  - 单实例单并发 worker 的约束不变；并发批量写的正确性已在持久化层用事务 + 回读校验兜底。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`Frontend/frontend_docs/contract_endpoints.md`、
+  `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-29 - 历史数据修复最终复核与验收
+
+- DeepSeek 对第 1 轮未提交修复完成独立只读复核，R1-R10 全部闭合，无 P0/P1/P2 遗留；N2 经 PG 部分唯一索引实证撤回。保留 N1/P3 未使用 find_active_job 建议。
+- 实现者受 Token Plan 429 阻塞后，由主代理完成交付收尾，不替换指定实现模型。
+- 主代理独立运行 P0 五文件集和前端 npm run build：均 exit 0；还原构建生成的两个 tsbuildinfo。
+- 主代理独立重跑真实 BTC/ETH 2026-09 下载与回测：PASS；隔离库 qts_history_e2e_review_final，两币各 43,200 条、无缺口，均 COMPLETED；新服务实例回读两任务成功和完整行情。
+- 详细审核问题、修复、实际验证、数据集/run_id、hash 和限制见 docs/reviews/BINANCE_SPOT_HISTORY_REVIEW.md。
+- 全量 Python 既有失败仅按实现者报告保留，未将其标为主代理独立验证通过。

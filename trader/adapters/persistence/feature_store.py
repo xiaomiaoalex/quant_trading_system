@@ -49,6 +49,10 @@ class FeatureStoreStrictError(RuntimeError):
     pass
 
 
+# 单条 INSERT 语句的最大行数（asyncpg 参数上限 65535，每行 7 个参数）
+_BULK_INSERT_CHUNK_SIZE = 500
+
+
 @dataclass
 class FeatureRecord:
     """Feature record representation"""
@@ -322,6 +326,9 @@ class FeatureStore:
         语义与 write_feature 一致：
         - 同 key 同 value 幂等（计为 duplicate）
         - 同 key 不同 value 抛 FeatureVersionConflictError
+        - 批内同 ts 同值折叠为一行；批内同 ts 异值直接抛冲突
+        - 绝不覆盖已有值；检测到冲突时整批回滚（无部分写入）
+        - created / duplicates 为真实计数（来自 INSERT ... RETURNING）
 
         Args:
             rows: (ts_ms, value) 序列
@@ -367,63 +374,112 @@ class FeatureStore:
         rows: Sequence[Tuple[int, Any]],
         meta: Dict[str, Any],
     ) -> Tuple[int, int]:
-        """批量写入 PostgreSQL（先查冲突，再批量插入）。"""
-        timestamps = [int(ts_ms) for ts_ms, _ in rows]
+        """
+        批量写入 PostgreSQL。
+
+        关键语义（Fail-Closed，不静默吞掉冲突）：
+        1. 批内先归并：同 ts 同值折叠为一行（计 duplicate），同 ts 异值直接抛冲突
+        2. 整批在**单个事务**内写入：``INSERT ... ON CONFLICT DO NOTHING RETURNING ts_ms``
+           —— DO NOTHING 永不覆盖已有值；并发写入会阻塞在唯一索引上，
+           对方提交后本批的 INSERT 才继续，随后校验阶段即可发现异值冲突
+        3. 写完立刻回读本批全部 ts 的 ``value_hash`` 与期望值比对：
+           不一致即抛 FeatureVersionConflictError，事务回滚 → **无部分发布**
+        4. created / duplicates 计数来自 INSERT ... RETURNING 与批内归并的真实结果
+        """
+        # 1) 批内归并与冲突检测
+        unique: Dict[int, Any] = {}
+        expected_hashes: Dict[int, str] = {}
+        intra_batch_duplicates = 0
+        for ts_ms, value in rows:
+            key = int(ts_ms)
+            value_hash = self._make_value_hash(value)
+            if key in unique:
+                if expected_hashes[key] == value_hash:
+                    intra_batch_duplicates += 1
+                    continue
+                raise FeatureVersionConflictError(
+                    f"Feature version conflict inside batch for "
+                    f"{self._make_key(symbol, feature_name, version, key)}: "
+                    f"existing value hash {expected_hashes[key]} != new value hash {value_hash}"
+                )
+            unique[key] = value
+            expected_hashes[key] = value_hash
+
+        if not unique:
+            return 0, intra_batch_duplicates
+
+        timestamps = list(unique.keys())
         meta_json = json.dumps(meta)
 
         async with self._postgres_storage._pool.acquire() as conn:
-            existing_rows = await conn.fetch(
-                """
-                SELECT ts_ms, value_hash FROM feature_values
-                WHERE symbol = $1 AND feature_name = $2 AND version = $3
-                  AND ts_ms = ANY($4::bigint[])
-                """,
-                symbol,
-                feature_name,
-                version,
-                timestamps,
-            )
-            existing_hashes = {int(row["ts_ms"]): row["value_hash"] for row in existing_rows}
-
-            payloads: List[Tuple[Any, ...]] = []
-            duplicates = 0
-            for ts_ms, value in rows:
-                key = int(ts_ms)
-                value_hash = self._make_value_hash(value)
-                current = existing_hashes.get(key)
-                if current is not None:
-                    if current == value_hash:
-                        duplicates += 1
-                        continue
-                    raise FeatureVersionConflictError(
-                        f"Feature version conflict for {self._make_key(symbol, feature_name, version, key)}: "
-                        f"existing value hash {current} != new value hash {value_hash}"
+            async with conn.transaction():
+                created_timestamps: List[int] = []
+                for chunk_start in range(0, len(timestamps), _BULK_INSERT_CHUNK_SIZE):
+                    chunk = timestamps[chunk_start : chunk_start + _BULK_INSERT_CHUNK_SIZE]
+                    placeholders: List[str] = []
+                    params: List[Any] = []
+                    for index, ts_ms in enumerate(chunk):
+                        base = index * 7
+                        placeholders.append(
+                            f"(${base + 1},${base + 2},${base + 3},${base + 4},"
+                            f"${base + 5},${base + 6},${base + 7})"
+                        )
+                        params.extend(
+                            [
+                                symbol,
+                                feature_name,
+                                version,
+                                ts_ms,
+                                json.dumps(unique[ts_ms]),
+                                meta_json,
+                                expected_hashes[ts_ms],
+                            ]
+                        )
+                    inserted = await conn.fetch(
+                        """
+                        INSERT INTO feature_values (
+                            symbol, feature_name, version, ts_ms, value, meta, value_hash
+                        )
+                        VALUES {values}
+                        ON CONFLICT (symbol, feature_name, version, ts_ms) DO NOTHING
+                        RETURNING ts_ms
+                        """.format(
+                            values=", ".join(placeholders)
+                        ),
+                        *params,
                     )
-                payloads.append(
-                    (
-                        symbol,
-                        feature_name,
-                        version,
-                        key,
-                        json.dumps(value),
-                        meta_json,
-                        value_hash,
-                    )
-                )
+                    created_timestamps.extend(int(row["ts_ms"]) for row in inserted)
 
-            if payloads:
-                await conn.executemany(
+                # 3) 回读真实 value_hash，检测并发写入造成的异值冲突
+                actual_rows = await conn.fetch(
                     """
-                    INSERT INTO feature_values (
-                        symbol, feature_name, version, ts_ms, value, meta, value_hash
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (symbol, feature_name, version, ts_ms) DO NOTHING
+                    SELECT ts_ms, value_hash FROM feature_values
+                    WHERE symbol = $1 AND feature_name = $2 AND version = $3
+                      AND ts_ms = ANY($4::bigint[])
                     """,
-                    payloads,
+                    symbol,
+                    feature_name,
+                    version,
+                    timestamps,
                 )
+                actual_hashes = {int(row["ts_ms"]): row["value_hash"] for row in actual_rows}
+                for ts_ms, expected_hash in expected_hashes.items():
+                    actual_hash = actual_hashes.get(ts_ms)
+                    if actual_hash is None:
+                        raise FeatureStoreStrictError(
+                            f"Feature row disappeared during bulk write: "
+                            f"{self._make_key(symbol, feature_name, version, ts_ms)}"
+                        )
+                    if actual_hash != expected_hash:
+                        raise FeatureVersionConflictError(
+                            f"Feature version conflict for "
+                            f"{self._make_key(symbol, feature_name, version, ts_ms)}: "
+                            f"existing value hash {actual_hash} != new value hash {expected_hash}"
+                        )
 
-        return len(payloads), duplicates
+        created = len(created_timestamps)
+        duplicates = intra_batch_duplicates + (len(unique) - created)
+        return created, duplicates
 
     async def read_feature(
         self,

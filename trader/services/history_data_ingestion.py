@@ -104,13 +104,6 @@ class HistoryStoreNotReadyError(RuntimeError):
     """PostgreSQL 不可用，无法创建历史任务。"""
 
 
-class HistoryArchiveNotFoundError(HistoryIngestionError):
-    """归档不存在（对应 404 类错误）。"""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(ERROR_ARCHIVE_NOT_FOUND, reason)
-
-
 # ==================== store accessor ====================
 
 _store_lock: Optional[asyncio.Lock] = None
@@ -269,8 +262,13 @@ class HistoryIngestionService:
         """
         提交导入任务。
 
-        - 已有可用数据集：直接返回关联的成功任务 / 数据集
-        - 已有活动任务：复用该任务
+        决策：**提交路径不做任何远程 HTTP**。
+        - 远程归档是否存在由 worker 在下载阶段判定（缺失 → 任务 FAILED，error_code=ARCHIVE_NOT_FOUND）。
+        - 因此提交不会被远端 HEAD 阻塞，也不会因归档被官方修订 / 移除而误报 404。
+
+        复用规则（完全走数据库）：
+        - 已有可用数据集：返回**关联的成功任务**（不新建任务行、不重复下载）
+        - 已有活动任务：复用该任务（数据库唯一约束保证并发正确）
         - 否则创建 QUEUED 任务
         """
         self.validate_request(symbol, month)
@@ -280,22 +278,14 @@ class HistoryIngestionService:
 
         store = await self._get_store()
 
-        # 归档不存在时给出明确的 404 类错误（网络异常不阻断，交给任务阶段报错）
-        ref = build_archive_ref(normalized_symbol, ARCHIVE_SUPPORTED_INTERVAL, normalized_month)
-        client = self._get_archive_client()
-        try:
-            archive_exists = await client.exists(ref)
-        except ArchiveError:
-            archive_exists = True
-        if not archive_exists:
-            raise HistoryArchiveNotFoundError(
-                f"No archive published for {normalized_symbol} {normalized_month}: {ref.zip_url}"
-            )
-
-        # 已有可用数据集：直接返回关联的成功任务 / 数据集（不重复下载）
+        # 1) 已有可用数据集：返回关联的成功任务（不触碰远程）
         available = await self._find_available_dataset(store, normalized_symbol, normalized_month)
         if available is not None:
-            job = await store.create_job(
+            job = await self._find_associated_job(store, available)
+            if job is not None:
+                return job
+            # 关联任务缺失（例如历史遗留的数据集）：补一条并复用
+            return await store.create_job(
                 job_id=_new_job_id(),
                 source=ARCHIVE_SOURCE_NAME,
                 market=ARCHIVE_SUPPORTED_MARKET,
@@ -308,7 +298,6 @@ class HistoryIngestionService:
                 dataset_id=available["dataset_id"],
                 feature_version=available["feature_version"],
             )
-            return job
 
         return await store.create_job(
             job_id=_new_job_id(),
@@ -321,6 +310,24 @@ class HistoryIngestionService:
             status=JOB_STATUS_QUEUED,
             stage=STAGE_QUEUED,
         )
+
+    async def _find_associated_job(
+        self,
+        store: HistoryDatasetStore,
+        dataset: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        查找数据集关联的成功任务。
+
+        优先使用数据集登记时的 job_id（精确关联），否则按 dataset_id 反查成功任务。
+        找不到时返回 None（由调用方决定是否补建）。
+        """
+        job_id = dataset.get("job_id")
+        if job_id:
+            job = await store.get_job(str(job_id))
+            if job is not None and job.get("status") == JOB_STATUS_SUCCEEDED:
+                return job
+        return await store.find_succeeded_job_by_dataset(str(dataset["dataset_id"]))
 
     async def _find_available_dataset(
         self,
@@ -371,6 +378,11 @@ class HistoryIngestionService:
                 f"Job {job_id} could not be requeued",
             )
         return requeued
+
+    async def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+        """按 dataset_id 直接查询数据集（不做列表扫描）。"""
+        store = await self._get_store()
+        return await store.get_dataset(dataset_id)
 
     async def list_datasets(
         self,
@@ -478,7 +490,8 @@ class HistoryIngestionService:
             archive_sha256=downloaded.sha256,
         )
         if existing is not None and existing["status"] == "PUBLISHED":
-            # 同 hash 已有可用数据集：复用，不重复导入
+            # 同 hash 已有可用数据集：复用，不重复导入（丢弃临时文件）
+            client.discard(downloaded)
             await store.update_job(
                 job_id,
                 stage=STAGE_PUBLISH,
@@ -500,11 +513,8 @@ class HistoryIngestionService:
             return published["job"]
 
         if existing is not None:
-            # 已有同 hash 的未发布数据集：沿用它的版本与归档路径（不新建版本）
+            # 已有同 hash 的未发布数据集：沿用它的版本（不新建版本）
             version = int(existing["version"])
-            archive_path = str(existing["archive_path"])
-            if not os.path.exists(archive_path):
-                archive_path = client.commit(downloaded, version)
         else:
             version = await store.next_version(
                 source=ARCHIVE_SOURCE_NAME,
@@ -513,7 +523,12 @@ class HistoryIngestionService:
                 interval=interval,
                 month=month,
             )
+        try:
+            # commit() 会校验目标文件 hash：一致则复用（并补写缺失的 CHECKSUM），
+            # 不一致则抛错 —— 绝不覆盖已发布版本的证据。
             archive_path = client.commit(downloaded, version)
+        except ArchiveChecksumMismatch as exc:
+            raise HistoryIngestionError(ERROR_CHECKSUM_MISMATCH, str(exc)) from exc
 
         # ---- IMPORT ----
         await store.update_job(job_id, stage=STAGE_IMPORT)
@@ -527,6 +542,15 @@ class HistoryIngestionService:
 
         feature_version = build_feature_version(symbol, month, downloaded.sha256)
         dataset_id = str(existing["dataset_id"]) if existing is not None else _new_dataset_id()
+
+        # 质量信息里记录官方文件名与本地版本化文件名（本地名带 -vN，官方名不带）
+        quality = {
+            **coverage.to_dict(),
+            "official_file_name": downloaded.official_file_name,
+            "local_archive_name": os.path.basename(archive_path),
+            "archive_sha256": downloaded.sha256,
+            "official_sha256": downloaded.official_sha256,
+        }
 
         if existing is None:
             await store.insert_dataset(
@@ -548,7 +572,7 @@ class HistoryIngestionService:
                 gap_count=coverage.gap_count,
                 first_ts_ms=coverage.first_ts_ms,
                 last_ts_ms=coverage.last_ts_ms,
-                quality=coverage.to_dict(),
+                quality=quality,
                 status=DATASET_STATUS_PENDING,
                 persistence_ok=False,
                 backtest_eligible=False,
@@ -594,7 +618,7 @@ class HistoryIngestionService:
             gap_count=coverage.gap_count,
             first_ts_ms=coverage.first_ts_ms,
             last_ts_ms=coverage.last_ts_ms,
-            quality=coverage.to_dict(),
+            quality=quality,
         )
         return published["job"]
 

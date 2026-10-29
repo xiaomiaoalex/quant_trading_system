@@ -174,8 +174,11 @@ interface HistoryJobCreateRequest {
 }
 ```
 
-错误语义：400 请求非法（不支持的 symbol / 非法月份 / 月份未结束）· 404 归档不存在 ·
-409 状态冲突（重试非 FAILED 任务）· 503 PostgreSQL 不可用（不创建假任务）。
+错误语义：400 请求非法（不支持的 symbol / 非法月份 / 月份未结束）· 409 状态冲突（重试非 FAILED 任务）·
+503 PostgreSQL 不可用（不创建假任务）。
+
+归档是否存在**不在提交阶段判定**（提交路径不做任何远程 HTTP）：提交正常返回 202，
+任务在 worker 下载阶段判定，缺失时任务 `FAILED` 且 `error_code=ARCHIVE_NOT_FOUND`。
 
 前端轮询约定：存在 `QUEUED` / `RUNNING` 任务时每 2 秒轮询一次，全部进入终态后停止轮询；
 出现 `SUCCEEDED` 任务时刷新数据集缓存。

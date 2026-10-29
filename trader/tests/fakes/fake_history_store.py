@@ -123,6 +123,30 @@ class FakeHistoryDatasetStore:
         queued.sort(key=lambda item: item["created_at"])
         return [dict(job) for job in queued[:limit]]
 
+    async def find_succeeded_job_by_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+        for job in self.jobs.values():
+            if job.get("dataset_id") == dataset_id and job["status"] == "SUCCEEDED":
+                return dict(job)
+        return None
+
+    async def find_active_job(self, **fields: Any) -> Optional[Dict[str, Any]]:
+        for job in self.jobs.values():
+            if job["status"] not in ("QUEUED", "RUNNING"):
+                continue
+            if (
+                job["source"],
+                job["symbol"],
+                job["interval"],
+                job["month"],
+            ) == (
+                fields["source"],
+                fields["symbol"],
+                fields["interval"],
+                fields["month"],
+            ):
+                return dict(job)
+        return None
+
     async def claim_job(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)
         if job is None or job["status"] != "QUEUED":
@@ -383,21 +407,23 @@ class FakeArchiveClient:
         self,
         zip_bytes: Optional[bytes] = None,
         bars: Optional[List[KlineBar]] = None,
-        exists: bool = True,
         download_error: Optional[Exception] = None,
         root: Optional[str] = None,
     ) -> None:
         self.zip_bytes = zip_bytes or b""
         self.bars = bars or []
-        self._exists = exists
         self._download_error = download_error
         self._root = root or tempfile.mkdtemp(prefix="fake-archive-")
         self.committed: List[str] = []
+        self.download_calls = 0
+        """下载调用次数（用于断言提交路径不做任何远程调用）。"""
 
-    async def exists(self, ref: Any) -> bool:
-        return self._exists
+    def set_payload(self, zip_bytes: bytes) -> None:
+        """替换归档内容（模拟官方修订归档 → hash 变化）。"""
+        self.zip_bytes = zip_bytes
 
     async def download(self, ref: Any) -> DownloadedArchive:
+        self.download_calls += 1
         if self._download_error is not None:
             raise self._download_error
         digest = hashlib.sha256(self.zip_bytes).hexdigest()
@@ -411,6 +437,8 @@ class FakeArchiveClient:
             size_bytes=len(self.zip_bytes),
             sha256=digest,
             official_sha256=digest,
+            official_checksum_text=f"{digest}  {ref.file_stem}.zip\n",
+            official_file_name=f"{ref.file_stem}.zip",
         )
 
     def commit(self, downloaded: DownloadedArchive, version: int) -> str:
@@ -421,6 +449,11 @@ class FakeArchiveClient:
         os.replace(downloaded.temp_path, target)
         self.committed.append(target)
         return target
+
+    def discard(self, downloaded: DownloadedArchive) -> None:
+        """丢弃未提交的临时文件（复用已有数据集时调用）。"""
+        if os.path.exists(downloaded.temp_path):
+            os.remove(downloaded.temp_path)
 
     def read_klines(self, archive_path: str, ref: Any) -> List[KlineBar]:
         return list(self.bars)

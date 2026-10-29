@@ -2411,7 +2411,10 @@ async def list_executions_for_projection(
 | 月份格式 | `YYYY-MM` | 必须是**已结束**的完整自然月 |
 
 - `source` / `market` / `interval` 省略时取默认值；显式提交与默认值冲突的请求必须被拒绝（HTTP 422）。
-- 归档不存在时必须返回 404 类错误（`POST /v1/data/history/jobs`）或任务级错误码 `ARCHIVE_NOT_FOUND`。
+- 归档不存在时，**提交路径不做任何远程探测**：请求正常返回 202（任务 QUEUED），
+  由 worker 在下载阶段判定并把任务标记为 `FAILED`，错误码 `ARCHIVE_NOT_FOUND`。
+  理由：提交路径一旦依赖远端 HEAD，就会被远端超时（最长 60s）阻塞，
+  且归档被官方修订 / 移除时会把「已有可用数据集」的重复提交误判成 404。
 - 时间戳：2025-01-01 起币安现货归档为微秒，之前为毫秒；系统按量级自动识别并统一为 UTC 毫秒整数。
 
 ### 12.2 历史任务接口
@@ -2466,13 +2469,21 @@ async def list_executions_for_projection(
 状态机与并发语义：
 
 - 生命周期固定为 `QUEUED → RUNNING → SUCCEEDED | FAILED`，阶段至少包含下载 / 校验 / 导入。
+- **提交路径不做任何远程 HTTP**：只做输入校验（400）与数据库查询；PG 不可用返回 503 且不创建任务。
 - 任务领取是 PostgreSQL 原子操作（`UPDATE ... WHERE status='QUEUED' RETURNING`），单后端实例、单并发 worker。
 - 同一 `(source, symbol, interval, month)` 同时只允许一个活动任务，由数据库部分唯一索引保证；重复提交复用同一任务。
-- 已存在**可用**数据集时，重复提交直接返回关联的成功任务与数据集，不重复下载；此时该任务的 `bytes_downloaded` / `rows_processed` 为 0（本次任务没有下载或写入任何行），真实行数以关联数据集的 `row_count` 为准。
+- 已存在**可用**数据集时，重复提交返回**数据集关联的既有成功任务**（优先用数据集登记时的 `job_id`，
+  其次按 `dataset_id` 反查成功任务），**不新建任务行、不重复下载、不触发任何远程调用**。
+  仅当数据集没有关联任务行（历史遗留）时才补建一条并复用。
+  该复用任务的 `bytes_downloaded` / `rows_processed` 为 0（本次任务没有下载或写入任何行），
+  真实行数以关联数据集的 `row_count` 为准。
 - 服务启动时先把残留 `RUNNING` 任务标记为 `FAILED`（`SERVICE_INTERRUPTED`），再执行 `QUEUED` 任务；不做分布式队列，也不做自动断点续传。
 - PostgreSQL 不可用时返回 HTTP 503，**不得**创建假任务。
 
 ### 12.3 历史数据集接口
+
+`GET /v1/data/history/datasets/{dataset_id}` **按 id 直接查询**（`store.get_dataset`），
+不得用列表扫描（数据集数量超过列表上限时旧记录会 404）。
 
 `HistoryDatasetResponse` 字段：
 
@@ -2487,7 +2498,7 @@ async def list_executions_for_projection(
 | `source_url` / `checksum_url` | str | 来源 URL（追溯证据） |
 | `row_count` / `expected_points` / `gap_count` | int | 覆盖与质量统计 |
 | `first_ts_ms` / `last_ts_ms` | int \| null | UTC 毫秒边界 |
-| `quality` | object | 覆盖度详情（`complete` 等） |
+| `quality` | object | 覆盖度详情（`complete`、`official_file_name`、`local_archive_name` 等） |
 | `status` | `PENDING` \| `PUBLISHED` \| `FAILED` | 发布状态 |
 | `persistence_ok` | bool | FeatureStore 严格持久化是否成功 |
 | `backtest_eligible` | bool | 是否可用于回测 |
@@ -2538,6 +2549,7 @@ async def list_executions_for_projection(
 
 - `data_provenance`: `dataset_id`、`source`、`market`、`symbol`、`interval`、`month`、`version`、
   `feature_version`、`source_url`、`official_sha256`、`archive_sha256`、`archive_path`、
+  `official_file_name`、`local_archive_name`、
   `start_ts_ms`、`end_ts_ms`、`row_count`、`expected_points`、`gap_count`、`quality`
 - `cost_model`: `fee_bps`、`slippage_bps`、`assumption`（固定比例费率 + 固定比例滑点，
   不含 maker/taker 分档、不含盘口深度模型）
@@ -2558,3 +2570,25 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 
 - PostgreSQL 不可用、写入失败、读取失败一律抛 `FeatureStoreStrictError`，**不回退**内存存储。
 - 新导入通路与新数据集回测读取均使用严格模式；旧的开发模式（默认 `strict=False`）行为不变。
+
+批量写入（`write_features_bulk`）语义：
+
+- 批内先归并：同 ts 同值折叠为一行（计 duplicate）；同 ts 异值**直接抛** `FeatureVersionConflictError`。
+- 整批在**单个事务**内写入：`INSERT ... ON CONFLICT DO NOTHING RETURNING ts_ms`
+  —— 永不覆盖已有值；并发写入同一 key 时会阻塞在唯一索引上，对方提交后才能继续。
+- 写完立即回读本批全部 ts 的 `value_hash` 与期望值比对：不一致即抛 `FeatureVersionConflictError`，
+  事务回滚 → **无部分写入**（不会出现「一半新行 + 一半冲突」的中间态）。
+- `created` / `duplicates` 为真实计数（来自 `RETURNING` 与批内归并结果），不做估算。
+
+### 12.8 归档文件与校验和
+
+- 归档文件按版本存放：`<MARKET_DATA_ROOT>/binance/spot/raw/klines/<symbol>/1m/<symbol>-1m-<month>-v<version>.zip`，
+  旧版本文件**永不覆盖、不删除**（官方修订归档 → 新版本）。
+- 官方 `.CHECKSUM` 按**预期文件名**匹配解析（不取任意第一个 token），多行 / 错文件名都能正确识别；
+  官方 CHECKSUM **原文**原样保存到同名 `.CHECKSUM` 侧车文件（不改写、不伪造）。
+- 本地版本化文件名（带 `-v<version>`）与官方文件名（不带）不同，该差异记录在数据集
+  `quality.official_file_name` / `quality.local_archive_name` 以及回测报告的 `data_provenance` 中。
+- 提交归档时若目标文件已存在：
+  - SHA-256 一致 → 复用该文件，并补写缺失的 `.CHECKSUM`（崩溃窗口恢复）；
+  - SHA-256 不一致 → 抛 `ArchiveChecksumMismatch`，**绝不覆盖**已有版本的证据。
+- `.CHECKSUM` 侧车文件用「临时文件 + 原子 replace」写入，避免出现半成品文件。

@@ -36,7 +36,6 @@ from trader.api.models.schemas import (
 )
 from trader.core.domain.services.ohlcv_archive import OhlcvRequestError
 from trader.services.history_data_ingestion import (
-    HistoryArchiveNotFoundError,
     HistoryIngestionError,
     HistoryIngestionService,
     HistoryJobWorker,
@@ -168,8 +167,6 @@ async def create_history_job(request: HistoryJobCreateRequest):
             month=request.month,
             requested_by=request.requested_by,
         )
-    except HistoryArchiveNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.reason) from exc
     except OhlcvRequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HistoryStoreUnavailableError as exc:
@@ -258,15 +255,14 @@ async def list_history_datasets(
 
 @router.get("/v1/data/history/datasets/{dataset_id}", response_model=HistoryDatasetResponse)
 async def get_history_dataset(dataset_id: str = Path(...)):
-    """查询单个历史数据集。"""
+    """查询单个历史数据集（按 id 直接查询，不做列表扫描）。"""
     service = HistoryIngestionService()
     try:
-        datasets = await service.list_datasets(limit=500)
+        row = await service.get_dataset(dataset_id)
     except HistoryStoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=f"History store unavailable: {exc}") from exc
     except HistoryStoreError as exc:
         raise HTTPException(status_code=503, detail=f"History store error: {exc}") from exc
-    for row in datasets:
-        if str(row["dataset_id"]) == dataset_id:
-            return _dataset_payload(row)
-    raise HTTPException(status_code=404, detail=f"History dataset {dataset_id} not found")
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"History dataset {dataset_id} not found")
+    return _dataset_payload(row)

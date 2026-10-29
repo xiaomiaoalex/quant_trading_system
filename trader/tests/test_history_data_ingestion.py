@@ -8,6 +8,7 @@ History Data Ingestion Service Tests
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -30,7 +31,6 @@ from trader.services.history_data_ingestion import (
     ERROR_NETWORK,
     ERROR_PERSISTENCE,
     ERROR_QUALITY,
-    HistoryArchiveNotFoundError,
     HistoryIngestionError,
     HistoryIngestionService,
 )
@@ -72,7 +72,7 @@ def _service(
     feature_store=None,
     archive_client=None,
     store=None,
-) -> tuple[HistoryIngestionService, FakeHistoryDatasetStore, FakeFeatureStore]:
+):
     feature_store = feature_store or FakeFeatureStore()
     store = store or FakeHistoryDatasetStore(feature_store=feature_store)
     archive_client = archive_client or FakeArchiveClient(
@@ -84,11 +84,11 @@ def _service(
         archive_client=archive_client,
         feature_store=feature_store,
     )
-    return service, store, feature_store
+    return service, store, feature_store, archive_client
 
 
 async def test_submit_job_creates_queued_job():
-    service, store, _ = _service()
+    service, store, _, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     assert job["status"] == "QUEUED"
     assert job["symbol"] == "BTCUSDT"
@@ -99,27 +99,40 @@ async def test_submit_job_creates_queued_job():
 
 
 async def test_submit_job_rejects_unsupported_symbol():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     with pytest.raises(OhlcvRequestError):
         await service.submit_job(symbol="SOLUSDT", month=FULL_MONTH)
 
 
 async def test_submit_job_rejects_month_that_has_not_ended():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     now = datetime(2026, 9, 15, tzinfo=timezone.utc)
     with pytest.raises(OhlcvRequestError):
         service.validate_request("BTCUSDT", "2026-09", now=now)
 
 
 async def test_submit_job_reuses_active_job():
-    service, _, _ = _service()
+    service, _, _, archive_client = _service()
     first = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     second = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     assert first["job_id"] == second["job_id"]
+    # 提交路径不做任何远程调用
+    assert archive_client.download_calls == 0
 
 
-async def test_submit_job_returns_succeeded_job_when_dataset_published():
-    service, store, _ = _service()
+async def test_submit_job_reuses_active_job_without_touching_remote():
+    archive_client = FakeArchiveClient(download_error=ArchiveDownloadError("network down"))
+    service, _, _, _ = _service(archive_client=archive_client)
+    first = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+    second = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
+    assert first["job_id"] == second["job_id"]
+    assert second["status"] == "QUEUED"
+    assert archive_client.download_calls == 0
+
+
+async def test_submit_job_returns_associated_job_when_dataset_published():
+    service, store, _, archive_client = _service()
     await store.insert_dataset(
         dataset_id="hds_existing",
         source="binance_vision",
@@ -138,21 +151,64 @@ async def test_submit_job_returns_succeeded_job_when_dataset_published():
         backtest_eligible=True,
         row_count=43200,
         expected_points=43200,
+        job_id="hjob_owner",
     )
+    await store.create_job(
+        job_id="hjob_owner",
+        source="binance_vision",
+        market="spot",
+        symbol="BTCUSDT",
+        interval="1m",
+        month=FULL_MONTH,
+        status="SUCCEEDED",
+        stage="PUBLISHED",
+        dataset_id="hds_existing",
+        feature_version="binance_spot_1m_BTCUSDT_2026-09_aaaaaaaaaaaa",
+    )
+
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
     assert job["status"] == "SUCCEEDED"
     assert job["dataset_id"] == "hds_existing"
+    # 复用关联的既有任务，不新建任务行
+    assert job["job_id"] == "hjob_owner"
+    assert len(store.jobs) == 1
+    # 完全走数据库，不触发任何远程调用
+    assert archive_client.download_calls == 0
 
 
-async def test_submit_job_reports_missing_archive():
-    archive_client = FakeArchiveClient(exists=False)
-    service, _, _ = _service(archive_client=archive_client)
-    with pytest.raises(HistoryArchiveNotFoundError):
-        await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+async def test_submit_job_succeeds_when_remote_archive_is_gone():
+    """归档被官方移除 / 修订后，重复提交仍返回关联的成功任务（不做远程探测）。"""
+    service, store, _, archive_client = _service()
+    job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+    result = await service.run_job(job["job_id"])
+    assert result["status"] == "SUCCEEDED"
+
+    # 归档随后消失（worker 下载阶段才会感知）
+    archive_client.set_payload(b"revised-bytes")
+    before = len(store.jobs)
+
+    reused = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
+    assert reused["status"] == "SUCCEEDED"
+    assert reused["job_id"] == job["job_id"]
+    assert reused["dataset_id"] == result["dataset_id"]
+    assert len(store.jobs) == before
+    assert archive_client.download_calls == 1  # 只有首次真正导入时下载过
+
+
+async def test_submit_job_never_probes_remote_for_new_job():
+    archive_client = FakeArchiveClient(download_error=ArchiveDownloadError("network down"))
+    service, _, _, _ = _service(archive_client=archive_client)
+
+    job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
+    assert job["status"] == "QUEUED"
+    assert archive_client.download_calls == 0
 
 
 async def test_run_job_publishes_dataset_and_marks_job_succeeded():
-    service, store, feature_store = _service()
+    service, store, feature_store, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -171,37 +227,72 @@ async def test_run_job_publishes_dataset_and_marks_job_succeeded():
 
 
 async def test_run_job_reuses_dataset_for_same_hash():
-    service, store, _ = _service()
+    """同一 symbol/month 且归档 hash 不变 → 复用同一个数据集，版本号不增加。"""
+    service, store, _, archive_client = _service()
     first = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await service.run_job(first["job_id"])
+    v1 = list(store.datasets.values())[0]
 
-    second = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+    # 再次导入同一份归档（hash 不变）
+    second = await store.create_job(
+        job_id="hjob_same_hash",
+        source="binance_vision",
+        market="spot",
+        symbol="BTCUSDT",
+        interval="1m",
+        month=FULL_MONTH,
+    )
     result = await service.run_job(second["job_id"])
 
     assert result["status"] == "SUCCEEDED"
     assert len(store.datasets) == 1
+    assert list(store.datasets.values())[0]["version"] == v1["version"] == 1
+    assert archive_client.download_calls == 2  # 两次导入都重新下载并校验了 hash
 
 
 async def test_run_job_creates_new_version_when_hash_changes():
-    service, store, _ = _service()
+    """同一 symbol/month 但官方修订归档（hash 变化）→ 新版本 2，旧版本与旧文件保留。"""
+    service, store, _, archive_client = _service()
     first = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await service.run_job(first["job_id"])
+    v1 = list(store.datasets.values())[0]
+    v1_archive_path = v1["archive_path"]
+    assert v1["version"] == 1
+    assert os.path.exists(v1_archive_path)
 
-    service._archive_client = FakeArchiveClient(zip_bytes=b"different", bars=_full_month_bars())
-    second = await service.submit_job(symbol="ETHUSDT", month=FULL_MONTH)
+    # 官方修订归档 → hash 变化
+    archive_client.set_payload(b"revised-archive-bytes")
+    second = await store.create_job(
+        job_id="hjob_revised",
+        source="binance_vision",
+        market="spot",
+        symbol="BTCUSDT",
+        interval="1m",
+        month=FULL_MONTH,
+    )
     result = await service.run_job(second["job_id"])
 
     assert result["status"] == "SUCCEEDED"
     assert len(store.datasets) == 2
     versions = sorted(int(item["version"]) for item in store.datasets.values())
-    assert versions == [1, 1]
+    assert versions == [1, 2]
+
+    v1_after = store.datasets[v1["dataset_id"]]
+    v2 = store.datasets[result["dataset_id"]]
+    assert v1_after["version"] == 1
+    assert v1_after["status"] == "PUBLISHED"
+    assert v1_after["feature_version"] != v2["feature_version"]
+    # 旧版本文件仍在（不被覆盖 / 不被删除）
+    assert os.path.exists(v1_archive_path)
+    assert v2["archive_path"] != v1_archive_path
+    assert os.path.exists(v2["archive_path"])
 
 
 async def test_run_job_fails_with_archive_not_found_error_code():
     archive_client = FakeArchiveClient(
         download_error=ArchiveNotFoundError("missing"),
     )
-    service, _, _ = _service(archive_client=archive_client)
+    service, _, _, _ = _service(archive_client=archive_client)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -212,7 +303,7 @@ async def test_run_job_fails_with_archive_not_found_error_code():
 
 async def test_run_job_fails_with_network_error_code():
     archive_client = FakeArchiveClient(download_error=ArchiveDownloadError("timeout"))
-    service, _, _ = _service(archive_client=archive_client)
+    service, _, _, _ = _service(archive_client=archive_client)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -225,7 +316,7 @@ async def test_run_job_fails_with_checksum_error_code():
     archive_client = FakeArchiveClient(
         download_error=ArchiveChecksumMismatch("bad hash"),
     )
-    service, _, _ = _service(archive_client=archive_client)
+    service, _, _, _ = _service(archive_client=archive_client)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -235,7 +326,7 @@ async def test_run_job_fails_with_checksum_error_code():
 
 
 async def test_run_job_fails_with_quality_error_code_on_gap():
-    service, _, _ = _service(bars=_full_month_bars(skip=10))
+    service, _, _, _ = _service(bars=_full_month_bars(skip=10))
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -246,7 +337,7 @@ async def test_run_job_fails_with_quality_error_code_on_gap():
 
 async def test_run_job_fails_with_persistence_error_code():
     feature_store = FakeFeatureStore(fail=True)
-    service, store, _ = _service(feature_store=feature_store)
+    service, store, _, _ = _service(feature_store=feature_store)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     result = await service.run_job(job["job_id"])
@@ -258,7 +349,7 @@ async def test_run_job_fails_with_persistence_error_code():
 
 async def test_retry_after_persistence_failure_reuses_same_dataset_version():
     feature_store = FakeFeatureStore(fail=True)
-    service, store, _ = _service(feature_store=feature_store)
+    service, store, _, _ = _service(feature_store=feature_store)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await service.run_job(job["job_id"])
     assert len(store.datasets) == 1
@@ -283,7 +374,7 @@ async def test_retry_after_persistence_failure_reuses_same_dataset_version():
 
 async def test_retry_job_requeues_failed_job():
     archive_client = FakeArchiveClient(download_error=ArchiveDownloadError("timeout"))
-    service, _, _ = _service(archive_client=archive_client)
+    service, _, _, _ = _service(archive_client=archive_client)
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await service.run_job(job["job_id"])
 
@@ -295,20 +386,20 @@ async def test_retry_job_requeues_failed_job():
 
 
 async def test_retry_job_rejects_non_failed_job():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     with pytest.raises(HistoryIngestionError):
         await service.retry_job(job["job_id"])
 
 
 async def test_retry_job_rejects_unknown_job():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     with pytest.raises(KeyError):
         await service.retry_job("hjob_missing")
 
 
 async def test_recover_interrupted_jobs_marks_running_jobs_failed():
-    service, store, _ = _service()
+    service, store, _, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await store.claim_job(job["job_id"])
 
@@ -321,7 +412,7 @@ async def test_recover_interrupted_jobs_marks_running_jobs_failed():
 
 
 async def test_process_next_queued_job_runs_pending_job():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
 
     processed = await service.process_next_queued_job()
@@ -332,12 +423,12 @@ async def test_process_next_queued_job_runs_pending_job():
 
 
 async def test_process_next_queued_job_returns_none_when_idle():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     assert await service.process_next_queued_job() is None
 
 
 async def test_list_datasets_reports_published_dataset():
-    service, _, _ = _service()
+    service, _, _, _ = _service()
     job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
     await service.run_job(job["job_id"])
 

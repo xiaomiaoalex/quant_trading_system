@@ -86,6 +86,7 @@ class ResolvedDataset:
 
     def provenance(self) -> Dict[str, Any]:
         """回测报告用的数据来源证据。"""
+        quality = self.quality
         return {
             "dataset_id": self.dataset_id,
             "source": self.source,
@@ -99,12 +100,14 @@ class ResolvedDataset:
             "official_sha256": self.official_sha256,
             "archive_sha256": self.archive_sha256,
             "archive_path": self.archive_path,
+            "official_file_name": quality.get("official_file_name"),
+            "local_archive_name": quality.get("local_archive_name"),
             "start_ts_ms": self.start_ts_ms,
             "end_ts_ms": self.end_ts_ms,
             "row_count": self.row_count,
             "expected_points": self.expected_points,
             "gap_count": self.gap_count,
-            "quality": self.quality,
+            "quality": quality,
         }
 
 

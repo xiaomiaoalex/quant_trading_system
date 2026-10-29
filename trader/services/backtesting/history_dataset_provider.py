@@ -13,7 +13,7 @@ History Dataset OHLCV Provider
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from trader.adapters.persistence.feature_store import FeatureStore, get_strict_feature_store
@@ -119,11 +119,6 @@ class HistoryDatasetOHLCVDataProvider(DataProviderPort):
 
     async def get_symbols(self) -> List[str]:
         return [self._dataset.symbol]
-
-
-def utc_datetime(ts_ms: int) -> datetime:
-    """毫秒转 UTC datetime。"""
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
 
 
 __all__ = ["HistoryDatasetOHLCVDataProvider"]

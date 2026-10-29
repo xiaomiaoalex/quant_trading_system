@@ -8,6 +8,45 @@
 
 ## 最近开发记录（滚动式）
 
+### 本次任务：历史归档通路第 1 轮审核修复（R1–R10）
+- 完成时间: 2026-10-29 19:05 (北京时间)
+- 状态: 已完成
+- 目标: 修复首次只读审核提出的 P1（R1）与本通路内的 R2–R10 边界 / 测试缺口。
+- 开发前状态:
+  - `submit_job` 先做远程 HEAD 探测：归档被官方修订 / 移除时，重复提交会误报 404；网络慢时 202 最长被阻塞 60s。
+  - 重复提交命中已发布数据集时每次新建一条 SUCCEEDED 任务行。
+  - `GET /v1/data/history/datasets/{id}` 用 `list(limit=500)` 线性查找，数据集超过 500 条后旧记录 404。
+  - `write_features_bulk` 的 SELECT→INSERT 存在 TOCTOU，`ON CONFLICT DO NOTHING` 会静默吞掉并发异值冲突，计数不准。
+  - `commit()` 复用既有归档文件时不校验 hash、不补写 CHECKSUM；CHECKSUM 非原子写。
+  - `parse_checksum` 取任意第一个 64-hex token，不按预期文件名匹配；官方 CHECKSUM 原文被改写。
+  - 前端 `isDatasetEligible` 未校验 `gap_count` 与 `row_count/expected_points` 一致性。
+- 开发后状态:
+  - R1：提交路径**完全去掉远程 HTTP**；只做输入校验（400）与数据库查询（PG 不可用 → 503，不建假任务）。
+    归档缺失由 worker 下载阶段判定，任务 `FAILED` + `error_code=ARCHIVE_NOT_FOUND`；POST 正常 202。
+  - R8：重复提交命中已发布数据集时返回**关联的既有成功任务**（优先数据集 `job_id`，其次按 `dataset_id` 反查），
+    不新建任务行、不重复下载、不触发远程调用；仅历史遗留的无关联数据集才补建一条并复用。
+  - R2：数据集详情改为 `store.get_dataset(dataset_id)` 直接查询；未知 id → 404，PG 故障 → 503。
+  - R3：`write_features_bulk` 改为「批内归并 + 单事务 `INSERT ... ON CONFLICT DO NOTHING RETURNING` + 写后回读校验」：
+    永不覆盖已有值，异值冲突抛 `FeatureVersionConflictError` 并整批回滚（无部分写入），created/duplicates 为真实计数。
+  - R4：补「同 symbol/month 归档 hash 变化 → version=2，旧版本与旧文件保留」测试（原测试名与断言不符已纠正）。
+  - R5：`commit()` 复用既有文件前校验 SHA-256，不同则抛错不覆盖；同 hash 且 CHECKSUM 缺失时补写；
+    CHECKSUM 用「临时文件 + 原子 replace」写入。
+  - R6/R7：CHECKSUM 按预期 zip 文件名匹配解析；官方原文原样保留到侧车文件；
+    本地 `-vN` 文件名与官方名的差异记录在 `quality.official_file_name` / `local_archive_name` 与报告 provenance。
+  - R9：前端 `isDatasetEligible` 补 `gap_count === 0` 与 `row_count === expected_points`（后端门禁仍是最终判断）。
+  - R10：删除无引用的 `utc_datetime`。
+- Issue 状态迁移:
+  - 「提交路径依赖远端可用性」：`待确认` → `已验证`
+  - 「批量写入并发冲突可被静默吞掉」：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest -q trader/tests/test_ohlcv_archive_domain.py trader/tests/test_binance_vision_archive.py trader/tests/test_history_data_ingestion.py trader/tests/test_backtest_dataset_resolution.py trader/tests/test_api_data_history.py --tb=short` → 全部通过
+  - `python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short` → 12 passed（真实 PostgreSQL 隔离库，含并发同值 / 异值、整批回滚、批内重复、strict 不回退内存）
+  - `cd Frontend && npm run typecheck` → 通过；`npx vitest run` → 11 files / 90 tests passed
+  - `python -m isort --check-only --profile black trader/`、`python -m black --check --line-length 100 trader/`、
+    `python scripts/check_core_no_io.py` → 全部通过
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12.2 / §12.3 / §12.7 / §12.8）、
+  `Frontend/frontend_docs/contract_endpoints.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
+
 ### 本次任务：币安公开归档历史数据 → 真实历史回测全链路
 - 完成时间: 2026-10-29 17:40 (北京时间)
 - 状态: 已完成
