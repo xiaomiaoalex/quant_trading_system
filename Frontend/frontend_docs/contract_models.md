@@ -221,6 +221,71 @@ interface SnapshotEnvelope {
 }
 ```
 
+## 5.1 历史数据模型（币安公开归档）
+
+```typescript
+type HistoryJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+type HistoryDatasetStatus = 'PENDING' | 'PUBLISHED' | 'FAILED'
+
+interface HistoryJob {
+  job_id: string
+  source: string
+  market: string
+  symbol: string
+  interval: string
+  month: string
+  status: HistoryJobStatus
+  stage: string            // QUEUED/DOWNLOAD/VERIFY/IMPORT/PUBLISH/FAILED
+  dataset_id?: string | null
+  feature_version?: string | null
+  rows_processed: number   // 实际处理行数
+  bytes_downloaded: number // 实际下载字节数
+  error_code?: string | null
+  error_reason?: string | null
+  requested_by: string
+  attempt: number
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+interface HistoryDataset {
+  dataset_id: string
+  source: string
+  market: string
+  symbol: string
+  interval: string
+  month: string
+  version: number
+  feature_version: string
+  archive_sha256: string
+  official_sha256?: string | null
+  source_url: string
+  checksum_url: string
+  row_count: number
+  expected_points: number
+  gap_count: number
+  first_ts_ms?: number | null
+  last_ts_ms?: number | null
+  quality: Record<string, unknown>
+  status: HistoryDatasetStatus
+  persistence_ok: boolean
+  backtest_eligible: boolean
+  created_at?: string | null
+  published_at?: string | null
+}
+```
+
+`BacktestRequest` / `BacktestDatasetSpec` 新增可选字段：
+
+```typescript
+dataset_id?: string | null  // 已发布历史数据集 ID
+interval?: string | null    // 历史数据集固定 '1m'
+```
+
+`start_ts_ms` / `end_ts_ms` 变为可选：提供 `dataset_id` 时省略即取整月区间。
+
 ## 6. 通用模型
 
 ```typescript

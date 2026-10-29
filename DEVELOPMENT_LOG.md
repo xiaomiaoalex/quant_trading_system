@@ -1174,3 +1174,55 @@
   - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` -> 18 passed
 - 风险/遗留: 持仓审计遇到无法解析的数量仍会进入现有 warning 路径并跳过本次审计；后续如需要更严格的风险告警，可单独增加 malformed position 事件。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-29 17:40 - 币安公开归档历史数据 → 真实历史回测全链路
+
+- 背景: Data 页面只有手动 JSON 导入与实时 OHLCV worker，研究者无法用真实历史行情重复「准备数据 → 选择策略 → 执行回测 → 查看结果」。
+  已有 `real_feature_store` 回测路径只认 `feature_version`，没有「已发布数据集」这一层准入，且 `FeatureStore` 在 PG 不可用时静默回退内存。
+- 决策:
+  - 归档来源固定为币安公开归档（`data.binance.vision`），只允许 BTCUSDT / ETHUSDT、现货、1m，不接受任意 URL，不随 `BINANCE_ENV` 变化。
+  - 数据集是**版本化**的：同一归档 hash 复用同一 `feature_version`；官方修订归档产生新版本，旧版本保留，旧文件不被覆盖。
+  - 「已登记数据集」用 `feature_version` 前缀 `binance_spot_1m` 标识：这类回测**必须**显式提供 `dataset_id`，
+    否则视为绕过数据集准入门禁；旧的手动导入 / 实时 worker 入口保持不变（高级入口）。
+  - 冲突判定只针对用户**显式提交**的字段（Pydantic `model_fields_set`），未提供的旧默认值不算冲突。
+  - FeatureStore 新增严格模式：PG 不可用 / 读写失败一律抛错，绝不静默回退内存（研究数据必须真的落库）。
+  - 真实历史回测只支持单币对，禁止 `symbols[0]` 静默丢弃其它币对。
+- 改动:
+  - `trader/core/domain/services/ohlcv_archive.py`: 纯领域服务 —— 时间戳解析（2025-01-01 起微秒，之前毫秒，统一 UTC 毫秒整数）、
+    K 线数值 / OHLC 关系 / 分钟对齐校验、同值去重与异值冲突检测、月度覆盖度与缺口统计、`feature_version` 构造。
+  - `trader/adapters/market_data/binance_vision.py`: 归档 URL 构造、流式下载到临时文件、SHA-256 计算与官方 CHECKSUM 比对、
+    原子提交到 `MARKET_DATA_ROOT` 版本化路径、只读取预期 CSV 成员（不做任意 extractall）。
+  - `trader/adapters/persistence/feature_store.py`: 新增 `strict` 模式与 `FeatureStoreStrictError`；新增 `write_features_bulk`
+    批量写入（先查冲突再批量插入，同 key 同值幂等、异值抛 `FeatureVersionConflictError`）。
+  - `trader/adapters/persistence/history_dataset_store.py`: 任务 / 数据集 PostgreSQL 存储（原子领取、启动恢复、重试、
+    发布状态与任务 SUCCEEDED 同事务提交、发布前校验 FeatureStore 真实行数）。
+  - `trader/adapters/persistence/postgres/__init__.py` + `migrations/009_history_datasets.sql`: 新表 DDL（与初始化一致）。
+  - `trader/services/history_data_ingestion.py`: 任务编排与单并发 worker（阶段推进、错误分类、幂等复用、启动恢复）。
+  - `trader/services/backtesting/backtest_dataset_resolution.py` + `history_dataset_resolver.py` + `history_dataset_provider.py`:
+    统一准入解析（普通回测与候选回测共用）、范围推导、数据集感知 Provider（读取后复核行数与连续性）。
+  - `trader/services/deployment.py`: `resolve_backtest_request()` 异步入口；数据集路径强制 `engine=vectorbt`、`data_mode=real_feature_store`；
+    报告新增 `data_provenance` 与 `cost_model`。
+  - `trader/api/routes/data_history.py` + `trader/api/routes/backtests.py` + `trader/api/routes/strategy_candidates.py`:
+    新接口与共享准入校验接入；`trader/api/models/schemas.py` 新增 `dataset_id` / `interval` 与历史任务 / 数据集模型。
+  - `Frontend/src/components/history/HistoryDataPanel.tsx`、`Frontend/src/hooks/useHistoryData.ts`、
+    `Frontend/src/utils/historyDataset.ts`、`Frontend/src/pages/Data.tsx`、`Frontend/src/pages/Backtests.tsx`:
+    Data 页面历史数据区块（2s 轮询、终态停止、成功刷新数据集缓存、失败重试）与 Backtests 数据集选择器。
+  - `scripts/e2e_history_backtest.py`: 真实联网 E2E 验收脚本（隔离数据库 + 真实归档 + 真实回测 + 重启复查）。
+- 验证:
+  - `python -m pytest -q trader/tests/test_ohlcv_archive_domain.py trader/tests/test_binance_vision_archive.py trader/tests/test_history_data_ingestion.py trader/tests/test_backtest_dataset_resolution.py trader/tests/test_api_data_history.py --tb=short` -> 99 passed
+  - `python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short` -> 8 passed（真实 PostgreSQL，隔离库 `qts_history_test`）
+  - `python -m pytest trader/tests/ --tb=no -p no:randomly -q --junitxml=...` -> 3034 tests / 32 failures / 1 error，
+    失败集合与基线 56a0fa0 完全一致（`client_order_id → cl_ord_id` 命名收口遗留，非本次引入）
+  - P0 回归集 -> 全部通过；`isort --check-only` / `black --check` / `check_core_no_io.py` -> 全部通过
+  - `python scripts/e2e_history_backtest.py --symbols BTCUSDT,ETHUSDT --month 2026-09` -> PASS
+  - `cd Frontend && npm run typecheck` -> passed；`npx vitest run` -> 88 passed；`npm run build` -> passed
+- 风险/遗留:
+  - 本阶段**不承诺盈利**：真实 E2E 中 EMA 交叉策略在 1m 数据 + 固定费率/滑点下为负收益（BTC -90.88% / ETH -91.28%），
+    这是研究通路可复现的基线，不是策略结论。
+  - 未覆盖逐笔成交、盘口深度、实时补数与付费数据源。
+  - 归档下载与解析目前是单币对单月串行；多月份批量导入尚未提供批量入口。
+  - `Frontend/tsconfig.node.json` 移除了与 `composite` 冲突的 `allowImportingTsExtensions`（该选项自 d092cc1 起
+    就让 `npm run build` 失败，属既有构建门禁问题，本次为跑通构建做的最小修复）。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`docs/PROJECT_ARCHITECTURE.md`、
+  `Frontend/frontend_docs/contract_endpoints.md`、`Frontend/frontend_docs/contract_models.md`、
+  `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`

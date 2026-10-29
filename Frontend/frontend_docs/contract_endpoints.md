@@ -150,6 +150,36 @@ interface CryptoRiskProbeResponse {
 }
 ```
 
+## 5.1 History Data（币安公开归档历史数据）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/v1/data/history/jobs` | 创建历史归档导入任务（202） |
+| GET | `/v1/data/history/jobs` | 查询导入任务（`status`/`symbol`/`month`/`limit`） |
+| GET | `/v1/data/history/jobs/{job_id}` | 查询单个导入任务 |
+| POST | `/v1/data/history/jobs/{job_id}/retry` | 重试 `FAILED` 任务（202） |
+| GET | `/v1/data/history/datasets` | 数据集列表（`symbol`/`month`/`only_eligible`/`limit`） |
+| GET | `/v1/data/history/datasets/{dataset_id}` | 数据集详情 |
+
+请求体：
+
+```typescript
+interface HistoryJobCreateRequest {
+  symbol: string          // BTCUSDT | ETHUSDT
+  month: string           // YYYY-MM，必须是已结束的月份
+  source?: 'binance_vision' // 固定值，省略即默认；提交其它值 → 422
+  market?: 'spot'          // 固定值，省略即默认；提交其它值 → 422
+  interval?: '1m'          // 固定值，省略即默认；提交其它值 → 422
+  requested_by?: string
+}
+```
+
+错误语义：400 请求非法（不支持的 symbol / 非法月份 / 月份未结束）· 404 归档不存在 ·
+409 状态冲突（重试非 FAILED 任务）· 503 PostgreSQL 不可用（不创建假任务）。
+
+前端轮询约定：存在 `QUEUED` / `RUNNING` 任务时每 2 秒轮询一次，全部进入终态后停止轮询；
+出现 `SUCCEEDED` 任务时刷新数据集缓存。
+
 ## 6. AI Lab
 
 | 方法 | 路径 | 说明 |

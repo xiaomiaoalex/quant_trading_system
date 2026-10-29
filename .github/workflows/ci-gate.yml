@@ -175,3 +175,4 @@ jobs:
         run: |
           python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
           python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short
+          python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short

@@ -211,6 +211,86 @@ pytest -q trader/tests/test_postgres_storage.py
 
 ---
 
+## 8.1 历史行情数据（币安公开归档）的部署要求
+
+「真实历史回测」通路依赖**两处持久化**，生产部署必须同时满足：
+
+| 依赖 | 内容 | 要求 |
+|------|------|------|
+| PostgreSQL 持久卷 | `feature_values`（OHLCV 行）+ `history_datasets` / `history_ingest_jobs` | **必须**挂载持久卷，不能用容器临时盘 |
+| 原始归档目录 | `MARKET_DATA_ROOT` 下的 `binance/spot/raw/klines/<symbol>/1m/*.zip` | **必须**挂载持久卷，保留来源证据与版本 |
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MARKET_DATA_ROOT` | `<项目根>/data/market` | 原始归档根目录 |
+| `POSTGRES_CONNECTION_STRING` | 无 | 历史数据集与 FeatureStore 的连接串 |
+
+目录结构（版本化文件，旧版本不会被覆盖）：
+
+```
+<MARKET_DATA_ROOT>/
+└── binance/spot/raw/klines/<SYMBOL>/1m/
+    ├── <SYMBOL>-1m-<YYYY-MM>-v1.zip
+    ├── <SYMBOL>-1m-<YYYY-MM>-v1.zip.CHECKSUM
+    └── <SYMBOL>-1m-<YYYY-MM>-v2.zip      # 官方修订后的新版本
+```
+
+### Docker Compose 示例
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_pwd
+    volumes:
+      - qts_pgdata:/var/lib/postgresql/data
+
+  api:
+    # 镜像与启动命令按实际部署补充
+    environment:
+      POSTGRES_CONNECTION_STRING: postgresql://trader:trader_pwd@postgres:5432/trading
+      MARKET_DATA_ROOT: /var/lib/qts/market
+    volumes:
+      - qts_market:/var/lib/qts/market      # 原始归档持久卷
+      - qts_pgdata:/var/lib/postgresql/data # 与 PG 容器共享同一持久卷
+
+volumes:
+  qts_pgdata:
+  qts_market:
+```
+
+### 数据库迁移
+
+- 新增表由 `trader/adapters/persistence/postgres/migrations/009_history_datasets.sql` 描述；
+  `PostgreSQLStorage.connect()` 内部的 `_initialize_schema()` 会执行等价的 `CREATE TABLE IF NOT EXISTS`，
+  两者保持一致，**不需要**引入新的迁移框架。
+- 启动后可用下面的 SQL 确认落库情况：
+
+```sql
+SELECT symbol, interval, month, version, row_count, expected_points, gap_count,
+       status, persistence_ok, backtest_eligible
+FROM history_datasets
+ORDER BY created_at DESC;
+
+SELECT status, stage, COUNT(*)
+FROM history_ingest_jobs
+GROUP BY status, stage;
+```
+
+### 运维提示
+
+- 归档目录会随月份数量线性增长（每个 symbol × 每个月份 ≈ 2MB），建议按月做归档或转储。
+- 重启后 worker 会把残留 `RUNNING` 任务标记为 `FAILED`（`SERVICE_INTERRUPTED`），需要用户显式重试；
+  系统不做自动断点续传。
+- 历史数据集的 FeatureStore 读写使用**严格模式**：PostgreSQL 不可用时导入任务直接失败（不会静默落到内存）。
+
+---
+
 ## 9. 小结
 你只需要记住三件事：
 - 数据库是“有规则的表格仓库”。

@@ -20,7 +20,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from trader.adapters.persistence.postgres import (
     PostgreSQLStorage,
@@ -34,6 +34,17 @@ logger = logging.getLogger(__name__)
 
 class FeatureVersionConflictError(Exception):
     """Raised when the same feature key has different values"""
+
+    pass
+
+
+class FeatureStoreStrictError(RuntimeError):
+    """
+    Raised in strict mode when PostgreSQL is unavailable or an IO operation fails.
+
+    Strict mode is used by the research/history-data path where silently falling
+    back to in-memory storage would turn a persistence failure into a fake success.
+    """
 
     pass
 
@@ -77,12 +88,18 @@ class FeatureStore:
     - PostgreSQL 不可用时自动回退到 InMemoryStorage
     """
 
-    def __init__(self, storage: Optional[InMemoryStorage] = None):
+    def __init__(self, storage: Optional[InMemoryStorage] = None, strict: bool = False):
         self._memory_storage = storage or get_storage()
         self._postgres_storage: Optional[PostgreSQLStorage] = None
         self._use_postgres = False
         self._init_lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._strict = strict
+
+    @property
+    def strict(self) -> bool:
+        """严格模式：PostgreSQL 不可用或 IO 失败时抛错，不回退内存。"""
+        return self._strict
 
     def _make_key(self, symbol: str, feature_name: str, version: str, ts_ms: int) -> str:
         """Generate unique key for feature"""
@@ -121,11 +138,22 @@ class FeatureStore:
                     logger.info("PostgreSQL connected successfully for feature store")
                     return True
                 except Exception as e:
+                    if self._strict:
+                        self._use_postgres = False
+                        self._postgres_storage = None
+                        raise FeatureStoreStrictError(
+                            f"Failed to connect to PostgreSQL in strict mode: {e}"
+                        ) from e
                     logger.warning(
                         f"Failed to connect to PostgreSQL: {e}, falling back to in-memory storage"
                     )
                     self._use_postgres = False
                     self._postgres_storage = None
+
+            if self._strict:
+                raise FeatureStoreStrictError(
+                    f"PostgreSQL is required in strict mode but unavailable: {msg}"
+                )
 
             logger.debug(f"PostgreSQL not available: {msg}")
             return False
@@ -222,6 +250,10 @@ class FeatureStore:
                     symbol, feature_name, version, ts_ms, value, meta
                 )
             except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL write_feature failed in strict mode: {e}"
+                    ) from e
                 logger.warning(f"PostgreSQL write_feature failed: {e}, falling back to in-memory")
 
         return self._check_and_store_memory(symbol, feature_name, version, ts_ms, value, meta)
@@ -276,6 +308,123 @@ class FeatureStore:
 
         return True, False
 
+    async def write_features_bulk(
+        self,
+        symbol: str,
+        feature_name: str,
+        version: str,
+        rows: Sequence[Tuple[int, Any]],
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[int, int]:
+        """
+        批量写入特征值（一次往返提交整批）。
+
+        语义与 write_feature 一致：
+        - 同 key 同 value 幂等（计为 duplicate）
+        - 同 key 不同 value 抛 FeatureVersionConflictError
+
+        Args:
+            rows: (ts_ms, value) 序列
+
+        Returns:
+            Tuple of (created, duplicates)
+        """
+        meta = meta or {}
+        if not rows:
+            return 0, 0
+
+        if await self._ensure_postgres():
+            try:
+                return await self._postgres_write_features_bulk(
+                    symbol, feature_name, version, rows, meta
+                )
+            except FeatureVersionConflictError:
+                raise
+            except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL write_features_bulk failed in strict mode: {e}"
+                    ) from e
+                logger.warning(
+                    f"PostgreSQL write_features_bulk failed: {e}, falling back to in-memory"
+                )
+
+        created = 0
+        duplicates = 0
+        for ts_ms, value in rows:
+            was_created, is_duplicate = self._check_and_store_memory(
+                symbol, feature_name, version, ts_ms, value, meta
+            )
+            created += int(was_created)
+            duplicates += int(is_duplicate)
+        return created, duplicates
+
+    async def _postgres_write_features_bulk(
+        self,
+        symbol: str,
+        feature_name: str,
+        version: str,
+        rows: Sequence[Tuple[int, Any]],
+        meta: Dict[str, Any],
+    ) -> Tuple[int, int]:
+        """批量写入 PostgreSQL（先查冲突，再批量插入）。"""
+        timestamps = [int(ts_ms) for ts_ms, _ in rows]
+        meta_json = json.dumps(meta)
+
+        async with self._postgres_storage._pool.acquire() as conn:
+            existing_rows = await conn.fetch(
+                """
+                SELECT ts_ms, value_hash FROM feature_values
+                WHERE symbol = $1 AND feature_name = $2 AND version = $3
+                  AND ts_ms = ANY($4::bigint[])
+                """,
+                symbol,
+                feature_name,
+                version,
+                timestamps,
+            )
+            existing_hashes = {int(row["ts_ms"]): row["value_hash"] for row in existing_rows}
+
+            payloads: List[Tuple[Any, ...]] = []
+            duplicates = 0
+            for ts_ms, value in rows:
+                key = int(ts_ms)
+                value_hash = self._make_value_hash(value)
+                current = existing_hashes.get(key)
+                if current is not None:
+                    if current == value_hash:
+                        duplicates += 1
+                        continue
+                    raise FeatureVersionConflictError(
+                        f"Feature version conflict for {self._make_key(symbol, feature_name, version, key)}: "
+                        f"existing value hash {current} != new value hash {value_hash}"
+                    )
+                payloads.append(
+                    (
+                        symbol,
+                        feature_name,
+                        version,
+                        key,
+                        json.dumps(value),
+                        meta_json,
+                        value_hash,
+                    )
+                )
+
+            if payloads:
+                await conn.executemany(
+                    """
+                    INSERT INTO feature_values (
+                        symbol, feature_name, version, ts_ms, value, meta, value_hash
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (symbol, feature_name, version, ts_ms) DO NOTHING
+                    """,
+                    payloads,
+                )
+
+        return len(payloads), duplicates
+
     async def read_feature(
         self,
         symbol: str,
@@ -299,6 +448,10 @@ class FeatureStore:
             try:
                 return await self._postgres_read_feature(symbol, feature_name, version, ts_ms)
             except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL read_feature failed in strict mode: {e}"
+                    ) from e
                 logger.warning(f"PostgreSQL read_feature failed: {e}, falling back to in-memory")
 
         key = self._make_key(symbol, feature_name, version, ts_ms)
@@ -377,6 +530,10 @@ class FeatureStore:
                     symbol, feature_name, start_time, end_time, version
                 )
             except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL read_feature_range failed in strict mode: {e}"
+                    ) from e
                 logger.warning(
                     f"PostgreSQL read_feature_range failed: {e}, falling back to in-memory"
                 )
@@ -504,6 +661,10 @@ class FeatureStore:
             try:
                 return await self._postgres_list_versions(symbol, feature_name)
             except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL list_versions failed in strict mode: {e}"
+                    ) from e
                 logger.warning(f"PostgreSQL list_versions failed: {e}, falling back to in-memory")
 
         memory_versions: Dict[str, int] = {}
@@ -559,6 +720,10 @@ class FeatureStore:
             try:
                 return await self._postgres_list_feature_coverage(feature_name, version)
             except Exception as e:
+                if self._strict:
+                    raise FeatureStoreStrictError(
+                        f"PostgreSQL list_feature_coverage failed in strict mode: {e}"
+                    ) from e
                 logger.warning(
                     f"PostgreSQL list_feature_coverage failed: {e}, falling back to in-memory"
                 )
@@ -652,3 +817,15 @@ def get_feature_store() -> FeatureStore:
     if not hasattr(get_feature_store, "_instance"):
         get_feature_store._instance = FeatureStore()
     return get_feature_store._instance
+
+
+def get_strict_feature_store() -> FeatureStore:
+    """
+    Get or create the global strict FeatureStore instance.
+
+    Strict mode never falls back to in-memory storage: PostgreSQL unavailability
+    or an IO failure raises FeatureStoreStrictError (Fail-Closed).
+    """
+    if not hasattr(get_strict_feature_store, "_instance"):
+        get_strict_feature_store._instance = FeatureStore(strict=True)
+    return get_strict_feature_store._instance

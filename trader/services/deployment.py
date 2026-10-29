@@ -192,6 +192,8 @@ class BacktestService:
 
     def create_backtest(self, request: BacktestRequest) -> BacktestRun:
         """Trigger a new async backtest run."""
+        if request.start_ts_ms is None or request.end_ts_ms is None:
+            raise ValueError("start_ts_ms and end_ts_ms are required")
         if request.end_ts_ms <= request.start_ts_ms:
             raise ValueError("end_ts_ms must be greater than start_ts_ms")
         if not request.symbols:
@@ -224,6 +226,19 @@ class BacktestService:
         if backtest:
             return BacktestRun(**backtest)
         return None
+
+    async def resolve_backtest_request(self, request: BacktestRequest) -> BacktestRequest:
+        """
+        解析并校验回测请求（异步，PG 读取不能阻塞 API loop）。
+
+        历史数据集路径会在这里完成准入校验：未发布 / 不完整 / 持久化不可用 /
+        范围越界 / 显式字段冲突，都会在创建任务之前被拒绝。
+        """
+        from trader.services.backtesting.backtest_dataset_resolution import (
+            resolve_backtest_request as _resolve,
+        )
+
+        return await _resolve(request)
 
     def get_backtest_raw(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get raw backtest data dict for internal/storage access.
@@ -316,6 +331,13 @@ class BacktestService:
                     "requested_by": request.requested_by,
                     "data_mode": request.data_mode,
                     "feature_version": request.feature_version,
+                    "dataset_id": request.dataset_id,
+                    "interval": request.interval or (request.params or {}).get("interval"),
+                    "strategy_code_version": request.strategy_code_version,
+                    "fee_bps": request.fee_bps,
+                    "slippage_bps": request.slippage_bps,
+                    "start_ts_ms": request.start_ts_ms,
+                    "end_ts_ms": request.end_ts_ms,
                 },
             )
             self._storage.update_backtest(
@@ -466,7 +488,7 @@ class BacktestService:
     ) -> Dict[str, Any]:
         symbol = request.symbols[0]
         params = request.params or {}
-        interval = str(params.get("interval", "1h"))
+        interval = str(params.get("interval") or request.interval or "1h")
         config = BacktestConfig(
             start_date=datetime.fromtimestamp(request.start_ts_ms / 1000, tz=timezone.utc),
             end_date=datetime.fromtimestamp(request.end_ts_ms / 1000, tz=timezone.utc),
@@ -477,13 +499,7 @@ class BacktestService:
             commission_rate=Decimal(str(request.fee_bps)) / Decimal("10000"),
             slippage_rate=Decimal(str(request.slippage_bps)) / Decimal("10000"),
         )
-        if request.data_mode == "real_feature_store":
-            data_provider: DataProviderPort = FeatureStoreOHLCVDataProvider(
-                feature_store=get_feature_store(),
-                feature_version=request.feature_version,
-            )
-        else:
-            data_provider = _DevSmokeOHLCVProvider(self, request)
+        data_provider, data_provenance = await self._build_data_provider(request)
 
         strategy = _StrategyRunnerVectorBTBridge(
             runner=runner,
@@ -541,6 +557,7 @@ class BacktestService:
                 request,
                 data_quality_summary=data_quality_summary,
                 equity_timestamps_ms=equity_timestamps_ms,
+                data_provenance=data_provenance,
             )
 
         if request.risk_mode == "risk_adjusted":
@@ -566,6 +583,7 @@ class BacktestService:
                 request,
                 data_quality_summary=data_quality_summary,
                 risk_mode="risk_adjusted",
+                data_provenance=data_provenance,
             )
 
         adapter = VectorBTAdapter(
@@ -579,7 +597,64 @@ class BacktestService:
             request,
             data_quality_summary=data_quality_summary,
             risk_mode="raw_only",
+            data_provenance=data_provenance,
         )
+
+    async def _build_data_provider(
+        self,
+        request: BacktestRequest,
+    ) -> tuple[DataProviderPort, Dict[str, Any]]:
+        """
+        构造回测数据源，并返回数据来源证据。
+
+        - dataset_id 路径：再次核验数据集发布状态 / 市场 / 周期 / 质量，
+          并使用严格模式 Provider（读取失败或数据不完整直接让回测失败）
+        - legacy real_feature_store 路径：按 feature_version 读取（高级入口，保留兼容）
+        - dev_smoke 路径：确定性合成数据（开发样例数据）
+        """
+        from trader.services.backtesting.history_dataset_provider import (
+            HistoryDatasetOHLCVDataProvider,
+        )
+        from trader.services.backtesting.history_dataset_resolver import HistoryDatasetResolver
+
+        if request.dataset_id:
+            if len(request.symbols) > 1:
+                raise ValueError(
+                    f"Dataset {request.dataset_id} provides a single symbol; "
+                    f"got {request.symbols}"
+                )
+            dataset = await HistoryDatasetResolver().resolve(
+                request.dataset_id,
+                start_ts_ms=request.start_ts_ms,
+                end_ts_ms=request.end_ts_ms,
+            )
+            provider = HistoryDatasetOHLCVDataProvider(dataset)
+            return provider, dataset.provenance()
+
+        if request.data_mode == "real_feature_store":
+            if len(request.symbols) > 1:
+                raise ValueError(
+                    "real_feature_store backtests support a single symbol; "
+                    f"got {request.symbols}"
+                )
+            provider = FeatureStoreOHLCVDataProvider(
+                feature_store=get_feature_store(),
+                feature_version=request.feature_version,
+            )
+            return provider, {
+                "source": "feature_store",
+                "feature_version": request.feature_version,
+                "entry": "legacy_feature_store",
+                "note": "Legacy feature_version entry; published datasets use dataset_id.",
+            }
+
+        provider = _DevSmokeOHLCVProvider(self, request)
+        return provider, {
+            "source": "deterministic_dev_smoke",
+            "feature_version": request.feature_version,
+            "entry": "dev_smoke",
+            "note": "Deterministic sample data; not real market history.",
+        }
 
     def _build_ohlcv_series(
         self,
@@ -613,6 +688,7 @@ class BacktestService:
         request: BacktestRequest,
         data_quality_summary: Optional[Dict[str, Any]] = None,
         risk_mode: str = "raw_only",
+        data_provenance: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         initial_capital = Decimal(str(request.initial_capital))
         final_equity = result.final_capital
@@ -666,6 +742,16 @@ class BacktestService:
             "fee_bps": request.fee_bps,
             "slippage_bps": request.slippage_bps,
             "benchmark": request.benchmark,
+            "data_provenance": dict(data_provenance or {}),
+            "strategy_code_version": request.strategy_code_version,
+            "cost_model": {
+                "fee_bps": request.fee_bps,
+                "slippage_bps": request.slippage_bps,
+                "assumption": (
+                    "Fixed proportional fee and fixed proportional slippage applied to "
+                    "notional; no tiered maker/taker fees, no order book depth model."
+                ),
+            },
             "data_quality_summary": data_quality_summary
             or {
                 "quality_score": 0.0,
@@ -705,6 +791,7 @@ class BacktestService:
         request: BacktestRequest,
         data_quality_summary: Optional[Dict[str, Any]] = None,
         equity_timestamps_ms: Optional[List[int]] = None,
+        data_provenance: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         initial_capital = Decimal(str(request.initial_capital))
         final_equity = result.equity_curve[-1] if result.equity_curve else initial_capital
@@ -770,6 +857,16 @@ class BacktestService:
             "fee_bps": request.fee_bps,
             "slippage_bps": request.slippage_bps,
             "benchmark": request.benchmark,
+            "data_provenance": dict(data_provenance or {}),
+            "strategy_code_version": request.strategy_code_version,
+            "cost_model": {
+                "fee_bps": request.fee_bps,
+                "slippage_bps": request.slippage_bps,
+                "assumption": (
+                    "Fixed proportional fee and fixed proportional slippage applied to "
+                    "notional; no tiered maker/taker fees, no order book depth model."
+                ),
+            },
             "data_quality_summary": data_quality_summary
             or {
                 "quality_score": 0.0,
@@ -1052,6 +1149,7 @@ class BacktestService:
             "fee_bps": request.fee_bps,
             "slippage_bps": request.slippage_bps,
             "benchmark": request.benchmark,
+            "data_provenance": {},
             "data_quality_summary": {
                 "quality_score": 0.0 if request.data_mode == "dev_smoke" else 1.0,
                 "missing_data": request.data_mode == "dev_smoke",
