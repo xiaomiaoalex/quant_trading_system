@@ -372,6 +372,55 @@ async def test_feature_store_bulk_write_is_idempotent_and_detects_conflicts(isol
 
 @skip_if_no_asyncpg
 @skip_if_no_postgres
+async def test_concurrent_job_creation_reuses_single_active_job(isolated_dsn):
+    """并发提交同一 (source, symbol, interval, month)：只保留一个活动任务。"""
+    store = _make_store(isolated_dsn)
+    await store.connect()
+    # 独立 month 标签，避免与其它用例的活动任务互相干扰
+    month_label = f"{RUN_ID[:6]}z"
+    try:
+        results = await asyncio.gather(
+            store.create_job(
+                job_id=f"hjob_c1_{RUN_ID}",
+                source="binance_vision",
+                market="spot",
+                symbol="ETHUSDT",
+                interval="1m",
+                month=month_label,
+            ),
+            store.create_job(
+                job_id=f"hjob_c2_{RUN_ID}",
+                source="binance_vision",
+                market="spot",
+                symbol="ETHUSDT",
+                interval="1m",
+                month=month_label,
+            ),
+        )
+        assert results[0]["job_id"] == results[1]["job_id"]
+
+        active = await store.find_active_job(
+            source="binance_vision",
+            symbol="ETHUSDT",
+            interval="1m",
+            month=month_label,
+        )
+        assert active is not None
+        assert active["job_id"] == results[0]["job_id"]
+
+        jobs = await store.list_jobs(symbol="ETHUSDT")
+        active_jobs = [
+            job
+            for job in jobs
+            if job["status"] in ("QUEUED", "RUNNING") and job["month"] == month_label
+        ]
+        assert len(active_jobs) == 1
+    finally:
+        await store.disconnect()
+
+
+@skip_if_no_asyncpg
+@skip_if_no_postgres
 async def test_feature_store_bulk_write_concurrent_same_value_is_idempotent(isolated_dsn):
     """并发写入同值：不得报错，总行数为 1，计数真实。"""
     store_a = await _strict_store(isolated_dsn)

@@ -75,3 +75,14 @@
 ## 能力与限制
 
 交付覆盖真实 OHLCV 研究数据与现有回测闭环；单实例、单任务并发。尚无逐笔成交、盘口回测、组合回测、实时补数新功能及付费数据接入。前端未进行真实浏览器端到端测试；现有接口与组件测试、TypeScript、生产构建已通过。
+
+### 实现者补充（第 1 轮修复之后的增量提交）
+
+- N1（`find_active_job` 无调用点）：新增真实 PostgreSQL 并发用例
+  `test_concurrent_job_creation_reuses_single_active_job` —— 并发提交同一
+  `(source, symbol, interval, month)` 只保留**一个**活动任务，并直接用 `find_active_job`
+  断言库内活动任务唯一。该方法由此获得明确调用点与用途（校验部分唯一索引的实际结果）。
+- 归档复用路径补上临时文件清理：命中已发布数据集直接复用时丢弃下载临时文件
+  （`BinanceVisionArchiveClient.discard`），避免 `.tmp` 目录残留。
+- 归档提交路径统一为「总是调用 `commit()`」：同 hash 复用并补写缺失的 CHECKSUM，
+  异 hash 抛错不覆盖；不再由调用方判断目标文件是否已存在。

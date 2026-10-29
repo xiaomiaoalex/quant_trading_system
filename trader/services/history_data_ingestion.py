@@ -777,6 +777,8 @@ __all__ = [
     "HistoryIngestionService",
     "HistoryJobWorker",
     "HistoryStoreNotReadyError",
+    "get_history_archive_client",
     "get_history_dataset_store",
+    "reset_history_archive_client",
     "reset_history_dataset_store",
 ]
