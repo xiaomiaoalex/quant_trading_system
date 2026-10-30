@@ -1,0 +1,16 @@
+{
+  "worktree": {
+    "setup": [
+      "py -3.12 -m venv .venv",
+      ".venv\\Scripts\\python.exe -m pip install -q --upgrade pip",
+      ".venv\\Scripts\\python.exe -m pip install -q -r trader\\requirements-ci.txt",
+      ".venv\\Scripts\\python.exe -m pip install -q numpy pandas matplotlib seaborn python-dotenv uvicorn psutil",
+      "npm --prefix Frontend ci --no-audit --no-fund"
+    ]
+  },
+  "scripts": {
+    "test": {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q trader/tests --tb=short"
+    }
+  }
+}
