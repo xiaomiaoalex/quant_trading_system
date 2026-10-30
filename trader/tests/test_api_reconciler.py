@@ -572,7 +572,7 @@ class TestOrderOwnershipRegistry:
 
         # Record an external order origin
         registry.record_order_origin(
-            client_order_id="unknown_order_123",
+            cl_ord_id="unknown_order_123",
             strategy_id=None,  # External / historical
             source="manual",
         )
@@ -586,7 +586,7 @@ class TestOrderOwnershipRegistry:
 
         # Record a system order origin
         registry.record_order_origin(
-            client_order_id="fire_test_signal_001",
+            cl_ord_id="fire_test_signal_001",
             strategy_id="fire_test",
             source="live_order",
         )

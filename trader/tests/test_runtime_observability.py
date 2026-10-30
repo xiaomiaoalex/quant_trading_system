@@ -93,7 +93,7 @@ class TestOMSCallbackObservableMetrics:
         """Test that order_submit_ok is incremented on successful submission."""
         mock_broker.place_order.return_value = MagicMock(
             broker_order_id="12345",
-            filled_quantity=Decimal("0"),
+            filled_qty=Decimal("0"),
             average_price=Decimal("0"),
             status=MagicMock(value="NEW"),
             created_at=None,
@@ -153,7 +153,7 @@ class TestOMSCallbackObservableMetrics:
         """Test that fill_latency_count is incremented when fills occur."""
         mock_broker.place_order.return_value = MagicMock(
             broker_order_id="12345",
-            filled_quantity=Decimal("0.01"),
+            filled_qty=Decimal("0.01"),
             average_price=Decimal("50000"),
             status=MagicMock(value="FILLED"),
             created_at=None,

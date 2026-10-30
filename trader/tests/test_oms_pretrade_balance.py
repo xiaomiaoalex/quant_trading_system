@@ -30,7 +30,7 @@ def _broker_with_balances(balances: list[dict[str, str]]) -> MagicMock:
 def _submitted_order() -> MagicMock:
     order = MagicMock()
     order.broker_order_id = "broker-1"
-    order.filled_quantity = Decimal("0")
+    order.filled_qty = Decimal("0")
     order.average_price = Decimal("0")
     order.status = OrderStatus.SUBMITTED
     order.created_at = None
