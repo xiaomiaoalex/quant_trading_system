@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import Any, Awaitable, Callable
 
 from trader.trading.models import NotReady, PlaceOrderCommand, ReconcileSnapshot
 from trader.trading.risk import RiskPolicy
 from trader.trading.service import TradingService
+
+logger = logging.getLogger(__name__)
 
 
 class TradingReadinessProvider:
@@ -42,6 +45,8 @@ class TradingRuntime:
         lease_scope: str | None = None,
         lease_seconds: int = 30,
         outbox_interval_seconds: float = 1.0,
+        reconcile_interval_seconds: float = 30.0,
+        lease_retry_interval_seconds: float | None = None,
     ):
         self.store = store
         self.exchange = exchange
@@ -54,6 +59,12 @@ class TradingRuntime:
         self.lease_scope = lease_scope or f"trading:{account_id}"
         self.lease_seconds = lease_seconds
         self.outbox_interval_seconds = outbox_interval_seconds
+        self.reconcile_interval_seconds = reconcile_interval_seconds
+        self.lease_retry_interval_seconds = (
+            lease_retry_interval_seconds
+            if lease_retry_interval_seconds is not None
+            else max(1.0, lease_seconds / 4)
+        )
 
         self.service: TradingService | None = None
         self.lease_token: int | None = None
@@ -62,6 +73,7 @@ class TradingRuntime:
         self.last_reasons: list[str] = []
         self.stages: list[str] = []
         self._tasks: list[asyncio.Task] = []
+        self._loops_started: set[str] = set()
         self._stopping = False
 
     async def start(self) -> bool:
@@ -82,6 +94,28 @@ class TradingRuntime:
         )
 
         self.stages.append("adapter")
+        self._stopping = False
+
+        # Background loops must run even while the account is blocked: the lease
+        # loop retries ownership and the reconcile loop keeps the view fresh.
+        self._ensure_background_loops()
+
+        if hasattr(self.store, "acquire_lease"):
+            self.stages.append("lease")
+            self.lease_token = await self.store.acquire_lease(
+                self.lease_scope, self.owner, self.lease_seconds
+            )
+            if self.lease_token is None:
+                self.started = False
+                self.last_reasons = ["EXECUTION_INSTANCE_CONFLICT"]
+                self.stages.append("blocked")
+                return False
+
+        self.started = True
+        return await self._complete_startup()
+
+    async def _complete_startup(self) -> bool:
+        """Reconcile and resume queued commands once this process owns the account."""
         self.stages.append("reconcile")
         try:
             snapshot = await self.snapshot_provider(self.account_id)
@@ -97,13 +131,6 @@ class TradingRuntime:
             self.ready = False
             self.last_reasons = list(view.reasons) or ["RECONCILIATION_UNAVAILABLE"]
 
-        if self.ready and hasattr(self.store, "acquire_lease"):
-            self.lease_token = await self.store.acquire_lease(
-                self.lease_scope, self.owner, self.lease_seconds
-            )
-            if self.lease_token is None:
-                self.ready = False
-                self.last_reasons.append("EXECUTION_INSTANCE_CONFLICT")
         if not self.ready:
             self.stages.append("blocked")
             return False
@@ -119,13 +146,18 @@ class TradingRuntime:
             return False
 
         self.stages.append("ready")
-        self.started = True
-        self._stopping = False
-        if self.notifier is not None:
-            self._tasks.append(asyncio.create_task(self._outbox_loop()))
-        if hasattr(self.store, "renew_lease"):
-            self._tasks.append(asyncio.create_task(self._lease_loop()))
         return True
+
+    def _ensure_background_loops(self) -> None:
+        if self.notifier is not None and "outbox" not in self._loops_started:
+            self._tasks.append(asyncio.create_task(self._outbox_loop()))
+            self._loops_started.add("outbox")
+        if self.reconcile_interval_seconds > 0 and "reconcile" not in self._loops_started:
+            self._tasks.append(asyncio.create_task(self._reconcile_loop()))
+            self._loops_started.add("reconcile")
+        if hasattr(self.store, "renew_lease") and "lease" not in self._loops_started:
+            self._tasks.append(asyncio.create_task(self._lease_loop()))
+            self._loops_started.add("lease")
 
     async def stop(self) -> None:
         self._stopping = True
@@ -135,6 +167,7 @@ class TradingRuntime:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._tasks.clear()
+        self._loops_started.clear()
         if self.lease_token is not None and hasattr(self.store, "release_lease"):
             await self.store.release_lease(self.lease_scope, self.owner, self.lease_token)
         self.lease_token = None
@@ -194,6 +227,30 @@ class TradingRuntime:
             return 0
         return await self.service.dispatch_outbox(self.account_id, self.notifier)
 
+    async def _reconcile_loop(self) -> None:
+        """Keep the account view aligned with the venue while the runtime runs."""
+        while not self._stopping:
+            await asyncio.sleep(self.reconcile_interval_seconds)
+            if self.service is None:
+                return
+            if self.lease_token is None:
+                # The account is not ours yet; never reconcile another owner's book.
+                continue
+            try:
+                snapshot = await self.snapshot_provider(self.account_id)
+            except Exception as exc:
+                logger.warning("Periodic reconciliation provider failed: %s", exc)
+                continue
+            if snapshot is None:
+                continue
+            try:
+                view = await self.service.recover(snapshot)
+            except Exception as exc:
+                logger.warning("Periodic reconciliation failed: %s", exc)
+                continue
+            self.ready = view.ready
+            self.last_reasons = list(view.reasons)
+
     async def _outbox_loop(self) -> None:
         while not self._stopping:
             try:
@@ -204,12 +261,28 @@ class TradingRuntime:
 
     async def _lease_loop(self) -> None:
         while not self._stopping:
-            await asyncio.sleep(max(1.0, self.lease_seconds / 2))
+            await asyncio.sleep(self.lease_retry_interval_seconds)
             if self.lease_token is None:
-                return
+                token = await self.store.acquire_lease(
+                    self.lease_scope, self.owner, self.lease_seconds
+                )
+                if token is None:
+                    continue
+                logger.info("Execution lease acquired; completing startup")
+                self.lease_token = token
+                self.started = True
+                self.last_reasons = [
+                    reason
+                    for reason in self.last_reasons
+                    if reason != "EXECUTION_INSTANCE_CONFLICT"
+                ]
+                await self._complete_startup()
+                continue
             if not await self.store.renew_lease(
                 self.lease_scope, self.owner, self.lease_token, self.lease_seconds
             ):
                 self.ready = False
-                self.last_reasons.append("EXECUTION_INSTANCE_CONFLICT")
-                return
+                self.lease_token = None
+                self.started = False
+                self.last_reasons = ["EXECUTION_INSTANCE_CONFLICT"]
+                continue

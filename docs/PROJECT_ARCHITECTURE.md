@@ -749,3 +749,11 @@ flowchart TB
 
 - `unknown_commands`、`unbooked_fills`、`balance_anomalies`、`active_holds`、`reconciliation_age_ms`、`outbox_backlog`、`unresolved`。
 - 研究侧：`research.backtest_jobs.status`、`attempt`、`fencing_token`、`lease_until`、`error`。
+
+**运行期对账与恢复边界**：
+
+- 执行租约在恢复之前获取；租约冲突时进程保持存活并重试，不进入对账或发送。
+- 取得租约后完成首次完整对账、补齐 `QUEUED` 命令并进入 `READY`；此后每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒重复完整对账。
+- 完整快照必须包含本系统尚未终结的挂单、本系统已关闭订单的终态和最近逐笔成交；仅依赖 `openOrders` 会把已撤/已成交订单误判为未知状态。
+- 交易所规则归一化位于 Adapter；MARKET BUY 以 quote 金额结算，成交 base 数量与请求数量不要求相等。
+- 主动重连入口只重建 venue 会话；重连后由周期对账恢复 `READY`，不触碰本地账本。

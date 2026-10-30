@@ -2539,3 +2539,16 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - `research.backtest_jobs` 查询记录必须返回 `model` 字段。
 - `model=event_runtime` 仅当成功结果包含 `engine=event_runtime`；其余历史成功结果返回 `model=legacy`，不得作为准入证据。
 - 旧结果不得原地改写；读取时标记，新运行使用冻结 manifest 全量重跑。
+
+### 12.7 运行期对账、交易所规则与沙箱验证
+
+- Trading Runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整 `ReconcileSnapshot`；撤单/成交终态必须来自快照中的订单观测或逐笔成交，不得由本地请求推断。
+- 快照必须同时报告：
+  - `openOrders` 中的本系统订单；
+  - `allOrders` 中本系统前缀（默认 `qts-`）已关闭订单的终态，避免撤单后订单从 `openOrders` 消失导致永久无法确认；
+  - 最近窗口内的逐笔成交。
+- `UNKNOWN_ORDER` 仅在本系统无法归属的外部订单仍出现在完整快照中时保持阻断；完整快照确认其已消失后自动解除并保留审计事件。`BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION` 仍需人工核对。
+- 交易所规则在 Adapter 边界归一化：`LOT_SIZE.stepSize` 向下取整数量、`PRICE_FILTER.tickSize` 取整价格、`NOTIONAL.minNotional` 预拒绝、`quoteAssetPrecision` 归一化 MARKET BUY 的 quote 金额；Core/Service 不接触原始 filter 字段。
+- MARKET BUY 以 quote 金额结算，交易所成交的 base 数量可能小于请求数量；只要逐笔成交可对上账，`FILLED` 观测不要求 `cumulative_qty == command.qty`。LIMIT 订单仍要求 `FILLED` 精确覆盖委托数量。
+- `POST /v1/trading/reconnect` 是运维主动重连入口，只重建交易所会话，不改变本地订单/账本；重连后必须等待 `/health/trading` 重新 `READY` 才能继续新增风险。
+- 沙箱验证脚本：`scripts/testnet_e2e.py`（下单/撤单/成交/重连，产出 `artifacts/e2e_evidence_final.json`）、`scripts/observe_trading_runtime.py` + `scripts/mark_observation.py` + `scripts/summarize_observation.py`（24h 观察窗口证据）。

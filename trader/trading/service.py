@@ -425,7 +425,11 @@ class TradingService:
                 self._refresh_status(state)
                 return False
 
-            if observation.status == "FILLED" and order.booked_qty != order.command.qty:
+            if (
+                observation.status == "FILLED"
+                and order.command.order_type != "MARKET"
+                and order.booked_qty != order.command.qty
+            ):
                 self._add_unresolved(
                     state,
                     "FILL_OBSERVATION_MISMATCH",
@@ -862,15 +866,37 @@ class TradingService:
         had_balances = bool(state.balances)
         expected = dict(state.balances)
 
-        # Keep execution-key conflicts as evidence; reconciliation-owned codes are rebuilt.
-        state.reconciliation["unresolved"] = [
-            entry
-            for entry in state.reconciliation.get("unresolved", [])
-            if entry["code"] in PERSISTENT_DIFFERENCES
-            or entry["code"] == "FILL_OBSERVATION_MISMATCH"
-        ]
-
         open_ids = {observation.cl_ord_id for observation in snapshot.open_orders}
+        foreign_ids = {
+            observation.cl_ord_id
+            for observation in snapshot.open_orders
+            if observation.cl_ord_id not in state.orders
+        }
+
+        # Keep execution-key conflicts as evidence; reconciliation-owned codes are rebuilt.
+        kept: list[dict[str, Any]] = []
+        for entry in state.reconciliation.get("unresolved", []):
+            code = entry["code"]
+            if code == "UNKNOWN_ORDER":
+                # An unknown order that no longer exists in a complete snapshot is
+                # resolved by evidence; anything still open stays blocked.
+                detail = entry.get("detail", {}) or {}
+                known_ids = set(detail.get("cl_ord_ids", []))
+                if detail.get("cl_ord_id"):
+                    known_ids.add(detail["cl_ord_id"])
+                remaining = sorted(known_ids & foreign_ids)
+                if remaining:
+                    kept.append(
+                        {
+                            "code": code,
+                            "detail": {"cl_ord_ids": remaining},
+                            "at_ms": entry.get("at_ms", now),
+                        }
+                    )
+                continue
+            if code in PERSISTENT_DIFFERENCES or code == "FILL_OBSERVATION_MISMATCH":
+                kept.append(entry)
+        state.reconciliation["unresolved"] = kept
 
         for execution in snapshot.executions:
             key = execution.key
@@ -916,11 +942,7 @@ class TradingService:
         for observation in snapshot.open_orders:
             order = state.orders.get(observation.cl_ord_id)
             if order is None:
-                self._add_unresolved(
-                    state,
-                    "UNKNOWN_ORDER",
-                    {"cl_ord_id": observation.cl_ord_id, "source": observation.source},
-                )
+                self._add_unknown_orders(state, foreign_ids)
                 continue
             try:
                 order.observe(observation)
@@ -931,7 +953,11 @@ class TradingService:
                     {"cl_ord_id": observation.cl_ord_id, "reason": str(exc)},
                 )
                 continue
-            if observation.status == "FILLED" and order.booked_qty != order.command.qty:
+            if (
+                observation.status == "FILLED"
+                and order.command.order_type != "MARKET"
+                and order.booked_qty != order.command.qty
+            ):
                 self._add_unresolved(
                     state,
                     "FILL_OBSERVATION_MISMATCH",
@@ -1071,6 +1097,25 @@ class TradingService:
         entries = state.reconciliation.setdefault("unresolved", [])
         if not any(entry["code"] == code for entry in entries):
             entries.append({"code": code, "detail": json_value(detail), "at_ms": self.clock()})
+
+    def _add_unknown_orders(self, state: AccountState, cl_ord_ids: set[str]) -> None:
+        """Track venue orders that this system does not own."""
+        if not cl_ord_ids:
+            return
+        entries = state.reconciliation.setdefault("unresolved", [])
+        existing = next((entry for entry in entries if entry["code"] == "UNKNOWN_ORDER"), None)
+        ids = sorted(cl_ord_ids)
+        if existing is None:
+            entries.append(
+                {
+                    "code": "UNKNOWN_ORDER",
+                    "detail": {"cl_ord_ids": ids},
+                    "at_ms": self.clock(),
+                }
+            )
+            return
+        detail = existing.setdefault("detail", {})
+        detail["cl_ord_ids"] = sorted(set(detail.get("cl_ord_ids", [])) | cl_ord_ids)
 
     def _resolve_unresolved(self, state: AccountState, code: str) -> None:
         entries = state.reconciliation.get("unresolved", [])

@@ -14,6 +14,7 @@
 | `QTS_RUNTIME_OWNER` | host:pid | 执行租约持有者 |
 | `QTS_RUNTIME_LEASE_SECONDS` | 30 | 执行租约秒数 |
 | `QTS_RECONCILE_LOOKBACK_MS` | 86400000 | REST 成交补查窗口 |
+| `QTS_RECONCILE_INTERVAL_SECONDS` | 30 | 运行期周期对账间隔；撤单/成交终态由轮询观测 |
 | `QTS_TRADING_API_PORT` | 8090 | 新 Control API 端口 |
 | `QTS_USERNAME` / `QTS_PASSWORD_HASH` | owner / 空 | 登录；空且 `QTS_AUTH_REQUIRED` 未设置时为开发模式 |
 | `QTS_AUTH_REQUIRED` | false | 无密码时强制鉴权（fail-closed） |
@@ -75,9 +76,53 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 .venv\Scripts\python.exe scripts\rehearse_trading_runtime.py
 ```
 
-## 5. 测试环境观察窗口（需人工执行）
+## 5. 沙箱 E2E 与测试环境观察窗口
 
-1. 至少运行 24 小时，期间执行一次主动断线重连和一次执行进程重启。
-2. 检查 `/v1/trading/metrics`：`unknown_commands`、`unbooked_fills`、`balance_anomalies`、`reconciliation_age_ms`、`outbox_backlog`、`unresolved`。
-3. 出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断，人工核对后再 `POST /v1/trading/resolve/{code}`。
-4. 记录观察窗口、重连/重启时间、指标和所有人工处置。
+### 5.1 沙箱 E2E
+
+本地启动（自动加载 `.env`，未配置密码时生成临时本地密码并写入系统临时目录，不打印明文）：
+
+```powershell
+.venv\Scripts\python.exe scripts\run_local_trading_runtime.py
+```
+
+如账户仍有非本系统遗留挂单，runtime 会按设计保持 `UNKNOWN_ORDER` 阻断。只能在确认这些挂单确属遗留后，用显式 allowlist 清理（拒绝 `qts-` 前缀订单）：
+
+```powershell
+.venv\Scripts\python.exe scripts\cancel_sandbox_orders.py --cl-ord-id <id1> --cl-ord-id <id2>
+```
+
+启动 runtime 后执行（只连接 `BINANCE_ENV` 指定的 sandbox；脚本不会读取或请求生产凭据）：
+
+```powershell
+.venv\Scripts\python.exe scripts\testnet_e2e.py --reconnect --out artifacts\e2e_evidence_final.json
+```
+
+脚本断言链路：
+
+1. 登录 + `/health/trading` 必须 `200`。
+2. LIMIT 挂单 → `OPEN`；撤单命令 `CONFIRMED` 但订单仍 `OPEN`；REST 周期对账观测到 `CANCELLED`。
+3. MARKET 买入 → 订单 `FILLED`；等待 `unbooked_fills=0` 且 `active_holds=0`。
+4. 读取 `trading_ledger`，费用按原币种记账。
+5. `POST /v1/trading/reconnect` 后重新 `READY`。
+6. `unresolved` 必须为空，`balance_anomalies` 必须为 0。
+
+### 5.2 观察窗口
+
+```powershell
+# 24h 观察（默认 60s 采样）
+.venv\Scripts\python.exe scripts\observe_trading_runtime.py --duration 86400 --out artifacts\observation.jsonl
+
+# 人工动作时追加标记
+.venv\Scripts\python.exe scripts\mark_observation.py --out artifacts\observation.jsonl --mark runtime_restart --detail "killed pid ..."
+
+# 汇总与门禁
+.venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl --min-hours 24 --json-out artifacts\observation_summary.json
+```
+
+窗口内必须完成一次主动重连和一次执行进程重启；`summarize_observation.py` 会输出 `ready_ratio`、读数切换、最大对账年龄、outbox 积压、未补齐成交、未知命令、账务异常、未解决差异和 markers。出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断，人工核对后再 `POST /v1/trading/resolve/{code}`。
+
+运行期注意：
+
+- 新 runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整账户快照；撤单/成交终态来自快照中的本系统订单观测，不靠猜测。
+- 交易所规则（step/tick/min notional/quote precision）在 Adapter 边界归一化；MARKET BUY 以 quote 金额结算，成交基础数量可能与请求数量不同，只要成交事实可对上账即视为完整。

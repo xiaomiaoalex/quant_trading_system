@@ -7,10 +7,18 @@ import asyncio
 import logging
 import os
 import socket
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from trader.trading.jobs import PostgresResearchStore, ResearchWorker
 from trader.trading.pg import create_pool
 from trader.trading.research import ResearchExecutor
+
+_ROOT = Path(__file__).resolve().parents[2]
+for _env_file in (_ROOT / ".env", _ROOT / ".env.postgres"):
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)
 
 logger = logging.getLogger(__name__)
 

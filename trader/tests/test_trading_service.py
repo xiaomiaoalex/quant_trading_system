@@ -894,3 +894,74 @@ async def test_recovery_releases_hold_on_terminal_observation_and_flags_missing_
         )
     )
     assert "FILL_OBSERVATION_MISMATCH" in view.reasons
+
+
+@pytest.mark.asyncio
+async def test_unknown_foreign_order_blocks_then_clears_when_the_venue_no_longer_shows_it():
+    clock = Clock(1_000_000)
+    service = make_service(clock=clock)
+    await bootstrap(service)
+
+    clock.now = 1_000_100
+    view = await service.recover(
+        ReconcileSnapshot(
+            "acct",
+            1_000_100,
+            2,
+            {"USDT": Decimal("1000"), "BTC": Decimal("0")},
+            open_orders=[
+                OrderObservation("acct", "foreign-1", "OPEN", Decimal("0"), "b-9", 1_000_100)
+            ],
+            marks={"BTCUSDT": {"price": Decimal("100"), "at_ms": 1_000_100}},
+        )
+    )
+    assert "UNKNOWN_ORDER" in view.reasons
+    assert view.ready is False
+
+    clock.now = 1_000_200
+    view = await service.recover(
+        ReconcileSnapshot(
+            "acct",
+            1_000_200,
+            3,
+            {"USDT": Decimal("1000"), "BTC": Decimal("0")},
+            marks={"BTCUSDT": {"price": Decimal("100"), "at_ms": 1_000_200}},
+        )
+    )
+    assert "UNKNOWN_ORDER" not in view.reasons
+    assert view.ready is True
+
+
+@pytest.mark.asyncio
+async def test_market_order_accepts_a_venue_fill_that_differs_from_the_requested_base_qty():
+    service = make_service()
+    await bootstrap(service)
+    receipt = await service.place(
+        command(
+            command_id="mkt", order_type="MARKET", qty=Decimal("0.0002"), price=Decimal("77468")
+        )
+    )
+    # The venue settles a MARKET buy in quote currency, so the executed base
+    # quantity may differ from the requested base quantity.
+    await service.observe(
+        OrderObservation("acct", receipt.cl_ord_id, "FILLED", Decimal("0.00019"), "b-1", 1_000_100)
+    )
+    order = await service.order("acct", receipt.cl_ord_id)
+    assert order["status"] == "FILLED"
+    view = await service.risk_view("acct")
+    assert "FILL_OBSERVATION_MISMATCH" not in view.reasons
+    assert "ORDER_OBSERVATION_CONFLICT" not in view.reasons
+
+
+@pytest.mark.asyncio
+async def test_limit_order_still_requires_an_exact_fill_cover():
+    service = make_service()
+    await bootstrap(service)
+    receipt = await service.place(command(command_id="lim", qty=Decimal("1"), price=Decimal("100")))
+    await service.observe(
+        OrderObservation("acct", receipt.cl_ord_id, "FILLED", Decimal("0.5"), "b-1", 1_000_100)
+    )
+    order = await service.order("acct", receipt.cl_ord_id)
+    assert order["status"] != "FILLED"
+    view = await service.risk_view("acct")
+    assert "ORDER_OBSERVATION_CONFLICT" in view.reasons

@@ -50,6 +50,7 @@ class FakeBroker:
             ]
         }
         self.orders = [broker_order()]
+        self.all_orders = list(self.orders)
         self.trades = {
             "BTCUSDT": [
                 {
@@ -65,9 +66,24 @@ class FakeBroker:
         }
         self.place_calls = []
         self.cancel_calls = []
+        self.exchange_info = {
+            "symbols": [
+                {
+                    "quoteAssetPrecision": 2,
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "stepSize": "0.00001"},
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                        {"filterType": "NOTIONAL", "minNotional": "10"},
+                    ],
+                }
+            ]
+        }
 
     async def _fetch_account(self):
         return self.account
+
+    async def get_exchange_info(self, symbol=None):
+        return self.exchange_info
 
     async def place_order(self, **kwargs):
         self.place_calls.append(kwargs)
@@ -88,7 +104,7 @@ class FakeBroker:
         return self.orders
 
     async def get_all_orders(self, symbol, start_time_ms=None, limit=1000):
-        return self.orders
+        return self.all_orders
 
     async def get_my_trades(self, symbol, start_time_ms=None, from_id=None, limit=1000):
         return self.trades.get(symbol, [])
@@ -191,3 +207,88 @@ async def test_snapshot_is_incomplete_when_pagination_or_order_mapping_is_missin
         broker, account_id="acct", symbols=["BTCUSDT"], clock=lambda: 1_000_100
     )
     assert (await unmapped.build()).complete is False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reports_our_own_closed_orders_but_not_foreign_ones():
+    broker = FakeBroker()
+    broker.orders = []
+    broker.all_orders = [
+        broker_order(order_id="b-2", cl_ord_id="qts-cancelled", status=OrderStatus.CANCELLED),
+        broker_order(order_id="b-3", cl_ord_id="foreign-order", status=OrderStatus.FILLED),
+    ]
+    provider = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=lambda: 1_000_100
+    )
+    snapshot = await provider.build()
+    observed = {item.cl_ord_id: item.status for item in snapshot.open_orders}
+    assert observed.get("qts-cancelled") == "CANCELLED"
+    assert "foreign-order" not in observed
+
+
+@pytest.mark.asyncio
+async def test_market_buy_rounds_the_quote_amount_to_the_asset_precision():
+    broker = FakeBroker()
+    port = BinanceSpotExchangePort(broker)
+    result = await port.place_order(
+        PlaceOrderCommand(
+            command_id="cmd-m",
+            account_id="acct",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            side="BUY",
+            qty=Decimal("0.0002"),
+            price=Decimal("77551.96"),
+            order_type="MARKET",
+        ),
+        "qts-m",
+    )
+    assert result.outcome == ExchangeOutcome.ACCEPTED
+    sent = broker.place_calls[0]
+    assert sent["quote_qty"] == Decimal("15.51")
+    assert sent["qty"] == Decimal("0.00020")
+
+
+@pytest.mark.asyncio
+async def test_market_sell_quantity_is_floored_to_the_step_size():
+    broker = FakeBroker()
+    port = BinanceSpotExchangePort(broker)
+    await port.place_order(
+        PlaceOrderCommand(
+            command_id="cmd-s",
+            account_id="acct",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            side="SELL",
+            qty=Decimal("0.001234567"),
+            price=Decimal("77551.96"),
+            order_type="MARKET",
+        ),
+        "qts-s",
+    )
+    assert broker.place_calls[0]["qty"] == Decimal("0.00123")
+
+
+@pytest.mark.asyncio
+async def test_limit_below_minimum_notional_is_rejected_without_sending():
+    broker = FakeBroker()
+    port = BinanceSpotExchangePort(broker)
+    result = await port.place_order(
+        PlaceOrderCommand(
+            command_id="cmd-small",
+            account_id="acct",
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            side="BUY",
+            qty=Decimal("0.0001"),
+            price=Decimal("100"),
+            order_type="LIMIT",
+        ),
+        "qts-small",
+    )
+    assert result.outcome == ExchangeOutcome.REJECTED
+    assert "NOTIONAL_BELOW_MINIMUM" in result.reason
+    assert broker.place_calls == []

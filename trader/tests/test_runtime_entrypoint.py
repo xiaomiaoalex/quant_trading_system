@@ -6,9 +6,16 @@ from fastapi.testclient import TestClient
 
 
 def test_entrypoint_starts_api_and_refuses_trading_without_credentials(monkeypatch):
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_SECRET_KEY", raising=False)
+    # Import first: the module loads .env, then the test overrides the values so
+    # the smoke test never touches the real sandbox or the development database.
     from trader.runtime.trading_main import app
+
+    monkeypatch.setenv("BINANCE_API_KEY", "")
+    monkeypatch.setenv("BINANCE_SECRET_KEY", "")
+    monkeypatch.setenv(
+        "POSTGRES_CONNECTION_STRING",
+        "postgresql://trader:trader_pwd@127.0.0.1:1/trading",
+    )
 
     with TestClient(app) as client:
         assert client.get("/health/live").status_code == 200

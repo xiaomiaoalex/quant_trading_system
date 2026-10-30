@@ -7,8 +7,10 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 
 from trader.adapters.broker.binance_spot_demo_broker import (
     BinanceSpotDemoBroker,
@@ -27,6 +29,11 @@ from trader.trading.models import ExchangeOrderResult, ExchangeOutcome
 from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
 from trader.trading.runtime import TradingReadinessProvider, TradingRuntime
+
+_ROOT = Path(__file__).resolve().parents[2]
+for _env_file in (_ROOT / ".env", _ROOT / ".env.postgres"):
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +99,7 @@ async def lifespan(app):
             )
             broker = BinanceSpotDemoBroker(config)
             await broker.connect()
+            app.state.broker = broker
             exchange = BinanceSpotExchangePort(broker)
             snapshot = BinanceSpotSnapshotProvider(
                 broker,
@@ -125,6 +133,7 @@ async def lifespan(app):
             notifier=notify,
             owner=os.getenv("QTS_RUNTIME_OWNER", f"{os.getenv('HOSTNAME', 'local')}:{os.getpid()}"),
             lease_seconds=int(os.getenv("QTS_RUNTIME_LEASE_SECONDS", "30")),
+            reconcile_interval_seconds=float(os.getenv("QTS_RECONCILE_INTERVAL_SECONDS", "30")),
         )
         started = await runtime.start()
         app.state.trading_service = runtime.service
@@ -160,6 +169,19 @@ app = create_trading_app(
     lifespan=lifespan,
     include_sse=True,
 )
+
+
+@app.post("/v1/trading/reconnect")
+async def reconnect_venue():
+    """Operator-triggered active reconnect of the venue session."""
+    broker = getattr(app.state, "broker", None)
+    if broker is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="Venue session is not configured")
+    await broker.disconnect()
+    await broker.connect()
+    return {"ok": True, "reconnected_at_ms": int(time.time() * 1000)}
 
 
 if __name__ == "__main__":

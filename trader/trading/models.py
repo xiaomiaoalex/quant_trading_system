@@ -206,7 +206,13 @@ class OrderAggregate:
             if status in TERMINAL:
                 raise Conflict("Conflicting terminal order observations")
             return
-        if status == "FILLED" and observation.cumulative_qty != self.command.qty:
+        if (
+            status == "FILLED"
+            and self.command.order_type != "MARKET"
+            and observation.cumulative_qty != self.command.qty
+        ):
+            # A LIMIT order must be covered exactly. A MARKET order is settled in
+            # quote currency, so the venue may fill a different base quantity.
             raise Conflict("FILLED observation must cover order quantity")
         self.status = status
         self.observed_qty = observation.cumulative_qty

@@ -66,6 +66,7 @@ async def test_startup_reconciles_before_becoming_ready_and_allows_strategies():
         "storage",
         "ledger_risk_oms",
         "adapter",
+        "lease",
         "reconcile",
         "resume_queued",
         "ready",
@@ -264,3 +265,53 @@ def test_runtime_entrypoints_import_without_network_side_effects():
     assert "/health/trading" in paths
     assert "/v1/trading/orders" in paths
     assert "/v1/research/backtests" in paths
+
+
+@pytest.mark.asyncio
+async def test_periodic_reconciliation_observes_terminal_orders():
+    clock = Clock(1_000_000)
+    calls = {"count": 0}
+
+    async def provider(account_id):
+        calls["count"] += 1
+        index = calls["count"]
+        if index == 1:
+            return snapshot(generation=1, checked=1_000_000)
+        if index == 2:
+            return snapshot(
+                generation=2,
+                checked=1_000_100,
+                open_orders=[
+                    OrderObservation("acct", "qts-1", "CANCELLED", Decimal("0"), "b-1", 1_000_100)
+                ],
+            )
+        return snapshot(generation=index, checked=1_000_000 + index * 100)
+
+    rt = runtime(clock=clock, snap=None)
+    rt.snapshot_provider = provider
+    rt.reconcile_interval_seconds = 0.01
+    assert await rt.start() is True
+    await asyncio.sleep(0.2)
+    state = await rt.store.read("acct")
+    assert state.reconciliation.get("checked_at_ms") >= 1_000_200
+    assert calls["count"] >= 3
+    await rt.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_retries_the_execution_lease_until_the_stale_owner_expires():
+    store = MemoryTradingStore()
+    await store.acquire_lease("trading:acct", "dead-owner", 30)
+
+    rt = runtime(store, owner="runtime-1", snap=snapshot())
+    rt.lease_seconds = 30
+    rt.lease_retry_interval_seconds = 0.02
+    rt.reconcile_interval_seconds = 0.01
+    assert await rt.start() is False
+    assert "EXECUTION_INSTANCE_CONFLICT" in rt.last_reasons
+
+    store.expire_lease("trading:acct")
+    await asyncio.sleep(0.4)
+    assert rt.lease_token is not None
+    assert rt.started is True
+    await rt.stop()
