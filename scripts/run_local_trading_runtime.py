@@ -28,12 +28,17 @@ from trader.api.auth import hash_password  # noqa: E402
 def provision_password() -> None:
     if os.getenv("QTS_PASSWORD_HASH"):
         return
-    password = os.getenv("QTS_LOCAL_PASSWORD") or secrets.token_urlsafe(18)
-    os.environ["QTS_PASSWORD_HASH"] = hash_password(password)
-    if not os.getenv("QTS_LOCAL_PASSWORD"):
-        target = Path(tempfile.gettempdir()) / "qts_operator_password.txt"
+    target = Path(tempfile.gettempdir()) / "qts_operator_password.txt"
+    password = os.getenv("QTS_LOCAL_PASSWORD")
+    if not password and target.exists():
+        # Reuse the local password across restarts so observation tooling keeps
+        # a valid login without ever printing the secret.
+        password = target.read_text(encoding="utf-8").strip()
+    if not password:
+        password = secrets.token_urlsafe(18)
         target.write_text(password, encoding="utf-8")
         print(f"[runbook] operator password stored in {target}")
+    os.environ["QTS_PASSWORD_HASH"] = hash_password(password)
 
 
 def main() -> None:

@@ -126,3 +126,21 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 
 - 新 runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整账户快照；撤单/成交终态来自快照中的本系统订单观测，不靠猜测。
 - 交易所规则（step/tick/min notional/quote precision）在 Adapter 边界归一化；MARKET BUY 以 quote 金额结算，成交基础数量可能与请求数量不同，只要成交事实可对上账即视为完整。
+
+### 5.3 本地验证产物（`artifacts/` 不提交）
+
+| 文件 | 内容 |
+|------|------|
+| `artifacts/e2e_evidence_final.json` | 首次完整沙箱链路：登录/健康/LIMIT 挂单/撤单/订单转 `CANCELLED`/MARKET 成交/账务结算/账本/主动重连 |
+| `artifacts/e2e_evidence_window.json` | 观察窗口内、执行进程重启后的同一链路复验 |
+| `artifacts/observation.jsonl` | 24h 观察采样（每 20s 一条；含 2 条重启停机 `ConnectError`、READY 切换和 markers） |
+| `artifacts/observation_summary_partial.json` | 当前部分窗口汇总；`blockers=[]` |
+| `artifacts/observation_attempt1.jsonl` | 第一次尝试（本地密码未跨重启复用导致 observer 401），保留用于审计 |
+
+24h 结束后运行最终门禁：
+
+```powershell
+.venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl --min-hours 24 --json-out artifacts\observation_summary_final.json
+```
+
+本地临时密码文件位于系统临时目录 `qts_operator_password.txt`；验证结束后可删除。生产/真实资金环境必须使用显式 `QTS_PASSWORD_HASH`，不得依赖该文件。

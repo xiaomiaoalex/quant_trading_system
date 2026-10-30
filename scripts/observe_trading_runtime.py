@@ -81,7 +81,13 @@ async def main() -> int:
                     }
             except Exception as exc:
                 line["error"] = f"{type(exc).__name__}: {exc}"
-                csrf = ""
+                if "401" in str(exc) or "403" in str(exc):
+                    # The session really is gone; reload the local password and
+                    # log in again on the next sample.
+                    csrf = ""
+                    password_file = Path(tempfile.gettempdir()) / "qts_operator_password.txt"
+                    if password_file.exists():
+                        password = password_file.read_text(encoding="utf-8").strip()
             with out.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(line, default=str) + "\n")
             print(json.dumps(line, default=str)[:300])
