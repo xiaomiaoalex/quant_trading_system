@@ -261,7 +261,9 @@ def test_runtime_entrypoints_import_without_network_side_effects():
 
     assert callable(research_main.main)
     assert trading_main.app is not None
-    paths = {route.path for route in trading_main.app.routes}
+    # Inspect the OpenAPI path map instead of route objects: FastAPI versions
+    # differ in how included routers are represented on app.routes.
+    paths = set(trading_main.app.openapi().get("paths", {}))
     assert "/health/trading" in paths
     assert "/v1/trading/orders" in paths
     assert "/v1/research/backtests" in paths
