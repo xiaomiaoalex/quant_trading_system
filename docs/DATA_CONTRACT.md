@@ -185,3 +185,35 @@ datetime,EMA20,EMA50,RSI14,BOLL_UPPER,...,FUNDING_RATE,SC_SUPPLY
 索引：`datetime` (Pandas Timestamp)  
 时间范围：inclusive [start_time, end_time]  
 频率：由 `resample_rule` 定义
+---
+
+## 6. 统一事件回测数据集契约（BAR_V1）
+
+不可变数据集 `dataset_id` 由内容哈希生成，identity 至少包含：
+
+| 字段 | 要求 |
+|------|------|
+| `venue` | 交易场所 |
+| `market_type` | 首期仅 `SPOT` |
+| `symbol` | 标的 |
+| `base_asset` / `quote_asset` | 资产；必须不同 |
+| `interval` | `1m` / `5m` / `15m` / `1h` / `4h` / `1d` |
+| `source` | 数据来源 |
+| `version` | 数据集版本 |
+
+每根 bar：
+
+| 字段 | 要求 |
+|------|------|
+| `open_time_ms` | UTC 开盘时间 |
+| `close_time_ms` | 必须等于 `open_time_ms + interval_ms` |
+| `available_at_ms` | BAR_V1 必须等于 `close_time_ms`；未完成 K 线不可见 |
+| `open/high/low/close/volume` | 有限十进制；`low <= min(open, close)`，`high >= max(open, close)` |
+
+规则：
+
+- 同一数据集内必须固定周期、严格递增且无缺口。
+- 多个数据集共同回测时必须共享 venue、计价资产、周期和完整 bar calendar。
+- 内容相同返回同一 `dataset_id`；任何 identity 或 bar 变化产生新 ID。
+- 回测 manifest 冻结 `dataset_ids`、strategy、capital、fee、slippage、engine、purpose；失败重跑必须复用冻结 manifest。
+- `vectorbt` 结果只用于研究筛选，不得作为执行/风控准入证据。

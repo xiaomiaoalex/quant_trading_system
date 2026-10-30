@@ -706,3 +706,46 @@ flowchart LR
 3. 修改实现和测试，遵循 TDD Red → Green → Refactor。
 4. 按规则更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`。
 5. 如改变阶段目标、优先级或当前执行入口，同步更新 `docs/PLAN.md` 或阶段计划文档。
+
+---
+
+## 7.1 Unified Spot Trading Runtime 拓扑
+
+首期 Binance 现货闭环采用三进程、PostgreSQL 协调架构，不引入消息中间件。
+
+```mermaid
+flowchart TB
+    UI["Frontend / Operator"] -->|Cookie + CSRF| API["Control API\ncreate_trading_app"]
+    API -->|Place/Cancel command| PG[("PostgreSQL\ntrading_accounts\ncommands / executions\nledger / events / outbox\nruntime leases")]
+    RT["Trading Runtime\nstrategy/portfolio/risk/OMS"] -->|SELECT FOR UPDATE| PG
+    RT -->|ExchangePort| BINANCE["Binance Spot\nREST / private stream"]
+    RT -->|outbox retry| SSE["SSE / notifications"]
+    WORKER["Research Worker\nlease + fencing"] -->|claim/finish| PG
+    WORKER -->|frozen dataset| RESEARCH[("research.datasets\nresearch.backtest_jobs")]
+    API --> RESEARCH
+```
+
+**启动顺序**：
+
+1. 存储初始化（版本化 schema）。
+2. 构建 `TradingService`（统一账本、预约、风控、OMS）。
+3. 注入 `ExchangePort`（Binance adapter）。
+4. 拉取完整 `ReconcileSnapshot` 并恢复（成交/订单/余额/代际）。
+5. 获取账户执行租约；冲突则交易未就绪。
+6. `/health/trading` 返回 200 后才允许策略启动。
+7. 策略运行；所有新风险命令经过同一 service 入口。
+
+**边界**：
+
+- `trader/trading/` 是纯领域 + 应用事务核心；网络调用只发生在账户事务之外。
+- `trader/adapters/broker/spot_execution_adapter.py` 只做 Binance 字段到内部 DTO 的转换；不得修改本地订单/账本。
+- `trader/services/trading_ingress.py` 将 private stream 成交与订单更新转发给统一 service；不维护第二套订单状态。
+- `trader/api/routes/trading.py` / `research.py` 是控制面入口，不直接触达交易所或账本表。
+- `trading_runtime_leases` 保证同一账户只有一个执行实例；研究任务租约与 fencing 独立。
+- Control API 与 Trading Runtime 可同进程启动用于本地开发，但生产部署按进程拆分。
+- 旧 OMS/ExecutionBudget/AccountState 路径不得与新 service 同时发送订单；切换到新入口时必须以运行时租约和就绪门禁为唯一发送者。
+
+**监控字段**（`GET /v1/trading/metrics`）：
+
+- `unknown_commands`、`unbooked_fills`、`balance_anomalies`、`active_holds`、`reconciliation_age_ms`、`outbox_backlog`、`unresolved`。
+- 研究侧：`research.backtest_jobs.status`、`attempt`、`fencing_token`、`lease_until`、`error`。
