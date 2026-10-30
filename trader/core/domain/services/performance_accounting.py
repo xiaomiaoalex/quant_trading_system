@@ -406,7 +406,10 @@ def calculate_brinson_carino_linking(
         period_benchmark_return = Decimal(str(period.get("benchmark_return", "0")))
         period_k = _carino_coefficient(period_portfolio_return, period_benchmark_return)
         link_weight = period_k / total_k
-        for raw_item in period.get("items", []):
+        raw_items = period.get("items", [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+        for raw_item in raw_items:
             item = dict(raw_item)  # type: ignore[arg-type]
             bucket = buckets.setdefault(
                 str(item["asset_class"]),
@@ -549,7 +552,7 @@ def calculate_factor_attribution(
         }
         for factor_name, bucket in sorted(buckets.items())
     ]
-    total = sum((item["contribution_return"] for item in items), Decimal("0"))
+    total = sum((Decimal(str(item["contribution_return"])) for item in items), Decimal("0"))
     return {
         "method": "factor_return_attribution_v3",
         "quality": quality,

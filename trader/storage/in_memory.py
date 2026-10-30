@@ -927,7 +927,10 @@ class ControlPlaneInMemoryStorage:
             "snapshot_id": self._snapshot_counter,
             "created_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
-        stream_key = snapshot.get("stream_key")
+        stream_key_value = snapshot.get("stream_key")
+        if not isinstance(stream_key_value, str) or not stream_key_value:
+            raise ValueError("snapshot requires non-empty stream_key")
+        stream_key = stream_key_value
         if stream_key not in self.snapshots:
             self.snapshots[stream_key] = []
         self.snapshots[stream_key].append(snapshot)

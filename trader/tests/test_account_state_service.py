@@ -56,7 +56,9 @@ class TestApplyRestSnapshot:
             "acct1", "binance", _make_snapshot_data([("USDT", "200", "0")]), ts_ms=2000
         )
         assert svc.get_balance("acct1", "binance", "BTC") is None
-        assert svc.get_balance("acct1", "binance", "USDT").free == Decimal("200")
+        usdt = svc.get_balance("acct1", "binance", "USDT")
+        assert usdt is not None
+        assert usdt.free == Decimal("200")
 
 
 class TestApplyPrivateAccountPosition:
@@ -210,7 +212,13 @@ class TestMultipleAccountsAndVenues:
         svc.apply_rest_snapshot(
             "acct2", "binance", _make_snapshot_data([("USDT", "3000", "0")]), ts_ms=1000
         )
-        assert svc.get_balance("acct1", "binance", "USDT").free == Decimal("1000")
-        assert svc.get_balance("acct1", "ftx", "USDT").free == Decimal("2000")
-        assert svc.get_balance("acct2", "binance", "USDT").free == Decimal("3000")
+        acct1_binance = svc.get_balance("acct1", "binance", "USDT")
+        acct1_ftx = svc.get_balance("acct1", "ftx", "USDT")
+        acct2_binance = svc.get_balance("acct2", "binance", "USDT")
+        assert acct1_binance is not None
+        assert acct1_ftx is not None
+        assert acct2_binance is not None
+        assert acct1_binance.free == Decimal("1000")
+        assert acct1_ftx.free == Decimal("2000")
+        assert acct2_binance.free == Decimal("3000")
         assert svc.get_balance("acct2", "ftx", "USDT") is None

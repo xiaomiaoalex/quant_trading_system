@@ -303,9 +303,9 @@ class VectorBTAdapter:
         param_combinations = list(itertools.product(*param_ranges.values()))
         param_names = list(param_ranges.keys())
 
-        results = []
-        best_metrics = None
-        best_params = None
+        results: List[Dict[str, Any]] = []
+        best_metrics: Dict[str, Any] | None = None
+        best_params: Dict[str, Any] | None = None
 
         for combo in param_combinations:
             params = dict(zip(param_names, combo))
@@ -326,7 +326,7 @@ class VectorBTAdapter:
                 init_cash=float(config.initial_capital),
             )
 
-            result = {
+            result: Dict[str, Any] = {
                 "params": params,
                 "total_return": float(pf.total_return()),
                 "sharpe_ratio": float(pf.sharpe_ratio(1.0)),
@@ -335,9 +335,16 @@ class VectorBTAdapter:
             }
             results.append(result)
 
-            if best_metrics is None or result["sharpe_ratio"] > best_metrics["sharpe_ratio"]:
+            sharpe_ratio = float(result["sharpe_ratio"])
+            best_sharpe_ratio = (
+                float(best_metrics["sharpe_ratio"]) if best_metrics is not None else None
+            )
+            if best_sharpe_ratio is None or sharpe_ratio > best_sharpe_ratio:
                 best_metrics = result
                 best_params = params
+
+        if best_metrics is None or best_params is None:
+            raise ValueError("parameter ranges produced no optimization candidates")
 
         return OptimizationResult(
             best_params=best_params,

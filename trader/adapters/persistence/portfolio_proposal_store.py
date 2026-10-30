@@ -85,6 +85,21 @@ class PortfolioProposalStore:
         self._use_postgres = False
         self._init_lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._memory_runs: Dict[str, Dict[str, Any]] = {}
+        self._memory_sleeves: Dict[str, Dict[str, Any]] = {}
+        self._memory_portfolios: Dict[str, Dict[str, Any]] = {}
+        self._memory_reviews: Dict[str, Dict[str, Any]] = {}
+
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres
+
+    @staticmethod
+    def _required_str(value: Any, field_name: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{field_name} is required")
+        return value
 
     async def _ensure_postgres(self) -> bool:
         """确保 PostgreSQL 可用"""
@@ -135,7 +150,7 @@ class PortfolioProposalStore:
 
     async def _save_committee_run_pg(self, run: Dict[str, Any]) -> str:
         """PostgreSQL 保存 CommitteeRun"""
-        run_id = run.get("run_id")
+        run_id = self._required_str(run.get("run_id"), "run_id")
 
         query = """
             INSERT INTO committee_runs (
@@ -161,7 +176,7 @@ class PortfolioProposalStore:
                 updated_at = EXCLUDED.updated_at
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 query,
                 run_id,
@@ -192,11 +207,9 @@ class PortfolioProposalStore:
     async def _save_committee_run_memory(self, run: Dict[str, Any]) -> str:
         """内存保存 CommitteeRun（仅开发/测试用）"""
         # 简单存储到模块级变量
-        if not hasattr(self, "_memory_runs"):
-            self._memory_runs: Dict[str, Dict[str, Any]] = {}
-
-        self._memory_runs[run.get("run_id")] = run
-        return run.get("run_id")
+        run_id = self._required_str(run.get("run_id"), "run_id")
+        self._memory_runs[run_id] = run
+        return run_id
 
     async def get_committee_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         """获取 CommitteeRun 记录"""
@@ -218,7 +231,7 @@ class PortfolioProposalStore:
             WHERE run_id = $1
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             row = await conn.fetchrow(query, run_id)
 
         if row is None:
@@ -251,8 +264,6 @@ class PortfolioProposalStore:
 
     async def _get_committee_run_memory(self, run_id: str) -> Optional[Dict[str, Any]]:
         """内存获取 CommitteeRun"""
-        if not hasattr(self, "_memory_runs"):
-            self._memory_runs: Dict[str, Dict[str, Any]] = {}
         return self._memory_runs.get(run_id)
 
     async def list_committee_runs(
@@ -268,7 +279,7 @@ class PortfolioProposalStore:
         self, status: Optional[str], limit: int, offset: int
     ) -> List[Dict[str, Any]]:
         """PostgreSQL 列出 CommitteeRun"""
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             if status:
                 query = """
                     SELECT run_id, research_request, context_package_version,
@@ -303,9 +314,6 @@ class PortfolioProposalStore:
         self, status: Optional[str], limit: int, offset: int
     ) -> List[Dict[str, Any]]:
         """内存列出 CommitteeRun"""
-        if not hasattr(self, "_memory_runs"):
-            self._memory_runs: Dict[str, Dict[str, Any]] = {}
-
         runs = list(self._memory_runs.values())
         if status:
             runs = [r for r in runs if r.get("status") == status]
@@ -326,7 +334,7 @@ class PortfolioProposalStore:
 
     async def _save_sleeve_proposal_pg(self, proposal: Dict[str, Any]) -> str:
         """PostgreSQL 保存 SleeveProposal"""
-        proposal_id = proposal.get("proposal_id")
+        proposal_id = self._required_str(proposal.get("proposal_id"), "proposal_id")
 
         query = """
             INSERT INTO sleeve_proposals (
@@ -348,7 +356,7 @@ class PortfolioProposalStore:
                 updated_at = EXCLUDED.updated_at
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 query,
                 proposal_id,
@@ -372,11 +380,9 @@ class PortfolioProposalStore:
 
     async def _save_sleeve_proposal_memory(self, proposal: Dict[str, Any]) -> str:
         """内存保存 SleeveProposal"""
-        if not hasattr(self, "_memory_sleeves"):
-            self._memory_sleeves: Dict[str, Dict[str, Any]] = {}
-
-        self._memory_sleeves[proposal.get("proposal_id")] = proposal
-        return proposal.get("proposal_id")
+        proposal_id = self._required_str(proposal.get("proposal_id"), "proposal_id")
+        self._memory_sleeves[proposal_id] = proposal
+        return proposal_id
 
     async def get_sleeve_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
         """获取 SleeveProposal"""
@@ -397,7 +403,7 @@ class PortfolioProposalStore:
             WHERE proposal_id = $1
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             row = await conn.fetchrow(query, proposal_id)
 
         if row is None:
@@ -423,8 +429,6 @@ class PortfolioProposalStore:
 
     async def _get_sleeve_proposal_memory(self, proposal_id: str) -> Optional[Dict[str, Any]]:
         """内存获取 SleeveProposal"""
-        if not hasattr(self, "_memory_sleeves"):
-            self._memory_sleeves: Dict[str, Dict[str, Any]] = {}
         return self._memory_sleeves.get(proposal_id)
 
     # =========================================================================
@@ -440,7 +444,7 @@ class PortfolioProposalStore:
 
     async def _save_portfolio_proposal_pg(self, proposal: Dict[str, Any]) -> str:
         """PostgreSQL 保存 PortfolioProposal"""
-        proposal_id = proposal.get("proposal_id")
+        proposal_id = self._required_str(proposal.get("proposal_id"), "proposal_id")
 
         query = """
             INSERT INTO portfolio_proposals (
@@ -461,7 +465,7 @@ class PortfolioProposalStore:
                 updated_at = EXCLUDED.updated_at
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 query,
                 proposal_id,
@@ -484,11 +488,9 @@ class PortfolioProposalStore:
 
     async def _save_portfolio_proposal_memory(self, proposal: Dict[str, Any]) -> str:
         """内存保存 PortfolioProposal"""
-        if not hasattr(self, "_memory_portfolios"):
-            self._memory_portfolios: Dict[str, Dict[str, Any]] = {}
-
-        self._memory_portfolios[proposal.get("proposal_id")] = proposal
-        return proposal.get("proposal_id")
+        proposal_id = self._required_str(proposal.get("proposal_id"), "proposal_id")
+        self._memory_portfolios[proposal_id] = proposal
+        return proposal_id
 
     # =========================================================================
     # ReviewReport 操作
@@ -503,7 +505,7 @@ class PortfolioProposalStore:
 
     async def _save_review_report_pg(self, report: Dict[str, Any]) -> str:
         """PostgreSQL 保存 ReviewReport"""
-        report_id = report.get("report_id")
+        report_id = self._required_str(report.get("report_id"), "report_id")
 
         query = """
             INSERT INTO review_reports (
@@ -522,7 +524,7 @@ class PortfolioProposalStore:
                 cost_score = EXCLUDED.cost_score
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 query,
                 report_id,
@@ -544,11 +546,9 @@ class PortfolioProposalStore:
 
     async def _save_review_report_memory(self, report: Dict[str, Any]) -> str:
         """内存保存 ReviewReport"""
-        if not hasattr(self, "_memory_reviews"):
-            self._memory_reviews: Dict[str, Dict[str, Any]] = {}
-
-        self._memory_reviews[report.get("report_id")] = report
-        return report.get("report_id")
+        report_id = self._required_str(report.get("report_id"), "report_id")
+        self._memory_reviews[report_id] = report
+        return report_id
 
     async def get_review_reports_for_proposal(self, proposal_id: str) -> List[Dict[str, Any]]:
         """获取某个 proposal 的所有 ReviewReport"""
@@ -570,7 +570,7 @@ class PortfolioProposalStore:
             ORDER BY created_at DESC
         """
 
-        async with self._postgres.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             rows = await conn.fetch(query, proposal_id)
 
         return [
@@ -594,7 +594,4 @@ class PortfolioProposalStore:
 
     async def _get_review_reports_memory(self, proposal_id: str) -> List[Dict[str, Any]]:
         """内存获取 ReviewReport"""
-        if not hasattr(self, "_memory_reviews"):
-            self._memory_reviews: Dict[str, Dict[str, Any]] = {}
-
         return [r for r in self._memory_reviews.values() if r.get("proposal_id") == proposal_id]

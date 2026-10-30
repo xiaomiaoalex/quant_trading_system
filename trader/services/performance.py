@@ -790,7 +790,7 @@ class PerformanceService:
             )
             return await self._repository.save_attribution_result(result)
 
-        brinson = calculate_brinson_attribution(
+        brinson: dict[str, Any] = calculate_brinson_attribution(
             portfolio_holdings=portfolio_holdings,
             benchmark_holdings=benchmark_holdings,
             classifications=classifications,
@@ -896,7 +896,7 @@ class PerformanceService:
             classifications = await self._repository.list_asset_classifications(
                 as_of_ms=period_start_ms,
             )
-            period_result = calculate_brinson_attribution(
+            period_result: dict[str, Any] = calculate_brinson_attribution(
                 portfolio_holdings=portfolio_holdings,
                 benchmark_holdings=benchmark_holdings,
                 classifications=classifications,
@@ -931,7 +931,7 @@ class PerformanceService:
             )
             return await self._repository.save_attribution_result(result)
 
-        linked = calculate_brinson_carino_linking(period_results)
+        linked: dict[str, Any] = calculate_brinson_carino_linking(period_results)
         items = [
             AttributionItem(
                 key=str(item["asset_class"]),
@@ -1090,7 +1090,7 @@ class PerformanceService:
             )
             return await self._repository.save_attribution_result(result)
 
-        factor_result = calculate_factor_attribution(
+        factor_result: dict[str, Any] = calculate_factor_attribution(
             exposures=exposures,
             factor_returns=factor_returns,
         )
@@ -1281,7 +1281,7 @@ class PerformanceService:
             period_start_ms=period_start_ms,
             period_end_ms=period_end_ms,
         )
-        risk_result = calculate_risk_budget_attribution(traces)
+        risk_result: dict[str, Any] = calculate_risk_budget_attribution(traces)
         items = [
             AttributionItem(
                 key=str(item["constraint_type"]),

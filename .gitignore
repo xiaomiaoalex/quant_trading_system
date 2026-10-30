@@ -218,6 +218,9 @@ mcp_mission_control.json
 # Artifacts - generated output (backtest reports, etc.)
 artifacts/
 
+# Market data root (raw Binance Vision archives, MARKET_DATA_ROOT)
+data/market/
+
 .mcp_bridge_test_tmp/
 .mcp_smoke_*/
 tmp*/

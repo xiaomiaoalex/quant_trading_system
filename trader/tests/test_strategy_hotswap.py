@@ -69,7 +69,7 @@ class FakeStrategyPlugin:
         version: str = "1.0.0",
         risk_level: RiskLevel = RiskLevel.LOW,
         resource_limits: Optional[StrategyResourceLimits] = None,
-        validate_result: ValidationResult = None,
+        validate_result: ValidationResult | None = None,
     ):
         self.strategy_id = name
         self.name = name
@@ -188,11 +188,11 @@ def fake_order():
     """创建 Fake 订单"""
     return Order(
         order_id="order_001",
-        client_order_id="clord_001",
+        cl_ord_id="clord_001",
         symbol="BTCUSDT",
         side=OrderSide.BUY,
         order_type=OrderType.LIMIT,
-        quantity=Decimal("0.1"),
+        qty=Decimal("0.1"),
         price=Decimal("50000"),
         status=OrderStatus.SUBMITTED,
     )
@@ -227,7 +227,7 @@ def order_manager_with_orders(fake_order):
     manager = MagicMock(spec=OrderManagerPort)
     manager.get_open_orders = AsyncMock(return_value=[fake_order])
     manager.cancel_order = AsyncMock(return_value=True)
-    manager.cancel_all_orders = AsyncMock(return_value=[fake_order.client_order_id])
+    manager.cancel_all_orders = AsyncMock(return_value=[fake_order.cl_ord_id])
     return manager
 
 

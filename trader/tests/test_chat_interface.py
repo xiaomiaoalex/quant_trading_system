@@ -12,6 +12,7 @@ Test Chat Interface - AI策略聊天界面单元测试
 """
 
 from datetime import datetime, timezone
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,6 +39,7 @@ from insight.chat_interface import (
 
 from trader.core.application.strategy_protocol import (
     RiskLevel,
+    StrategyPlugin,
     StrategyResourceLimits,
     ValidationResult,
     ValidationStatus,
@@ -107,25 +109,26 @@ class FakeGenerator(AIStrategyGenerator):
     async def generate(
         self,
         prompt: str,
-        config: GenerationConfig | None = None,
+        config: GenerationConfig,
+        strategy_name: str | None = None,
     ) -> GeneratedStrategy:
         # 创建一个假的策略实例
         fake_strategy = FakeStrategyForTest()
         return GeneratedStrategy(
             code=f"# Strategy for: {prompt}\nprint('hello')",
-            name="TestStrategy",
+            name=strategy_name or "TestStrategy",
             version="1.0.0",
             description=f"Generated strategy for: {prompt}",
-            strategy=fake_strategy,  # 添加策略实例
+            strategy=cast(StrategyPlugin, fake_strategy),  # 添加策略实例
             validation_result=ValidationResult.valid(),
         )
 
     async def register_strategy(
         self,
-        strategy: GeneratedStrategy = None,
+        strategy: StrategyPlugin,
         code: str = "",
         prompt: str = "",
-        metadata: dict = None,
+        metadata: dict[str, Any] | None = None,
     ) -> RegistrationResult:
         # 兼容多种调用方式
         if strategy is not None and hasattr(strategy, "name"):

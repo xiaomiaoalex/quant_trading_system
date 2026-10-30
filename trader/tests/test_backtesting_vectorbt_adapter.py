@@ -2,6 +2,7 @@ import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -50,7 +51,7 @@ def test_vectorbt_config_defaults():
 async def test_vectorbt_adapter_uses_injected_data_provider(monkeypatch, sample_config):
     class FakeDataProvider:
         def __init__(self) -> None:
-            self.calls = []
+            self.calls: list[tuple[str, str, Any, Any]] = []
 
         async def get_klines(self, symbol, interval, start_date, end_date):
             self.calls.append((symbol, interval, start_date, end_date))

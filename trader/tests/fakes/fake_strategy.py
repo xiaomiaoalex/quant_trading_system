@@ -5,6 +5,7 @@ Fake Strategy Plugin - 用于测试
 提供一个可配置的 Mock 策略插件，用于 StrategyRunner 的单元测试。
 """
 
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from trader.core.application.strategy_protocol import (
@@ -87,8 +88,8 @@ class FakeStrategyPlugin:
                 signal_type=SignalType.BUY,
                 symbol=market_data.symbol,
                 price=market_data.price,
-                quantity=0.1,
-                confidence=0.8,
+                quantity=Decimal("0.1"),
+                confidence=Decimal("0.8"),
                 reason="Fake signal",
             )
         return None

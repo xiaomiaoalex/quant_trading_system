@@ -95,7 +95,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -138,7 +138,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -176,7 +176,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -219,7 +219,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -257,7 +257,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=close_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -300,7 +300,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 
@@ -342,7 +342,7 @@ class TestStrategyRunnerRiskModeEarlyGate:
             quantity=Decimal("0.01"),
             price=Decimal("50000"),
         )
-        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)
+        mock_plugin.on_market_data = AsyncMock(return_value=open_signal)  # type: ignore[method-assign]
 
         result = await runner.tick("test_strategy", _make_market_data())
 

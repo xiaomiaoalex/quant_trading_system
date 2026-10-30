@@ -265,7 +265,7 @@ class FundingOIAdapter:
         await self._ensure_session()
 
         url = f"{self._config.base_url}/fapi/v1/topLongShortPositionRatio"
-        params = {"symbol": symbol, "period": period, "limit": limit}
+        params = {"symbol": symbol, "period": period, "limit": str(limit)}
 
         for attempt in range(self._config.max_retries):
             try:

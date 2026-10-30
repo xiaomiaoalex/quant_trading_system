@@ -32,8 +32,8 @@ export interface BacktestRequest {
   strategy_code_version?: number
   params?: Record<string, unknown>
   symbols: string[]
-  start_ts_ms: number
-  end_ts_ms: number
+  start_ts_ms?: number | null
+  end_ts_ms?: number | null
   venue: string
   requested_by: string
   feature_version?: string
@@ -42,6 +42,8 @@ export interface BacktestRequest {
   slippage_bps?: number
   benchmark?: string
   data_mode?: BacktestDataMode
+  dataset_id?: string | null
+  interval?: string | null
 }
 
 // Backtest report from GET /v1/backtests/{run_id}/report

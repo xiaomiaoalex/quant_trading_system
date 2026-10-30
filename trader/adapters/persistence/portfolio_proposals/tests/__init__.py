@@ -25,7 +25,9 @@ class TestMyStore:
 这样可以确保 InMemory 和 Postgres 两个实现的行为完全一致。
 """
 
-from typing import Callable, Generic, List, TypeVar
+from collections.abc import Generator
+from decimal import Decimal
+from typing import Any, Callable, TypeVar
 
 import pytest
 
@@ -41,7 +43,9 @@ from trader.adapters.persistence.portfolio_proposals.store_protocol import Portf
 T = TypeVar("T", bound=PortfolioProposalStore)
 
 
-def run_contract_tests(store_factory: Callable[[], PortfolioProposalStore]) -> None:
+def run_contract_tests(
+    store_factory: Callable[[], PortfolioProposalStore]
+) -> list[Callable[..., Any]]:
     """
     运行所有契约测试
 
@@ -50,7 +54,7 @@ def run_contract_tests(store_factory: Callable[[], PortfolioProposalStore]) -> N
     """
 
     @pytest.fixture
-    def store() -> PortfolioProposalStore:
+    def store() -> Generator[PortfolioProposalStore, None, None]:
         """创建并初始化 store"""
         s = store_factory()
         import asyncio
@@ -86,13 +90,13 @@ def run_contract_tests(store_factory: Callable[[], PortfolioProposalStore]) -> N
         """创建测试用 Portfolio 提案"""
         sleeve = SleeveData(
             sleeve_id="sleeve-1",
-            capital_cap=1000.0,
+            capital_cap=Decimal("1000.0"),
             weight=0.5,
-            max_position_size=100.0,
+            max_position_size=Decimal("100.0"),
         )
         return ProposalModel.create_portfolio(
             sleeves=[sleeve],
-            capital_caps={"sleeve-1": 1000.0},
+            capital_caps={"sleeve-1": Decimal("1000.0")},
             risk_explanation="Medium risk",
             feature_version="v1.0",
             prompt_version="p1.0",
@@ -408,13 +412,13 @@ class TestContractSuite:
     def portfolio_proposal(self) -> ProposalModel:
         sleeve = SleeveData(
             sleeve_id="sleeve-1",
-            capital_cap=1000.0,
+            capital_cap=Decimal("1000.0"),
             weight=0.5,
-            max_position_size=100.0,
+            max_position_size=Decimal("100.0"),
         )
         return ProposalModel.create_portfolio(
             sleeves=[sleeve],
-            capital_caps={"sleeve-1": 1000.0},
+            capital_caps={"sleeve-1": Decimal("1000.0")},
             risk_explanation="Medium risk",
             feature_version="v1.0",
             prompt_version="p1.0",

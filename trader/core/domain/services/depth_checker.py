@@ -26,7 +26,7 @@ from trader.core.domain.models.orderbook import DepthCheckResult, OrderBook
 from trader.core.domain.models.signal import Signal, SignalType
 
 if TYPE_CHECKING:
-    from trader.core.application.risk_engine import RiskEngine
+    from trader.core.application.risk_engine import RiskCheckResult, RiskEngine
 
 
 class MarketDataPort(Protocol):
@@ -248,7 +248,7 @@ class DepthCheckPreTradePlugin:
         signal: Signal,
         metrics: "RiskEngine",  # 实际上是 RiskMetrics，但协议定义如此
         engine: "RiskEngine",
-    ) -> Optional["DepthCheckResult"]:  # 实际上是 RiskCheckResult
+    ) -> Optional["RiskCheckResult"]:
         """
         执行深度检查
 

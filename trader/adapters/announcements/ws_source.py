@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 from contextlib import nullcontext
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import websockets
 
@@ -64,7 +64,7 @@ class BinanceWsAnnouncementSource:
         self._reconnect_delay = reconnect_delay
         self._max_reconnect_attempts = max_reconnect_attempts
 
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: Optional[Any] = None
         self._connected = False
         self._subscribed = False
         self._recv_task: Optional[asyncio.Task] = None
@@ -280,6 +280,8 @@ class BinanceWsAnnouncementSource:
         except asyncio.CancelledError:
             logger.info("WS_SOURCE_RECV_CANCELLED")
             raise
+
+        raise RuntimeError("WebSocket receive loop ended")
 
     async def recv_async_iterator(self) -> AsyncIterator[RawAnnouncement]:
         """异步迭代器版本的接收循环

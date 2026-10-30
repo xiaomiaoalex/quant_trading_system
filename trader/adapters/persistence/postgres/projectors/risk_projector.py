@@ -24,7 +24,10 @@ Risk Projector - 风控投影
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    import asyncpg
 
 from trader.adapters.persistence.postgres.projectors.base import Projectable
 from trader.core.domain.models.events import EventType

@@ -76,7 +76,10 @@ class TestOMSCallbackIdempotency:
         # Setup mock to return a filled order
         mock_broker.place_order.return_value = MagicMock(
             broker_order_id="12345",
-            filled_quantity=Decimal("0.01"),
+            cl_ord_id="test_order",
+            symbol="BTCUSDT",
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0.01"),
             average_price=Decimal("50000"),
             status=OrderStatus.FILLED,
             created_at=None,
@@ -132,7 +135,10 @@ class TestOMSCallbackIdempotency:
         """
         mock_broker.place_order.return_value = MagicMock(
             broker_order_id="12345",
-            filled_quantity=Decimal("0.01"),
+            cl_ord_id="test_order",
+            symbol="BTCUSDT",
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0.01"),
             average_price=Decimal("50000"),
             status=OrderStatus.FILLED,
             created_at=None,
@@ -170,7 +176,10 @@ class TestOMSCallbackIdempotency:
         # Simulate a fill
         mock_broker.place_order.return_value = MagicMock(
             broker_order_id="12345",
-            filled_quantity=Decimal("0.01"),
+            cl_ord_id="test_order",
+            symbol="BTCUSDT",
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0.01"),
             average_price=Decimal("50000"),
             status=OrderStatus.FILLED,
             created_at=None,
@@ -273,11 +282,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.FILLED,
         )
@@ -292,11 +301,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.CANCELLED,
         )
@@ -311,11 +320,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.REJECTED,
         )
@@ -330,11 +339,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.PENDING,
         )
@@ -349,11 +358,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.SUBMITTED,
         )
@@ -368,11 +377,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.FILLED,  # Terminal state
         )
@@ -389,11 +398,11 @@ class TestTerminalStateMonotonicity:
 
         order = Order(
             order_id="test_1",
-            client_order_id="test_1",
+            cl_ord_id="test_1",
             symbol="BTCUSDT",
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT,
-            quantity=Decimal("0.01"),
+            qty=Decimal("0.01"),
             price=Decimal("50000"),
             status=OrderStatus.FILLED,  # Terminal state
         )

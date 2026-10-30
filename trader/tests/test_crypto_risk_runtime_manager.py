@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -125,7 +126,7 @@ class RejectingRiskSource(ProbeRiskSource):
 def _component_builder(source: FakeRiskSource, check: MagicMock):
     def _build(**_kwargs) -> CryptoRiskRuntimeComponents:
         return CryptoRiskRuntimeComponents(
-            source=source,
+            source=cast(Any, source),
             snapshot_provider=MagicMock(),
             pre_trade_risk_check=check,
         )

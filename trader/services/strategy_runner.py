@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, runtime_checkable
 
 from trader.core.application.risk_engine import KillSwitchLevel
 from trader.core.application.strategy_protocol import (
@@ -267,7 +267,7 @@ class StrategyRunner:
         portfolio_short_exposure = self._side_exposure("SHORT")
         symbol_long_exposure = self._symbol_side_exposure(symbol, "LONG")
         symbol_short_exposure = self._symbol_side_exposure(symbol, "SHORT")
-        positions = {
+        positions: Dict[str, Dict[Literal["LONG", "SHORT"], float]] = {
             symbol: {
                 "LONG": symbol_long_exposure,
                 "SHORT": symbol_short_exposure,
@@ -496,7 +496,7 @@ class StrategyRunner:
                 return reject("allocation profile disabled")
             if side == "SHORT" and not profile.allow_short:
                 return reject("short signals disabled by allocation profile")
-            allocator = CapitalAllocator(
+            allocator: CapitalAllocator | None = CapitalAllocator(
                 CapitalAllocatorConfig(
                     total_exposure_budget=float(profile.max_notional),
                     net_exposure_limit=float(profile.max_symbol_exposure),

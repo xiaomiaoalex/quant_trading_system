@@ -46,6 +46,17 @@ class RuntimeStateRepository:
             self._postgres_storage._connected = False
         self._clear_postgres_state()
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
+    @staticmethod
+    def _required_str(value: Any, field_name: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{field_name} is required")
+        return value
+
     async def _ensure_postgres(self) -> bool:
         current_loop = asyncio.get_running_loop()
         if self._loop is not current_loop:
@@ -75,7 +86,7 @@ class RuntimeStateRepository:
                 return False
 
     async def _ensure_tables(self) -> None:
-        async with self._postgres_storage._pool.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS strategy_runtime_states (
@@ -102,14 +113,15 @@ class RuntimeStateRepository:
             )
 
     async def save_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        deployment_id = state.get("deployment_id") or state.get("strategy_id")
-        if not deployment_id:
-            raise ValueError("runtime state requires deployment_id or strategy_id")
+        deployment_id = self._required_str(
+            state.get("deployment_id") or state.get("strategy_id"),
+            "deployment_id or strategy_id",
+        )
         self._memory_storage.strategy_runtime_states[deployment_id] = state.copy()
 
         if await self._ensure_postgres():
             try:
-                async with self._postgres_storage._pool.acquire() as conn:
+                async with self._postgres_or_raise().acquire() as conn:
                     await conn.execute(
                         """
                         INSERT INTO strategy_runtime_states
@@ -151,7 +163,7 @@ class RuntimeStateRepository:
     async def get_state(self, deployment_id: str) -> Optional[Dict[str, Any]]:
         if await self._ensure_postgres():
             try:
-                async with self._postgres_storage._pool.acquire() as conn:
+                async with self._postgres_or_raise().acquire() as conn:
                     row = await conn.fetchrow(
                         """
                         SELECT deployment_id, strategy_id, status, config, symbols,
@@ -192,7 +204,7 @@ class RuntimeStateRepository:
     async def list_running_states(self) -> List[Dict[str, Any]]:
         if await self._ensure_postgres():
             try:
-                async with self._postgres_storage._pool.acquire() as conn:
+                async with self._postgres_or_raise().acquire() as conn:
                     rows = await conn.fetch(
                         """
                         SELECT deployment_id, strategy_id, status, config, symbols,
@@ -214,7 +226,7 @@ class RuntimeStateRepository:
     async def list_all_states(self) -> List[Dict[str, Any]]:
         if await self._ensure_postgres():
             try:
-                async with self._postgres_storage._pool.acquire() as conn:
+                async with self._postgres_or_raise().acquire() as conn:
                     rows = await conn.fetch(
                         """
                         SELECT deployment_id, strategy_id, status, config, symbols,
@@ -234,7 +246,7 @@ class RuntimeStateRepository:
     async def delete_state(self, deployment_id: str) -> bool:
         self._memory_storage.strategy_runtime_states.pop(deployment_id, None)
         if await self._ensure_postgres():
-            async with self._postgres_storage._pool.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 result = await conn.execute(
                     "DELETE FROM strategy_runtime_states WHERE deployment_id = $1",
                     deployment_id,

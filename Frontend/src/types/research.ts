@@ -35,8 +35,8 @@ export type BacktestRiskMode = 'raw_only' | 'risk_adjusted' | 'event_replay'
 
 export interface BacktestDatasetSpec {
   symbols: string[]
-  start_ts_ms: number
-  end_ts_ms: number
+  start_ts_ms?: number | null
+  end_ts_ms?: number | null
   feature_version: string
   venue: string
   initial_capital: number
@@ -45,6 +45,71 @@ export interface BacktestDatasetSpec {
   benchmark?: string
   data_mode: 'real_feature_store' | 'dev_smoke'
   risk_mode: BacktestRiskMode
+  dataset_id?: string | null
+  interval?: string | null
+}
+
+// ==================== History data (Binance Vision archives) ====================
+
+export type HistoryJobStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+export type HistoryDatasetStatus = 'PENDING' | 'PUBLISHED' | 'FAILED'
+
+export interface HistoryJob {
+  job_id: string
+  source: string
+  market: string
+  symbol: string
+  interval: string
+  month: string
+  status: HistoryJobStatus
+  stage: string
+  dataset_id?: string | null
+  feature_version?: string | null
+  rows_processed: number
+  bytes_downloaded: number
+  error_code?: string | null
+  error_reason?: string | null
+  requested_by: string
+  attempt: number
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+}
+
+export interface HistoryDataset {
+  dataset_id: string
+  source: string
+  market: string
+  symbol: string
+  interval: string
+  month: string
+  version: number
+  feature_version: string
+  archive_sha256: string
+  official_sha256?: string | null
+  source_url: string
+  checksum_url: string
+  row_count: number
+  expected_points: number
+  gap_count: number
+  first_ts_ms?: number | null
+  last_ts_ms?: number | null
+  quality: Record<string, unknown>
+  status: HistoryDatasetStatus
+  persistence_ok: boolean
+  backtest_eligible: boolean
+  created_at?: string | null
+  published_at?: string | null
+}
+
+export interface HistoryJobCreateRequest {
+  symbol: string
+  month: string
+  source?: 'binance_vision'
+  market?: 'spot'
+  interval?: '1m'
+  requested_by?: string
 }
 
 export interface BacktestGateResult {

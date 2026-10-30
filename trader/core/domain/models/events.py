@@ -175,7 +175,7 @@ class DomainEvent:
 
     @classmethod
     def _deserialize_data(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        result = {}
+        result: Dict[str, Any] = {}
         for key, value in data.items():
             if isinstance(value, str) and any(
                 key.endswith(s) or key == s for s in cls._DECIMAL_KEY_SUFFIXES

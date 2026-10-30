@@ -9,6 +9,7 @@ test_reconciliation_engine - ReconciliationEngine 单元测试（Batch 2.4）
 """
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -23,7 +24,7 @@ from trader.core.domain.services.reconciliation_engine import (
 class _FakeLedgerManager:
     """模拟 PositionLedgerManager"""
 
-    def __init__(self, ledgers: dict = None):
+    def __init__(self, ledgers: dict[Any, Any] | None = None):
         self._ledgers: dict = ledgers or {}
 
     def list_ledgers(self):

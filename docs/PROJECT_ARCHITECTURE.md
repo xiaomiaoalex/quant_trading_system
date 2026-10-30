@@ -5,9 +5,16 @@
 
 ## 文档状态
 
-- 最后更新: 2026-06-07 (北京时间)
+- 最后更新: 2026-10-29 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile + 币安公开归档历史数据通路（真实历史回测）。
+
+### 本次变更摘要（2026-10-29）
+
+1. **新增历史归档数据通路**: Adapter Plane 增加 `trader/adapters/market_data/binance_vision.py`（固定币安公开归档 URL、流式下载、SHA-256 校验、原子提交、只读预期 CSV 成员），Core Plane 增加 `trader/core/domain/services/ohlcv_archive.py`（纯解析 / 校验 / 覆盖度）。
+2. **新增持久化契约**: 新增 `history_ingest_jobs` / `history_datasets` 两张表（迁移 `009_history_datasets.sql`）；`FeatureStore` 增加严格模式，PG 不可用 / 读写失败一律抛错，不再静默回退内存。
+3. **新增任务编排与门禁**: Service 层 `HistoryIngestionService` + 单并发 `HistoryJobWorker` 负责任务生命周期与启动恢复；Control Plane 提供 `/v1/data/history/*`，并与 `/v1/backtests`、候选回测共用异步准入校验 `resolve_backtest_request()`。
+4. **部署拓扑变化**: 新增 `MARKET_DATA_ROOT` 行情根目录（默认 `<项目根>/data/market`），原始归档目录需与 PostgreSQL 持久卷一同挂载。
 
 ### 本次变更摘要（2026-06-07）
 
@@ -84,6 +91,8 @@ flowchart TB
         RestAlign["REST Alignment"]
         Clean["Canonical DTO Mapping"]
         CryptoSource["Binance Futures Risk Data Source"]
+        VisionArchive["Binance Vision Archive Client
+Download / SHA-256 / ZIP read"]
     end
 
     subgraph Persistence["Persistence Plane: trader/adapters/persistence/"]
@@ -91,6 +100,8 @@ flowchart TB
         PG["PostgreSQL Repositories"]
         RiskAudit["risk_audit_events / MarketRiskAuditRepository"]
         Projection["Read Models / Projectors"]
+        HistoryStore["history_ingest_jobs / history_datasets
+FeatureStore (strict mode)"]
     end
 
     API --> Lifecycle
@@ -138,6 +149,8 @@ flowchart TB
     CryptoSource --> Clean
     PG --> Projection
     KillAPI --> Kill
+    VisionArchive --> HistoryStore
+    HistoryStore --> Projection
 ```
 
 ### 层级约束
@@ -323,6 +336,43 @@ BinanceFundingOIMetricsSource (Service 层) 位于:
 - `/v1/data/ohlcv/import` 写入 `feature_name=ohlcv` 的 compact dict，后续 `real_feature_store` 回测通过同一 FeatureStore 读取，避免 Data 页面和 Backtests 使用两套数据真相源。
 - `BinanceOHLCVRestSource` 位于 Adapter 层，负责调用 Binance REST `/v3/klines` 并把原始数组映射为内部 OHLCV bar；`BinanceOHLCVIngestionWorker` 位于 Service 层，负责分页、断点续拉、幂等写入 FeatureStore。
 - `POST /v1/data/ohlcv/sync-binance` 提供单次补数；`/v1/data/ohlcv/worker/start|stop|status` 控制持续 worker。默认不自动启动，只有 `BINANCE_OHLCV_INGESTION_ENABLED=true` 时由 lifespan 启动。
+
+### 历史归档数据通路（Binance Vision → 真实回测）
+
+```mermaid
+flowchart LR
+    UI["Data 页面 / Backtests 页面"] --> API2["/v1/data/history/*
+/v1/backtests"]
+    API2 --> Svc["HistoryIngestionService
+BacktestService.resolve_backtest_request"]
+    Svc --> Adapter["BinanceVisionArchiveClient
+流式下载 + SHA-256 + ZIP 成员读取"]
+    Adapter --> Core2["ohlcv_archive 领域服务
+解析 / 校验 / 覆盖度"]
+    Core2 --> Strict["FeatureStore 严格模式
+PostgreSQL feature_values"]
+    Strict --> Jobs["history_ingest_jobs / history_datasets"]
+    Jobs --> Resolver["HistoryDatasetResolver
+准入 + 范围推导"]
+    Resolver --> Provider["HistoryDatasetOHLCVDataProvider
+读取后复核完整性"]
+    Provider --> Engine["VectorBT 回测 + 报告追溯"]
+```
+
+- Adapter Plane 新增 `trader/adapters/market_data/binance_vision.py`：固定币安公开归档 URL、流式下载到临时文件、
+  计算 SHA-256、比对官方 `.CHECKSUM`、校验通过后原子提交到 `MARKET_DATA_ROOT` 下的**版本化**路径
+  （不覆盖被已发布数据集引用的文件，官方修订产生新版本，旧版本保留）。
+- Core Plane 新增 `trader/core/domain/services/ohlcv_archive.py`：纯函数领域服务，负责时间戳解析
+  （2025-01-01 起微秒，之前毫秒）、K 线数值 / 对齐校验、月度覆盖度与缺口 / 冲突检测。**禁止 IO**。
+- Persistence Plane 新增 `history_ingest_jobs` / `history_datasets` 两张表（迁移 `009_history_datasets.sql`），
+  并为 `FeatureStore` 增加**严格模式**（PG 不可用 / 读写失败一律抛错，绝不回退内存）。
+- Service 层 `HistoryIngestionService` 负责任务编排（`QUEUED → RUNNING → SUCCEEDED/FAILED`、
+  阶段推进、原子领取、启动恢复、失败重试），`HistoryJobWorker` 是**单并发**后台 worker，由 API lifespan 管理。
+- Control Plane 的 `/v1/data/history/*` 与 `/v1/backtests` 共用同一套异步准入校验：
+  `BacktestService.resolve_backtest_request()` 先校验数据集再创建回测，**不依赖前端禁用按钮**。
+- 真实历史回测只支持**单币对**，禁止 `symbols[0]` 静默丢弃其它币对；执行阶段 Provider 会再次核验
+  market / interval / 质量与真实读取完整性。
+- 旧入口（`POST /v1/data/ohlcv/import` 手动导入、`/v1/data/ohlcv/worker/*` 实时 worker）保留为高级入口，语义不变。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 
@@ -706,3 +756,54 @@ flowchart LR
 3. 修改实现和测试，遵循 TDD Red → Green → Refactor。
 4. 按规则更新 `PROJECT_STATUS.md`、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`。
 5. 如改变阶段目标、优先级或当前执行入口，同步更新 `docs/PLAN.md` 或阶段计划文档。
+
+---
+
+## 8. Unified Spot Trading Runtime 拓扑
+
+首期 Binance 现货闭环采用三进程、PostgreSQL 协调架构，不引入消息中间件。
+
+```mermaid
+flowchart TB
+    UI["Frontend / Operator"] -->|Cookie + CSRF| API["Control API\ncreate_trading_app"]
+    API -->|Place/Cancel command| PG[("PostgreSQL\ntrading_accounts\ncommands / executions\nledger / events / outbox\nruntime leases")]
+    RT["Trading Runtime\nstrategy/portfolio/risk/OMS"] -->|SELECT FOR UPDATE| PG
+    RT -->|ExchangePort| BINANCE["Binance Spot\nREST / private stream"]
+    RT -->|outbox retry| SSE["SSE / notifications"]
+    WORKER["Research Worker\nlease + fencing"] -->|claim/finish| PG
+    WORKER -->|frozen dataset| RESEARCH[("research.datasets\nresearch.backtest_jobs")]
+    API --> RESEARCH
+```
+
+**启动顺序**：
+
+1. 存储初始化（版本化 schema）。
+2. 构建 `TradingService`（统一账本、预约、风控、OMS）。
+3. 注入 `ExchangePort`（Binance adapter）。
+4. 拉取完整 `ReconcileSnapshot` 并恢复（成交/订单/余额/代际）。
+5. 获取账户执行租约；冲突则交易未就绪。
+6. `/health/trading` 返回 200 后才允许策略启动。
+7. 策略运行；所有新风险命令经过同一 service 入口。
+
+**边界**：
+
+- `trader/trading/` 是纯领域 + 应用事务核心；网络调用只发生在账户事务之外。
+- `trader/adapters/broker/spot_execution_adapter.py` 只做 Binance 字段到内部 DTO 的转换；不得修改本地订单/账本。
+- `trader/services/trading_ingress.py` 将 private stream 成交与订单更新转发给统一 service；不维护第二套订单状态。
+- `trader/api/routes/trading.py` / `research.py` 是控制面入口，不直接触达交易所或账本表。
+- `trading_runtime_leases` 保证同一账户只有一个执行实例；研究任务租约与 fencing 独立。
+- Control API 与 Trading Runtime 可同进程启动用于本地开发，但生产部署按进程拆分。
+- 旧 OMS/ExecutionBudget/AccountState 路径不得与新 service 同时发送订单；切换到新入口时必须以运行时租约和就绪门禁为唯一发送者。
+
+**监控字段**（`GET /v1/trading/metrics`）：
+
+- `unknown_commands`、`unbooked_fills`、`balance_anomalies`、`active_holds`、`reconciliation_age_ms`、`outbox_backlog`、`unresolved`。
+- 研究侧：`research.backtest_jobs.status`、`attempt`、`fencing_token`、`lease_until`、`error`。
+
+**运行期对账与恢复边界**：
+
+- 执行租约在恢复之前获取；租约冲突时进程保持存活并重试，不进入对账或发送。
+- 取得租约后完成首次完整对账、补齐 `QUEUED` 命令并进入 `READY`；此后每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒重复完整对账。
+- 完整快照必须包含本系统尚未终结的挂单、本系统已关闭订单的终态和最近逐笔成交；仅依赖 `openOrders` 会把已撤/已成交订单误判为未知状态。
+- 交易所规则归一化位于 Adapter；MARKET BUY 以 quote 金额结算，成交 base 数量与请求数量不要求相等。
+- 主动重连入口只重建 venue 会话；重连后由周期对账恢复 `READY`，不触碰本地账本。

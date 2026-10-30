@@ -10,6 +10,8 @@ from trader.adapters.persistence.feature_store import get_feature_store
 from trader.api.main import app
 from trader.storage.in_memory import get_storage
 
+pytest.importorskip("vectorbt", reason="vectorbt optional research dependency is not installed")
+
 
 def _wait_for_backtest(client: TestClient, run_id: str) -> dict:
     payload: dict = {}
@@ -32,7 +34,7 @@ async def _seed_ohlcv_feature_store(version: str, start_ts_ms: int, points: int 
         del storage.feature_values_by_key[key]
 
     store = get_feature_store()
-    store._ensure_postgres = AsyncMock(return_value=False)
+    store._ensure_postgres = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
     price = 100.0
     for i in range(points):

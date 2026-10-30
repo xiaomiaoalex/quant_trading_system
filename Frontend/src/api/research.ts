@@ -6,6 +6,9 @@ import type {
   BinanceOHLCVWorkerStatus,
   DataCatalogResponse,
   DataSourceStatus,
+  HistoryDataset,
+  HistoryJob,
+  HistoryJobCreateRequest,
   OHLCVImportRequest,
   OHLCVImportResponse,
   PortfolioAutopilotDecision,
@@ -53,6 +56,56 @@ export class ResearchAPI extends APIClient {
 
   async getBinanceOHLCVWorkerStatus(): Promise<BinanceOHLCVWorkerStatus> {
     return this.get<BinanceOHLCVWorkerStatus>('/v1/data/ohlcv/worker/status')
+  }
+
+  // ==================== History data (Binance Vision archives) ====================
+
+  async createHistoryJob(request: HistoryJobCreateRequest): Promise<HistoryJob> {
+    return this.post<HistoryJob>('/v1/data/history/jobs', request)
+  }
+
+  async listHistoryJobs(params?: {
+    status?: string
+    symbol?: string
+    month?: string
+    limit?: number
+  }): Promise<HistoryJob[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.set('status', params.status)
+    if (params?.symbol) searchParams.set('symbol', params.symbol)
+    if (params?.month) searchParams.set('month', params.month)
+    if (params?.limit) searchParams.set('limit', String(params.limit))
+    const query = searchParams.toString()
+    return this.get<HistoryJob[]>(`/v1/data/history/jobs${query ? `?${query}` : ''}`)
+  }
+
+  async getHistoryJob(jobId: string): Promise<HistoryJob> {
+    return this.get<HistoryJob>(`/v1/data/history/jobs/${jobId}`)
+  }
+
+  async retryHistoryJob(jobId: string): Promise<HistoryJob> {
+    return this.post<HistoryJob>(`/v1/data/history/jobs/${jobId}/retry`, {})
+  }
+
+  async listHistoryDatasets(params?: {
+    symbol?: string
+    month?: string
+    only_eligible?: boolean
+    limit?: number
+  }): Promise<HistoryDataset[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.symbol) searchParams.set('symbol', params.symbol)
+    if (params?.month) searchParams.set('month', params.month)
+    if (params?.only_eligible !== undefined) {
+      searchParams.set('only_eligible', String(params.only_eligible))
+    }
+    if (params?.limit) searchParams.set('limit', String(params.limit))
+    const query = searchParams.toString()
+    return this.get<HistoryDataset[]>(`/v1/data/history/datasets${query ? `?${query}` : ''}`)
+  }
+
+  async getHistoryDataset(datasetId: string): Promise<HistoryDataset> {
+    return this.get<HistoryDataset>(`/v1/data/history/datasets/${datasetId}`)
   }
 
   async listCandidates(): Promise<StrategyCandidate[]> {

@@ -169,7 +169,7 @@ async def _apply_killswitch_effect(
                             scope=previous_state.scope,
                             level=previous_state.level,
                             reason=previous_state.reason,
-                            updated_by=previous_state.updated_by,
+                            updated_by=previous_state.updated_by or "system",
                         )
                     )
             except Exception as rollback_exc:

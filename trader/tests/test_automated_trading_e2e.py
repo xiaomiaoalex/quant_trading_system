@@ -125,9 +125,9 @@ class FakeBroker:
         symbol: str,
         side,
         order_type,
-        quantity: Decimal,
+        qty: Decimal,
         price=None,
-        client_order_id=None,
+        cl_ord_id=None,
     ):
         from trader.core.domain.models.order import OrderStatus
 
@@ -136,7 +136,7 @@ class FakeBroker:
         order.broker_order_id = f"BO{self.place_order_calls}"
         # Check order_type.value to handle both str and OrderType enum
         ot_value = order_type.value if hasattr(order_type, "value") else str(order_type)
-        order.filled_quantity = quantity if ot_value == "MARKET" else Decimal("0")
+        order.filled_qty = qty if ot_value == "MARKET" else Decimal("0")
         order.average_price = price or Decimal("50000")
         order.status = OrderStatus.FILLED if ot_value == "MARKET" else OrderStatus.SUBMITTED
         order.created_at = None
@@ -144,9 +144,9 @@ class FakeBroker:
             {
                 "symbol": symbol,
                 "side": side,
-                "quantity": quantity,
+                "qty": qty,
                 "price": price,
-                "client_order_id": client_order_id,
+                "cl_ord_id": cl_ord_id,
             }
         )
         return order

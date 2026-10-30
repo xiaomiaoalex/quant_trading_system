@@ -216,13 +216,15 @@ async def get_monitor_snapshot(
         raw_oms_positions: List[PositionView] = portfolio_svc.list_positions()
         for p in raw_oms_positions:
             symbol = p.instrument
-            has_qty = p.qty and p.qty.strip()
-            has_avg_cost = p.avg_cost and p.avg_cost.strip()
+            qty_text = p.qty or ""
+            avg_cost_text = p.avg_cost or ""
+            has_qty = bool(qty_text.strip())
+            has_avg_cost = bool(avg_cost_text.strip())
             has_mark_price = p.mark_price and p.mark_price.strip()
             has_unrealized = p.unrealized_pnl and p.unrealized_pnl.strip()
 
-            qty_dec = Decimal(p.qty.strip()) if has_qty else Decimal("0")
-            avg_cost_dec = Decimal(p.avg_cost.strip()) if has_avg_cost else None
+            qty_dec = Decimal(qty_text.strip()) if has_qty else Decimal("0")
+            avg_cost_dec = Decimal(avg_cost_text.strip()) if has_avg_cost else None
 
             oms_positions[symbol.upper()] = {
                 "symbol": symbol,

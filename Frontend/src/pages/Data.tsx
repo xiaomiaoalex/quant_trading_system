@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import { researchAPI } from '@/api'
 import { ErrorState, LoadingState, EmptyState } from '@/components/ui'
+import { HistoryDataPanel } from '@/components'
 import { PageHeader } from '@/components/layout'
 import { formatAPIError } from '@/api/client'
+import { useNavigate } from 'react-router-dom'
 import type {
   BinanceOHLCVIngestionRequest,
   BinanceOHLCVWorkerStatus,
@@ -29,6 +31,7 @@ function formatTs(ts?: number | null) {
 }
 
 export function Data() {
+  const navigate = useNavigate()
   const [catalog, setCatalog] = useState<DataCatalogResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -184,9 +187,18 @@ export function Data() {
       <div className="p-6 space-y-6">
         <div className="text-sm text-accent-3">Feature version: {catalog?.feature_version ?? '-'}</div>
 
+        <HistoryDataPanel
+          onUseForBacktest={datasetId =>
+            navigate(`/backtests?dataset_id=${encodeURIComponent(datasetId)}`)
+          }
+        />
+
         <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-white">Binance OHLCV Worker</h2>
+            <div>
+              <h2 className="text-base font-semibold text-white">Binance OHLCV Worker</h2>
+              <p className="mt-1 text-xs text-accent-3">高级入口：实时增量同步（不适合历史研究回测）。</p>
+            </div>
             <span className={clsx('rounded px-2 py-1 text-xs font-medium', workerStatus?.running ? 'bg-emerald-950/40 text-emerald-300' : 'bg-gray-700 text-gray-400')}>
               {workerStatus?.running ? 'Running' : 'Stopped'}
             </span>
@@ -282,7 +294,8 @@ export function Data() {
         </div>
 
         <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
-          <h2 className="mb-4 text-base font-semibold text-white">Import OHLCV</h2>
+          <h2 className="mb-1 text-base font-semibold text-white">Import OHLCV</h2>
+          <p className="mb-4 text-xs text-accent-3">高级入口：手动 JSON 导入（开发与迁移用）。</p>
           {(importError || importMessage) && (
             <div
               className={clsx(

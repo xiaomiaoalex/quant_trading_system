@@ -13,6 +13,7 @@ test_event_driven_risk_replay.py - P9.4 EventDrivenRiskReplay v1 单元测试
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -39,7 +40,7 @@ def _make_signal(symbol: str = "BTCUSDT") -> Signal:
         symbol=symbol,
         price=Decimal("50000"),
         quantity=Decimal("0.1"),
-        timestamp=None,
+        timestamp=datetime.now(timezone.utc),
     )
 
 

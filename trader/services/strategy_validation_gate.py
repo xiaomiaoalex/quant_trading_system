@@ -70,11 +70,11 @@ class StrategyValidationReport:
     """
 
     strategy_id: str
-    layer1_mechanism: tuple[bool, str | None] = (False, None)  # (passed, reason)
-    layer2_backtest: tuple[bool, str | None] = (False, None)
-    layer3_out_of_sample: tuple[bool, str | None] = (False, None)
-    layer4_cost_stress: tuple[bool, str | None] = (False, None)
-    layer5_shadow_mode: tuple[bool, str | None] = (False, None)  # 可选
+    layer1_mechanism: tuple[bool, str] = (False, "")  # (passed, reason)
+    layer2_backtest: tuple[bool, str] = (False, "")
+    layer3_out_of_sample: tuple[bool, str] = (False, "")
+    layer4_cost_stress: tuple[bool, str] = (False, "")
+    layer5_shadow_mode: tuple[bool, str] = (False, "")  # 可选
     overall_passed: bool = False
     failed_layers: list[int] = field(default_factory=list)
     recommendations: list[str] = field(default_factory=list)
@@ -246,7 +246,7 @@ class StrategyValidationGate:
     async def validate_layer1(
         self,
         mechanism: MechanismHypothesis | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str]:
         """
         Layer 1: 机制假设验证
 
@@ -269,7 +269,7 @@ class StrategyValidationGate:
     async def validate_layer2(
         self,
         backtest_result: Any | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str]:
         """
         Layer 2: 回测合规验证
 
@@ -304,7 +304,7 @@ class StrategyValidationGate:
         self,
         walkforward_result: Any | None,
         kfold_result: Any | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str]:
         """
         Layer 3: 样本外验证
 
@@ -340,7 +340,7 @@ class StrategyValidationGate:
     async def validate_layer4(
         self,
         cost_stress_result: Any | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str]:
         """
         Layer 4: 成本压测验证
 
@@ -384,7 +384,7 @@ class StrategyValidationGate:
     async def validate_layer5(
         self,
         shadow_mode_result: Any | None,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str]:
         """
         Layer 5: 影子模式验证（可选）
 

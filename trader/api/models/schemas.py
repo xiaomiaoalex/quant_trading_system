@@ -7,7 +7,7 @@ This module defines all request/response models for the API endpoints.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -356,8 +356,8 @@ class DeploymentRuntime(BaseModel):
 # ==================== Backtest Models ====================
 
 
-BacktestEngine = Literal["strategy_runner", "vectorbt"]
-BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
+BacktestEngine: TypeAlias = Literal["strategy_runner", "vectorbt"]
+BacktestRiskMode: TypeAlias = Literal["raw_only", "risk_adjusted", "event_replay"]
 
 
 class BacktestRequest(BaseModel):
@@ -368,8 +368,20 @@ class BacktestRequest(BaseModel):
     engine: BacktestEngine = "strategy_runner"
     params: Optional[Dict[str, Any]] = None
     symbols: List[str]
-    start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
-    end_ts_ms: int = Field(..., description="End timestamp in milliseconds")
+    start_ts_ms: Optional[int] = Field(
+        default=None,
+        description=(
+            "Start timestamp in milliseconds. Optional when dataset_id is provided: "
+            "the dataset's full month range is used by default."
+        ),
+    )
+    end_ts_ms: Optional[int] = Field(
+        default=None,
+        description=(
+            "End timestamp in milliseconds (inclusive, last bar open time). "
+            "Optional when dataset_id is provided."
+        ),
+    )
     venue: str = Field(..., json_schema_extra={"example": "BINANCE"})
     requested_by: str
     strategy_code_version: Optional[int] = None
@@ -384,6 +396,17 @@ class BacktestRequest(BaseModel):
     )
     risk_mode: BacktestRiskMode = Field(
         default="risk_adjusted", description="回测风控模式: raw_only | risk_adjusted | event_replay"
+    )
+    dataset_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "已发布历史数据集 ID。提供后 symbol / interval / feature_version / "
+            "data_mode / engine 由数据集推导，显式冲突会被拒绝。"
+        ),
+    )
+    interval: Optional[str] = Field(
+        default=None,
+        description="K 线周期。历史数据集固定为 1m。",
     )
 
 
@@ -449,15 +472,18 @@ StrategyCandidateStatus = Literal[
 ]
 
 
-BacktestRiskMode = Literal["raw_only", "risk_adjusted", "event_replay"]
-
-
 class BacktestDatasetSpec(BaseModel):
     """研究回测数据集选择。"""
 
     symbols: List[str] = Field(default_factory=lambda: ["BTCUSDT"])
-    start_ts_ms: int = Field(..., description="Start timestamp in milliseconds")
-    end_ts_ms: int = Field(..., description="End timestamp in milliseconds")
+    start_ts_ms: Optional[int] = Field(
+        default=None,
+        description="Start timestamp in milliseconds (optional when dataset_id is provided)",
+    )
+    end_ts_ms: Optional[int] = Field(
+        default=None,
+        description="End timestamp in milliseconds (optional when dataset_id is provided)",
+    )
     feature_version: str = "dev_smoke"
     venue: str = "BINANCE"
     initial_capital: float = Field(default=100000.0, ge=0.0)
@@ -466,6 +492,14 @@ class BacktestDatasetSpec(BaseModel):
     benchmark: Optional[str] = None
     data_mode: Literal["real_feature_store", "dev_smoke"] = "dev_smoke"
     risk_mode: BacktestRiskMode = "risk_adjusted"
+    dataset_id: Optional[str] = Field(
+        default=None,
+        description="已发布历史数据集 ID。提供后其余字段由数据集推导。",
+    )
+    interval: Optional[str] = Field(
+        default=None,
+        description="K 线周期。历史数据集固定为 1m。",
+    )
 
 
 class BacktestGateResult(BaseModel):
@@ -475,6 +509,76 @@ class BacktestGateResult(BaseModel):
     failed_rules: List[str] = Field(default_factory=list)
     metrics: Dict[str, Any] = Field(default_factory=dict)
     evidence_refs: Dict[str, str] = Field(default_factory=dict)
+
+
+# ==================== History Data Models ====================
+
+HistoryJobStatus = Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"]
+HistoryDatasetStatus = Literal["PENDING", "PUBLISHED", "FAILED"]
+
+
+class HistoryJobCreateRequest(BaseModel):
+    """创建历史归档导入任务。"""
+
+    symbol: str = Field(..., description="Symbol to download, e.g. BTCUSDT")
+    month: str = Field(..., description="Archive month in YYYY-MM format (must have ended)")
+    source: Literal["binance_vision"] = "binance_vision"
+    market: Literal["spot"] = "spot"
+    interval: Literal["1m"] = "1m"
+    requested_by: str = "console_user"
+
+
+class HistoryJobResponse(BaseModel):
+    """历史归档导入任务。"""
+
+    job_id: str
+    source: str
+    market: str
+    symbol: str
+    interval: str
+    month: str
+    status: HistoryJobStatus
+    stage: str
+    dataset_id: Optional[str] = None
+    feature_version: Optional[str] = None
+    rows_processed: int = 0
+    bytes_downloaded: int = 0
+    error_code: Optional[str] = None
+    error_reason: Optional[str] = None
+    requested_by: str = "console_user"
+    attempt: int = 1
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class HistoryDatasetResponse(BaseModel):
+    """历史数据集（元数据 + 质量 + 回测资格）。"""
+
+    dataset_id: str
+    source: str
+    market: str
+    symbol: str
+    interval: str
+    month: str
+    version: int = 1
+    feature_version: str
+    archive_sha256: str
+    official_sha256: Optional[str] = None
+    source_url: str
+    checksum_url: str
+    row_count: int = 0
+    expected_points: int = 0
+    gap_count: int = 0
+    first_ts_ms: Optional[int] = None
+    last_ts_ms: Optional[int] = None
+    quality: Dict[str, Any] = Field(default_factory=dict)
+    status: HistoryDatasetStatus = "PENDING"
+    persistence_ok: bool = False
+    backtest_eligible: bool = False
+    created_at: Optional[str] = None
+    published_at: Optional[str] = None
 
 
 class StrategyCandidateCreateRequest(BaseModel):

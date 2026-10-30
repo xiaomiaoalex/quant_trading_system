@@ -38,7 +38,7 @@ def _make_broker() -> MagicMock:
     broker.place_order = AsyncMock(
         return_value=MagicMock(
             broker_order_id="broker-1",
-            filled_quantity=Decimal("0"),
+            filled_qty=Decimal("0"),
             average_price=Decimal("0"),
             status=OrderStatus.SUBMITTED,
             created_at=None,
@@ -307,7 +307,7 @@ class TestRiskModeKillSwitchConsistency:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-l1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("0"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,
@@ -390,7 +390,7 @@ class TestOMSRiskModeFinalGate:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-close-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,
@@ -435,7 +435,7 @@ class TestOMSRiskModeFinalGate:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-close-only-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,
@@ -509,7 +509,7 @@ class TestOMSRiskModeFinalGate:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-sys-liqq-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,
@@ -561,7 +561,7 @@ class TestOMSRiskModeFinalGate:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-normal-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,
@@ -587,7 +587,7 @@ class TestOMSRiskModeFinalGate:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-no-callback-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,

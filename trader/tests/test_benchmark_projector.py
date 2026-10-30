@@ -16,6 +16,17 @@ from trader.core.domain.models.performance import StrategyRun
 from trader.services.performance import PerformanceService
 
 
+def test_performance_router_is_mounted_on_main_app() -> None:
+    """Performance API endpoints must be reachable through the main FastAPI app."""
+    from trader.api.main import app
+
+    route_paths = {getattr(route, "path", "") for route in app.routes}
+
+    assert "/v1/performance/benchmark/project" in route_paths
+    assert "/v1/performance/benchmark/config" in route_paths
+    assert "/v1/performance/initial-weights" in route_paths
+
+
 @pytest.fixture
 def mock_performance_repo(monkeypatch: pytest.MonkeyPatch) -> PerformanceRepository:
     """Create a fresh performance repository with mocked postgres."""
@@ -196,6 +207,43 @@ async def test_benchmark_projector_project_from_config(
     assert holdings_dict["ETHUSDT"] == Decimal("0.35")
     assert holdings_dict["BNBUSDT"] == Decimal("0.15")
     assert holdings_dict["SOLUSDT"] == Decimal("0.10")
+
+
+@pytest.mark.asyncio
+async def test_benchmark_projector_preserves_symbol_period_returns(
+    performance_service: PerformanceService,
+    mock_performance_repo: PerformanceRepository,
+) -> None:
+    """Configured period_return values must stay attached to their symbols."""
+    from trader.services.benchmark_projector import BenchmarkConstituentProjector
+
+    projector = BenchmarkConstituentProjector(performance_service=performance_service)
+    await projector.project_from_config(
+        benchmark_id="config:returns",
+        constituents={
+            "BTCUSDT": Decimal("0.60"),
+            "ETHUSDT": Decimal("0.40"),
+        },
+        period_start_ms=1700000000000,
+        period_end_ms=1700000064000,
+        period_return="0",
+        period_returns={
+            "BTCUSDT": Decimal("0.12"),
+            "ETHUSDT": Decimal("-0.03"),
+        },
+    )
+
+    holdings = await mock_performance_repo.list_benchmark_holdings(
+        benchmark_id="config:returns",
+        period_start_ms=1700000000000,
+        period_end_ms=1700000064000,
+    )
+
+    returns_by_symbol = {holding.symbol: holding.period_return for holding in holdings}
+    assert returns_by_symbol == {
+        "BTCUSDT": Decimal("0.12"),
+        "ETHUSDT": Decimal("-0.03"),
+    }
 
 
 @pytest.mark.asyncio

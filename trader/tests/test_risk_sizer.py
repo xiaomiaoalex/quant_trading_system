@@ -209,6 +209,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(size_by_stop=float("nan"))
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "not finite" in result.rejection_reason
 
     def test_inf_size_by_stop_rejected(self) -> None:
@@ -216,6 +217,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(size_by_stop=float("inf"))
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "not finite" in result.rejection_reason
 
     def test_negative_size_by_stop_rejected(self) -> None:
@@ -223,6 +225,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(size_by_stop=-10.0)
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "negative" in result.rejection_reason or "must be > 0" in result.rejection_reason
 
     def test_zero_size_by_stop_rejected(self) -> None:
@@ -230,6 +233,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(size_by_stop=0.0)
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "must be > 0" in result.rejection_reason
 
     def test_negative_strategy_cap_rejected(self) -> None:
@@ -243,6 +247,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(time_coef=float("nan"))
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "not finite" in result.rejection_reason
 
     def test_inf_coefficient_rejected(self) -> None:
@@ -256,6 +261,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(regime_coef=1.5)
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "out of range" in result.rejection_reason
 
     def test_coefficient_below_zero_rejected(self) -> None:
@@ -263,6 +269,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(venue_health_coef=-0.1)
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "out of range" in result.rejection_reason
 
     def test_zero_time_coef_rejected_fail_closed(self) -> None:
@@ -270,6 +277,7 @@ class TestRiskSizerFailClosed:
         inputs = _make_inputs(time_coef=0.0)
         result = sizer.compute(inputs)
         assert result.is_rejected
+        assert result.rejection_reason is not None
         assert "Zero coefficient" in result.rejection_reason
 
     def test_zero_drawdown_coef_rejected_fail_closed(self) -> None:

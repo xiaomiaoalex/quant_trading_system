@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from collections.abc import Iterator
+from types import ModuleType
 
 import pytest
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ _BASE_ENV = {
     key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key) for key in _TRACKED_ENV_KEYS
 }
 try:
-    _REAL_ASYNCPG = importlib.import_module("asyncpg")
+    _REAL_ASYNCPG: ModuleType | None = importlib.import_module("asyncpg")
 except Exception:
     _REAL_ASYNCPG = None
 
@@ -72,6 +73,7 @@ def _reset_global_test_state() -> None:
     from trader.adapters.persistence.position_repository import reset_position_repository
     from trader.adapters.persistence.risk_repository import reset_risk_event_repository
     from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
+    from trader.api import main as api_main
     from trader.api.routes import monitor
     from trader.api.routes.strategies import reset_strategy_route_state_for_tests
     from trader.core.domain.services.order_ownership_registry import reset_order_ownership_registry
@@ -80,6 +82,8 @@ def _reset_global_test_state() -> None:
     from trader.storage.in_memory import reset_storage
 
     reset_strategy_route_state_for_tests()
+    api_main._binance_connector_instance = None
+    api_main._binance_cascade_controller = None
     monitor._monitor_service = None
     monitor._portfolio_service = None
     reset_proxy_failover_controller()

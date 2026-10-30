@@ -157,7 +157,9 @@ class StrategyRuntimeOrchestrator:
             ]
             pub_running = False
             try:
-                pub_running = self._connector.public_stream.is_running()
+                connector = self._connector
+                if connector is not None:
+                    pub_running = connector.public_stream.is_running()
             except Exception:
                 pass
             logger.debug(
@@ -287,6 +289,8 @@ class StrategyRuntimeOrchestrator:
         except Exception as e:
             logger.warning(f"[Orchestrator] Failed to convert event {event_type}: {e}")
             return None
+
+        return None
 
     async def _dispatch_to_strategies(self, symbol: str, market_data: MarketData) -> None:
         """

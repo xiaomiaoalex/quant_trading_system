@@ -516,7 +516,7 @@ class DataValidator:
         interval: str,
     ) -> List[DataQualityIssue]:
         """检查数据对齐问题"""
-        issues = []
+        issues: List[DataQualityIssue] = []
 
         if len(timestamps) < 2:
             return issues
@@ -545,8 +545,8 @@ class DataValidator:
         interval: str,
     ) -> Tuple[List[DataGap], List[str]]:
         """检查数据缺口"""
-        gaps = []
-        warnings = []
+        gaps: List[DataGap] = []
+        warnings: List[str] = []
 
         if len(timestamps) < 2:
             return gaps, warnings
@@ -777,7 +777,7 @@ class DataPipeline:
 
         output: Dict[str, Tuple[List[Any], DataQualityReport]] = {}
         for symbol, result in zip(symbols, results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 logger.error(f"Failed to load {symbol}: {result}")
                 # Create error report
                 error_report = DataQualityReport(
@@ -837,7 +837,7 @@ class DataPipeline:
         end: datetime,
     ) -> List[Dict[str, Any]]:
         """生成模拟数据用于测试"""
-        data = []
+        data: List[Dict[str, Any]] = []
         current = start
         price = 100.0
 
@@ -854,7 +854,7 @@ class DataPipeline:
                     "volume": 1000 + hash(symbol) % 500,
                 }
             )
-            price = data[-1]["close"]
+            price = float(data[-1]["close"])
             current += delta
 
         return data

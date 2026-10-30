@@ -29,9 +29,9 @@ from trader.core.domain.signals.trend_signals import (
 def make_price_sample(
     ts_ms: int,
     close_price: float,
-    open_price: float = None,
-    high_price: float = None,
-    low_price: float = None,
+    open_price: float | None = None,
+    high_price: float | None = None,
+    low_price: float | None = None,
 ) -> PriceSample:
     """创建价格样本"""
     if open_price is None:

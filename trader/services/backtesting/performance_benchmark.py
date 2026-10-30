@@ -215,7 +215,7 @@ class PerformanceBenchmark:
             bars_count = len(data)
 
             # Run backtest
-            result = self._run_backtest_sync(data)
+            backtest_result = self._run_backtest_sync(data)
 
             duration = time.perf_counter() - start_time
 
@@ -254,7 +254,7 @@ class PerformanceBenchmark:
             duration = time.perf_counter() - start_time
             logger.error(f"1-year backtest error: {e}")
 
-            result = BenchmarkResult(
+            failure_result = BenchmarkResult(
                 name="1-Year Backtest",
                 duration_seconds=duration,
                 passed=False,
@@ -263,8 +263,8 @@ class PerformanceBenchmark:
                 expected_value=self._targets.one_year_backtest_max,
                 error=str(e),
             )
-            self._results.append(result)
-            return result
+            self._results.append(failure_result)
+            return failure_result
 
     def test_5year_backtest(self) -> BenchmarkResult:
         """
@@ -290,7 +290,7 @@ class PerformanceBenchmark:
             bars_count = len(data)
 
             # Run backtest
-            result = self._run_backtest_sync(data)
+            backtest_result = self._run_backtest_sync(data)
 
             duration = time.perf_counter() - start_time
 
@@ -329,7 +329,7 @@ class PerformanceBenchmark:
             duration = time.perf_counter() - start_time
             logger.error(f"5-year backtest error: {e}")
 
-            result = BenchmarkResult(
+            failure_result = BenchmarkResult(
                 name="5-Year Backtest",
                 duration_seconds=duration,
                 passed=False,
@@ -338,8 +338,8 @@ class PerformanceBenchmark:
                 expected_value=self._targets.five_year_backtest_max,
                 error=str(e),
             )
-            self._results.append(result)
-            return result
+            self._results.append(failure_result)
+            return failure_result
 
     def test_memory_usage(self) -> BenchmarkResult:
         """

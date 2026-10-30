@@ -64,7 +64,7 @@ class SSEManager:
                 self._client_counter += 1
                 client_id = f"client_{self._client_counter}"
 
-            queue = asyncio.Queue(maxsize=100)
+            queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
             client = SSEClient(client_id, queue)
             self._clients[client_id] = client
             logger.info(f"[SSE] Client connected: {client_id}")

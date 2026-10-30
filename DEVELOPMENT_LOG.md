@@ -1174,3 +1174,160 @@
   - `python -m pytest -q trader/tests/test_strategy_auto_pause.py trader/tests/test_oms_callback_fill_idempotency.py trader/tests/test_oms_pretrade_risk_gate.py --tb=short` -> 18 passed
 - 风险/遗留: 持仓审计遇到无法解析的数量仍会进入现有 warning 路径并跳过本次审计；后续如需要更严格的风险告警，可单独增加 malformed position 事件。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-29 17:40 - 币安公开归档历史数据 → 真实历史回测全链路
+
+- 背景: Data 页面只有手动 JSON 导入与实时 OHLCV worker，研究者无法用真实历史行情重复「准备数据 → 选择策略 → 执行回测 → 查看结果」。
+  已有 `real_feature_store` 回测路径只认 `feature_version`，没有「已发布数据集」这一层准入，且 `FeatureStore` 在 PG 不可用时静默回退内存。
+- 决策:
+  - 归档来源固定为币安公开归档（`data.binance.vision`），只允许 BTCUSDT / ETHUSDT、现货、1m，不接受任意 URL，不随 `BINANCE_ENV` 变化。
+  - 数据集是**版本化**的：同一归档 hash 复用同一 `feature_version`；官方修订归档产生新版本，旧版本保留，旧文件不被覆盖。
+  - 「已登记数据集」用 `feature_version` 前缀 `binance_spot_1m` 标识：这类回测**必须**显式提供 `dataset_id`，
+    否则视为绕过数据集准入门禁；旧的手动导入 / 实时 worker 入口保持不变（高级入口）。
+  - 冲突判定只针对用户**显式提交**的字段（Pydantic `model_fields_set`），未提供的旧默认值不算冲突。
+  - FeatureStore 新增严格模式：PG 不可用 / 读写失败一律抛错，绝不静默回退内存（研究数据必须真的落库）。
+  - 真实历史回测只支持单币对，禁止 `symbols[0]` 静默丢弃其它币对。
+- 改动:
+  - `trader/core/domain/services/ohlcv_archive.py`: 纯领域服务 —— 时间戳解析（2025-01-01 起微秒，之前毫秒，统一 UTC 毫秒整数）、
+    K 线数值 / OHLC 关系 / 分钟对齐校验、同值去重与异值冲突检测、月度覆盖度与缺口统计、`feature_version` 构造。
+  - `trader/adapters/market_data/binance_vision.py`: 归档 URL 构造、流式下载到临时文件、SHA-256 计算与官方 CHECKSUM 比对、
+    原子提交到 `MARKET_DATA_ROOT` 版本化路径、只读取预期 CSV 成员（不做任意 extractall）。
+  - `trader/adapters/persistence/feature_store.py`: 新增 `strict` 模式与 `FeatureStoreStrictError`；新增 `write_features_bulk`
+    批量写入（先查冲突再批量插入，同 key 同值幂等、异值抛 `FeatureVersionConflictError`）。
+  - `trader/adapters/persistence/history_dataset_store.py`: 任务 / 数据集 PostgreSQL 存储（原子领取、启动恢复、重试、
+    发布状态与任务 SUCCEEDED 同事务提交、发布前校验 FeatureStore 真实行数）。
+  - `trader/adapters/persistence/postgres/__init__.py` + `migrations/009_history_datasets.sql`: 新表 DDL（与初始化一致）。
+  - `trader/services/history_data_ingestion.py`: 任务编排与单并发 worker（阶段推进、错误分类、幂等复用、启动恢复）。
+  - `trader/services/backtesting/backtest_dataset_resolution.py` + `history_dataset_resolver.py` + `history_dataset_provider.py`:
+    统一准入解析（普通回测与候选回测共用）、范围推导、数据集感知 Provider（读取后复核行数与连续性）。
+  - `trader/services/deployment.py`: `resolve_backtest_request()` 异步入口；数据集路径强制 `engine=vectorbt`、`data_mode=real_feature_store`；
+    报告新增 `data_provenance` 与 `cost_model`。
+  - `trader/api/routes/data_history.py` + `trader/api/routes/backtests.py` + `trader/api/routes/strategy_candidates.py`:
+    新接口与共享准入校验接入；`trader/api/models/schemas.py` 新增 `dataset_id` / `interval` 与历史任务 / 数据集模型。
+  - `Frontend/src/components/history/HistoryDataPanel.tsx`、`Frontend/src/hooks/useHistoryData.ts`、
+    `Frontend/src/utils/historyDataset.ts`、`Frontend/src/pages/Data.tsx`、`Frontend/src/pages/Backtests.tsx`:
+    Data 页面历史数据区块（2s 轮询、终态停止、成功刷新数据集缓存、失败重试）与 Backtests 数据集选择器。
+  - `scripts/e2e_history_backtest.py`: 真实联网 E2E 验收脚本（隔离数据库 + 真实归档 + 真实回测 + 重启复查）。
+- 验证:
+  - `python -m pytest -q trader/tests/test_ohlcv_archive_domain.py trader/tests/test_binance_vision_archive.py trader/tests/test_history_data_ingestion.py trader/tests/test_backtest_dataset_resolution.py trader/tests/test_api_data_history.py --tb=short` -> 99 passed
+  - `python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short` -> 8 passed（真实 PostgreSQL，隔离库 `qts_history_test`）
+  - `python -m pytest trader/tests/ --tb=no -p no:randomly -q --junitxml=...` -> 3034 tests / 32 failures / 1 error，
+    失败集合与基线 56a0fa0 完全一致（`client_order_id → cl_ord_id` 命名收口遗留，非本次引入）
+  - P0 回归集 -> 全部通过；`isort --check-only` / `black --check` / `check_core_no_io.py` -> 全部通过
+  - `python scripts/e2e_history_backtest.py --symbols BTCUSDT,ETHUSDT --month 2026-09` -> PASS
+  - `cd Frontend && npm run typecheck` -> passed；`npx vitest run` -> 88 passed；`npm run build` -> passed
+- 风险/遗留:
+  - 本阶段**不承诺盈利**：真实 E2E 中 EMA 交叉策略在 1m 数据 + 固定费率/滑点下为负收益（BTC -90.88% / ETH -91.28%），
+    这是研究通路可复现的基线，不是策略结论。
+  - 未覆盖逐笔成交、盘口深度、实时补数与付费数据源。
+  - 归档下载与解析目前是单币对单月串行；多月份批量导入尚未提供批量入口。
+  - `Frontend/tsconfig.node.json` 移除了与 `composite` 冲突的 `allowImportingTsExtensions`（该选项自 d092cc1 起
+    就让 `npm run build` 失败，属既有构建门禁问题，本次为跑通构建做的最小修复）。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`docs/PROJECT_ARCHITECTURE.md`、
+  `Frontend/frontend_docs/contract_endpoints.md`、`Frontend/frontend_docs/contract_models.md`、
+  `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`、`docs/PLAN.md`
+
+### 2026-10-29 19:05 - 历史归档通路第 1 轮审核修复（R1–R10）
+
+- 背景: 首次独立只读审核未发现 P0，但提出 1 个 P1 与若干 P2/P3 边界与测试缺口。
+  核心问题是「提交路径依赖远端可用性」与「批量写入并发冲突可被静默吞掉」。
+- 决策:
+  - **提交路径不做任何远程 HTTP**：归档是否存在由 worker 下载阶段判定（`ARCHIVE_NOT_FOUND` → 任务 FAILED），
+    POST 正常返回 202。这样 202 不会被远端 HEAD 阻塞（最长 60s），归档被官方修订 / 移除时也不会把
+    「已有可用数据集」的重复提交误判成 404。
+  - **重复提交复用既有任务行**：已发布数据集优先用其登记时的 `job_id` 关联任务，其次按 `dataset_id` 反查成功任务；
+    不再每次新建 SUCCEEDED 行。
+  - **批量写入必须可检测并发冲突**：`INSERT ... ON CONFLICT DO NOTHING RETURNING` + 写后回读 `value_hash` 比对，
+    绝不采用会覆盖旧值的 `DO UPDATE`；冲突整批回滚（无部分写入），计数真实。
+  - **不覆盖已发布版本的证据**：`commit()` 复用既有归档前校验 SHA-256，不同即抛错；CHECKSUM 原子写并可在崩溃窗口恢复。
+  - **官方 CHECKSUM 原文保留**：按预期 zip 文件名匹配解析（不取任意第一个 token），原文原样保存，
+    本地 `-vN` 文件名与官方名的差异记录在 quality / provenance，不伪造改写。
+- 改动:
+  - `trader/services/history_data_ingestion.py`: `submit_job` 去掉远程探测 + 复用关联任务；新增 `_find_associated_job`、
+    `get_dataset`；数据集 quality 记录 `official_file_name` / `local_archive_name`。
+  - `trader/adapters/persistence/history_dataset_store.py`: 新增 `find_succeeded_job_by_dataset`、`find_active_job`。
+  - `trader/api/routes/data_history.py`: 数据集详情改用 `get_dataset` 直查；移除提交阶段 404 映射。
+  - `trader/adapters/market_data/binance_vision.py`: 移除 `exists()` / `head_status`；
+    `parse_checksum` 按文件名匹配；`commit()` 校验 hash、原子写 CHECKSUM、崩溃窗口补写；保留官方原文。
+  - `trader/adapters/persistence/feature_store.py`: 重写 `write_features_bulk`（批内归并 + 单事务插入 + 回读校验）。
+  - `trader/services/backtesting/history_dataset_provider.py`: 删除无引用的 `utc_datetime`。
+  - `trader/services/backtesting/history_dataset_resolver.py`: provenance 增加官方 / 本地归档名。
+  - `Frontend/src/utils/historyDataset.ts`: `isDatasetEligible` 补 `gap_count` 与 `row_count/expected_points` 校验。
+  - 测试：新增 / 修正适配器（R5/R6/R7）、服务（R1/R4/R8）、API（R1/R2）、PG 并发与回滚（R3）用例。
+- 验证:
+  - `python -m pytest -q trader/tests/test_ohlcv_archive_domain.py trader/tests/test_binance_vision_archive.py trader/tests/test_history_data_ingestion.py trader/tests/test_backtest_dataset_resolution.py trader/tests/test_api_data_history.py --tb=short` -> 全部通过
+  - `python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short` -> 12 passed（真实 PostgreSQL 隔离库）
+  - `cd Frontend && npm run typecheck` -> passed；`npx vitest run` -> 90 passed
+  - `python -m isort --check-only --profile black trader/`、`python -m black --check --line-length 100 trader/`、
+    `python scripts/check_core_no_io.py` -> 全部通过
+- 风险/遗留:
+  - 本轮不修复既有全量测试中的 32 failures + 1 error（`client_order_id -> cl_ord_id` 命名收口遗留，与基线一致）。
+  - 单实例单并发 worker 的约束不变；并发批量写的正确性已在持久化层用事务 + 回读校验兜底。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§12）、`Frontend/frontend_docs/contract_endpoints.md`、
+  `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-29 - 历史数据修复最终复核与验收
+
+- DeepSeek 对第 1 轮未提交修复完成独立只读复核，R1-R10 全部闭合，无 P0/P1/P2 遗留；N2 经 PG 部分唯一索引实证撤回。保留 N1/P3 未使用 find_active_job 建议。
+- 实现者受 Token Plan 429 阻塞后，由主代理完成交付收尾，不替换指定实现模型。
+- 主代理独立运行 P0 五文件集和前端 npm run build：均 exit 0；还原构建生成的两个 tsbuildinfo。
+- 主代理独立重跑真实 BTC/ETH 2026-09 下载与回测：PASS；隔离库 qts_history_e2e_review_final，两币各 43,200 条、无缺口，均 COMPLETED；新服务实例回读两任务成功和完整行情。
+- 详细审核问题、修复、实际验证、数据集/run_id、hash 和限制见 docs/reviews/BINANCE_SPOT_HISTORY_REVIEW.md。
+- 全量 Python 既有失败仅按实现者报告保留，未将其标为主代理独立验证通过。
+### 2026-06-05 17:38 - PR #110 审查问题修复
+
+- 背景: 最近 PR #110 审查发现 performance benchmark API route module 未挂载到主 FastAPI app，导致 PR 摘要承诺的 `/v1/performance/benchmark/*` 与 `/v1/performance/initial-weights` 端点实际 404；同时 `benchmark/config` 文档允许 per-symbol `period_return`，实现却统一使用全局默认值。
+- 决策: 先用 TDD 复现主 app 路由缺失和 per-symbol return 丢失；修复保持现有 `period_return` 默认值兼容，只新增 `period_returns` override 映射，不重做请求体形状。
+- 改动:
+  - `trader/api/routes/__init__.py`、`trader/api/main.py`: 导入并挂载 `performance.router`。
+  - `trader/services/benchmark_projector.py`: `project_from_config()` 与 module-level convenience function 增加 `period_returns`，按 symbol 覆盖全局默认 return。
+  - `trader/api/routes/performance.py`: 解析 `constituents[].period_return` 并传递到 projector，非法数值返回 400。
+  - `trader/tests/test_benchmark_projector.py`: 新增主 app 路由挂载回归和 per-symbol period return 保真回归。
+  - `docs/INTERFACE_CONTRACTS.md`: 新增 Performance Benchmark Projector API/DTO/幂等键契约。
+  - `docs/PROJECT_ARCHITECTURE.md`: 新增 Performance Benchmark Projector 数据流与边界约束。
+- 验证:
+  - 红测复现: `python -m pytest -q trader/tests/test_benchmark_projector.py::test_performance_router_is_mounted_on_main_app trader/tests/test_benchmark_projector.py::test_benchmark_projector_preserves_symbol_period_returns --tb=short` -> 2 failed（修复前）
+  - 修复后同命令 -> 2 passed
+  - `python -m pytest -q trader/tests/test_benchmark_projector.py --tb=short` -> 9 passed
+- 风险/遗留: 新端点仍主要由 service/projector 测试覆盖，建议后续增加 `TestClient` 级 API 契约测试和 PostgreSQL 集成测试，覆盖真实请求体、PG unique/upsert 与 Brinson 读取链路。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/PROJECT_ARCHITECTURE.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-06-06 21:21 - mypy 技术债阶段性集中清理
+
+- 背景: 用户创建目标要求集中修复仓库 mypy 技术债。初始 `mypy trader/` 基线为 486 errors / 114 files，噪音与真实类型债混杂。
+- 决策: 先消除第三方 stub 噪音，再按错误簇清理 PG-first 仓储 Optional storage、Projector 注解、Core deterministic layer None 收窄和回测 data pipeline 容器推断；不通过 `ignore_errors` 屏蔽仓库内部错误。
+- 改动:
+  - `pyproject.toml`: 新增 `[tool.mypy]`，禁用第三方 `import-not-found/import-untyped` 错误码，并保留常见外部库 overrides。
+  - 多个 PG-first repository: 新增 `_postgres_or_raise()` / `_storage_or_raise()`，将 `_ensure_postgres()` 后的隐含非空连接状态显式化。
+  - `trader/adapters/persistence/postgres/*`: `acquire()` 增加未连接防御，event store 返回 ID 增加非空校验，projector 补齐 `Enum/json/TYPE_CHECKING` 与事件类型列表修正。
+  - `trader/core/application/deterministic_layer.py`: 对 exchange timestamp 和 pending payload 做显式类型收窄，保持 CAS 单调规则不变。
+  - `trader/services/backtesting/data_pipeline.py`: 补齐空容器类型、`asyncio.gather` exception 收窄和 mock price 数值收窄。
+- 验证:
+  - `mypy trader/`：486 errors -> 312 errors（仍失败）。
+  - `mypy` 已修改核心/仓储/回测 13 个源码文件（`--follow-imports=skip`）-> passed。
+  - `python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short` -> 39 passed。
+  - `python -m pytest -q trader/tests/test_deterministic_layer.py trader/tests/test_postgres_storage.py trader/tests/test_postgres_projectors.py --tb=short` -> 超时；未按仓库说明启动 Docker/Postgres，不能视为通过。
+- 风险/遗留: 全量 mypy 仍有 312 errors，剩余集中在 tests、performance attribution、Binance stream/session narrowing、API route DTO narrowing、strategy runner 和 fake broker；PG 集成测试需在 Docker Postgres 可用后重跑。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-06-07 - mypy 技术债集中清理归零
+
+- 背景: 延续上一阶段 486 errors -> 312 errors 的 mypy 清理目标，继续处理仓库内部真实类型债，目标是让 `mypy trader/` 全量通过，同时避免用仓库级 `ignore_errors` 掩盖问题。
+- 决策: 保留 `pyproject.toml` 对第三方 `import-not-found/import-untyped` 的隔离；仓库内部错误按错误簇修复。对 Optional storage/session 使用局部 helper 或显式 guard 收窄；测试 fake 和 monkeypatch 边界使用局部 `cast(Any, ...)` 或精确 `# type: ignore[method-assign]`，不扩大到模块级忽略。
+- 改动:
+  - `pyproject.toml`: 固化 Python 3.12 mypy 配置和外部库 overrides，将第三方 stub 噪音与内部类型错误分离。
+  - Persistence/PG-first 仓储: 补齐 `_postgres_or_raise()`、`_storage_or_raise()`、pool acquire 非空校验、SQL 参数/返回值类型和 Decimal/时间戳收窄。
+  - `trader/adapters/persistence/execution_repository.py`: 增加 `list_executions_for_projection(after_ts_ms, after_execution_id, limit)`，`PerformanceExecutionProjector` 通过显式游标契约读取 execution facts。
+  - Binance/IO adapters: 对 aiohttp session、websocket、REST alignment、funding/OI、public/private stream 和 announcement/onchain stream 做显式非空 guard。
+  - Core/Services/API: 修正 deterministic payload、event deserialize、reconciliation kill-switch 调用、performance accounting Decimal 聚合、route DTO/TypeAlias、strategy runtime optional connector 和 validation gate reason 类型。
+  - Tests/fakes: 修正 fake clock/http/ws/strategy 类型，补齐 Decimal 字面量、非空断言、局部 cast 和 method assignment ignore，保持测试行为不变。
+- 验证:
+  - `mypy trader/` -> `Success: no issues found in 389 source files`
+  - `python -m black --check --line-length 100 trader/` -> passed
+  - `python -m isort --check-only --profile black trader/` -> passed
+  - P0 回归集 `test_binance_connector.py test_binance_private_stream.py test_binance_degraded_cascade.py test_deterministic_layer.py test_hard_properties.py` -> passed
+  - Strategy/chat、Binance、Persistence/reconciler、Backtesting、Portfolio risk、Signals/committee、API/feature store 等目标子集 -> passed
+  - `python -m pytest -q trader/tests --tb=short` -> 124 秒超时，无失败明细，未标记为通过
+  - Portfolio proposal PostgreSQL 测试因未配置 PostgreSQL skip；memory store 测试通过
+- 风险/遗留: 全量 pytest 仍需在更长超时时间或 CI 环境中重跑；PostgreSQL 集成路径需启动 Docker/Postgres 后单独验证。当前 mypy 已清零，但后续新增测试 fake/monkeypatch 仍应优先局部收窄，避免重新积累类型债。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

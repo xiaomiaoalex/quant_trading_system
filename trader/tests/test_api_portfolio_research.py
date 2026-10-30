@@ -5,6 +5,7 @@ Tests for Portfolio Research API endpoints using TestClient.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,8 +22,8 @@ class MockCommitteeRun:
         run_id: str = "run-001",
         trace_id: str = "trace-001",
         research_request: str = "Test request",
-        sleeve_proposals: list = None,
-        portfolio_proposal: dict = None,
+        sleeve_proposals: list[Any] | None = None,
+        portfolio_proposal: dict[str, Any] | None = None,
         status: str = "completed",
     ):
         self.run_id = run_id
@@ -49,9 +50,9 @@ class MockWorkflowResult:
     def __init__(
         self,
         success: bool = True,
-        committee_run: MockCommitteeRun = None,
+        committee_run: MockCommitteeRun | None = None,
         execution_time_seconds: float = 1.5,
-        error_message: str = None,
+        error_message: str | None = None,
     ):
         self.success = success
         self.committee_run = committee_run or MockCommitteeRun()
@@ -65,7 +66,7 @@ class MockPortfolioProposal:
     def __init__(
         self,
         proposal_id: str = "proposal-001",
-        sleeves: list = None,
+        sleeves: list[Any] | None = None,
     ):
         self.proposal_id = proposal_id
         self.sleeves = sleeves or []

@@ -9,8 +9,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+from trader.adapters.persistence.history_dataset_store import HistoryStoreUnavailableError
 from trader.api.models.schemas import BacktestReport, BacktestRequest, BacktestRun
 from trader.services import BacktestService
+from trader.services.backtesting.history_dataset_resolver import (
+    DatasetNotEligibleError,
+    DatasetNotFoundError,
+)
 from trader.storage.artifact_storage import get_artifact_storage
 
 router = APIRouter(tags=["Backtests"])
@@ -37,11 +42,23 @@ async def create_backtest(request: BacktestRequest):
     """
     Trigger a backtest run.
 
-    Creates and starts a new backtest run.
+    历史数据集路径会先做异步准入校验（数据集已发布 / 完整 / 持久化可用 /
+    范围合法 / 显式字段无冲突），校验通过后才创建回测任务。
     """
     service = BacktestService()
     try:
-        return service.create_backtest(request)
+        resolved = await service.resolve_backtest_request(request)
+    except DatasetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DatasetNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HistoryStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"History store unavailable: {exc}") from exc
+
+    try:
+        return service.create_backtest(resolved)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

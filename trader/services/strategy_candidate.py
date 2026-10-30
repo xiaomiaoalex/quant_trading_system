@@ -365,13 +365,12 @@ class StrategyCandidateService:
             await self._rollback_promote(candidate_dict, deployment_id, str(exc))
             # load 阶段失败 -> PROMOTE_LOAD_FAILED；approve/audit 阶段失败 -> 同样 PROMOTE_LOAD_FAILED
             # 两者对调用方语义相同：运行态没有干净进入 APPROVED_FOR_PAPER
-            error_code: str = "PROMOTE_LOAD_FAILED"
             if isinstance(exc, HTTPException):
                 # load_strategy 内部已包装成 HTTPException，保留原始错误
                 raise HTTPException(
                     status_code=409,
                     detail=PromotePaperError(
-                        error_code=error_code,
+                        error_code="PROMOTE_LOAD_FAILED",
                         detail=f"PROMOTE_LOAD_FAILED: {exc.detail}",
                         candidate_id=candidate_id,
                     ).model_dump(),
@@ -379,7 +378,7 @@ class StrategyCandidateService:
             raise HTTPException(
                 status_code=409,
                 detail=PromotePaperError(
-                    error_code=error_code,
+                    error_code="PROMOTE_LOAD_FAILED",
                     detail=f"PROMOTE_LOAD_FAILED: {exc}",
                     candidate_id=candidate_id,
                 ).model_dump(),

@@ -765,7 +765,7 @@ class TestAuditEventPersistence:
 
         event = audit_events[0]
         with pytest.raises(AttributeError):
-            event.reason = "MODIFIED"
+            event.reason = "MODIFIED"  # type: ignore[misc]
 
         with pytest.raises(AttributeError):
-            event.mode_after = RiskMode.NORMAL.value
+            event.mode_after = RiskMode.NORMAL.value  # type: ignore[misc]

@@ -514,7 +514,8 @@ class BinanceLiquidationWSConnector:
         while self._running:
             try:
                 await self._ensure_session()
-                async with self._session.ws_connect(url) as ws:
+                session = self._session_or_raise()
+                async with session.ws_connect(url) as ws:
                     self._ws = ws
                     self._reconnect_delay = 1.0  # 重置重连延迟
                     logger.info(f"[LiquidationWS] Connected to {url}")
@@ -569,6 +570,11 @@ class BinanceLiquidationWSConnector:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=30)
             self._session = aiohttp.ClientSession(timeout=timeout)
+
+    def _session_or_raise(self) -> "aiohttp.ClientSession":
+        if self._session is None:
+            raise RuntimeError("HTTP session is not initialized")
+        return self._session
 
     async def _close_session(self) -> None:
         """关闭 HTTP session"""
@@ -681,6 +687,11 @@ class OnChainMarketDataAdapter:
             timeout = aiohttp.ClientTimeout(total=self._config.request_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
 
+    def _session_or_raise(self) -> "aiohttp.ClientSession":
+        if self._session is None:
+            raise RuntimeError("HTTP session is not initialized")
+        return self._session
+
     async def _close_session(self) -> None:
         """关闭 HTTP session"""
         if self._session and not self._session.closed:
@@ -716,7 +727,8 @@ class OnChainMarketDataAdapter:
         records: List[LiquidationRecord] = []
 
         try:
-            async with self._session.get(url) as resp:
+            session = self._session_or_raise()
+            async with session.get(url) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     now_ms = int(time.time() * 1000)
@@ -795,15 +807,16 @@ class OnChainMarketDataAdapter:
             "vs_currency": "usd",
             "ids": "tether,usd-coin,binance-usd,dai",
             "order": "market_cap_desc",
-            "per_page": 10,
-            "page": 1,
+            "per_page": "10",
+            "page": "1",
             "sparkline": "false",
         }
 
         # 带退避重试的请求
         for attempt in range(self._config.max_retries):
             try:
-                async with self._session.get(url, params=params) as resp:
+                session = self._session_or_raise()
+                async with session.get(url, params=params) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         now_ms = int(time.time() * 1000)

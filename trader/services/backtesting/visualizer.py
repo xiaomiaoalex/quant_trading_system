@@ -15,7 +15,7 @@ Requires: matplotlib, seaborn (optional for styling)
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -45,10 +45,10 @@ class PlotConfig:
     title_fontsize: int = 14
     label_fontsize: int = 11
     tick_fontsize: int = 9
-    color_scheme: Dict[str, str] = None  # Custom color scheme
+    color_scheme: Dict[str, str] = field(default_factory=dict)  # Custom color scheme
 
     def __post_init__(self):
-        if self.color_scheme is None:
+        if not self.color_scheme:
             self.color_scheme = {
                 "equity": "#2E86AB",
                 "benchmark": "#A23B72",
@@ -105,6 +105,10 @@ class BacktestVisualizer:
             else:
                 result.append(datetime.now(timezone.utc))
         return result
+
+    def _date_axis(self, timestamps: List[datetime]) -> Any:
+        """Convert datetimes to matplotlib's numeric date axis representation."""
+        return mdates.date2num(timestamps)
 
     def _parse_equities(self, equities: List[Any]) -> List[float]:
         """Parse equity values to floats."""
@@ -165,7 +169,7 @@ class BacktestVisualizer:
 
         # Plot equity curve
         ax.plot(
-            timestamps,
+            self._date_axis(timestamps),
             equities,
             color=self.config.color_scheme["equity"],
             linewidth=2,
@@ -178,7 +182,7 @@ class BacktestVisualizer:
             bench_eq = self._parse_equities(benchmark.get("equities", []))
             if bench_ts and bench_eq:
                 ax.plot(
-                    bench_ts,
+                    self._date_axis(bench_ts),
                     bench_eq,
                     color=self.config.color_scheme["benchmark"],
                     linewidth=1.5,
@@ -277,9 +281,18 @@ class BacktestVisualizer:
             drawdowns.append(-dd)  # Negative for visualization
 
         ax.fill_between(
-            timestamps, drawdowns, 0, color=self.config.color_scheme["drawdown"], alpha=0.5
+            self._date_axis(timestamps),
+            drawdowns,
+            0,
+            color=self.config.color_scheme["drawdown"],
+            alpha=0.5,
         )
-        ax.plot(timestamps, drawdowns, color=self.config.color_scheme["drawdown"], linewidth=1.5)
+        ax.plot(
+            self._date_axis(timestamps),
+            drawdowns,
+            color=self.config.color_scheme["drawdown"],
+            linewidth=1.5,
+        )
 
         # Formatting
         ax.set_title(title, fontsize=self.config.title_fontsize, pad=20)
@@ -372,7 +385,7 @@ class BacktestVisualizer:
 
         # Set ticks
         ax.set_xticks(range(len(years)))
-        ax.set_xticklabels(years, fontsize=self.config.tick_fontsize)
+        ax.set_xticklabels([str(year) for year in years], fontsize=self.config.tick_fontsize)
         ax.set_yticks(range(12))
         ax.set_yticklabels(month_names, fontsize=self.config.tick_fontsize)
 
@@ -438,7 +451,7 @@ class BacktestVisualizer:
                 ]
             )
             ax.plot(
-                timestamps,
+                self._date_axis(timestamps),
                 equities,
                 color=self.config.color_scheme["equity"],
                 linewidth=1.5,
@@ -489,7 +502,7 @@ class BacktestVisualizer:
                 # Entry marker (triangle up)
                 if entry_time:
                     ax.scatter(
-                        [entry_time],
+                        self._date_axis(self._parse_timestamps([entry_time])),
                         [entry_price],
                         marker="^",
                         color="green" if direction.upper() == "BUY" else "red",
@@ -504,7 +517,14 @@ class BacktestVisualizer:
                         if pnl > 0
                         else self.config.color_scheme["loss"]
                     )
-                    ax.scatter([exit_time], [exit_price], marker="v", color=color, s=100, zorder=5)
+                    ax.scatter(
+                        self._date_axis(self._parse_timestamps([exit_time])),
+                        [exit_price],
+                        marker="v",
+                        color=color,
+                        s=100,
+                        zorder=5,
+                    )
 
         ax.set_title(title, fontsize=self.config.title_fontsize, pad=20)
         ax.set_xlabel("Date", fontsize=self.config.label_fontsize)
@@ -641,7 +661,7 @@ class BacktestVisualizer:
                 ]
             )
             ax1.plot(
-                timestamps,
+                self._date_axis(timestamps),
                 equities,
                 color=self.config.color_scheme["equity"],
                 linewidth=2,
@@ -653,7 +673,7 @@ class BacktestVisualizer:
                 bench_eq = self._parse_equities(benchmark.get("equities", []))
                 if bench_ts and bench_eq:
                     ax1.plot(
-                        bench_ts,
+                        self._date_axis(bench_ts),
                         bench_eq,
                         color=self.config.color_scheme["benchmark"],
                         linewidth=1.5,
@@ -681,9 +701,18 @@ class BacktestVisualizer:
                 dd = ((peak - eq) / peak * 100) if peak > 0 else 0
                 drawdowns.append(-dd)
             ax2.fill_between(
-                timestamps, drawdowns, 0, color=self.config.color_scheme["drawdown"], alpha=0.5
+                self._date_axis(timestamps),
+                drawdowns,
+                0,
+                color=self.config.color_scheme["drawdown"],
+                alpha=0.5,
             )
-            ax2.plot(timestamps, drawdowns, color=self.config.color_scheme["drawdown"], linewidth=1)
+            ax2.plot(
+                self._date_axis(timestamps),
+                drawdowns,
+                color=self.config.color_scheme["drawdown"],
+                linewidth=1,
+            )
             ax2.set_title("Drawdown", fontsize=self.config.title_fontsize)
             ax2.set_ylabel("Drawdown (%)", fontsize=self.config.label_fontsize)
             ax2.grid(True, alpha=0.3)

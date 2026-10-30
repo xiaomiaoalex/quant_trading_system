@@ -3926,6 +3926,119 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 
 ---
 
+## 二十六、mypy 技术债归零经验
+
+### 26.1 踩坑记录：`_ensure_*()` 不等于类型收窄
+
+**场景**：
+多个 PG-first repository 先调用 `_ensure_postgres()` 或 `_ensure_storage()`，随后直接访问 `self._postgres` / `self._storage`。
+
+**问题**：
+- 运行时逻辑已经保证非空，但 mypy 无法从有副作用的方法调用推导实例属性一定非空
+- 继续直接访问会形成大量 `union-attr` / `arg-type` 噪音
+
+**经验**：
+- 使用 `_postgres_or_raise()` / `_storage_or_raise()` 返回非空局部变量
+- 后续 SQL、事务和 projector 逻辑只使用该局部变量
+- 这样既保留 fail-closed 防御，也让类型契约可见
+
+### 26.2 踩坑记录：Decimal 聚合必须提供 Decimal 起始值
+
+**场景**：
+Performance accounting 和风险测试中存在 `sum(Decimal(... ) for ...)`。
+
+**问题**：
+- Python 默认起始值是 `0`，类型为 `int`
+- mypy 会把结果推断为 `Decimal | int` 或触发 operator 类型错误
+
+**经验**：
+- Decimal 聚合统一使用 `sum(values, Decimal("0"))`
+- 测试输入中涉及资金、权重、仓位上限的字段也应直接使用 `Decimal(...)`
+
+### 26.3 设计模式：测试 fake 的类型边界局部化
+
+**场景**：
+测试 fake 需要模拟 aiohttp session、websocket、manager 或 source，对象通常只实现协议的一小部分。
+
+**经验**：
+- 在测试调用点使用 `cast(Any, fake)` 表达“这里是测试替身边界”
+- 不在生产代码或整个测试模块上使用宽泛 ignore
+- monkeypatch 方法赋值优先用 fixture；确需直接赋值时使用局部 `# type: ignore[method-assign]`
+
+### 26.4 设计模式：第三方 stub 噪音与内部类型债分离
+
+**场景**：
+`mypy trader/` 同时报告第三方库缺失 stub 和仓库内部 Optional/Any/DTO 错误。
+
+**经验**：
+- `pyproject.toml` 只屏蔽第三方 `import-not-found/import-untyped` 噪音
+- 不对仓库内部包启用 `ignore_errors`
+- 每轮清理用全量 mypy 验证，避免局部 `--follow-imports=skip` 掩盖跨模块错误
+
+---
+
+## 二十六、mypy 技术债阶段性清理经验
+
+### 26.1 踩坑记录：PG-first 仓储的运行时非空事实不会自动传递给 mypy
+
+**场景**：
+多处 repository 在 `await _ensure_postgres()` 返回 True 后直接访问 `self._postgres_storage` 或 `self._storage`。
+
+**问题**：
+- 运行时逻辑能保证连接已初始化，但 mypy 仍看到 `PostgreSQLStorage | None`
+- 直接散落 `assert self._postgres_storage is not None` 会重复且容易遗漏
+
+**经验**：
+- 每个仓储类提供 `_postgres_or_raise()` / `_storage_or_raise()`，集中表达“初始化失败即异常”的 fail-closed 语义
+- `PostgreSQLStorage.acquire()` 自身也应检查 `_pool is None`，避免未连接时返回不明确错误
+
+### 26.2 设计模式：先消噪，再清源码类型债
+
+**场景**：
+初始 `mypy trader/` 同时包含第三方库缺 stub、生产代码类型债和测试辅助对象类型债。
+
+**经验**：
+- 对 `asyncpg`、`pandas`、`seaborn`、`vectorbt` 等第三方 IO/分析边界，先通过 mypy 配置压掉 `import-not-found/import-untyped` 噪音
+- 仓库内部错误不使用 `ignore_errors`，按错误簇逐步清理
+- 全量门禁未清零前，保留错误数基线，避免阶段性修复被误读为完成
+
+### 26.3 Core Plane 类型收窄不得改变确定性规则
+
+**场景**：
+`deterministic_layer` 中 `has_exch_ts = exch_ts is not None` 的布尔别名无法让 mypy 推导 `exch_ts` 非空。
+
+**经验**：
+- 在 Core Plane 中优先做局部变量收窄和 `isinstance` 收窄，避免为了类型通过改写状态机规则
+- pending buffer 的 `payload: object` 应按 `kind + isinstance` 双重判断后再分派，保持异常/未知 payload fail-closed
+
+---
+
+## 二十六、Performance API 路由挂载与配置字段保真
+
+### 26.1 踩坑记录：route module 存在不代表主 app 可达
+
+**场景**：
+PR #110 新增了 `trader/api/routes/performance.py` 和多个 `/v1/performance/...` 端点，但没有在 `trader/api/main.py` include router，也没有加入 `trader/api/routes/__init__.py` 聚合入口。
+
+**问题**：
+- 单独导入 route module 时端点存在，主 FastAPI app 路由表中却没有这些路径
+- 使用 `TestClient(app)` 或真实服务访问会得到 404
+- 只测 service/projector 会漏掉 Control Plane 接线问题
+
+**经验**：
+- 新增 API route 必须同时测试 `trader.api.main.app.routes`
+- Review/CI 不应只验证 route module 或 service 层，应覆盖主 app 可达性
+
+### 26.2 设计模式：默认值与 per-symbol override 分层
+
+**场景**：
+`POST /v1/performance/benchmark/config` 支持全局 `period_return`，同时文档示例允许 `constituents[].period_return`。
+
+**经验**：
+- 全局字段只能作为默认值，不能覆盖更具体的 per-symbol 配置
+- Service 层接口应显式表达 override 映射，如 `period_returns: dict[str, Decimal] | None`
+- 测试必须读取最终 persistence DTO，确认字段没有在 API -> Service -> Repository 链路中丢失
+
 ## 二十六、自动暂停恢复与持仓审计一致性经验
 
 ### 26.1 踩坑记录：字符串零不能直接与数字零比较
@@ -5250,3 +5363,163 @@ Reconciler 的 `reconcile()` 方法增加了 `external_order_ids` 参数。
 - Core Plane 组件必须无 IO、完全确定性
 - 订单归属判断只依赖注册数据，不产生副作用
 - 持久化（如需要）应放在 Adapter/Persistence 层
+
+## 二十九、真实历史行情导入与回测门禁经验
+
+### 29.1 踩坑：币安公开归档的时间戳不是一直用毫秒
+
+**场景**：
+下载 `BTCUSDT-1m-2026-09.zip` 后解析第一列开盘时间，直接按毫秒解析得到 5 位数年份。
+
+**根因**：
+币安公开归档（`binance-public-data`）自 **2025-01-01** 起现货 K 线时间戳改为**微秒**，之前是毫秒。
+若写死「除以 1000」，2025 年之后的归档会被解析到 1970 / 远未来，导致覆盖度校验全量失败。
+
+**经验**：
+- 时间戳一律按**量级**识别（`>= 1e15` 视为微秒，`>= 1e12` 视为毫秒），统一归一到 UTC 毫秒整数。
+- 全链路禁止用浮点表示时间戳：`int` 毫秒 + `timedelta` 换算，避免大整数除法带来的精度与舍入问题。
+
+### 29.2 踩坑：CSV 可能带表头，也可能不带
+
+**场景**：
+同一套解析逻辑在官方归档上偶发「时间戳不是整数」的解析错误。
+
+**根因**：
+不同月份 / 不同来源的归档 CSV 首行可能是表头（`open_time,open,high,...`），也可能直接是数据行。
+
+**经验**：
+- 解析前先做表头探测（必需列名全部命中即视为表头并跳过），不要用「第一行一定特殊」这种假设。
+- 归档列顺序固定为：`open_time, open, high, low, close, volume, close_time, quote_asset_volume,
+  number_of_trades, taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore`；只依赖前 6 列做业务解析。
+
+### 29.3 踩坑：`FeatureStore` 静默回退内存 = 假成功
+
+**场景**：
+历史数据导入「成功」，数据集也标记为 PUBLISHED，但数据库里一行数据都没有。
+
+**根因**：
+`FeatureStore` 历史上在 PostgreSQL 不可用 / 读写异常时会 `logger.warning` 后回退到进程内存。
+对开发烟测这很方便，对研究数据却是致命的：调用方以为数据落库了，实际重启就没。
+
+**经验**：
+- 给 FeatureStore 增加**显式严格模式**（`FeatureStore(strict=True)`）：PG 不可用、写入失败、读取失败一律抛
+  `FeatureStoreStrictError`，绝不回退内存。默认仍是开发模式，旧路径行为不变。
+- 关键在于「默认兼容 + 显式严格」：不要直接改默认行为，否则会打断大量既有单测与开发流程。
+- **发布前再校验一次**：从 PG 反查真实行数 / 首末时间戳，与归档解析出的期望值比对，不一致就判定持久化失败。
+  「写入没报错」不等于「写对了」。
+
+### 29.4 踩坑：`symbols[0]` 会静默丢掉其余币对
+
+**场景**：
+回测请求带两个币对，报告里只有一个币对的数据，用户完全不知情。
+
+**根因**：
+`_run_vectorbt_backtest` 直接取 `request.symbols[0]`，历史 `real_feature_store` 路径下多币对不会报错。
+
+**经验**：
+- 真实数据路径必须**显式拒绝**多币对（`len(symbols) > 1` 直接报错），不能靠取第一个蒙混过关。
+- 「单币对数据集」这个约束要在**两个层面**表达：数据集本身只含一个 symbol；请求侧再校验一次。
+- 通用教训：任何「取第一个」的写法都要问一句——被丢掉的那些数据去哪了？
+
+### 29.5 踩坑：默认值的「显式冲突」与「未提供」要区分
+
+**场景**：
+前端为了兼容旧结构，总是提交 `data_mode=dev_smoke`；用户选了真实数据集后，服务端把「默认的 dev_smoke」
+判成冲突并拒绝，用户完全无法使用。
+
+**根因**：
+冲突判定如果只看字段当前值，就无法区分「用户明确选了 dev_smoke」和「前端没传、落到了默认值」。
+
+**经验**：
+- 用 Pydantic 的 `model_fields_set` 判断字段是否被**显式提交**；只有显式提交且与数据集推导值不同才算冲突。
+- 这类「默认值即合法值」的字段（`data_mode`、`engine`、`feature_version`）必须配套显式提交语义。
+
+### 29.6 踩坑：任务 worker 的「启动恢复」不能每轮都跑
+
+**场景**：
+worker 循环里每轮都执行「把残留 RUNNING 标记为 FAILED」，结果正在运行的任务被自己打断。
+
+**经验**：
+- 启动恢复必须**只执行一次**（进程级一次性动作），与「每轮取任务」分开。
+- 任务领取要用数据库原子操作（`UPDATE ... WHERE status='QUEUED' RETURNING`），不能先查后写。
+
+### 29.7 设计模式：归档文件按版本存放，天然避免覆盖
+
+**场景**：
+官方修订归档后，如果复用同一个文件名，已发布数据集引用的文件会被静默改写，历史回测无法复现。
+
+**经验**：
+- 归档落盘路径带版本号（`<symbol>-1m-<month>-v<version>.zip`），新版本写新文件，旧文件原样保留。
+- `feature_version` 由 **内容 hash** 派生（`binance_spot_1m_<symbol>_<month>_<sha256[:12]>`）：
+  同一份内容天然幂等（重试复用同一 key），内容变化天然产生新版本。
+- 校验值要**同时**保留「官方 CHECKSUM 值」与「本地实际计算值」，二者不一致就是硬错误。
+
+### 29.8 设计模式：数据集 = 元数据 + 质量 + 资格三元组
+
+**场景**：
+「数据已经下载了」不等于「可以用来做研究回测」。
+
+**经验**：
+- 数据集必须显式记录 `status`（PENDING/PUBLISHED/FAILED）、`persistence_ok`、`backtest_eligible`，
+  以及 `row_count / expected_points / gap_count`。
+- 准入判定集中在一个 resolver 里（`HistoryDatasetResolver`），普通回测与候选回测**共用**同一个异步入口，
+  校验通过才创建回测任务 —— **不依赖前端禁用按钮**。
+- 执行阶段还要再核一次（Provider 读取后复核行数与时间连续性）：创建时的校验不能替代执行时的校验。
+
+### 29.9 设计模式：批量写 + 发布前对账
+
+**场景**：
+逐条写 43,200 行 1 分钟 K 线，单个数据集导入耗时数分钟。
+
+**经验**：
+- 批量写入（先查冲突、再 `executemany` 插入）把导入时间降到秒级，同时保留「同 key 同值幂等、异值冲突抛错」的语义。
+- 批量写不能丢冲突检测：先 `SELECT ... WHERE ts_ms = ANY($1)` 拿到已有行的 `value_hash`，
+  比对不一致直接抛 `FeatureVersionConflictError`，一致的才计为 duplicate。
+
+### 29.10 踩坑：提交路径做远程探测，会把「已有数据」变成「远端故障」
+
+**场景**：
+用户已经成功导入过 BTCUSDT 2026-09，再次提交同一 symbol/month，却收到 404「归档不存在」；
+网络慢的时候这个提交还要卡 60 秒才返回。
+
+**根因**：
+`submit_job` 先做了一次远程 HEAD（判断归档是否存在），再做「已有可用数据集」的复用判断。
+而币安公开归档**可能被官方修订或移除**——本地已有可用数据集，远程却查不到了。
+
+**经验**：
+- **提交路径只做本地能确定的事**：输入校验 + 数据库查询。远端可用性属于「执行阶段」的问题，
+  应该由 worker 在下载阶段判定，并以任务级错误码（`ARCHIVE_NOT_FOUND`）呈现，而不是让 202 变成 404。
+- 任何在请求路径上的外部探测，都会把外部系统的抖动传导成接口语义漂移，还会拖慢响应。
+- 「已有可用数据集 → 复用」必须**完全走数据库**：优先用数据集登记时记录的 `job_id` 关联任务，
+  其次按 `dataset_id` 反查成功任务；这样重复提交既不会新建任务行，也不会触发任何远程调用。
+
+### 29.11 踩坑：`ON CONFLICT DO NOTHING` 会把并发冲突变成静默成功
+
+**场景**：
+两个进程并发写同一个 `(symbol, feature_name, version, ts_ms)`，值不同；
+后写的那个既没报错，也没写进去，计数还显示「成功」。
+
+**根因**：
+先 SELECT 判断冲突、再 INSERT，中间存在 TOCTOU 窗口；而 `ON CONFLICT DO NOTHING`
+对「已存在且值不同」和「已存在且值相同」一视同仁地静默跳过。
+
+**经验**：
+- 想让「不覆盖旧值」与「能发现冲突」同时成立，正确组合是：
+  `INSERT ... ON CONFLICT DO NOTHING RETURNING ts_ms` + **写后回读实际 `value_hash` 与期望值比对**。
+  `DO NOTHING` 会阻塞在唯一索引上直到并发方提交，回读就能看到真实落库值。
+- **不要用 `DO UPDATE`**：它会用新值覆盖旧值，把「冲突」变成「静默改写历史」。
+- 整批操作放在**单个事务**里：冲突时抛错回滚，避免出现「一半新行 + 一半冲突」的中间态。
+- 批内也要先归并：同 ts 同值折叠成 duplicate，同 ts 异值直接抛冲突（写库之前就失败）。
+
+### 29.12 踩坑：校验和文件不是「随便一行 64 位 hex」
+
+**场景**：
+官方 `.CHECKSUM` 里出现多行，或本地文件名与官方文件名不一致时，
+校验和可能被取错行，或者侧车文件里写着一个官方根本没提过的文件名。
+
+**经验**：
+- 解析校验和要**按预期文件名匹配**，而不是取第一个 token；匹配不到就报错，不要兜底乱取。
+- 官方校验和**原文保留**：本地版本化文件名（`-vN`）与官方名不同是正常现象，
+  应该把两个名字都记录下来（数据集 quality / 报告 provenance），而不是把官方校验和改写成「看起来一致」。
+- 侧车文件用「临时文件 + 原子 replace」写入；复用既有归档前先校验 SHA-256，
+  不同就抛错**绝不覆盖**（已发布版本的证据不能被改写），相同则顺手补写缺失的侧车文件（崩溃窗口恢复）。

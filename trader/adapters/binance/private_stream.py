@@ -149,7 +149,7 @@ class PrivateStreamManager(BaseStreamFSM):
         # 注意：不要覆盖 BaseStreamFSM._config（其类型是 StreamConfig）
         self._private_config = config or PrivateStreamConfig()
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws: Optional[ws_client.WebSocketClientProtocol] = None
+        self._ws: Any | None = None
 
         self._listen_key: Optional[str] = None
         self._listen_key_expiry_ts: float = 0
@@ -175,7 +175,9 @@ class PrivateStreamManager(BaseStreamFSM):
         self._fill_update_handlers: List[Callable[[RawFillUpdate], None]] = []
         self._account_update_handlers: List[Callable[[dict], None]] = []
         self._balance_update_handlers: List[Callable[[dict], None]] = []
-        self._force_resync_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        self._force_resync_callback: Optional[
+            Callable[[str], Awaitable[Optional[RestAlignmentSnapshot]]]
+        ] = None
 
         self._ping_task: Optional[asyncio.Task] = None
         self._stale_check_task: Optional[asyncio.Task] = None
@@ -202,7 +204,12 @@ class PrivateStreamManager(BaseStreamFSM):
         """注册余额变动处理器（balanceUpdate）"""
         self._balance_update_handlers.append(handler)
 
-    async def _dispatch_handler(self, handler: Callable, *args) -> None:
+    def _session_or_raise(self) -> "aiohttp.ClientSession":
+        if self._session is None:
+            raise RuntimeError("HTTP session is not initialized")
+        return self._session
+
+    async def _dispatch_handler(self, handler: Callable[..., Any], *args: Any) -> None:
         """分发处理器调用，自动处理同步/异步函数"""
         try:
             if asyncio.iscoroutinefunction(handler):
@@ -212,7 +219,9 @@ class PrivateStreamManager(BaseStreamFSM):
         except Exception as e:
             logger.error(f"[{self._name}] Handler error: {e}")
 
-    def set_force_resync_callback(self, callback: Callable[[str], Awaitable[None]]) -> None:
+    def set_force_resync_callback(
+        self, callback: Callable[[str], Awaitable[Optional[RestAlignmentSnapshot]]]
+    ) -> None:
         """设置强制对齐回调"""
         self._force_resync_callback = callback
 
@@ -384,7 +393,7 @@ class PrivateStreamManager(BaseStreamFSM):
         for attempt in range(1, max_attempts + 1):
             proxy = self._resolve_proxy()
             try:
-                async with self._session.get(url, proxy=proxy) as resp:
+                async with self._session_or_raise().get(url, proxy=proxy) as resp:
                     if resp.status != 200:
                         raise RuntimeError(f"status={resp.status}")
                     data = await resp.json()
@@ -517,7 +526,7 @@ class PrivateStreamManager(BaseStreamFSM):
         proxy = self._resolve_proxy()
 
         try:
-            async with self._session.post(
+            async with self._session_or_raise().post(
                 url,
                 headers=headers,
                 proxy=proxy,
@@ -573,13 +582,18 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _refresh_listen_key(self) -> None:
         """刷新 listenKey"""
+        if self._listen_key is None:
+            logger.warning(f"[{self._name}] ListenKey missing, triggering reconnect")
+            await self.reconnect()
+            return
+
         url = f"{self._private_config.rest_url}/v3/userDataStream"
         headers = {"X-MBX-APIKEY": self._credentials.api_key}
         params = {"listenKey": self._listen_key}
         proxy = self._resolve_proxy()
 
         try:
-            async with self._session.put(
+            async with self._session_or_raise().put(
                 url,
                 headers=headers,
                 params=params,
@@ -611,7 +625,7 @@ class PrivateStreamManager(BaseStreamFSM):
         proxy = self._resolve_proxy()
 
         try:
-            async with self._session.delete(
+            async with self._session_or_raise().delete(
                 url,
                 headers=headers,
                 params=params,
@@ -840,13 +854,13 @@ class PrivateStreamManager(BaseStreamFSM):
                 self._has_seen_execution_report = True
 
                 order_update = self._parse_order_update(data, exchange_ts)
-                for handler in self._order_update_handlers:
-                    await self._dispatch_handler(handler, order_update)
+                for order_handler in self._order_update_handlers:
+                    await self._dispatch_handler(order_handler, order_update)
 
                 fill_update = self._parse_fill_update(data, exchange_ts)
                 if fill_update is not None:
-                    for handler in self._fill_update_handlers:
-                        await self._dispatch_handler(handler, fill_update)
+                    for fill_handler in self._fill_update_handlers:
+                        await self._dispatch_handler(fill_handler, fill_update)
 
             await self._trigger_event(StreamEvent.DATA_RECEIVED, payload)
 
@@ -931,7 +945,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 cl_ord_id=data.get("c"),
                 trade_id=trade_id,
                 exec_type=exec_type,
-                side=data.get("S"),
+                side=str(data.get("S") or ""),
                 price=self._safe_float(data.get("L", 0.0)),
                 qty=fill_qty,
                 commission=self._safe_float(data.get("n", 0.0)),

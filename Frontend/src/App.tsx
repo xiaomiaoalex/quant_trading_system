@@ -16,6 +16,7 @@ import {
   PortfolioAllocation,
   PortfolioAutopilot,
   CryptoRiskOps,
+  Orders,
 } from './pages'
 
 function PageFallback() {
@@ -38,6 +39,7 @@ function App() {
             <Route path="/data" element={<Data />} />
             <Route path="/research" element={<Research />} />
             <Route path="/strategies" element={<Strategies />} />
+            <Route path="/orders" element={<Orders />} />
             <Route path="/reconcile" element={<Reconcile />} />
             <Route path="/backtests" element={<Backtests />} />
             <Route path="/portfolio-allocation" element={<PortfolioAllocation />} />

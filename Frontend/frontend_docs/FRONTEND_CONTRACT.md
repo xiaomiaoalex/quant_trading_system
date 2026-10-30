@@ -676,7 +676,26 @@ interface GetLatestSnapshotParams {
 | POST | `/v1/monitor/alerts/{rule_name}/clear` | 清除指定告警 |
 | POST | `/v1/monitor/alerts/clear-all` | 清除所有告警 |
 
-### 7.7 健康检查
+### 7.7 历史数据接口（币安公开归档）
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| POST | `/v1/data/history/jobs` | 创建历史归档导入任务 |
+| GET | `/v1/data/history/jobs` | 查询导入任务 |
+| GET | `/v1/data/history/jobs/{job_id}` | 查询单个导入任务 |
+| POST | `/v1/data/history/jobs/{job_id}/retry` | 重试失败任务 |
+| GET | `/v1/data/history/datasets` | 数据集列表 |
+| GET | `/v1/data/history/datasets/{dataset_id}` | 数据集详情 |
+
+请求 / 响应模型见 `contract_models.md` §5.1，端点细节见 `contract_endpoints.md` §5.1。
+
+前端行为约定：
+- Data 页面多选币对后点击「下载」会**拆分为多个任务**（每币对一个），无需二次确认。
+- 存在 `QUEUED` / `RUNNING` 任务时每 2 秒轮询，全部终态后停止；出现成功任务时刷新数据集缓存。
+- 「用于回测」以 `dataset_id` 跳转到 Backtests 页面；目标页**重新查询数据集**，不信任 URL 里的其它参数。
+- 回测表单仍需用户主动选择 / 编辑策略并点击提交；报告成功**不自动**晋级 / 部署 / 启动交易。
+
+### 7.8 健康检查
 
 | 方法 | 路径 | 描述 |
 |------|------|------|

@@ -76,8 +76,8 @@ class MockStrategyPlugin:
                 signal_type=SignalType.BUY,
                 symbol=market_data.symbol,
                 price=market_data.price,
-                quantity=0.1,
-                confidence=0.8,
+                quantity=Decimal("0.1"),
+                confidence=Decimal("0.8"),
                 reason="Mock signal",
             )
         return None
@@ -523,6 +523,7 @@ class TestErrorIsolation:
 
         assert signal is None
         info = runner.get_status("test_strategy")
+        assert info is not None
         assert info.error_count == 1
         assert info.last_error is not None
 
@@ -550,6 +551,7 @@ class TestErrorIsolation:
                 await runner.tick("test_strategy", sample_market_data)
 
         info = runner.get_status("test_strategy")
+        assert info is not None
         assert info.status == StrategyStatus.ERROR
         assert info.error_count >= 10
 
@@ -808,6 +810,7 @@ class TestStrategyResourceLimits:
             assert signal is None  # 被阻止
 
             info = runner_with_oms.get_status("test_strategy")
+            assert info is not None
             assert info.blocked_reason == "Order rate limit exceeded"
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -871,6 +874,7 @@ class TestStrategyResourceLimits:
 
         assert signal is None  # OMS 失败后信号被丢弃
         info = runner_with_oms.get_status("test_strategy")
+        assert info is not None
         assert info.error_count == 0  # 策略本身没有错误
 
 
@@ -919,6 +923,8 @@ class TestKillSwitchIntegration:
 
         assert signal is None
         info = runner_with_killswitch.get_status("test_strategy")
+        assert info is not None
+        assert info.blocked_reason is not None
         assert "KillSwitch L1" in info.blocked_reason
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -946,7 +952,9 @@ class TestKillSwitchIntegration:
 
         assert signal is None
         info = runner_with_killswitch.get_status("test_strategy")
+        assert info is not None
         assert info.status == StrategyStatus.STOPPED
+        assert info.blocked_reason is not None
         assert "KillSwitch L2" in info.blocked_reason
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -974,6 +982,7 @@ class TestKillSwitchIntegration:
 
         assert signal is None
         info = runner_with_killswitch.get_status("test_strategy")
+        assert info is not None
         assert info.status == StrategyStatus.STOPPED
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -1001,6 +1010,7 @@ class TestKillSwitchIntegration:
 
         assert signal is not None
         info = runner_with_killswitch.get_status("test_strategy")
+        assert info is not None
         assert info.blocked_reason is None
 
     @pytest.mark.timeout(TEST_TIMEOUT)
@@ -1059,12 +1069,12 @@ class TestTimeoutControl:
                 signal_type=SignalType.BUY,
                 symbol=md.symbol,
                 price=md.price,
-                quantity=0.1,
-                confidence=0.8,
+                quantity=Decimal("0.1"),
+                confidence=Decimal("0.8"),
                 reason="slow signal",
             )
 
-        mock_plugin.on_market_data = slow_on_market_data
+        mock_plugin.on_market_data = slow_on_market_data  # type: ignore[method-assign]
         mock_module = _create_mock_module(mock_plugin)
 
         with patch("importlib.import_module", return_value=mock_module):
@@ -1080,7 +1090,9 @@ class TestTimeoutControl:
 
         assert signal is None
         info = runner.get_status("test_strategy")
+        assert info is not None
         assert info.error_count == 1
+        assert info.last_error is not None
         assert "超时" in info.last_error
 
 

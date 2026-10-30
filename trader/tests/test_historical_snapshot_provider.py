@@ -15,6 +15,7 @@ test_historical_snapshot_provider.py - P10 Historical Crypto Risk Snapshot Provi
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -65,7 +66,7 @@ def _make_signal(symbol: str = "BTCUSDT", timestamp_ms: int = 1000000) -> Signal
         symbol=symbol,
         price=Decimal("50000"),
         quantity=Decimal("0.1"),
-        timestamp=timestamp_ms,
+        timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc),
     )
 
 

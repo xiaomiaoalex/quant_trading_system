@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -68,7 +68,7 @@ def _source(session: _FakeSession) -> BinanceFuturesRiskDataSource:
             secret_key="secret",
             max_retries=1,
         ),
-        session=session,
+        session=cast(Any, session),
     )
 
 
@@ -172,7 +172,7 @@ async def test_signed_request_retries_and_resyncs_on_negative_1021(
             secret_key="secret",
             max_retries=2,
         ),
-        session=session,
+        session=cast(Any, session),
     )
     monkeypatch.setattr(
         "trader.adapters.binance.crypto_risk_source.time.time",
@@ -275,7 +275,7 @@ async def test_recv_window_resets_after_24h(monkeypatch: pytest.MonkeyPatch) -> 
             max_retries=2,
             initial_recv_window_ms=5000,
         ),
-        session=session,
+        session=cast(Any, session),
     )
 
     # First call: 100.0s -> syncs offset

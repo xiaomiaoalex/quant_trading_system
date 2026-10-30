@@ -243,6 +243,11 @@ class PostgresPortfolioProposalStore:
         """检查是否已初始化"""
         return self._initialized
 
+    def _storage_or_raise(self) -> PostgreSQLStorage:
+        if self._storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._storage
+
     async def initialize(self) -> None:
         """
         初始化存储
@@ -263,10 +268,10 @@ class PostgresPortfolioProposalStore:
                 self._storage = PostgreSQLStorage()
 
             # 建立连接
-            await self._storage.connect()
+            await self._storage_or_raise().connect()
 
             # 创建表和索引
-            async with self._storage.acquire() as conn:
+            async with self._storage_or_raise().acquire() as conn:
                 # 创建表
                 await conn.execute(self._CREATE_TABLE_SQL)
 
@@ -326,7 +331,7 @@ class PostgresPortfolioProposalStore:
 
         proposal.save()  # 更新 updated_at
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             await conn.execute(self._UPSERT_SQL, *self._model_to_params(proposal))
 
         return proposal.proposal_id
@@ -343,7 +348,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             row = await conn.fetchrow(self._GET_BY_ID_SQL, proposal_id)
 
         if row is None:
@@ -370,7 +375,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             rows = await conn.fetch(
                 self._LIST_BY_STATUS_SQL,
                 status.value,
@@ -399,7 +404,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             rows = await conn.fetch(
                 self._LIST_BY_TYPE_SQL,
                 proposal_type.value,
@@ -428,7 +433,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             rows = await conn.fetch(
                 self._LIST_BY_SPECIALIST_SQL,
                 ProposalType.SLEEVE.value,
@@ -450,7 +455,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             await conn.execute(self._DELETE_SQL, proposal_id)
 
     async def exists(self, proposal_id: str) -> bool:
@@ -475,7 +480,7 @@ class PostgresPortfolioProposalStore:
         """
         await self._ensure_initialized()
 
-        async with self._storage.acquire() as conn:
+        async with self._storage_or_raise().acquire() as conn:
             row = await conn.fetchrow(self._COUNT_SQL)
 
         return row["count"] if row else 0
@@ -488,7 +493,7 @@ class PostgresPortfolioProposalStore:
         """
         try:
             await self._ensure_initialized()
-            async with self._storage.acquire() as conn:
+            async with self._storage_or_raise().acquire() as conn:
                 await conn.fetchval("SELECT 1")
             return True
         except Exception as e:

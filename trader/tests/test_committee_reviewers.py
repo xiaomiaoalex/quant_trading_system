@@ -8,6 +8,7 @@ Test Committee Reviewers - Red Team Agents 单元测试
 """
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from insight.committee.orthogonality import OrthogonalityAgent, OrthogonalityResult
@@ -27,13 +28,13 @@ def create_test_proposal(
     proposal_id: str = "test_proposal",
     specialist_type: SpecialistType = SpecialistType.TREND,
     hypothesis: str = "测试假设",
-    required_features: list = None,
+    required_features: list[Any] | None = None,
     regime: str = "strong_trend",
-    failure_modes: list = None,
+    failure_modes: list[Any] | None = None,
     feature_version: str = "v1.0.0",
     prompt_version: str = "v1.0.0",
-    cost_assumptions: CostAssumptions = None,
-    evidence_refs: list = None,
+    cost_assumptions: CostAssumptions | None = None,
+    evidence_refs: list[Any] | None = None,
 ) -> SleeveProposal:
     """创建测试用 SleeveProposal"""
     if required_features is None:

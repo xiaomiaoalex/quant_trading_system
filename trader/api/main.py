@@ -40,12 +40,14 @@ from trader.api.routes import (
     brokers,
     chat,
     data_catalog,
+    data_history,
     deployments,
     events,
     health,
     killswitch,
     monitor,
     orders,
+    performance,
     portfolio,
     portfolio_autopilot,
     portfolio_research,
@@ -649,7 +651,7 @@ async def lifespan(app: FastAPI):
             self_check_passed = await _run_startup_self_check(connector)
 
             # Store self-check result for strategy start gate
-            connector._startup_self_check_passed = self_check_passed
+            setattr(connector, "_startup_self_check_passed", self_check_passed)
 
             if self_check_passed:
                 logger.info(
@@ -714,8 +716,12 @@ async def lifespan(app: FastAPI):
                 orchestrator = get_strategy_orchestrator()
 
                 for state in running_states:
-                    deployment_id = state.get("deployment_id") or state.get("strategy_id")
-                    strategy_id = state.get("strategy_id") or deployment_id
+                    raw_deployment_id = state.get("deployment_id") or state.get("strategy_id")
+                    if not raw_deployment_id:
+                        logger.warning("[Recovery] Runtime state missing deployment_id, skipping")
+                        continue
+                    deployment_id = str(raw_deployment_id)
+                    strategy_id = str(state.get("strategy_id") or deployment_id)
                     saved_env = state.get("env", "demo")
                     symbols = state.get("symbols", [])
 
@@ -771,18 +777,17 @@ async def lifespan(app: FastAPI):
                         # 发布恢复事件
                         from trader.api.routes.strategies import _event_callback_dispatcher
 
-                        if _event_callback_dispatcher:
-                            _event_callback_dispatcher(
-                                deployment_id,
-                                "strategy.recovered",
-                                {
-                                    "deployment_id": deployment_id,
-                                    "strategy_id": strategy_id,
-                                    "symbols": symbols,
-                                    "env": binance_env,
-                                    "recovered_at": datetime.now(timezone.utc).isoformat(),
-                                },
-                            )
+                        _event_callback_dispatcher(
+                            deployment_id,
+                            "strategy.recovered",
+                            {
+                                "deployment_id": deployment_id,
+                                "strategy_id": strategy_id,
+                                "symbols": symbols,
+                                "env": binance_env,
+                                "recovered_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
                     except Exception as e:
                         logger.error("[Recovery] Failed to recover strategy %s: %s", strategy_id, e)
                         state["recovery_error"] = str(e)
@@ -928,6 +933,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[OHLCVIngestion] Failed to start from env: {e}")
 
+    try:
+        await data_history.start_history_worker()
+    except Exception as e:
+        logger.error(f"[HistoryData] Failed to start ingestion worker: {e}")
+
     health.configure_heartbeat(
         heartbeat_service=_heartbeat_service,
         connection_manager=_connection_manager,
@@ -949,18 +959,27 @@ async def lifespan(app: FastAPI):
         await data_catalog.shutdown_ohlcv_ingestion_worker()
     except Exception as e:
         logger.error(f"[OHLCVIngestion] Error shutting down worker: {e}")
+    try:
+        await data_history.stop_history_worker()
+    except Exception as e:
+        logger.error(f"[HistoryData] Error shutting down history worker: {e}")
     if _binance_connector_instance is not None:
         try:
             await _binance_connector_instance.stop()
             logger.info("[Lifespan] BinanceConnector stopped")
         except Exception as e:
             logger.error(f"[Lifespan] Error stopping BinanceConnector: {e}")
+        finally:
+            # Never let a stopped connector leak into the next test or restart.
+            _binance_connector_instance = None
     if _binance_cascade_controller is not None:
         try:
             await _binance_cascade_controller.stop()
             logger.info("[Lifespan] DegradedCascadeController stopped")
         except Exception as e:
             logger.error(f"[Lifespan] Error stopping DegradedCascadeController: {e}")
+        finally:
+            _binance_cascade_controller = None
     await _heartbeat_service.stop()
     await _connection_manager.stop()
     await reconciler_service.stop()
@@ -988,11 +1007,13 @@ app.include_router(brokers.router)
 app.include_router(reconciler.router)
 app.include_router(monitor.router)
 app.include_router(chat.router)
+app.include_router(performance.router)
 app.include_router(portfolio_research.router)
 app.include_router(strategy_candidates.router)
 app.include_router(allocations.router)
 app.include_router(portfolio_autopilot.router)
 app.include_router(data_catalog.router)
+app.include_router(data_history.router)
 app.include_router(audit.router)
 app.include_router(sse.router)
 

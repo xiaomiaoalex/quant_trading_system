@@ -53,11 +53,15 @@ class StrategyEvent:
             self.trace_id = str(uuid.uuid4())
 
     def to_envelope(self) -> EventEnvelope:
+        ts_ms = self.ts_ms
+        if ts_ms is None:
+            ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            self.ts_ms = ts_ms
         return EventEnvelope(
             stream_key=f"strategy:{self.strategy_id}",
             event_type=self.event_type.value,
             trace_id=self.trace_id,
-            ts_ms=self.ts_ms,
+            ts_ms=ts_ms,
             payload={
                 "strategy_id": self.strategy_id,
                 **self.payload,

@@ -46,7 +46,7 @@ def _make_signal(
         symbol=symbol,
         price=price,
         quantity=quantity,
-        timestamp=timestamp_ms,
+        timestamp=datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc),
     )
 
 

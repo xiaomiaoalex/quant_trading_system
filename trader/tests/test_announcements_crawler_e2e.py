@@ -12,6 +12,7 @@ E2E 测试覆盖场景：
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -61,10 +62,10 @@ class MockStrategy:
 
     def __init__(self, name: str = "MockStrategy"):
         self.name = name
-        self.received_events = []
-        self.listing_alerts = []  # 模拟考虑交易的新币
-        self.delisting_alerts = []  # 模拟需要平仓的币种
-        self.maintenance_alerts = []
+        self.received_events: list[Any] = []
+        self.listing_alerts: list[Any] = []  # 模拟考虑交易的新币
+        self.delisting_alerts: list[Any] = []  # 模拟需要平仓的币种
+        self.maintenance_alerts: list[Any] = []
         self.is_running = False
 
     async def on_event(self, event):

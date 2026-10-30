@@ -64,8 +64,13 @@ class AccountStateRepository:
                 self._use_postgres = False
                 return False
 
+    def _postgres_or_raise(self) -> PostgreSQLStorage:
+        if self._postgres_storage is None:
+            raise RuntimeError("PostgreSQL storage is not initialized")
+        return self._postgres_storage
+
     async def _ensure_tables(self) -> None:
-        async with self._postgres_storage.acquire() as conn:
+        async with self._postgres_or_raise().acquire() as conn:
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS account_balances (
@@ -110,7 +115,7 @@ class AccountStateRepository:
         try:
             await self._ensure_tables()
 
-            async with self._postgres_storage.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 # 删除旧数据（全量覆盖语义）
                 await conn.execute(
                     "DELETE FROM account_balances WHERE account_id = $1 AND venue = $2",
@@ -151,7 +156,7 @@ class AccountStateRepository:
             return None
 
         try:
-            async with self._postgres_storage.acquire() as conn:
+            async with self._postgres_or_raise().acquire() as conn:
                 rows = await conn.fetch(
                     """
                     SELECT asset, free, locked, updated_at_ms, source

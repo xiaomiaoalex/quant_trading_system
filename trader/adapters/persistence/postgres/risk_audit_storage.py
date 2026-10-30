@@ -113,10 +113,13 @@ class PostgresMarketRiskAuditStorage:
             payload = {}
 
         created_at = row.get("created_at") if isinstance(row, dict) else row["created_at"]
+        created_at_value: str | None
         if isinstance(created_at, datetime):
             created_at_value = created_at.isoformat()
-        else:
+        elif isinstance(created_at, str):
             created_at_value = created_at
+        else:
+            created_at_value = None
 
         return {
             "event_id": row["id"],
