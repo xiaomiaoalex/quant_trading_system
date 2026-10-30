@@ -9,6 +9,16 @@ type APIErrorResponse = Partial<APIError> & {
 // Base URL is handled by Vite proxy in development
 const BASE_URL = ''
 
+let csrfToken = ''
+
+export function setCSRFToken(token: string | null) {
+  csrfToken = token ?? ''
+}
+
+export function getCSRFToken(): string {
+  return csrfToken
+}
+
 export class APIClient {
   protected readonly client: AxiosInstance
 
@@ -16,14 +26,19 @@ export class APIClient {
     this.client = axios.create({
       baseURL,
       timeout: 10_000,
+      withCredentials: true,
       headers: {
         'Content-Type': 'application/json',
       },
     })
 
-    // Request interceptor for logging
+    // Request interceptor for logging and CSRF
     this.client.interceptors.request.use(
       config => {
+        const method = (config.method ?? 'get').toLowerCase()
+        if (!['get', 'head', 'options'].includes(method) && csrfToken) {
+          config.headers.set?.('x-csrf-token', csrfToken)
+        }
         console.debug(`[API] ${config.method?.toUpperCase()} ${config.url}`)
         return config
       },

@@ -29,7 +29,7 @@ def _broker() -> MagicMock:
     broker.place_order = AsyncMock(
         return_value=MagicMock(
             broker_order_id="broker-1",
-            filled_quantity=Decimal("0"),
+            filled_qty=Decimal("0"),
             average_price=Decimal("0"),
             status=OrderStatus.SUBMITTED,
             created_at=None,
@@ -202,9 +202,9 @@ class TestOMSRiskSizingClip:
         risk_check.assert_awaited_once()
         broker.place_order.assert_awaited_once()
         assert captured_order is not None
-        assert captured_order.get("quantity") == final, (
+        assert captured_order.get("qty") == final, (
             f"Broker must receive final_qty={final}, not requested_qty={requested}. "
-            f"Got: {captured_order.get('quantity')}"
+            f"Got: {captured_order.get('qty')}"
         )
 
     @pytest.mark.asyncio
@@ -218,7 +218,7 @@ class TestOMSRiskSizingClip:
         broker.place_order = AsyncMock(
             return_value=MagicMock(
                 broker_order_id="broker-audit-1",
-                filled_quantity=Decimal("0"),
+                filled_qty=Decimal("0"),
                 average_price=Decimal("50000"),
                 status=OrderStatus.SUBMITTED,
                 created_at=None,

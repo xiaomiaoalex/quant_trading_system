@@ -969,12 +969,17 @@ async def lifespan(app: FastAPI):
             logger.info("[Lifespan] BinanceConnector stopped")
         except Exception as e:
             logger.error(f"[Lifespan] Error stopping BinanceConnector: {e}")
+        finally:
+            # Never let a stopped connector leak into the next test or restart.
+            _binance_connector_instance = None
     if _binance_cascade_controller is not None:
         try:
             await _binance_cascade_controller.stop()
             logger.info("[Lifespan] DegradedCascadeController stopped")
         except Exception as e:
             logger.error(f"[Lifespan] Error stopping DegradedCascadeController: {e}")
+        finally:
+            _binance_cascade_controller = None
     await _heartbeat_service.stop()
     await _connection_manager.stop()
     await reconciler_service.stop()

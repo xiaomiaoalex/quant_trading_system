@@ -1,0 +1,3 @@
+# 被 gitignore 但新建 worktree 需要的本地文件
+# 说明：.env.postgres 已被 git 跟踪，无需在此列出
+.env

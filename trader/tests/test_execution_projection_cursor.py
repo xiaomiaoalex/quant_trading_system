@@ -6,10 +6,17 @@ from trader.adapters.persistence.execution_repository import ExecutionRepository
 from trader.storage.in_memory import InMemoryStorage
 
 
+async def _no_postgres() -> bool:
+    return False
+
+
 @pytest.mark.asyncio
 async def test_projection_cursor_reads_oldest_executions_before_advancing() -> None:
     storage = InMemoryStorage()
     repository = ExecutionRepository(storage)
+    # This test targets the in-memory cursor path; never let ambient PG config
+    # redirect it to a shared database.
+    repository._ensure_postgres = _no_postgres
 
     for ts_ms, execution_id in (
         (5000, "exec-5"),

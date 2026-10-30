@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { HealthBadge, KillSwitchBadge } from '@/components/ui'
 import { useMonitorSnapshot } from '@/hooks'
+import { authAPI } from '@/api'
 import { clsx } from 'clsx'
 
 const pageTitles: Record<string, string> = {
@@ -9,6 +11,7 @@ const pageTitles: Record<string, string> = {
   '/research': 'Research',
   '/strategies': 'Strategy Management',
   '/reconcile': 'Reconciliation',
+  '/orders': 'Orders',
   '/chat': 'AI Strategy Chat',
   '/backtests': 'Backtests',
   '/portfolio-allocation': 'Portfolio Allocation',
@@ -42,6 +45,23 @@ export function Topbar({ sidebarCollapsed = false, onToggleSidebar }: TopbarProp
   const location = useLocation()
   const { snapshot, healthState, isStale } = useMonitorSnapshot()
   const pageTitle = pageTitles[location.pathname] ?? 'Trading Console'
+
+  const [actor, setActor] = useState<string>('')
+
+  useEffect(() => {
+    let active = true
+    authAPI
+      .me()
+      .then(session => {
+        if (active) setActor(session.actor)
+      })
+      .catch(() => {
+        if (active) setActor('')
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const killswitchLevel = snapshot?.killswitch_level ?? 0
   const lastUpdate = formatLastUpdate(snapshot?.timestamp)
@@ -118,6 +138,18 @@ export function Topbar({ sidebarCollapsed = false, onToggleSidebar }: TopbarProp
           )}
 
           <HealthBadge state={healthState} size="sm" />
+
+          {actor && (
+            <button
+              type="button"
+              onClick={() => {
+                void authAPI.logout().finally(() => window.location.reload())
+              }}
+              className="rounded-md border border-gray-700 px-2.5 py-1 text-xs text-gray-300 hover:bg-gray-700/50"
+            >
+              Sign out ({actor})
+            </button>
+          )}
         </div>
       </div>
     </header>
