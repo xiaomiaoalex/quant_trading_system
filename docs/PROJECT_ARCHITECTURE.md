@@ -5,9 +5,16 @@
 
 ## 文档状态
 
-- 最后更新: 2026-06-07 (北京时间)
+- 最后更新: 2026-10-29 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
-- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile。
+- 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile + 币安公开归档历史数据通路（真实历史回测）。
+
+### 本次变更摘要（2026-10-29）
+
+1. **新增历史归档数据通路**: Adapter Plane 增加 `trader/adapters/market_data/binance_vision.py`（固定币安公开归档 URL、流式下载、SHA-256 校验、原子提交、只读预期 CSV 成员），Core Plane 增加 `trader/core/domain/services/ohlcv_archive.py`（纯解析 / 校验 / 覆盖度）。
+2. **新增持久化契约**: 新增 `history_ingest_jobs` / `history_datasets` 两张表（迁移 `009_history_datasets.sql`）；`FeatureStore` 增加严格模式，PG 不可用 / 读写失败一律抛错，不再静默回退内存。
+3. **新增任务编排与门禁**: Service 层 `HistoryIngestionService` + 单并发 `HistoryJobWorker` 负责任务生命周期与启动恢复；Control Plane 提供 `/v1/data/history/*`，并与 `/v1/backtests`、候选回测共用异步准入校验 `resolve_backtest_request()`。
+4. **部署拓扑变化**: 新增 `MARKET_DATA_ROOT` 行情根目录（默认 `<项目根>/data/market`），原始归档目录需与 PostgreSQL 持久卷一同挂载。
 
 ### 本次变更摘要（2026-06-07）
 
@@ -84,6 +91,8 @@ flowchart TB
         RestAlign["REST Alignment"]
         Clean["Canonical DTO Mapping"]
         CryptoSource["Binance Futures Risk Data Source"]
+        VisionArchive["Binance Vision Archive Client
+Download / SHA-256 / ZIP read"]
     end
 
     subgraph Persistence["Persistence Plane: trader/adapters/persistence/"]
@@ -91,6 +100,8 @@ flowchart TB
         PG["PostgreSQL Repositories"]
         RiskAudit["risk_audit_events / MarketRiskAuditRepository"]
         Projection["Read Models / Projectors"]
+        HistoryStore["history_ingest_jobs / history_datasets
+FeatureStore (strict mode)"]
     end
 
     API --> Lifecycle
@@ -138,6 +149,8 @@ flowchart TB
     CryptoSource --> Clean
     PG --> Projection
     KillAPI --> Kill
+    VisionArchive --> HistoryStore
+    HistoryStore --> Projection
 ```
 
 ### 层级约束
@@ -323,6 +336,43 @@ BinanceFundingOIMetricsSource (Service 层) 位于:
 - `/v1/data/ohlcv/import` 写入 `feature_name=ohlcv` 的 compact dict，后续 `real_feature_store` 回测通过同一 FeatureStore 读取，避免 Data 页面和 Backtests 使用两套数据真相源。
 - `BinanceOHLCVRestSource` 位于 Adapter 层，负责调用 Binance REST `/v3/klines` 并把原始数组映射为内部 OHLCV bar；`BinanceOHLCVIngestionWorker` 位于 Service 层，负责分页、断点续拉、幂等写入 FeatureStore。
 - `POST /v1/data/ohlcv/sync-binance` 提供单次补数；`/v1/data/ohlcv/worker/start|stop|status` 控制持续 worker。默认不自动启动，只有 `BINANCE_OHLCV_INGESTION_ENABLED=true` 时由 lifespan 启动。
+
+### 历史归档数据通路（Binance Vision → 真实回测）
+
+```mermaid
+flowchart LR
+    UI["Data 页面 / Backtests 页面"] --> API2["/v1/data/history/*
+/v1/backtests"]
+    API2 --> Svc["HistoryIngestionService
+BacktestService.resolve_backtest_request"]
+    Svc --> Adapter["BinanceVisionArchiveClient
+流式下载 + SHA-256 + ZIP 成员读取"]
+    Adapter --> Core2["ohlcv_archive 领域服务
+解析 / 校验 / 覆盖度"]
+    Core2 --> Strict["FeatureStore 严格模式
+PostgreSQL feature_values"]
+    Strict --> Jobs["history_ingest_jobs / history_datasets"]
+    Jobs --> Resolver["HistoryDatasetResolver
+准入 + 范围推导"]
+    Resolver --> Provider["HistoryDatasetOHLCVDataProvider
+读取后复核完整性"]
+    Provider --> Engine["VectorBT 回测 + 报告追溯"]
+```
+
+- Adapter Plane 新增 `trader/adapters/market_data/binance_vision.py`：固定币安公开归档 URL、流式下载到临时文件、
+  计算 SHA-256、比对官方 `.CHECKSUM`、校验通过后原子提交到 `MARKET_DATA_ROOT` 下的**版本化**路径
+  （不覆盖被已发布数据集引用的文件，官方修订产生新版本，旧版本保留）。
+- Core Plane 新增 `trader/core/domain/services/ohlcv_archive.py`：纯函数领域服务，负责时间戳解析
+  （2025-01-01 起微秒，之前毫秒）、K 线数值 / 对齐校验、月度覆盖度与缺口 / 冲突检测。**禁止 IO**。
+- Persistence Plane 新增 `history_ingest_jobs` / `history_datasets` 两张表（迁移 `009_history_datasets.sql`），
+  并为 `FeatureStore` 增加**严格模式**（PG 不可用 / 读写失败一律抛错，绝不回退内存）。
+- Service 层 `HistoryIngestionService` 负责任务编排（`QUEUED → RUNNING → SUCCEEDED/FAILED`、
+  阶段推进、原子领取、启动恢复、失败重试），`HistoryJobWorker` 是**单并发**后台 worker，由 API lifespan 管理。
+- Control Plane 的 `/v1/data/history/*` 与 `/v1/backtests` 共用同一套异步准入校验：
+  `BacktestService.resolve_backtest_request()` 先校验数据集再创建回测，**不依赖前端禁用按钮**。
+- 真实历史回测只支持**单币对**，禁止 `symbols[0]` 静默丢弃其它币对；执行阶段 Provider 会再次核验
+  market / interval / 质量与真实读取完整性。
+- 旧入口（`POST /v1/data/ohlcv/import` 手动导入、`/v1/data/ohlcv/worker/*` 实时 worker）保留为高级入口，语义不变。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 

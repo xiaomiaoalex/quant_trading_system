@@ -1,13 +1,21 @@
 import { useMemo, useState, useCallback, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
 import { useBacktestList, useBacktestReport, useLoadedStrategies } from '@/hooks'
+import { useHistoryDatasets, useHistoryDataset } from '@/hooks/useHistoryData'
 import { LoadingState, ErrorState } from '@/components/ui'
 import { BacktestList, BacktestDetailPanel } from '@/components/backtests'
 import { PageHeader } from '@/components/layout'
 import { researchAPI } from '@/api'
 import { formatAPIError, isAPIError } from '@/api/client'
-import { useNavigate } from 'react-router-dom'
-import type { BacktestDataMode, BacktestEngine, StrategyCandidate } from '@/types'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import type { BacktestDataMode, StrategyCandidate } from '@/types'
+import {
+  applyDatasetToLabForm,
+  clearDatasetFromLabForm,
+  datasetOptionLabel,
+  isDatasetEligible,
+  type BacktestLabForm,
+} from '@/utils/historyDataset'
 
 const STRATEGY_TEMPLATES: Record<string, string> = {
   minimal: `from trader.core.application.strategy_protocol import (
@@ -190,6 +198,8 @@ def get_plugin():
 
 export function Backtests() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const datasetIdParam = searchParams.get('dataset_id')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
 
@@ -199,11 +209,15 @@ export function Backtests() {
   const { data: report, isLoading: isReportLoading } = useBacktestReport(selectedRunId ?? '')
   const { data: loadedStrategies, refetch: refetchLoaded } = useLoadedStrategies()
 
-  const [labForm, setLabForm] = useState({
+  // 历史数据集：跳转后重新查询数据集本身，不信任 URL 里的其它参数
+  const datasetsQuery = useHistoryDatasets({ onlyEligible: true })
+  const datasetQuery = useHistoryDataset(datasetIdParam)
+
+  const [labForm, setLabForm] = useState<BacktestLabForm>({
     strategy_id: 'lab_strategy',
     name: 'Lab Strategy',
     description: 'Editable strategy code for fast backtest iteration',
-    engine: 'vectorbt' as BacktestEngine,
+    engine: 'vectorbt',
     symbols: 'BTCUSDT',
     start_ts_ms: Date.now() - 30 * 24 * 60 * 60 * 1000,
     end_ts_ms: Date.now(),
@@ -213,9 +227,11 @@ export function Backtests() {
     fee_bps: 10,
     slippage_bps: 5,
     benchmark: 'BTCUSDT',
-    data_mode: 'dev_smoke' as BacktestDataMode,
-    risk_mode: 'risk_adjusted' as 'raw_only' | 'risk_adjusted' | 'event_replay',
+    data_mode: 'dev_smoke',
+    risk_mode: 'risk_adjusted',
     requested_by: 'console_user',
+    dataset_id: '',
+    interval: '',
   })
   const [strategyCode, setStrategyCode] = useState(STRATEGY_TEMPLATES.threshold)
   const [templateKey, setTemplateKey] = useState('threshold')
@@ -240,6 +256,37 @@ export function Backtests() {
     () => labForm.symbols.split(',').map(s => s.trim()).filter(Boolean),
     [labForm.symbols],
   )
+
+  const eligibleDatasets = useMemo(() => datasetsQuery.data ?? [], [datasetsQuery.data])
+  const selectedDataset = useMemo(
+    () => eligibleDatasets.find(item => item.dataset_id === labForm.dataset_id) ?? null,
+    [eligibleDatasets, labForm.dataset_id],
+  )
+
+  // 跳转后按 dataset_id 重新查询数据集本身，用查询结果填充表单（不信任 URL 其它参数）
+  useEffect(() => {
+    const dataset = datasetQuery.data
+    if (!dataset) return
+    setLabForm(current => applyDatasetToLabForm(current, dataset))
+  }, [datasetQuery.data])
+
+  const handleDatasetSelect = (datasetId: string) => {
+    if (!datasetId) {
+      setSearchParams({}, { replace: true })
+      setLabForm(current => clearDatasetFromLabForm(current))
+      return
+    }
+    setSearchParams({ dataset_id: datasetId }, { replace: true })
+  }
+
+  const handleDataModeChange = (mode: BacktestDataMode) => {
+    if (mode === 'dev_smoke') {
+      setLabForm(current => clearDatasetFromLabForm(current))
+      if (datasetIdParam) setSearchParams({}, { replace: true })
+      return
+    }
+    setLabForm(current => ({ ...current, data_mode: mode }))
+  }
 
   useEffect(() => {
     if (!candidate || candidate.status !== 'BACKTEST_RUNNING') return
@@ -368,6 +415,8 @@ export function Backtests() {
           benchmark: labForm.benchmark || undefined,
           data_mode: labForm.data_mode,
           risk_mode: labForm.risk_mode,
+          dataset_id: labForm.dataset_id || undefined,
+          interval: labForm.interval || undefined,
         },
         requested_by: labForm.requested_by,
       })
@@ -551,8 +600,21 @@ export function Backtests() {
               placeholder="BTCUSDT,ETHUSDT"
             />
             <select
+              value={labForm.dataset_id || datasetIdParam || ''}
+              onChange={(e) => handleDatasetSelect(e.target.value)}
+              aria-label="Backtest dataset"
+              className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
+            >
+              <option value="">开发样例数据 (dev_smoke)</option>
+              {eligibleDatasets.map(dataset => (
+                <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                  {datasetOptionLabel(dataset)}
+                </option>
+              ))}
+            </select>
+            <select
               value={labForm.data_mode}
-              onChange={(e) => setLabForm({ ...labForm, data_mode: e.target.value as BacktestDataMode })}
+              onChange={(e) => handleDataModeChange(e.target.value as BacktestDataMode)}
               aria-label="Backtest data mode"
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
             >
@@ -585,6 +647,30 @@ export function Backtests() {
               className="rounded bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200"
               placeholder="initial capital"
             />
+          </div>
+
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-accent-3">
+            <span>
+              数据来源：
+              <span className={labForm.dataset_id ? 'text-emerald-300' : 'text-amber-300'}>
+                {labForm.dataset_id ? '真实历史数据' : '开发样例数据'}
+              </span>
+            </span>
+            {selectedDataset && (
+              <span>
+                · {selectedDataset.symbol} {selectedDataset.month} {selectedDataset.interval} ·{' '}
+                {selectedDataset.row_count} bars
+              </span>
+            )}
+            {datasetQuery.isError && (
+              <span className="text-red-300">数据集查询失败：{formatAPIError(datasetQuery.error)}</span>
+            )}
+            {datasetIdParam && !datasetQuery.isLoading && !datasetQuery.data && (
+              <span className="text-red-300">未找到数据集 {datasetIdParam}</span>
+            )}
+            {datasetIdParam && datasetQuery.data && !isDatasetEligible(datasetQuery.data) && (
+              <span className="text-amber-300">数据集 {datasetIdParam} 未完整，不能用于回测</span>
+            )}
           </div>
 
           <div className="mb-2 flex items-center gap-2">

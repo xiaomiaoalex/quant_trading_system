@@ -386,6 +386,116 @@ class PostgreSQLStorage:
             """
             )
 
+            # Stage 7: 历史归档导入任务 / 数据集
+            # 与 migrations/009_history_datasets.sql 保持一致
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS history_ingest_jobs (
+                    job_id VARCHAR(64) PRIMARY KEY,
+                    source VARCHAR(32) NOT NULL,
+                    market VARCHAR(16) NOT NULL,
+                    symbol VARCHAR(32) NOT NULL,
+                    interval VARCHAR(8) NOT NULL,
+                    month VARCHAR(7) NOT NULL,
+                    status VARCHAR(16) NOT NULL DEFAULT 'QUEUED',
+                    stage VARCHAR(32) NOT NULL DEFAULT 'QUEUED',
+                    dataset_id VARCHAR(64),
+                    feature_version VARCHAR(128),
+                    rows_processed BIGINT NOT NULL DEFAULT 0,
+                    bytes_downloaded BIGINT NOT NULL DEFAULT 0,
+                    error_code VARCHAR(64),
+                    error_reason TEXT,
+                    requested_by VARCHAR(128) NOT NULL DEFAULT 'console_user',
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    started_at TIMESTAMP WITH TIME ZONE,
+                    finished_at TIMESTAMP WITH TIME ZONE,
+                    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    CONSTRAINT ck_history_ingest_jobs_status
+                        CHECK (status IN ('QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED'))
+                )
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_history_ingest_jobs_active
+                    ON history_ingest_jobs(source, symbol, interval, month)
+                    WHERE status IN ('QUEUED', 'RUNNING')
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_ingest_jobs_status
+                    ON history_ingest_jobs(status, created_at)
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_ingest_jobs_lookup
+                    ON history_ingest_jobs(source, market, symbol, interval, month)
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS history_datasets (
+                    dataset_id VARCHAR(64) PRIMARY KEY,
+                    source VARCHAR(32) NOT NULL,
+                    market VARCHAR(16) NOT NULL,
+                    symbol VARCHAR(32) NOT NULL,
+                    interval VARCHAR(8) NOT NULL,
+                    month VARCHAR(7) NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    feature_version VARCHAR(128) NOT NULL,
+                    archive_path TEXT NOT NULL,
+                    archive_sha256 VARCHAR(64) NOT NULL,
+                    official_sha256 VARCHAR(64),
+                    source_url TEXT NOT NULL,
+                    checksum_url TEXT NOT NULL,
+                    row_count BIGINT NOT NULL DEFAULT 0,
+                    expected_points BIGINT NOT NULL DEFAULT 0,
+                    gap_count BIGINT NOT NULL DEFAULT 0,
+                    first_ts_ms BIGINT,
+                    last_ts_ms BIGINT,
+                    quality JSONB NOT NULL DEFAULT '{}',
+                    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+                    persistence_ok BOOLEAN NOT NULL DEFAULT FALSE,
+                    backtest_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+                    job_id VARCHAR(64),
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    published_at TIMESTAMP WITH TIME ZONE,
+                    CONSTRAINT uq_history_datasets_version
+                        UNIQUE (source, market, symbol, interval, month, version),
+                    CONSTRAINT ck_history_datasets_status
+                        CHECK (status IN ('PENDING', 'PUBLISHED', 'FAILED'))
+                )
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_datasets_lookup
+                    ON history_datasets(source, market, symbol, interval, month)
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_datasets_status
+                    ON history_datasets(status, backtest_eligible)
+                """
+            )
+
+            await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_datasets_feature_version
+                    ON history_datasets(feature_version)
+                """
+            )
+
     async def save_event(self, event) -> str:
         """
         Save an event to the event log.

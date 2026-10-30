@@ -40,6 +40,7 @@ from trader.api.routes import (
     brokers,
     chat,
     data_catalog,
+    data_history,
     deployments,
     events,
     health,
@@ -928,6 +929,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[OHLCVIngestion] Failed to start from env: {e}")
 
+    try:
+        await data_history.start_history_worker()
+    except Exception as e:
+        logger.error(f"[HistoryData] Failed to start ingestion worker: {e}")
+
     health.configure_heartbeat(
         heartbeat_service=_heartbeat_service,
         connection_manager=_connection_manager,
@@ -949,6 +955,10 @@ async def lifespan(app: FastAPI):
         await data_catalog.shutdown_ohlcv_ingestion_worker()
     except Exception as e:
         logger.error(f"[OHLCVIngestion] Error shutting down worker: {e}")
+    try:
+        await data_history.stop_history_worker()
+    except Exception as e:
+        logger.error(f"[HistoryData] Error shutting down history worker: {e}")
     if _binance_connector_instance is not None:
         try:
             await _binance_connector_instance.stop()
@@ -993,6 +1003,7 @@ app.include_router(strategy_candidates.router)
 app.include_router(allocations.router)
 app.include_router(portfolio_autopilot.router)
 app.include_router(data_catalog.router)
+app.include_router(data_history.router)
 app.include_router(audit.router)
 app.include_router(sse.router)
 

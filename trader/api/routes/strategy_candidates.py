@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
+from trader.adapters.persistence.history_dataset_store import HistoryStoreUnavailableError
 from trader.api.models.schemas import (
     ActionResult,
     BacktestRequest,
@@ -14,6 +15,11 @@ from trader.api.models.schemas import (
     StrategyCandidatePromoteRequest,
     StrategyCodeCreateRequest,
     StrategyCodeDebugRequest,
+)
+from trader.services.backtesting.backtest_dataset_resolution import resolve_dataset_spec
+from trader.services.backtesting.history_dataset_resolver import (
+    DatasetNotEligibleError,
+    DatasetNotFoundError,
 )
 from trader.services.deployment import BacktestService
 from trader.services.strategy_candidate import StrategyCandidateService
@@ -149,18 +155,34 @@ async def run_candidate_backtest(
 
     dataset = request.dataset
     try:
+        dataset = await resolve_dataset_spec(dataset)
+    except DatasetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DatasetNotEligibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HistoryStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=f"History store unavailable: {exc}") from exc
+
+    params = {
+        **candidate.config,
+        "initial_capital": dataset.initial_capital,
+        "fee_bps": dataset.fee_bps,
+        "slippage_bps": dataset.slippage_bps,
+        "benchmark": dataset.benchmark,
+    }
+    if dataset.interval:
+        params["interval"] = dataset.interval
+
+    try:
         backtest = BacktestService().create_backtest(
             BacktestRequest(
                 strategy_id=candidate.strategy_id,
                 version=1,
                 strategy_code_version=candidate.code_version,
-                params={
-                    **candidate.config,
-                    "initial_capital": dataset.initial_capital,
-                    "fee_bps": dataset.fee_bps,
-                    "slippage_bps": dataset.slippage_bps,
-                    "benchmark": dataset.benchmark,
-                },
+                engine="vectorbt" if dataset.dataset_id else "strategy_runner",
+                params=params,
                 symbols=dataset.symbols,
                 start_ts_ms=dataset.start_ts_ms,
                 end_ts_ms=dataset.end_ts_ms,
@@ -174,6 +196,8 @@ async def run_candidate_backtest(
                 data_mode=dataset.data_mode,
                 risk_mode=dataset.risk_mode,
                 candidate_id=candidate_id,
+                dataset_id=dataset.dataset_id,
+                interval=dataset.interval,
             )
         )
     except ValueError as exc:

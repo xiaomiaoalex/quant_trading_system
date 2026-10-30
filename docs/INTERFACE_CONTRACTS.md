@@ -2392,3 +2392,203 @@ async def list_executions_for_projection(
 - 内存实现和 PostgreSQL 实现必须提供专用 cursor 读取路径，按 `(ts_ms, execution_id)` 升序在存储层过滤并限量；不得复用面向列表页的倒序 `list_executions()` 结果后再截断排序。
 - `PerformanceExecutionProjector` 只依赖 `list_executions_for_projection()` 的游标契约，不读取 repository 私有字段。
 - 该方法是只读投影接口，不改变 event sourcing 真理来源，也不引入新的跨层写入路径。
+
+## 12. 历史归档数据（币安公开归档）契约
+
+本节描述「币安现货公开归档 → 历史数据集 → 真实回测」这条新通路的接口契约。
+旧的手动导入（`POST /v1/data/ohlcv/import`）与实时 worker 保留为高级入口，语义不变。
+
+### 12.1 数据来源与固定参数
+
+| 项 | 值 | 说明 |
+|----|----|------|
+| `source` | `binance_vision` | 固定值，不随 `BINANCE_ENV` 变化 |
+| `market` | `spot` | 固定值 |
+| `interval` | `1m` | 固定值 |
+| 支持币对 | `BTCUSDT`、`ETHUSDT` | 白名单，不接受任意 symbol / 任意 URL |
+| 归档地址 | `https://data.binance.vision/data/spot/monthly/klines/<symbol>/1m/<symbol>-1m-YYYY-MM.zip` | 固定前缀 |
+| 校验文件 | 同名 `.CHECKSUM` | SHA-256（`sha256sum` 格式） |
+| 月份格式 | `YYYY-MM` | 必须是**已结束**的完整自然月 |
+
+- `source` / `market` / `interval` 省略时取默认值；显式提交与默认值冲突的请求必须被拒绝（HTTP 422）。
+- 归档不存在时，**提交路径不做任何远程探测**：请求正常返回 202（任务 QUEUED），
+  由 worker 在下载阶段判定并把任务标记为 `FAILED`，错误码 `ARCHIVE_NOT_FOUND`。
+  理由：提交路径一旦依赖远端 HEAD，就会被远端超时（最长 60s）阻塞，
+  且归档被官方修订 / 移除时会把「已有可用数据集」的重复提交误判成 404。
+- 时间戳：2025-01-01 起币安现货归档为微秒，之前为毫秒；系统按量级自动识别并统一为 UTC 毫秒整数。
+
+### 12.2 历史任务接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/v1/data/history/jobs` | 创建导入任务，返回 202 |
+| GET | `/v1/data/history/jobs` | 查询任务列表（`status` / `symbol` / `month` / `limit`） |
+| GET | `/v1/data/history/jobs/{job_id}` | 查询单个任务 |
+| POST | `/v1/data/history/jobs/{job_id}/retry` | 重试 `FAILED` 任务，返回 202 |
+| GET | `/v1/data/history/datasets` | 数据集列表（`symbol` / `month` / `only_eligible` / `limit`） |
+| GET | `/v1/data/history/datasets/{dataset_id}` | 单个数据集详情 |
+
+`HistoryJobCreateRequest`：
+
+- `symbol`（必填）
+- `month`（必填，`YYYY-MM`）
+- `source`（默认 `binance_vision`）
+- `market`（默认 `spot`）
+- `interval`（默认 `1m`）
+- `requested_by`（默认 `console_user`）
+
+`HistoryJobResponse` 字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `job_id` | str | 任务 ID |
+| `source` / `market` / `symbol` / `interval` / `month` | str | 请求快照 |
+| `status` | `QUEUED` \| `RUNNING` \| `SUCCEEDED` \| `FAILED` | 任务状态 |
+| `stage` | str | 真实阶段：`QUEUED`/`DOWNLOAD`/`VERIFY`/`IMPORT`/`PUBLISH`/`FAILED` |
+| `dataset_id` | str \| null | 关联数据集 |
+| `feature_version` | str \| null | 关联 feature_version |
+| `rows_processed` | int | **实际**处理行数 |
+| `bytes_downloaded` | int | **实际**下载字节数 |
+| `error_code` | str \| null | 见下表 |
+| `error_reason` | str \| null | 可读原因 |
+| `attempt` | int | 重试次数 |
+| `created_at` / `started_at` / `finished_at` / `updated_at` | str \| null | 时间戳 |
+
+错误码（`error_code`）：
+
+| 错误码 | 含义 |
+|--------|------|
+| `ARCHIVE_NOT_FOUND` | 归档 / CHECKSUM 不存在 |
+| `NETWORK_ERROR` | 下载超时或远端不可达 |
+| `CHECKSUM_MISMATCH` | 实际 SHA-256 与官方 CHECKSUM 不一致 |
+| `QUALITY_ERROR` | 数据质量不达标（缺口 / 数值非法 / 覆盖不足 / 冲突） |
+| `PERSISTENCE_ERROR` | PostgreSQL 写入或发布前校验未通过 |
+| `SERVICE_INTERRUPTED` | 服务重启导致任务中断 |
+| `UNSUPPORTED_REQUEST` | 请求不被支持（如重试非 FAILED 任务） |
+
+状态机与并发语义：
+
+- 生命周期固定为 `QUEUED → RUNNING → SUCCEEDED | FAILED`，阶段至少包含下载 / 校验 / 导入。
+- **提交路径不做任何远程 HTTP**：只做输入校验（400）与数据库查询；PG 不可用返回 503 且不创建任务。
+- 任务领取是 PostgreSQL 原子操作（`UPDATE ... WHERE status='QUEUED' RETURNING`），单后端实例、单并发 worker。
+- 同一 `(source, symbol, interval, month)` 同时只允许一个活动任务，由数据库部分唯一索引保证；重复提交复用同一任务。
+- 已存在**可用**数据集时，重复提交返回**数据集关联的既有成功任务**（优先用数据集登记时的 `job_id`，
+  其次按 `dataset_id` 反查成功任务），**不新建任务行、不重复下载、不触发任何远程调用**。
+  仅当数据集没有关联任务行（历史遗留）时才补建一条并复用。
+  该复用任务的 `bytes_downloaded` / `rows_processed` 为 0（本次任务没有下载或写入任何行），
+  真实行数以关联数据集的 `row_count` 为准。
+- 服务启动时先把残留 `RUNNING` 任务标记为 `FAILED`（`SERVICE_INTERRUPTED`），再执行 `QUEUED` 任务；不做分布式队列，也不做自动断点续传。
+- PostgreSQL 不可用时返回 HTTP 503，**不得**创建假任务。
+
+### 12.3 历史数据集接口
+
+`GET /v1/data/history/datasets/{dataset_id}` **按 id 直接查询**（`store.get_dataset`），
+不得用列表扫描（数据集数量超过列表上限时旧记录会 404）。
+
+`HistoryDatasetResponse` 字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `dataset_id` | str | 数据集 ID |
+| `source` / `market` / `symbol` / `interval` / `month` | str | 数据集定位信息 |
+| `version` | int | 同归档修订产生新版本，旧版本保留 |
+| `feature_version` | str | `binance_spot_1m_<symbol>_<month>_<sha256[:12]>` |
+| `archive_sha256` | str | **实际**计算的 SHA-256 |
+| `official_sha256` | str \| null | 官方 CHECKSUM 中的 SHA-256 |
+| `source_url` / `checksum_url` | str | 来源 URL（追溯证据） |
+| `row_count` / `expected_points` / `gap_count` | int | 覆盖与质量统计 |
+| `first_ts_ms` / `last_ts_ms` | int \| null | UTC 毫秒边界 |
+| `quality` | object | 覆盖度详情（`complete`、`official_file_name`、`local_archive_name` 等） |
+| `status` | `PENDING` \| `PUBLISHED` \| `FAILED` | 发布状态 |
+| `persistence_ok` | bool | FeatureStore 严格持久化是否成功 |
+| `backtest_eligible` | bool | 是否可用于回测 |
+
+数据集只有在**同时满足**下列条件时才可回测：`status=PUBLISHED`、`persistence_ok=true`、`backtest_eligible=true`、`gap_count=0`、`row_count=expected_points`。
+
+### 12.4 数据质量规则
+
+- 覆盖区间为 UTC `[月初, 下月月初)`；2026-09 完整月份为 **43,200** 条 1 分钟 K 线。
+- 单根 K 线校验：价格有限且为正、成交量有限且非负（允许 0）、`high >= max(open, close)`、`low <= min(open, close)`、`high >= low`、开盘时间对齐整分钟。
+- 相同时间戳同值去重；相同时间戳异值视为冲突，**直接失败**，不插值、不覆盖。
+- 月份范围外的行、缺口、未对齐行都判为质量错误。
+- 只有「全月有效、无冲突、无缺口且 PostgreSQL 持久化成功」的数据集才允许回测。
+
+### 12.5 回测请求扩展
+
+`BacktestRequest` / `BacktestDatasetSpec` 新增可选字段：
+
+- `dataset_id`: 已发布历史数据集 ID
+- `interval`: K 线周期（历史数据集固定 `1m`）
+
+兼容性：
+
+- `start_ts_ms` / `end_ts_ms` 改为可选。提供 `dataset_id` 时省略即取整月区间；
+  不提供 `dataset_id` 的旧请求必须仍然显式给出时间范围，否则返回 400。
+- 旧请求（不带 `dataset_id`）行为不变，包括 `data_mode=real_feature_store` + `feature_version` 的历史入口。
+
+数据集路径的推导与冲突规则（服务端为准，不依赖前端禁用按钮）：
+
+| 字段 | 数据集路径下的取值 | 显式冲突时 |
+|------|--------------------|------------|
+| `symbols` | `[dataset.symbol]` | 400 |
+| `feature_version` | `dataset.feature_version` | 400 |
+| `data_mode` | `real_feature_store` | 400（仅当用户**显式**提交其它值） |
+| `engine` | `vectorbt` | 400 |
+| `interval` / `params.interval` | `dataset.interval`（`1m`） | 400 |
+| `start_ts_ms` / `end_ts_ms` | 整月，或月内对齐子区间 | 越界 / 未对齐 → 400 |
+
+- 「未提供的旧默认值」不算冲突：只有用户**显式提交**的字段才参与冲突判定（通过 `model_fields_set` 判定）。
+- 结束端点取当月**最后一根 bar 的开盘时间**（如 `2026-09-30T23:59:00Z`），避免多算 1 分钟。
+- 已登记数据集的 `feature_version` 以 `binance_spot_1m` 开头；这类请求**必须**显式提供 `dataset_id`，
+  否则返回 400（防止只靠 version 名绕过数据集准入门禁）。
+- `real_feature_store` 路径只允许单币对，多币对请求返回 400（不允许 `symbols[0]` 静默丢弃其余币对）。
+
+### 12.6 报告追溯字段
+
+真实数据集回测的 `metrics` 必须包含：
+
+- `data_provenance`: `dataset_id`、`source`、`market`、`symbol`、`interval`、`month`、`version`、
+  `feature_version`、`source_url`、`official_sha256`、`archive_sha256`、`archive_path`、
+  `official_file_name`、`local_archive_name`、
+  `start_ts_ms`、`end_ts_ms`、`row_count`、`expected_points`、`gap_count`、`quality`
+- `cost_model`: `fee_bps`、`slippage_bps`、`assumption`（固定比例费率 + 固定比例滑点，
+  不含 maker/taker 分档、不含盘口深度模型）
+- `data_quality_summary`: 额外包含 `dataset_id`、`integrity_verified`、`verified_rows`
+
+默认费用沿用 `fee_bps=10`、`slippage_bps=5`（固定费率 + 固定滑点假设）。
+
+### 12.7 存储契约
+
+新增 PostgreSQL 表（迁移 `009_history_datasets.sql`，与 `PostgreSQLStorage._initialize_schema` 保持一致）：
+
+- `history_ingest_jobs`: 任务请求 / 状态 / 阶段 / 实际处理行数 / 错误 / 时间 / 关联 dataset；
+  部分唯一索引 `uq_history_ingest_jobs_active (source, symbol, interval, month) WHERE status IN ('QUEUED','RUNNING')`。
+- `history_datasets`: source / market / symbol / interval / month / version / 文件 hash / URL /
+  质量 / 覆盖 / 可用状态；唯一约束 `(source, market, symbol, interval, month, version)`。
+
+FeatureStore 严格模式（`FeatureStore(strict=True)`）：
+
+- PostgreSQL 不可用、写入失败、读取失败一律抛 `FeatureStoreStrictError`，**不回退**内存存储。
+- 新导入通路与新数据集回测读取均使用严格模式；旧的开发模式（默认 `strict=False`）行为不变。
+
+批量写入（`write_features_bulk`）语义：
+
+- 批内先归并：同 ts 同值折叠为一行（计 duplicate）；同 ts 异值**直接抛** `FeatureVersionConflictError`。
+- 整批在**单个事务**内写入：`INSERT ... ON CONFLICT DO NOTHING RETURNING ts_ms`
+  —— 永不覆盖已有值；并发写入同一 key 时会阻塞在唯一索引上，对方提交后才能继续。
+- 写完立即回读本批全部 ts 的 `value_hash` 与期望值比对：不一致即抛 `FeatureVersionConflictError`，
+  事务回滚 → **无部分写入**（不会出现「一半新行 + 一半冲突」的中间态）。
+- `created` / `duplicates` 为真实计数（来自 `RETURNING` 与批内归并结果），不做估算。
+
+### 12.8 归档文件与校验和
+
+- 归档文件按版本存放：`<MARKET_DATA_ROOT>/binance/spot/raw/klines/<symbol>/1m/<symbol>-1m-<month>-v<version>.zip`，
+  旧版本文件**永不覆盖、不删除**（官方修订归档 → 新版本）。
+- 官方 `.CHECKSUM` 按**预期文件名**匹配解析（不取任意第一个 token），多行 / 错文件名都能正确识别；
+  官方 CHECKSUM **原文**原样保存到同名 `.CHECKSUM` 侧车文件（不改写、不伪造）。
+- 本地版本化文件名（带 `-v<version>`）与官方文件名（不带）不同，该差异记录在数据集
+  `quality.official_file_name` / `quality.local_archive_name` 以及回测报告的 `data_provenance` 中。
+- 提交归档时若目标文件已存在：
+  - SHA-256 一致 → 复用该文件，并补写缺失的 `.CHECKSUM`（崩溃窗口恢复）；
+  - SHA-256 不一致 → 抛 `ArchiveChecksumMismatch`，**绝不覆盖**已有版本的证据。
+- `.CHECKSUM` 侧车文件用「临时文件 + 原子 replace」写入，避免出现半成品文件。
