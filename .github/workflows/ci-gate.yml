@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+# Python 版本策略：只锁 minor（3.12），不锁 patch。
+# 原因：ubuntu-latest 镜像的 python-versions 清单只保留每个 minor 最近的 3~4 个补丁版本，
+# 写死补丁号（如 3.12.5）会在镜像升级后直接失败（2026-10-19 迁移到 Ubuntu 26.04 即如此）。
+# 补丁版本之间 ABI 一致，不构成兼容风险；需要固定补丁号时改 .python-version，不动本文件。
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -17,10 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -39,10 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -60,10 +64,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Core Plane IO Check
         run: python scripts/check_core_no_io.py
@@ -75,10 +79,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -100,10 +104,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -139,10 +143,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12.5
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12.5"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
