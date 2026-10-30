@@ -49,8 +49,12 @@ def configure_trading_readiness(provider) -> None:
 @router.get("/health/trading")
 async def trading_readiness(request: Request):
     """Trading readiness is separate from process liveness and API readiness."""
-    provider = getattr(request.app.state, "readiness_provider", None)
-    if provider is None:
+    # An app that explicitly carries a readiness_provider state (including None)
+    # owns its answer. The module-level provider is only a legacy fallback for
+    # apps that never configure the state attribute at all.
+    if hasattr(request.app.state, "readiness_provider"):
+        provider = request.app.state.readiness_provider
+    else:
         provider = _trading_readiness_provider
     if provider is None:
         return JSONResponse(

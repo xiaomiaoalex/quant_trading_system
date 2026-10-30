@@ -365,3 +365,51 @@ async def test_control_actions_are_commands_with_audit_identity():
         assert allowed.status_code == 202
     finally:
         await client.aclose()
+
+
+class _ReadyProvider:
+    async def check(self):
+        return {"ready": True, "reasons": [], "account_id": "acct"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_does_not_inherit_another_apps_global_provider():
+    from trader.api.routes import health
+
+    health.configure_trading_readiness(_ReadyProvider())
+    try:
+        app = create_trading_app(trading_service=None)
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        )
+        try:
+            response = await client.get("/health/trading")
+            assert response.status_code == 503
+            assert response.json()["ready"] is False
+        finally:
+            await client.aclose()
+    finally:
+        health.configure_trading_readiness(None)
+
+
+@pytest.mark.asyncio
+async def test_legacy_app_without_state_still_uses_the_global_provider():
+    from fastapi import FastAPI
+
+    from trader.api.routes import health
+
+    app = FastAPI()
+    app.include_router(health.router)
+    health.configure_trading_readiness(_ReadyProvider())
+    try:
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        )
+        try:
+            response = await client.get("/health/trading")
+            assert response.status_code == 200
+            assert response.json()["ready"] is True
+        finally:
+            await client.aclose()
+    finally:
+        health.configure_trading_readiness(None)
