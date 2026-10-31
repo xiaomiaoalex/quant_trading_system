@@ -1,0 +1,8 @@
+---
+name: quant-binance-adapter
+description: 开发或调试本仓库 Binance WS、REST 对齐、限流和降级链路。
+---
+
+读取 [领域参考](../../../skills/binance_adapter/SPEC.md)，按当前任务使用其中的约束与验证建议。相对路径从本文件目录解析；SPEC 中以仓库根开头的路径从仓库根解析。
+
+以当前代码、契约和测试核对接口；本技能不增加与任务无关的审批、输出模板或完整测试流程。

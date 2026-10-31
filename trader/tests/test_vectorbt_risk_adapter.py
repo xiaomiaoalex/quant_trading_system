@@ -13,6 +13,8 @@ from trader.services.backtesting.vectorbt_risk_adapter import (
     VectorBTRiskMetrics,
 )
 
+pytest.importorskip("vectorbt", reason="vectorbt optional research dependency is not installed")
+
 
 class MockBaseAdapter:
     def __init__(self, data_provider=None):

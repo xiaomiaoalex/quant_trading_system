@@ -1,0 +1,14 @@
+{
+  "worktree": {
+    "setup": [
+      "$src = \"$env:PASEO_SOURCE_CHECKOUT_PATH\\.venv\"\nif (Test-Path $src) {\n  robocopy $src \".venv\" /E /NFL /NDL /NJH /NJS /NP /MT:16 | Out-Null\n  if ($LASTEXITCODE -ge 8) { Write-Host \"[setup] .venv 复制失败 rc=$LASTEXITCODE\"; exit 1 }\n} else {\n  py -3.12 -m venv .venv\n  if ($LASTEXITCODE -ne 0) { Write-Host \"[setup] venv 创建失败\"; exit 1 }\n  & \".venv\\Scripts\\python.exe\" -m pip install -q -r trader\\requirements-ci.txt\n  if ($LASTEXITCODE -ne 0) { Write-Host \"[setup] 依赖安装失败\"; exit 1 }\n  & \".venv\\Scripts\\python.exe\" -m pip install -q numpy pandas matplotlib seaborn python-dotenv uvicorn psutil\n  if ($LASTEXITCODE -ne 0) { Write-Host \"[setup] 补充依赖安装失败\"; exit 1 }\n}\nexit 0",
+      "$nm = \"$env:PASEO_SOURCE_CHECKOUT_PATH\\Frontend\\node_modules\"\nif (Test-Path $nm) {\n  robocopy $nm \"Frontend\\node_modules\" /E /NFL /NDL /NJH /NJS /NP /MT:16 | Out-Null\n  if ($LASTEXITCODE -ge 8) { Write-Host \"[setup] node_modules 复制失败 rc=$LASTEXITCODE\"; exit 1 }\n} else {\n  npm --prefix Frontend ci --no-audit --no-fund\n  if ($LASTEXITCODE -ne 0) { Write-Host \"[setup] npm ci 失败\"; exit 1 }\n}\nexit 0",
+      "& \".venv\\Scripts\\python.exe\" -c \"import sys; print('[setup] python', sys.version.split()[0])\"\nif ($LASTEXITCODE -ne 0) { exit 1 }\nexit 0"
+    ]
+  },
+  "scripts": {
+    "test": {
+      "command": ".venv\\Scripts\\python.exe -m pytest -q trader/tests --tb=short"
+    }
+  }
+}
