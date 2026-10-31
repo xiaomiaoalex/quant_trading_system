@@ -1,3 +1,20 @@
+"""Shared pytest fixtures for the trader test-suite.
+
+测试隔离约定（见 docs/INTERFACE_CONTRACTS.md「测试隔离与本地 Postgres」）：
+
+- **绝不隐式加载本地 Postgres DSN**。`.env.postgres` 曾经被版本控制跟踪，
+  导致任何开发者 clone 后只要本地 Postgres 可用，单元测试就会静默连上真实库，
+  读到真实库里的遗留数据而不是本测试写入的数据（Fail-Open，测试结果不可信）。
+- 需要真实 PostgreSQL 的**集成测试**必须显式传入 DSN：
+
+      POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading \\
+          python -m pytest -q trader/tests/test_postgres_storage.py
+
+  CI（.github/workflows/ci-gate.yml 的 postgres-integration job）与
+  `run_tests.bat` 都是这样做的。
+- `.env`（Binance 演示配置）仍然加载，但其中的敏感键会被 `_restore_tracked_env` 剥离。
+"""
+
 import importlib
 import logging
 import os
@@ -8,10 +25,9 @@ from types import ModuleType
 import pytest
 from dotenv import load_dotenv
 
-if os.path.exists(".env.postgres"):
-    load_dotenv(".env.postgres")
-else:
-    load_dotenv()
+# 只加载 .env（开发用 Binance 演示配置）。绝不加载 .env.postgres：
+# 隐式加载本地 DSN 会让单元测试连上真实库，破坏测试隔离。
+load_dotenv()
 
 
 _SANITIZED_ENV_KEYS = (

@@ -135,9 +135,15 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.env.* <-- 添加这一行，它会忽略所有以 .env. 开头的文件
-!.env.example <-- 如果你有模板文件，可以用感叹号排除它（不忽略模板）
-*.db 
+# Local env files: never commit real secrets or local DSNs.
+# (The two lines below used to carry a trailing "<-- ..." note, which made the
+#  patterns literal and therefore never matched anything.)
+.env.*
+!.env.example
+!.env.postgres.example
+# Local PostgreSQL DSN for integration tests (copy from .env.postgres.example)
+.env.postgres
+*.db
 # Spyder project settings
 .spyderproject
 .spyproject

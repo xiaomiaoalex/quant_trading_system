@@ -2393,6 +2393,39 @@ async def list_executions_for_projection(
 - `PerformanceExecutionProjector` 只依赖 `list_executions_for_projection()` 的游标契约，不读取 repository 私有字段。
 - 该方法是只读投影接口，不改变 event sourcing 真理来源，也不引入新的跨层写入路径。
 
+### 11.4 `ExecutionRepository` 存储后端选择（测试隔离）
+
+签名（新增关键字参数，向后兼容）：
+
+```python
+class ExecutionRepository:
+    def __init__(
+        self,
+        storage: InMemoryStorage | None = None,
+        *,
+        allow_postgres: bool = True,
+    ) -> None: ...
+
+    @property
+    def allow_postgres(self) -> bool: ...
+
+    @property
+    def postgres_active(self) -> bool: ...
+```
+
+契约：
+
+- `allow_postgres=True`（默认）：行为不变——PG 可用时走 PostgreSQL，不可用时按各方法语义回退内存 / 抛错。
+- `allow_postgres=False`：**强制内存存储**。`_ensure_postgres()` 直接返回 `False`，绝不调用
+  `check_postgres_connection()`，也绝不构造 `PostgreSQLStorage`。
+  - `save_execution()` 仍按 Fail-Closed 语义抛 `RuntimeError`（内存模式不应被当作「PG 已降级」）。
+  - `save_execution_best_effort()` / 读接口正常走内存。
+- `postgres_active` 暴露当前是否真的在用 PostgreSQL；`allow_postgres=False` 时恒为 `False`。
+- 用途：单元测试显式声明「不依赖真实库」，避免本地 PostgreSQL 可用时静默读到真实库遗留数据。
+  生产代码不使用 `allow_postgres=False`。
+- 兼容策略：新增参数带默认值，所有既有调用点无需修改；真实 PG 路径的覆盖仍由
+  `trader/tests/test_pg_repositories.py`（`skip_if_no_postgres`）保证。
+
 ## 12. 历史归档数据（币安公开归档）契约
 
 本节描述「币安现货公开归档 → 历史数据集 → 真实回测」这条新通路的接口契约。
@@ -2592,3 +2625,31 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
   - SHA-256 一致 → 复用该文件，并补写缺失的 `.CHECKSUM`（崩溃窗口恢复）；
   - SHA-256 不一致 → 抛 `ArchiveChecksumMismatch`，**绝不覆盖**已有版本的证据。
 - `.CHECKSUM` 侧车文件用「临时文件 + 原子 replace」写入，避免出现半成品文件。
+
+## 13. 测试隔离与本地 Postgres
+
+本节约束「单元测试不得隐式依赖本地真实数据库」这条跨模块约定。适用于 `conftest.py`（仓库根）
+与 `trader/tests/conftest.py`。
+
+### 13.1 环境变量来源
+
+- `conftest.py` **只加载 `.env`**（Binance 演示配置），**绝不加载 `.env.postgres`**。
+  历史上 `conftest.py` 检测到 `.env.postgres` 就 `load_dotenv(".env.postgres")`，
+  导致只要开发者本地 PostgreSQL 可用，所有单元测试都会静默连上真实库。
+- 需要真实 PostgreSQL 的集成测试必须**显式**传入 DSN：
+  `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest ...`。
+  CI 的 `postgres-integration` job 与 `run_tests.bat` 都是这样做的。
+
+### 13.2 `.env.postgres` 不再入库
+
+- `.env.postgres` 已从版本控制移除，并被 `.gitignore` 忽略；模板 `/.env.postgres.example` 仍然入库。
+- 开发者本地用法：`cp .env.postgres.example .env.postgres` 后自行填写；该文件只用于本地手工启动，
+  **不会被测试自动读取**。
+
+### 13.3 repository 级别的隔离开关
+
+- 单元测试涉及 `ExecutionRepository` 时必须显式传入 `allow_postgres=False`（见 11.4），
+  或 monkeypatch `trader.adapters.persistence.execution_repository.check_postgres_connection`。
+- 回归用例：`trader/tests/test_execution_projection_cursor.py::test_projection_cursor_never_touches_postgres_when_pinned_to_memory`
+  ——把 PG 探测伪造成「可用」，并把 `PostgreSQLStorage` 替换为「一旦构造就失败」的桩，
+  以此证明内存仓库在任何环境下都不会触碰真实库。

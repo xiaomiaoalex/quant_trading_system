@@ -1,15 +1,21 @@
-import os
+"""Root pytest configuration.
+
+测试隔离约定（见 docs/INTERFACE_CONTRACTS.md「测试隔离与本地 Postgres」）：
+
+- **绝不隐式加载本地 Postgres DSN**。`.env.postgres` 曾经被版本控制跟踪，
+  导致只要本地 Postgres 可用，单元测试就会静默连上真实库。
+- 需要真实 PostgreSQL 的集成测试必须显式传入 DSN（CI 与 run_tests.bat 已这样做）。
+"""
+
 import logging
+import os
 from collections.abc import Iterator
 
 import pytest
 from dotenv import load_dotenv
 
-# 优先加载 postgres 测试环境
-if os.path.exists(".env.postgres"):
-    load_dotenv(".env.postgres")
-else:
-    load_dotenv()
+# 只加载 .env（开发用 Binance 演示配置）。绝不加载 .env.postgres。
+load_dotenv()
 
 
 _SANITIZED_ENV_KEYS = (
@@ -33,8 +39,7 @@ _TRACKED_ENV_KEYS = (
     "POSTGRES_PASSWORD",
 )
 _BASE_ENV = {
-    key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key)
-    for key in _TRACKED_ENV_KEYS
+    key: None if key in _SANITIZED_ENV_KEYS else os.environ.get(key) for key in _TRACKED_ENV_KEYS
 }
 
 
@@ -53,17 +58,15 @@ def _restore_tracked_env() -> None:
 
 
 def _reset_global_test_state() -> None:
+    from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.adapters.persistence.execution_repository import reset_execution_repository
     from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
     from trader.adapters.persistence.position_repository import reset_position_repository
     from trader.adapters.persistence.risk_repository import reset_risk_event_repository
     from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
-    from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.api.routes import monitor
     from trader.api.routes.strategies import reset_strategy_route_state_for_tests
-    from trader.core.domain.services.order_ownership_registry import (
-        reset_order_ownership_registry,
-    )
+    from trader.core.domain.services.order_ownership_registry import reset_order_ownership_registry
     from trader.core.domain.services.position_lot_registry import reset_lot_manager
     from trader.services.strategy_event_service import reset_strategy_event_service
     from trader.storage.in_memory import reset_storage

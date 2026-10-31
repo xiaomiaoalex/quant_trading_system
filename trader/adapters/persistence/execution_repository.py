@@ -12,14 +12,35 @@ logger = logging.getLogger(__name__)
 
 
 class ExecutionRepository:
-    """Persist executions with cl_ord_id + exec_id idempotency."""
+    """Persist executions with cl_ord_id + exec_id idempotency.
 
-    def __init__(self, storage: Optional[InMemoryStorage] = None):
+    ``allow_postgres=False`` 强制走内存存储：仓库永远不会连接 PostgreSQL，
+    也不会因为本地 Postgres 可用而读到真实库里的遗留数据。
+    单元测试用它来证明「不依赖真实库」，生产默认行为不变（``allow_postgres=True``）。
+    """
+
+    def __init__(
+        self,
+        storage: Optional[InMemoryStorage] = None,
+        *,
+        allow_postgres: bool = True,
+    ):
         self._memory_storage = storage or get_storage()
+        self._allow_postgres = allow_postgres
         self._postgres_storage: Optional[PostgreSQLStorage] = None
         self._use_postgres = False
         self._init_lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    @property
+    def allow_postgres(self) -> bool:
+        """是否允许连接 PostgreSQL（False = 强制内存存储）。"""
+        return self._allow_postgres
+
+    @property
+    def postgres_active(self) -> bool:
+        """当前是否正在使用 PostgreSQL（仅在 allow_postgres=True 时才可能为 True）。"""
+        return self._use_postgres
 
     def _clear_postgres_state(self) -> None:
         self._postgres_storage = None
@@ -52,6 +73,11 @@ class ExecutionRepository:
         return self._postgres_storage
 
     async def _ensure_postgres(self) -> bool:
+        if not self._allow_postgres:
+            # 显式内存模式：绝不连接真实 Postgres（单元测试隔离）。
+            logger.debug("ExecutionRepository is pinned to in-memory storage")
+            return False
+
         current_loop = asyncio.get_running_loop()
         if self._loop is not current_loop:
             await self._reset_postgres_connection()
