@@ -704,6 +704,37 @@ interface GetLatestSnapshotParams {
 | GET | `/health/live` | 存活探针 |
 | GET | `/health/ready` | 就绪探针 |
 
+### 7.9 Research 数据集与事件回测接口（研究平面）
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | `/v1/research/datasets` | Research 数据集目录（只读元数据） |
+| GET | `/v1/research/strategies` | 已安装、允许提交回测的策略与参数 |
+| POST | `/v1/research/backtests` | 提交事件回测（202） |
+| GET | `/v1/research/backtests?limit=100` | 运行记录列表 |
+| GET | `/v1/research/backtests/{run_id}` | 运行记录详情 |
+| POST | `/v1/research/backtests/{run_id}/retry` | 重试 FAILED 运行（202；非 FAILED → 409） |
+| POST | `/v1/research/backtests/{run_id}/cancel` | 取消运行（202） |
+
+请求 / 响应模型见 `contract_models.md` §5.2，端点细节见 `contract_endpoints.md` §5.2。
+历史任务 / 数据集新增可选字段 `research_dataset_id: string | null`（指向 `ds_*`）。
+
+前端行为约定（路由 `/research/data`、`/research/backtests`）：
+
+- `/research/data` 展示 Research 数据集目录（只读元数据），并复用既有历史归档导入能力
+  （下载 → SHA-256 校验 → 发布 Binance 官方整月 BTCUSDT/ETHUSDT 1m 数据）。
+- 只有 `official_eligible === true` 的 Research 数据集允许提交回测；资格不足或数据集资格
+  查询失败时禁用提交按钮并展示明确原因。
+- 单币、单月、单数据集：一次只提交一个 `dataset_id`。
+- `engine=event_runtime`、`purpose=research_screening` 由前端常量固定；`module_path` 只能
+  取自 `/v1/research/strategies`；不上传策略源码，不做部署动作。
+- 默认 `initial_cash="100000"`、`fee_bps="10"`、`slippage_bps="5"`，均可调整。
+- 运行列表在有 `QUEUED` / `RUNNING` 时每 2 秒轮询，终态
+  （`SUCCEEDED` / `FAILED` / `CANCELLED`）停止轮询；选中运行写入 URL `?run_id=`，
+  刷新后按 `run_id` 重新查询。
+- 所有响应经 Zod 运行时校验（`src/contracts/research.ts`）；字段漂移会以错误态呈现，
+  不静默渲染。
+
 ---
 
 ## 8. WebSocket 接口

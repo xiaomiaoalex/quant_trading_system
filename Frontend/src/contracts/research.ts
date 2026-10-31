@@ -5,6 +5,9 @@ import { z } from 'zod'
  *
  * 这里只描述「后端已实现」的形状；任何字段漂移都会在运行时被 Zod 拦住，
  * 避免把不可信响应直接渲染到控制台。
+ *
+ * 注意：`report.datasets[].identity` 来自冻结数据集，除字符串身份字段外
+ * 还包含 `schema_version` / `interval_ms` 等数值字段，因此按宽松 record 校验。
  */
 
 // ─── 数据集目录（只读元数据） ────────────────────────────────────────────────
@@ -70,19 +73,22 @@ export const ResearchBacktestStatusSchema = z.enum([
 
 export const ResearchBacktestModelSchema = z.enum(['event_runtime', 'legacy'])
 
+/** PG store 返回 ISO 字符串，内存 store 返回单调时钟数字；展示层统一格式化。 */
+const RunTimestampSchema = z.union([z.string(), z.number()]).nullable().optional()
+
 export const ResearchEquityPointSchema = z.object({
   at_ms: z.number(),
   equity: z.string(),
 })
 
+export const ResearchBacktestReportDatasetSchema = z.object({
+  dataset_id: z.string(),
+  identity: z.record(z.unknown()),
+  quality: z.record(z.unknown()),
+})
+
 export const ResearchBacktestReportSchema = z.object({
-  datasets: z.array(
-    z.object({
-      dataset_id: z.string(),
-      identity: z.record(z.string()),
-      quality: z.record(z.unknown()),
-    }),
-  ),
+  datasets: z.array(ResearchBacktestReportDatasetSchema),
   provenance: z.record(z.string()),
   strategy: z.object({
     module_path: z.string(),
@@ -118,10 +124,13 @@ export const ResearchBacktestReportSchema = z.object({
 })
 
 /**
- * 成功运行的结果。字段全部可选：老版本（legacy）运行没有这些字段，
- * 但字段存在时仍必须满足类型契约。
+ * 事件运行（model=event_runtime）的结果。
+ *
+ * 字段全部可选：排队 / 运行中的运行没有结果；事件运行则按契约提供。
+ * 字段存在时仍必须满足类型，否则 Zod 会拒绝整条响应。
+ * `legacy` 结果没有该结构，由 API 层单独处理，不参与严格校验。
  */
-export const ResearchBacktestResultSchema = z.object({
+export const ResearchBacktestEventResultSchema = z.object({
   engine: z.string().optional(),
   runtime_version: z.string().optional(),
   admissible: z.boolean().optional(),
@@ -146,15 +155,23 @@ export const ResearchBacktestResultSchema = z.object({
   report: ResearchBacktestReportSchema.optional(),
 })
 
-export const ResearchBacktestRunSchema = z.object({
+/**
+ * 运行记录外层信封。
+ *
+ * `result` 在这里只要求是对象/空：`legacy` 运行的结果结构与事件运行不同，
+ * 严格结构由 `ResearchBacktestEventResultSchema` 在 API 层按 model 单独校验。
+ */
+export const ResearchBacktestRunEnvelopeSchema = z.object({
   run_id: z.string(),
   status: ResearchBacktestStatusSchema,
   model: ResearchBacktestModelSchema,
   manifest: z.record(z.unknown()).nullable().optional(),
-  result: ResearchBacktestResultSchema.nullable().optional(),
+  result: z.record(z.unknown()).nullable().optional(),
   error: z.string().nullable().optional(),
-  created_at: z.string().nullable().optional(),
-  updated_at: z.string().nullable().optional(),
+  created_at: RunTimestampSchema,
+  updated_at: RunTimestampSchema,
 })
 
-export const ResearchBacktestRunListSchema = z.array(ResearchBacktestRunSchema)
+export const ResearchBacktestRunListEnvelopeSchema = z.array(
+  ResearchBacktestRunEnvelopeSchema,
+)

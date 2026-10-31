@@ -13,6 +13,8 @@ import {
   Replay,
   Data,
   Research,
+  ResearchData,
+  ResearchBacktests,
   PortfolioAllocation,
   PortfolioAutopilot,
   CryptoRiskOps,
@@ -38,6 +40,8 @@ function App() {
             <Route path="/monitor" element={<Monitor />} />
             <Route path="/data" element={<Data />} />
             <Route path="/research" element={<Research />} />
+            <Route path="/research/data" element={<ResearchData />} />
+            <Route path="/research/backtests" element={<ResearchBacktests />} />
             <Route path="/strategies" element={<Strategies />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/reconcile" element={<Reconcile />} />
