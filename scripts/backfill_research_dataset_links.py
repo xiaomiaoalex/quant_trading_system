@@ -137,13 +137,20 @@ async def backfill(
     apply: bool,
     symbol: Optional[str] = None,
     limit: int = 200,
+    store: Optional[HistoryDatasetStore] = None,
+    bridge: Optional[ResearchHistoryBridgeStore] = None,
+    client: Optional[BinanceVisionArchiveClient] = None,
 ) -> List[Dict[str, Any]]:
-    store = HistoryDatasetStore()
-    await store.connect()
-    client = BinanceVisionArchiveClient(AiohttpArchiveHttpClient())
+    owns_store = store is None
+    owns_client = client is None
+    store = store or HistoryDatasetStore()
+    if owns_store:
+        await store.connect()
+    client = client or BinanceVisionArchiveClient(AiohttpArchiveHttpClient())
     try:
-        bridge = ResearchHistoryBridgeStore(storage=store.storage)
-        await bridge.ensure_research_schema()
+        bridge = bridge or ResearchHistoryBridgeStore(storage=store.storage)
+        if owns_store:
+            await bridge.ensure_research_schema()
         datasets = await store.list_datasets(
             source=ARCHIVE_SOURCE_NAME,
             market=ARCHIVE_SUPPORTED_MARKET,
@@ -229,8 +236,10 @@ async def backfill(
             results.append(record)
         return results
     finally:
-        await client.close()
-        await store.disconnect()
+        if owns_client:
+            await client.close()
+        if owns_store:
+            await store.disconnect()
 
 
 def main() -> None:

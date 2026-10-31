@@ -225,10 +225,20 @@ class HistoryIngestionService:
         return await get_history_dataset_store()
 
     def _get_bridge_store(self, store: HistoryDatasetStore) -> ResearchHistoryBridgeStore:
-        """桥接存储：与历史存储共用同一条 PostgreSQL 连接池。"""
+        """桥接存储：与历史存储共用同一条 PostgreSQL 连接池。
+
+        没有底层连接时直接失败：桥接发布必须和历史发布在同一个事务里完成，
+        绝不允许悄悄新建一个数据库连接。
+        """
         if self._bridge_store is not None:
             return self._bridge_store
-        self._bridge_store = ResearchHistoryBridgeStore(storage=store.storage)
+        storage = getattr(store, "storage", None)
+        if storage is None:
+            raise HistoryIngestionError(
+                ERROR_PERSISTENCE,
+                "History store has no PostgreSQL connection; cannot publish to Research",
+            )
+        self._bridge_store = ResearchHistoryBridgeStore(storage=storage)
         return self._bridge_store
 
     @property

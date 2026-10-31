@@ -41,6 +41,11 @@ class FakeHistoryDatasetStore:
         self.fail_connect = False
         self.fail_writes = False
 
+    @property
+    def storage(self):
+        """内存替身没有底层连接；桥接存储必须显式注入。"""
+        return None
+
     # ---------- helpers ----------
 
     def _now(self) -> str:
@@ -388,6 +393,19 @@ class FakeResearchHistoryBridgeStore:
             "official_eligible": True,
             **link["payload"],
         }
+        if not fields.get("job_id"):
+            # Backfill publishes without a job row.
+            dataset = self.history_store.datasets[fields["history_dataset_id"]]
+            dataset.update(
+                {
+                    "status": "PUBLISHED",
+                    "persistence_ok": True,
+                    "backtest_eligible": True,
+                    "research_dataset_id": research_dataset_id,
+                    "published_at": self.history_store._now(),
+                }
+            )
+            return {"dataset": dict(dataset), "job": None}
         return await self.history_store.publish_dataset_with_job(
             job_id=fields["job_id"],
             dataset_id=fields["history_dataset_id"],

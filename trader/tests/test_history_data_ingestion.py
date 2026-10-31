@@ -8,6 +8,7 @@ History Data Ingestion Service Tests
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -33,6 +34,7 @@ from trader.services.history_data_ingestion import (
     ERROR_QUALITY,
     HistoryIngestionError,
     HistoryIngestionService,
+    HistoryJobWorker,
 )
 from trader.tests.fakes.fake_history_store import (
     FakeArchiveClient,
@@ -511,3 +513,42 @@ async def test_list_datasets_reports_published_dataset():
     assert len(datasets) == 1
     assert len(eligible) == 1
     assert eligible[0]["backtest_eligible"] is True
+
+
+async def test_worker_retries_startup_recovery_before_claiming_any_job():
+    """启动恢复失败必须重试；恢复成功之前不领取任何任务。"""
+    calls: list[str] = []
+
+    class FlakyService:
+        def __init__(self) -> None:
+            self.recoveries = 0
+
+        async def recover_interrupted_jobs(self) -> int:
+            self.recoveries += 1
+            calls.append("recover")
+            if self.recoveries < 2:
+                raise RuntimeError("postgres not ready")
+            return 0
+
+        async def process_next_queued_job(self):
+            calls.append("claim")
+            return None
+
+    worker = HistoryJobWorker(
+        FlakyService(),
+        poll_interval_seconds=0.01,
+        unavailable_backoff_seconds=0.01,
+    )
+    await worker.start()
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while "claim" not in calls and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop()
+
+    assert calls[0] == "recover"
+    assert calls[1] == "recover"
+    assert "claim" in calls
+    assert calls.index("claim") > calls.index("recover", 1)

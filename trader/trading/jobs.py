@@ -105,19 +105,23 @@ class MemoryResearchStore:
         """Catalog listing: metadata only, never the bar payload."""
         records = []
         for dataset_id, data in self.datasets.items():
-            record = {
-                "dataset_id": dataset_id,
-                **dataset_metadata(data),
-                "history_dataset_id": None,
-                "official_eligible": False,
-                "provenance_hash": None,
-                "published_at": None,
-                "created_at": None,
-            }
-            records.append(record)
+            records.append(
+                {
+                    "dataset_id": dataset_id,
+                    "metadata": dataset_metadata(data),
+                    "month": None,
+                    "history_dataset_id": None,
+                    "official_eligible": False,
+                    "provenance_hash": None,
+                    "published_at": None,
+                    "created_at": None,
+                }
+            )
         symbol = filters.get("symbol")
         if symbol:
-            records = [r for r in records if r.get("symbol") == symbol.upper()]
+            records = [
+                r for r in records if r["metadata"].get("symbol") == symbol.upper()
+            ]
         month = filters.get("month")
         if month:
             records = [r for r in records if r.get("month") == month]
