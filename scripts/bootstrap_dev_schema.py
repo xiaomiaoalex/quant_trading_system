@@ -28,6 +28,29 @@ DROP TABLE IF EXISTS trading_order_projection, trading_schema_migrations,
 """
 DROP_RESEARCH = "DROP SCHEMA IF EXISTS research CASCADE;"
 
+LIVE_LEASES = """
+    SELECT scope, owner, expires_at FROM trading_runtime_leases
+    WHERE expires_at >= clock_timestamp()
+    ORDER BY scope
+"""
+
+
+async def ensure_no_live_runtime(conn) -> None:
+    """Refuse to destroy the schema while an execution process still holds the account.
+
+    Dropping the tables under a live runtime makes it replay a full day of venue
+    fills into an empty account, which is unrecoverable without operator work.
+    """
+    if not await conn.fetchval("SELECT to_regclass('trading_runtime_leases') IS NOT NULL"):
+        return
+    rows = await conn.fetch(LIVE_LEASES)
+    if rows:
+        owners = ", ".join(f"{row['scope']}={row['owner']}" for row in rows)
+        raise SystemExit(
+            f"refusing to drop the development schema while a runtime holds the lease: {owners}. "
+            "Stop the execution runtime first."
+        )
+
 
 async def bootstrap(target: str, drop: bool, rebuild_account: str | None = None) -> None:
     if target != "dev":
@@ -38,6 +61,7 @@ async def bootstrap(target: str, drop: bool, rebuild_account: str | None = None)
     try:
         async with pool.acquire() as conn:
             if drop:
+                await ensure_no_live_runtime(conn)
                 await conn.execute(DROP_TRADING)
                 await conn.execute(DROP_RESEARCH)
                 print("dropped development trading/research schema")

@@ -90,8 +90,12 @@
 - **blocked：真实 testnet 覆盖证明与 E2E。** 证明器尚未对真实 Binance 账户运行；
   真实环境的分页上限、权重、符号范围与交易所迟到写入仍需实测。`QTS_SYMBOLS` 必须覆盖
   策略实际交易的每个 symbol，否则证明范围不完整。
-- **blocked：24h 观察与主动重连/重启记录。** 本地观察进程仍在运行，尚未达到24h；
-  未执行并保存主动重连、执行进程重启、真实成交/撤单的完整演练记录，不能标通过。
+- **blocked：24h 观察与主动重连/重启记录。** 2026-10-30 22:17 至 10-31 13:48 的窗口只覆盖
+  15.5h 即在账户阻塞后随观察进程一起中断，未达到24h；`active_reconnect` marker 从未写入
+  （重连确实发生过，但没有留下可复查标记），最终门禁为
+  `MISSING_MARKER:active_reconnect`、`NOT_READY_AT_END`、`WINDOW_SHORTER_THAN_MIN`，不能标通过。
+  该窗口暴露的成交重放假冲突已修复（见 `docs/INTERFACE_CONTRACTS.md` 成交重放约定），
+  修复本身不能替代重跑窗口。
 - 预热默认长度0只表示“不额外加长”；有状态插件必须声明 `warmup_events`（或配置
   `QTS_STRATEGY_WARMUP_EVENTS`），否则以 `STRATEGY_WARMUP_NOT_CONFIGURED` 阻断。
   预热窗口的重新采集仅在真实 testnet 上跑过一次回放路径，尚未做长周期实盘式验证。

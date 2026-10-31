@@ -47,6 +47,22 @@ def _canonical(value: Any) -> str:
     return json.dumps(json_value(value), sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+LOCAL_EXECUTION_FLAGS = frozenset({"applied", "in_opening"})
+
+
+def _execution_identity(value: dict[str, Any]) -> str:
+    """Canonical execution fact without local bookkeeping flags.
+
+    ``applied`` records whether this process has already booked the fill and
+    ``in_opening`` whether the opening balance already absorbed it. Both are
+    local state, not exchange evidence; comparing them would turn every
+    replayed fill into a false ``EXECUTION_KEY_CONFLICT``.
+    """
+    return _canonical(
+        {key: item for key, item in value.items() if key not in LOCAL_EXECUTION_FLAGS}
+    )
+
+
 def _place_payload(command: PlaceOrderCommand) -> dict[str, Any]:
     # decision_id is tracing metadata, not an economic order parameter.
     return {
@@ -326,7 +342,7 @@ class TradingService:
             key = execution.key
             existing = state.executions.get(key)
             if existing is not None:
-                if _canonical(existing) != _canonical(execution.content):
+                if _execution_identity(existing) != _canonical(execution.content):
                     self._add_unresolved(
                         state,
                         "EXECUTION_KEY_CONFLICT",
@@ -342,8 +358,15 @@ class TradingService:
                         source="reconciliation",
                     )
                     outcome = "conflict"
-                else:
+                elif existing.get("applied") is not False:
                     outcome = "duplicate"
+                else:
+                    # The fill was stored before its order was known. Now that the
+                    # order exists it can be booked instead of staying an orphan.
+                    rebooked = self._rebook_stored_execution(state, execution, source="exchange")
+                    if rebooked == "booked":
+                        self._post_execution(state, execution)
+                    outcome = "applied" if rebooked == "booked" else rebooked
             else:
                 order = state.orders.get(execution.cl_ord_id)
                 if order is None:
@@ -368,46 +391,16 @@ class TradingService:
                         order.apply(execution)
                     except Conflict as exc:
                         state.executions[key] = dict(execution.content, applied=False)
-                        self._add_unresolved(
-                            state,
-                            "EXECUTION_QUANTITY_CONFLICT",
-                            {
-                                "execution_key": key,
-                                "cl_ord_id": execution.cl_ord_id,
-                                "reason": str(exc),
-                            },
-                        )
-                        self._emit(
-                            state,
-                            "reconciliation.conflict",
-                            execution.cl_ord_id,
-                            execution.exec_id,
-                            {"execution_key": key, "code": "EXECUTION_QUANTITY_CONFLICT"},
-                            self.clock(),
-                            source="reconciliation",
-                        )
+                        self._record_quantity_conflict(state, execution, exc)
                         outcome = "conflict"
                     else:
-                        self._apply_ledger(state, order.command, execution)
-                        self._apply_position(state, order.command, execution)
-                        self._release_hold(state, order.command, execution, execution.cl_ord_id)
-                        state.executions[key] = execution.content
-                        self._emit(
+                        self._book_execution(
                             state,
-                            "execution.booked",
-                            execution.cl_ord_id,
-                            execution.exec_id,
-                            {
-                                "execution_key": key,
-                                "qty": execution.qty,
-                                "price": execution.price,
-                                "fee": execution.fee,
-                                "fee_asset": execution.fee_asset,
-                            },
+                            order,
+                            execution,
                             execution.occurred_at_ms or self.clock(),
                             source="exchange",
                         )
-                        self._reconcile_order_evidence(state)
                         self._post_execution(state, execution)
             self._refresh_status(state)
 
@@ -850,6 +843,168 @@ class TradingService:
                     order.status = "FILLED"
                 self._release_remaining_hold(state, order.cl_ord_id)
 
+    def _book_execution(
+        self,
+        state: AccountState,
+        order: OrderAggregate,
+        execution: Execution,
+        occurred_at_ms: int,
+        source: str,
+    ) -> None:
+        """Book a fill whose order aggregate already accepted it."""
+        first_entry = len(state.ledger)
+        self._apply_ledger(state, order.command, execution)
+        self._apply_position(state, order.command, execution)
+        self._release_hold(state, order.command, execution, execution.cl_ord_id)
+        self._offset_opening_balances(state, execution, state.ledger[first_entry:])
+        state.executions[execution.key] = execution.content
+        self._emit(
+            state,
+            "execution.booked",
+            execution.cl_ord_id,
+            execution.exec_id,
+            {
+                "execution_key": execution.key,
+                "qty": execution.qty,
+                "price": execution.price,
+                "fee": execution.fee,
+                "fee_asset": execution.fee_asset,
+            },
+            occurred_at_ms,
+            source=source,
+        )
+        self._reconcile_order_evidence(state)
+        self._refresh_unbooked_execution_evidence(state)
+
+    def _offset_opening_balances(
+        self,
+        state: AccountState,
+        execution: Execution,
+        booked_entries: list[dict[str, Any]],
+    ) -> None:
+        """A fill that predates the opening snapshot is already inside that snapshot.
+
+        Booking it later would count the same movement twice, so the opening
+        residual is reduced by an explicit compensating entry instead of being
+        rewritten. Fills that happened after the opening snapshot are unaffected.
+        """
+        stored = state.executions.get(execution.key) or {}
+        if stored.get("in_opening") is not True:
+            return
+        deltas: dict[str, Decimal] = {}
+        for entry in booked_entries:
+            asset = entry["asset"]
+            deltas[asset] = deltas.get(asset, Decimal(0)) + Decimal(entry["delta"])
+        for asset in sorted(deltas):
+            delta = deltas[asset]
+            if delta == 0:
+                continue
+            self._ledger_entry(
+                state,
+                execution,
+                f"opening_offset:{asset}",
+                asset,
+                -delta,
+                "opening_balance",
+            )
+
+    def _rebook_stored_execution(
+        self,
+        state: AccountState,
+        execution: Execution,
+        venue_orders: dict[str, Any] | None = None,
+        source: str = "exchange",
+    ) -> str:
+        """Book a stored-but-unapplied fill once its order is known.
+
+        Returns one of ``booked``, ``unknown`` (still no order) or ``conflict``.
+        """
+        order = state.orders.get(execution.cl_ord_id)
+        if order is None and venue_orders is not None:
+            order = self._adopt_venue_order(state, venue_orders, execution.cl_ord_id)
+        if order is None:
+            return "unknown"
+        try:
+            order.apply(execution)
+        except Conflict as exc:
+            self._record_quantity_conflict(state, execution, exc)
+            return "conflict"
+        self._book_execution(
+            state,
+            order,
+            execution,
+            execution.occurred_at_ms or self.clock(),
+            source=source,
+        )
+        return "booked"
+
+    def _record_quantity_conflict(
+        self, state: AccountState, execution: Execution, exc: Conflict
+    ) -> None:
+        already_raised = any(
+            entry["code"] == "EXECUTION_QUANTITY_CONFLICT"
+            for entry in state.reconciliation.get("unresolved", [])
+        )
+        if already_raised:
+            return
+        self._add_unresolved(
+            state,
+            "EXECUTION_QUANTITY_CONFLICT",
+            {
+                "execution_key": execution.key,
+                "cl_ord_id": execution.cl_ord_id,
+                "reason": str(exc),
+            },
+        )
+        self._emit(
+            state,
+            "reconciliation.conflict",
+            execution.cl_ord_id,
+            execution.exec_id,
+            {"execution_key": execution.key, "code": "EXECUTION_QUANTITY_CONFLICT"},
+            self.clock(),
+            source="reconciliation",
+        )
+
+    @staticmethod
+    def _is_marker_only_conflict(entry: dict[str, Any]) -> bool:
+        detail = entry.get("detail") or {}
+        existing = detail.get("existing")
+        incoming = detail.get("incoming")
+        if not isinstance(existing, dict) or not isinstance(incoming, dict):
+            return False
+        return _execution_identity(existing) == _canonical(incoming)
+
+    @staticmethod
+    def _execution_from_content(content: dict[str, Any]) -> Execution:
+        return Execution(
+            account_id=content["account_id"],
+            cl_ord_id=content["cl_ord_id"],
+            symbol=content["symbol"],
+            exec_id=content["exec_id"],
+            qty=Decimal(str(content["qty"])),
+            price=Decimal(str(content["price"])),
+            fee=Decimal(str(content.get("fee", "0"))),
+            fee_asset=content.get("fee_asset", ""),
+            occurred_at_ms=int(content.get("occurred_at_ms") or 0),
+            venue=content.get("venue", "binance_spot"),
+        )
+
+    def _refresh_unbooked_execution_evidence(self, state: AccountState) -> None:
+        """UNKNOWN_EXECUTION is derived from fills still waiting for their order."""
+        self._resolve_unresolved(state, "UNKNOWN_EXECUTION")
+        for key, content in state.executions.items():
+            if content.get("applied") is not False:
+                continue
+            if content.get("cl_ord_id") in state.orders:
+                continue
+            self._add_unresolved(
+                state,
+                "UNKNOWN_EXECUTION",
+                {"execution_key": key, "cl_ord_id": content["cl_ord_id"]},
+            )
+            break
+
     def _post_execution(self, state: AccountState, execution: Execution) -> None:
         """Post-write invariant check. A failure rolls the whole account transaction back."""
         key = execution.key
@@ -870,15 +1025,23 @@ class TradingService:
         open_ids = {observation.cl_ord_id for observation in snapshot.open_orders}
         venue_orders = {order.cl_ord_id: order for order in snapshot.venue_orders}
 
+        seen_execution_keys: set[str] = set()
         for execution in snapshot.executions:
             key = execution.key
+            seen_execution_keys.add(key)
             existing = state.executions.get(key)
             if existing is not None:
-                if _canonical(existing) != _canonical(execution.content):
+                if _execution_identity(existing) != _canonical(execution.content):
                     self._add_unresolved(
                         state,
                         "EXECUTION_KEY_CONFLICT",
                         {"existing": existing, "incoming": execution.content},
+                    )
+                elif existing.get("applied") is False:
+                    # Stored before the order was known; the snapshot may now
+                    # prove the order and let the fill be booked.
+                    self._rebook_stored_execution(
+                        state, execution, venue_orders, source="rest_alignment"
                     )
                 continue
             order = state.orders.get(execution.cl_ord_id)
@@ -893,23 +1056,23 @@ class TradingService:
                     )
                     continue
             order.apply(execution)
-            self._apply_ledger(state, order.command, execution)
-            self._apply_position(state, order.command, execution)
-            self._release_hold(state, order.command, execution, execution.cl_ord_id)
-            state.executions[key] = execution.content
-            self._emit(
+            self._book_execution(
                 state,
-                "execution.booked",
-                execution.cl_ord_id,
-                execution.exec_id,
-                {
-                    "execution_key": key,
-                    "qty": execution.qty,
-                    "price": execution.price,
-                    "fee": execution.fee,
-                    "fee_asset": execution.fee_asset,
-                },
+                order,
+                execution,
                 execution.occurred_at_ms or now,
+                source="rest_alignment",
+            )
+
+        # Fills older than the venue lookback never come back in a snapshot; the
+        # durable local record is the only place that can settle them.
+        for key, content in list(state.executions.items()):
+            if key in seen_execution_keys or content.get("applied") is not False:
+                continue
+            self._rebook_stored_execution(
+                state,
+                self._execution_from_content(content),
+                venue_orders,
                 source="rest_alignment",
             )
 
@@ -943,9 +1106,21 @@ class TradingService:
                         }
                     )
                 continue
-            if code in PERSISTENT_DIFFERENCES or code == "FILL_OBSERVATION_MISMATCH":
+            if code == "UNKNOWN_EXECUTION":
+                # Derived from the stored fills, rebuilt below.
+                continue
+            if code == "EXECUTION_KEY_CONFLICT" and self._is_marker_only_conflict(entry):
+                # Recorded by an older build that compared the local `applied`
+                # marker as if it were exchange evidence. The facts are equal.
+                continue
+            if (
+                code in PERSISTENT_DIFFERENCES
+                or code == "FILL_OBSERVATION_MISMATCH"
+                or code == "EXECUTION_QUANTITY_CONFLICT"
+            ):
                 kept.append(entry)
         state.reconciliation["unresolved"] = kept
+        self._refresh_unbooked_execution_evidence(state)
 
         for observation in snapshot.open_orders:
             order = state.orders.get(observation.cl_ord_id)
@@ -1188,6 +1363,11 @@ class TradingService:
         Whatever the venue already held cannot be attributed to a fill, so it
         is booked as an explicit opening balance instead of being hidden.
         """
+        for content in state.executions.values():
+            if content.get("applied") is False:
+                # This fill is not explained by the ledger yet, so the venue
+                # balances about to become the opening state already include it.
+                content["in_opening"] = True
         assets = set(computed) | set(snapshot.balances)
         for asset in sorted(assets):
             venue = snapshot.balances.get(asset, Decimal(0))

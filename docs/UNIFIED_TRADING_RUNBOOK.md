@@ -227,13 +227,22 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 
 最终汇总门禁要求 `runtime_restart` 和 `active_reconnect` 两个 marker 的时间戳均在首末采样之间；
 marker 的 `detail` 应指向可复查的动作/恢复证据，不能仅凭标记声称动作已完成。
+重启可以写成一条 `runtime_restart`，也可以写成 `runtime_restart_start` + `runtime_restart_end`
+成对记录；只写 `runtime_restart_start` 不算完成重启。`active_reconnect` 必须在重连发生时
+当场记录，事后凭日志补记不算数。
 损坏 JSON、无效行或乱序/重复采样时间戳使门禁失败。相邻采样最大间隔默认 180 秒，
 可按实际采样计划显式使用 `--max-gap-seconds` 调整，输出同时记录实际和允许间隔；
 不得用仅有首末两个样本的时间跨度冒充连续观察。`parse_errors > 0` 不可通过。
 
 运行期注意：
 
+- **观察窗口进行中禁止重建开发库 schema。** `bootstrap_dev_schema.py --drop` 会删除
+  `trading_accounts`，运行中的 runtime 会把窗口内全部历史成交当作新事实重放；脚本现在会在
+  发现未过期 `trading_runtime_leases` 租约时拒绝执行。需要重建时先停 runtime，再执行 bootstrap，
+  最后重新开始窗口计时。
 - 新 runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整账户快照；撤单/成交终态来自快照中的本系统订单观测，不靠猜测。
+- 私有流可能先于本地订单聚合到达；这类成交先以未入账状态保留，订单被 REST 领养后自动补记，
+  不会因重复投递变成 `EXECUTION_KEY_CONFLICT`。内容真正不同的同 `exec_id` 成交仍然阻断。
 - 交易所规则（step/tick/min notional/quote precision）在 Adapter 边界归一化；MARKET BUY 以 quote 金额结算，成交基础数量可能与请求数量不同，只要成交事实可对上账即视为完整。
 
 ### 5.3 本地验证产物（`artifacts/` 不提交）
@@ -243,7 +252,7 @@ marker 的 `detail` 应指向可复查的动作/恢复证据，不能仅凭标�
 | `artifacts/e2e_evidence_final.json` | 首次完整沙箱链路：登录/健康/LIMIT 挂单/撤单/订单转 `CANCELLED`/MARKET 成交/账务结算/账本/主动重连 |
 | `artifacts/e2e_evidence_window.json` | 观察窗口内、执行进程重启后的同一链路复验 |
 | `artifacts/observation.jsonl` | 24h 观察采样（每 20s 一条；含 2 条重启停机 `ConnectError`、READY 切换和 markers） |
-| `artifacts/observation_summary_partial.json` | 当前部分窗口汇总；`blockers=[]` |
+| `artifacts/observation_summary_partial.json` | 8.8h 部分窗口、以 `--min-hours 8` 生成的中间汇总；不是 24h 门禁结论，不能用作验收证据 |
 | `artifacts/observation_attempt1.jsonl` | 第一次尝试（本地密码未跨重启复用导致 observer 401），保留用于审计 |
 
 24h 结束后运行最终门禁：
