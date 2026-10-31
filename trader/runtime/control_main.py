@@ -11,9 +11,12 @@ from dataclasses import replace
 
 import uvicorn
 
+from trader.adapters.persistence.history_dataset_store import HistoryDatasetStore
+from trader.adapters.persistence.research_history_bridge_store import ResearchHistoryBridgeStore
 from trader.api.auth import AuthSettings, PostgresSessionStore
 from trader.api.routes.sse import get_sse_manager
 from trader.api.trading_app import create_trading_app
+from trader.services.history_data_ingestion import HistoryIngestionService
 from trader.trading.jobs import BacktestApplication, PostgresResearchStore
 from trader.trading.models import NotReady
 from trader.trading.pg import create_pool
@@ -94,6 +97,7 @@ class QueuedTradingControl:
 async def lifespan(app):
     pool = None
     task = None
+    history_store = None
     try:
         pool = await create_pool()
         store = PostgresTradingStore(pool)
@@ -119,7 +123,40 @@ async def lifespan(app):
         app.state.readiness_provider = readiness
         app.state.sessions = sessions
         app.state.research_store = research
-        app.state.research_application = BacktestApplication(research)
+
+        # 历史归档：Control API 只提供接口与资格校验，导入由独立 worker 进程执行。
+        try:
+            history_store = HistoryDatasetStore()
+            await history_store.connect()
+            bridge = ResearchHistoryBridgeStore(storage=history_store.storage)
+            app.state.history_service = HistoryIngestionService(
+                store=history_store,
+                bridge_store=bridge,
+            )
+
+            async def dataset_eligible(dataset_id: str) -> bool:
+                """官方资格来自可信关联 + 已发布的历史数据集，绝不只看 source 字符串。"""
+                link = await bridge.find_link_by_research_dataset(dataset_id)
+                if not link or not link.get("official_eligible"):
+                    return False
+                history_dataset_id = link.get("history_dataset_id")
+                if not history_dataset_id:
+                    return False
+                row = await history_store.get_dataset(history_dataset_id)
+                if row is None:
+                    return False
+                return (
+                    row.get("status") == "PUBLISHED"
+                    and bool(row.get("persistence_ok"))
+                    and bool(row.get("backtest_eligible"))
+                )
+
+            app.state.research_application = BacktestApplication(
+                research, eligibility=dataset_eligible
+            )
+        except Exception:
+            app.state.history_service = None
+            app.state.research_application = BacktestApplication(research)
 
         async def notify(event):
             channel = (
@@ -148,6 +185,9 @@ async def lifespan(app):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        if history_store is not None:
+            with contextlib.suppress(Exception):
+                await history_store.disconnect()
         if pool:
             await pool.close()
 

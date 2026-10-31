@@ -237,6 +237,7 @@ interface HistoryJob {
   status: HistoryJobStatus
   stage: string            // QUEUED/DOWNLOAD/VERIFY/IMPORT/PUBLISH/FAILED
   dataset_id?: string | null
+  research_dataset_id?: string | null  // 发布后指向 Research 平面 ds_*
   feature_version?: string | null
   rows_processed: number   // 实际处理行数
   bytes_downloaded: number // 实际下载字节数
@@ -272,6 +273,7 @@ interface HistoryDataset {
   status: HistoryDatasetStatus
   persistence_ok: boolean
   backtest_eligible: boolean
+  research_dataset_id?: string | null  // 对应 Research 平面 ds_*
   created_at?: string | null
   published_at?: string | null
 }
@@ -285,6 +287,152 @@ interval?: string | null    // 历史数据集固定 '1m'
 ```
 
 `start_ts_ms` / `end_ts_ms` 变为可选：提供 `dataset_id` 时省略即取整月区间。
+
+## 5.2 Research 数据集 / 已安装策略 / 事件回测模型
+
+运行时由 `src/contracts/research.ts` 的 Zod schema 校验；金额与指标均为十进制字符串。
+
+```typescript
+type ResearchBacktestStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+type ResearchBacktestModel = 'event_runtime' | 'legacy'
+
+interface ResearchDatasetSummary {
+  dataset_id: string
+  symbol: string | null
+  interval: string | null
+  month: string | null
+  venue: string | null
+  market_type: string | null
+  base_asset: string | null
+  quote_asset: string | null
+  source: string | null
+  version: string | null
+  bar_count: number | null
+  coverage_start_ms: number | null
+  coverage_end_ms: number | null
+  complete: boolean
+  history_dataset_id: string | null
+  official_eligible: boolean
+  archive_sha256: string | null
+  official_sha256: string | null
+  source_url: string | null
+  checksum_url: string | null
+  provenance_hash: string | null
+  conversion_version: string | null
+  published_at: string | null
+  created_at: string | null
+}
+
+interface ResearchStrategyParam {
+  name: string
+  type: string
+  default: string | null
+  required: boolean
+}
+
+interface ResearchStrategySummary {
+  module_path: string     // trader.strategies.*
+  strategy_id: string
+  name: string
+  version: string
+  code_hash: string
+  params: ResearchStrategyParam[]
+}
+
+interface ResearchBacktestManifest {
+  dataset_ids: string[]   // 单次只允许一个 ds_*（单币、单月）
+  strategy: { module_path: string; params?: Record<string, unknown> }
+  initial_cash: string
+  fee_bps: string
+  slippage_bps: string
+  engine: 'event_runtime'
+  purpose: 'research_screening'
+}
+
+interface ResearchBacktestRun {
+  run_id: string
+  status: ResearchBacktestStatus
+  model: ResearchBacktestModel
+  manifest?: Record<string, unknown> | null
+  result?: ResearchBacktestResult | null
+  error?: string | null
+  created_at?: string | number | null
+  updated_at?: string | number | null
+}
+
+interface ResearchBacktestResult {
+  engine?: string
+  runtime_version?: string
+  admissible?: boolean
+  manifest_hash?: string
+  runtime_manifest_hash?: string
+  limitations?: string[]
+  net_value?: string
+  total_return?: string
+  total_fees?: string
+  max_drawdown?: string
+  max_drawdown_pct?: string
+  max_drawdown_amount?: string
+  win_rate?: string
+  equity_curve?: string[]
+  equity_points?: Array<{ at_ms: number; equity: string }>
+  positions?: Record<string, string>
+  fills?: Array<Record<string, unknown>>
+  rejections?: Record<string, number>
+  execution_rejections?: Record<string, number>
+  closed_trades?: string[]
+  errors?: string[]
+  report?: ResearchBacktestReport
+}
+
+interface ResearchBacktestReport {
+  datasets: Array<{
+    dataset_id: string
+    identity: Record<string, unknown>
+    quality: Record<string, unknown>
+  }>
+  provenance: Record<string, string>
+  strategy: {
+    module_path: string
+    params: Record<string, unknown>
+    version: string | null
+    code_hash: string | null
+  }
+  runtime: {
+    engine: string
+    runtime_version: string
+    manifest_hash: string
+    runtime_manifest_hash: string
+  }
+  costs: {
+    initial_cash: string
+    fee_bps: string
+    slippage_bps: string
+    total_fees: string
+  }
+  performance: {
+    net_value: string
+    total_return: string
+    max_drawdown_pct: string
+    max_drawdown_amount: string
+    win_rate: string
+  }
+  executions: {
+    fill_count: number
+    rejections: Record<string, number>
+    execution_rejections: Record<string, number>
+  }
+  limitations: string[]
+}
+```
+
+补充约定：
+
+- `report.datasets[].identity` 来自冻结数据集，除字符串身份字段外还包含 `schema_version` /
+  `interval_ms` / `time_semantics` 等字段，前端按宽松 record 渲染。
+- `legacy` 运行的 `result` 结构与事件运行不同，不能作为准入证据；前端只显示「缺少事件回测报告」提示。
+- `created_at` / `updated_at` 在 PostgreSQL 部署下为 ISO 字符串；内存 store 返回单调时钟数字，
+  展示层统一格式化。
 
 ## 6. 通用模型
 

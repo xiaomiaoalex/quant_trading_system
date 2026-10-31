@@ -541,6 +541,7 @@ class HistoryJobResponse(BaseModel):
     stage: str
     dataset_id: Optional[str] = None
     feature_version: Optional[str] = None
+    research_dataset_id: Optional[str] = None
     rows_processed: int = 0
     bytes_downloaded: int = 0
     error_code: Optional[str] = None
@@ -577,6 +578,7 @@ class HistoryDatasetResponse(BaseModel):
     status: HistoryDatasetStatus = "PENDING"
     persistence_ok: bool = False
     backtest_eligible: bool = False
+    research_dataset_id: Optional[str] = None
     created_at: Optional[str] = None
     published_at: Optional[str] = None
 

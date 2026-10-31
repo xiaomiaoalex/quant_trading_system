@@ -94,3 +94,27 @@ def freeze_dataset(identity: dict, bars: list[dict]) -> dict:
             "coverage_end_ms": normalized[-1]["close_time_ms"],
         },
     }
+
+
+def dataset_metadata(document: dict) -> dict:
+    """Catalog metadata of a frozen dataset.
+
+    Never includes the bar payload: the catalog must stay small enough to be
+    listed without loading every dataset body.
+    """
+    identity = document.get("identity") or {}
+    quality = document.get("quality") or {}
+    return {
+        "venue": identity.get("venue"),
+        "market_type": identity.get("market_type"),
+        "symbol": identity.get("symbol"),
+        "base_asset": identity.get("base_asset"),
+        "quote_asset": identity.get("quote_asset"),
+        "interval": identity.get("interval"),
+        "source": identity.get("source"),
+        "version": identity.get("version"),
+        "bar_count": quality.get("bar_count"),
+        "coverage_start_ms": quality.get("coverage_start_ms"),
+        "coverage_end_ms": quality.get("coverage_end_ms"),
+        "complete": bool(quality.get("complete")),
+    }

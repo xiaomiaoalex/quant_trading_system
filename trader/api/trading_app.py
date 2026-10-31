@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from trader.api.auth import AuthSettings, SessionMiddleware
-from trader.api.routes import health, research, sse, trading
+from trader.api.routes import data_history, health, research, sse, trading
 
 
 def create_trading_app(
@@ -22,6 +22,8 @@ def create_trading_app(
     readiness_provider=None,
     lifespan=None,
     include_sse: bool = False,
+    history_service=None,
+    include_history: bool = True,
 ) -> FastAPI:
     settings = auth_settings or AuthSettings()
     app = FastAPI(
@@ -37,6 +39,7 @@ def create_trading_app(
     app.state.sessions = sessions
     app.state.auth_settings = settings
     app.state.readiness_provider = readiness_provider
+    app.state.history_service = history_service
     if readiness_provider is not None:
         health.configure_trading_readiness(readiness_provider)
 
@@ -44,6 +47,8 @@ def create_trading_app(
     app.include_router(health.router)
     app.include_router(trading.router)
     app.include_router(research.router)
+    if include_history:
+        app.include_router(data_history.router)
     if include_sse:
         app.include_router(sse.router)
     return app

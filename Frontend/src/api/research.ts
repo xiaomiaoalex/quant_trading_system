@@ -1,4 +1,12 @@
+import type { z } from 'zod'
 import { APIClient } from './client'
+import {
+  ResearchBacktestEventResultSchema,
+  ResearchBacktestRunEnvelopeSchema,
+  ResearchBacktestRunListEnvelopeSchema,
+  ResearchDatasetListSchema,
+  ResearchStrategyListSchema,
+} from '@/contracts/research'
 import type {
   ActionResult,
   BinanceOHLCVIngestionRequest,
@@ -15,6 +23,11 @@ import type {
   PortfolioAutopilotSnapshot,
   PortfolioAutopilotTickRequest,
   PromotePaperResponse,
+  ResearchBacktestCreateRequest,
+  ResearchBacktestRun,
+  ResearchDatasetQuery,
+  ResearchDatasetSummary,
+  ResearchStrategySummary,
   StrategyAllocationProfile,
   StrategyAllocationProfileUpdateRequest,
   StrategyCandidate,
@@ -23,6 +36,39 @@ import type {
   StrategyCandidateDebugResponse,
   StrategyCandidateBacktestRequest,
 } from '@/types'
+
+/** 运行时契约校验：响应漂移不能被静默渲染。 */
+function parseOrThrow<T>(schema: z.ZodType<T>, payload: unknown, label: string): T {
+  const parsed = schema.safeParse(payload)
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ')
+    throw new Error(`${label} schema mismatch: ${detail}`)
+  }
+  return parsed.data
+}
+
+/**
+ * 运行记录解析：外层信封统一校验；事件运行的结果再按严格契约校验。
+ * legacy 结果结构与事件运行不同，不作为准入证据，直接丢弃。
+ */
+function parseResearchBacktestRun(raw: unknown, label: string): ResearchBacktestRun {
+  const envelope = parseOrThrow(ResearchBacktestRunEnvelopeSchema, raw, label)
+  let result: ResearchBacktestRun['result'] = null
+  if (
+    envelope.model === 'event_runtime' &&
+    envelope.result !== null &&
+    envelope.result !== undefined
+  ) {
+    result = parseOrThrow(
+      ResearchBacktestEventResultSchema,
+      envelope.result,
+      `${label} result`,
+    )
+  }
+  return { ...envelope, result }
+}
 
 export class ResearchAPI extends APIClient {
   async getDataCatalog(): Promise<DataCatalogResponse> {
@@ -106,6 +152,72 @@ export class ResearchAPI extends APIClient {
 
   async getHistoryDataset(datasetId: string): Promise<HistoryDataset> {
     return this.get<HistoryDataset>(`/v1/data/history/datasets/${datasetId}`)
+  }
+
+  // ==================== Research plane (datasets / strategies / event backtests) ====================
+
+  /** Research 数据集目录（只读元数据）。 */
+  async listResearchDatasets(params?: ResearchDatasetQuery): Promise<ResearchDatasetSummary[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.symbol) searchParams.set('symbol', params.symbol)
+    if (params?.month) searchParams.set('month', params.month)
+    if (params?.official_only !== undefined) {
+      searchParams.set('official_only', String(params.official_only))
+    }
+    if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+    if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
+    const query = searchParams.toString()
+    const raw = await this.get<unknown>(`/v1/research/datasets${query ? `?${query}` : ''}`)
+    return parseOrThrow(ResearchDatasetListSchema, raw, 'Research datasets')
+  }
+
+  /** 已安装、允许提交回测的策略。 */
+  async listResearchStrategies(): Promise<ResearchStrategySummary[]> {
+    const raw = await this.get<unknown>('/v1/research/strategies')
+    return parseOrThrow(ResearchStrategyListSchema, raw, 'Research strategies')
+  }
+
+  /** 提交事件回测（engine=event_runtime, purpose=research_screening）。 */
+  async createResearchBacktest(
+    request: ResearchBacktestCreateRequest,
+  ): Promise<ResearchBacktestRun> {
+    const raw = await this.post<unknown>('/v1/research/backtests', request)
+    return parseResearchBacktestRun(raw, 'Research backtest run')
+  }
+
+  async listResearchBacktests(params?: { limit?: number }): Promise<ResearchBacktestRun[]> {
+    const limit = params?.limit ?? 100
+    const raw = await this.get<unknown>(`/v1/research/backtests?limit=${encodeURIComponent(limit)}`)
+    const envelopes = parseOrThrow(
+      ResearchBacktestRunListEnvelopeSchema,
+      raw,
+      'Research backtest runs',
+    )
+    return envelopes.map(envelope => parseResearchBacktestRun(envelope, 'Research backtest run'))
+  }
+
+  async getResearchBacktest(runId: string): Promise<ResearchBacktestRun> {
+    const raw = await this.get<unknown>(
+      `/v1/research/backtests/${encodeURIComponent(runId)}`,
+    )
+    return parseResearchBacktestRun(raw, 'Research backtest run')
+  }
+
+  /** 重试 FAILED 运行；非 FAILED 返回 409，不存在返回 404。 */
+  async retryResearchBacktest(runId: string): Promise<ResearchBacktestRun> {
+    const raw = await this.post<unknown>(
+      `/v1/research/backtests/${encodeURIComponent(runId)}/retry`,
+      {},
+    )
+    return parseResearchBacktestRun(raw, 'Research backtest retry')
+  }
+
+  async cancelResearchBacktest(runId: string): Promise<ResearchBacktestRun> {
+    const raw = await this.post<unknown>(
+      `/v1/research/backtests/${encodeURIComponent(runId)}/cancel`,
+      {},
+    )
+    return parseResearchBacktestRun(raw, 'Research backtest cancel')
   }
 
   async listCandidates(): Promise<StrategyCandidate[]> {

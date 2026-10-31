@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,24 +27,26 @@ logger = logging.getLogger(__name__)
 # Factor Types (因子类型)
 # =============================================================================
 
+
 @dataclass
 class FactorImportance:
     """
     因子重要性
-    
+
     单个特征/因子的重要性指标
     """
+
     factor_name: str
     importance: float  # 重要性得分 (0-1)
     rank: int  # 排名 (1 = 最高)
     direction: str  # "positive" | "negative" | "neutral"
     stability: float  # 稳定性得分 (0-1)
     contribution_pct: float  # 贡献占比 (%)
-    
+
     def is_stable(self, threshold: float = 0.7) -> bool:
         """是否稳定因子"""
         return self.stability >= threshold
-    
+
     def is_positive_contributor(self) -> bool:
         """是否为正向贡献因子"""
         return self.direction == "positive"
@@ -54,9 +56,10 @@ class FactorImportance:
 class FactorReport:
     """
     因子分析报告
-    
+
     完整的因子挖掘结果
     """
+
     report_id: str
     model_version: str
     feature_version: str
@@ -68,15 +71,15 @@ class FactorReport:
     neutral_count: int
     generated_at: str
     recommendations: List[str]  # 使用建议
-    
+
     def top_n(self, n: int = 10) -> List[FactorImportance]:
         """获取 Top N 因子"""
         return self.all_factors[:n]
-    
+
     def stable_factors(self, threshold: float = 0.7) -> List[FactorImportance]:
         """获取稳定因子"""
         return [f for f in self.all_factors if f.is_stable(threshold)]
-    
+
     def positive_factors(self) -> List[FactorImportance]:
         """获取正向贡献因子"""
         return [f for f in self.all_factors if f.is_positive_contributor()]
@@ -87,6 +90,7 @@ class FactorMiningConfig:
     """
     因子挖掘配置
     """
+
     min_importance: float = 0.01  # 最小重要性阈值
     top_n: int = 20  # Top N 因子数量
     stability_window: int = 5  # 稳定性评估窗口
@@ -97,19 +101,20 @@ class FactorMiningConfig:
 # Factor Miner (因子挖掘器)
 # =============================================================================
 
+
 class QlibFactorMiner:
     """
     Qlib 因子挖掘器
-    
+
     核心功能：
     1. 从 LightGBM 模型提取特征重要性
     2. 计算因子稳定性和方向性
     3. 生成因子排名和报告
     """
-    
+
     def __init__(self, config: Optional[FactorMiningConfig] = None):
         self._config = config or FactorMiningConfig()
-    
+
     def analyze_feature_importance(
         self,
         importance_dict: Dict[str, float],
@@ -118,31 +123,27 @@ class QlibFactorMiner:
     ) -> FactorReport:
         """
         分析特征重要性并生成因子报告
-        
+
         Args:
             importance_dict: 特征重要性字典 {feature_name: importance_score}
             model_id: 模型ID (可选)
             feature_version: 特征版本 (可选)
-            
+
         Returns:
             FactorReport
         """
         logger.info(f"Analyzing {len(importance_dict)} features")
-        
+
         # 按重要性排序
-        sorted_features = sorted(
-            importance_dict.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
-        
+        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+
         total_importance = sum(importance_dict.values())
-        
+
         # 构建因子列表
         factors: List[FactorImportance] = []
         for rank, (name, importance) in enumerate(sorted_features, 1):
             contribution_pct = (importance / total_importance * 100) if total_importance > 0 else 0
-            
+
             factor = FactorImportance(
                 factor_name=name,
                 importance=importance,
@@ -152,20 +153,20 @@ class QlibFactorMiner:
                 contribution_pct=contribution_pct,
             )
             factors.append(factor)
-        
+
         # 统计方向分布
         positive_count = sum(1 for f in factors if f.direction == "positive")
         negative_count = sum(1 for f in factors if f.direction == "negative")
         neutral_count = len(factors) - positive_count - negative_count
-        
+
         # 生成建议
         recommendations = self._generate_recommendations(factors)
-        
+
         report = FactorReport(
             report_id=f"factor_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             model_version=model_id or "unknown",
             feature_version=feature_version or "unknown",
-            top_factors=factors[:self._config.top_n],
+            top_factors=factors[: self._config.top_n],
             all_factors=factors,
             total_factors=len(factors),
             positive_count=positive_count,
@@ -174,9 +175,9 @@ class QlibFactorMiner:
             generated_at=datetime.now(timezone.utc).isoformat(),
             recommendations=recommendations,
         )
-        
+
         return report
-    
+
     def _determine_direction(
         self,
         factor_name: str,
@@ -184,7 +185,7 @@ class QlibFactorMiner:
     ) -> str:
         """
         判断因子方向性
-        
+
         基于因子名称和上下文判断方向
         简化实现：实际应用中需要基于回归系数判断
         """
@@ -192,24 +193,24 @@ class QlibFactorMiner:
         # 实际上需要分析因子与标签的相关性
         positive_indicators = ("long", "buy", "up", "bull", "positive")
         negative_indicators = ("short", "sell", "down", "bear", "negative")
-        
+
         name_lower = factor_name.lower()
-        
+
         for indicator in positive_indicators:
             if indicator in name_lower:
                 return "positive"
-        
+
         for indicator in negative_indicators:
             if indicator in name_lower:
                 return "negative"
-        
+
         # 默认中性
         return "neutral"
-    
+
     def _calculate_stability(self, factor_name: str, importance: float) -> float:
         """
         计算因子稳定性
-        
+
         简化实现：基于重要性水平的稳定性估计
         实际应用中需要基于多窗口/多季节的交叉验证
         """
@@ -222,42 +223,34 @@ class QlibFactorMiner:
             return 0.5
         else:
             return 0.3
-    
+
     def _generate_recommendations(self, factors: List[FactorImportance]) -> List[str]:
         """生成使用建议"""
         recommendations = []
-        
+
         # Top 因子建议
         top_5 = factors[:5]
         if top_5:
             top_names = [f.factor_name for f in top_5]
-            recommendations.append(
-                f"Top 5 因子: {', '.join(top_names)} - 建议作为策略核心信号"
-            )
-        
+            recommendations.append(f"Top 5 因子: {', '.join(top_names)} - 建议作为策略核心信号")
+
         # 正向因子建议
         positive_factors = [f for f in factors if f.direction == "positive"]
         if positive_factors:
-            recommendations.append(
-                f"正向因子 {len(positive_factors)} 个 - 可用于构建做多信号"
-            )
-        
+            recommendations.append(f"正向因子 {len(positive_factors)} 个 - 可用于构建做多信号")
+
         # 稳定因子建议
         stable_factors = [f for f in factors if f.stability >= 0.7]
         if stable_factors:
-            recommendations.append(
-                f"稳定因子 {len(stable_factors)} 个 - 建议用于实盘推理"
-            )
-        
+            recommendations.append(f"稳定因子 {len(stable_factors)} 个 - 建议用于实盘推理")
+
         # 风险提示
         low_importance = [f for f in factors if f.importance < self._config.min_importance]
         if low_importance:
-            recommendations.append(
-                f"低重要性因子 {len(low_importance)} 个 - 建议剔除以减少噪声"
-            )
-        
+            recommendations.append(f"低重要性因子 {len(low_importance)} 个 - 建议剔除以减少噪声")
+
         return recommendations
-    
+
     def compare_factor_sets(
         self,
         report_a: FactorReport,
@@ -265,27 +258,21 @@ class QlibFactorMiner:
     ) -> Dict[str, Any]:
         """
         比较两个因子集
-        
+
         用于版本间因子稳定性分析
         """
-        common_factors = set(
-            f.factor_name for f in report_a.top_factors
-        ) & set(
+        common_factors = set(f.factor_name for f in report_a.top_factors) & set(
             f.factor_name for f in report_b.top_factors
         )
-        
-        only_in_a = set(
-            f.factor_name for f in report_a.top_factors
-        ) - set(
+
+        only_in_a = set(f.factor_name for f in report_a.top_factors) - set(
             f.factor_name for f in report_b.top_factors
         )
-        
-        only_in_b = set(
-            f.factor_name for f in report_b.top_factors
-        ) - set(
+
+        only_in_b = set(f.factor_name for f in report_b.top_factors) - set(
             f.factor_name for f in report_a.top_factors
         )
-        
+
         return {
             "common_count": len(common_factors),
             "common_factors": list(common_factors),
@@ -299,6 +286,7 @@ class QlibFactorMiner:
 # Main Entry Point (主入口 - 供 Hermes 编排调用)
 # =============================================================================
 
+
 def analyze_factor_importance(
     importance_dict: Dict[str, float],
     model_id: Optional[str] = None,
@@ -307,7 +295,7 @@ def analyze_factor_importance(
 ) -> FactorReport:
     """
     分析因子重要性的主入口函数
-    
+
     供 Hermes 编排脚本调用
     """
     miner = QlibFactorMiner(config)
@@ -316,10 +304,12 @@ def analyze_factor_importance(
         model_id=model_id,
         feature_version=feature_version,
     )
-    
-    logger.info(f"Factor analysis complete: {report.total_factors} factors, "
-                f"{report.positive_count} positive, {report.negative_count} negative")
-    
+
+    logger.info(
+        f"Factor analysis complete: {report.total_factors} factors, "
+        f"{report.positive_count} positive, {report.negative_count} negative"
+    )
+
     return report
 
 
@@ -341,18 +331,20 @@ if __name__ == "__main__":
         "HIGH": 0.03,
         "LOW": 0.02,
     }
-    
+
     report = analyze_factor_importance(
         importance_dict=sample_importance,
         model_id="m240416.abcd",
         feature_version="v1",
     )
-    
+
     print(f"Factor Report: {report.report_id}")
     print(f"Total factors: {report.total_factors}")
     print(f"Top 5 factors:")
     for factor in report.top_factors:
-        print(f"  {factor.rank}. {factor.factor_name}: {factor.importance:.4f} ({factor.contribution_pct:.1f}%)")
+        print(
+            f"  {factor.rank}. {factor.factor_name}: {factor.importance:.4f} ({factor.contribution_pct:.1f}%)"
+        )
     print(f"\nRecommendations:")
     for rec in report.recommendations:
         print(f"  - {rec}")

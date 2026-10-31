@@ -40,6 +40,26 @@ const navItems: NavItem[] = [
     ),
   },
   {
+    path: '/research/data',
+    label: 'Research Data',
+    phase: 'P1',
+    icon: (
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 7c0-1.657 3.582-3 8-3s8 1.343 8 3-3.582 3-8 3-8-1.343-8-3zm0 0v10c0 1.657 3.582 3 8 3s8-1.343 8-3V7M4 12c0 1.657 3.582 3 8 3s8-1.343 8-3" />
+      </svg>
+    ),
+  },
+  {
+    path: '/research/backtests',
+    label: 'Research BT',
+    phase: 'P1',
+    icon: (
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+  },
+  {
     path: '/strategies',
     label: 'Strategies',
     phase: 'P0',

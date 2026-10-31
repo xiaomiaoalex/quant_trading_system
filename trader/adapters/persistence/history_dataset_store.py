@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from trader.adapters.persistence.postgres import PostgreSQLStorage
 
@@ -33,6 +33,9 @@ DATASET_STATUS_PUBLISHED = "PUBLISHED"
 DATASET_STATUS_FAILED = "FAILED"
 
 _ACTIVE_STATUSES = (JOB_STATUS_QUEUED, JOB_STATUS_RUNNING)
+
+HISTORY_WORKER_LOCK_KEY = 0x51545348
+"""历史导入 worker 的数据库级独占锁（session advisory lock）。"""
 
 _JOB_UPDATABLE_COLUMNS = frozenset(
     {
@@ -65,6 +68,7 @@ class HistoryDatasetStore:
     def __init__(self, storage: Optional[PostgreSQLStorage] = None) -> None:
         self._storage = storage
         self._owns_storage = storage is None
+        self._lock_holder: Optional[Tuple[Any, Any]] = None
 
     # ==================== lifecycle ====================
 
@@ -90,6 +94,49 @@ class HistoryDatasetStore:
         if self._storage is None or not self._storage.is_connected:
             raise HistoryStoreUnavailableError("History dataset store is not connected")
         return self._storage
+
+    @property
+    def storage(self) -> Optional[PostgreSQLStorage]:
+        """底层连接（供需要同一事务的桥接存储复用）。"""
+        return self._storage
+
+    # ==================== worker ownership ====================
+
+    async def try_acquire_worker_lock(self, key: int = HISTORY_WORKER_LOCK_KEY) -> bool:
+        """尝试获取数据库级独占锁。
+
+        锁是 session 级的：持锁连接会在释放前一直占用，因此同一个数据库里
+        最多只有一个历史导入 worker 是 owner。获取失败时返回 False，调用方
+        绝不能继续执行启动恢复或领取任务。
+        """
+        storage = self._require_storage()
+        if self._lock_holder is not None:
+            return True
+        holder = storage.acquire()
+        conn = await holder.__aenter__()
+        try:
+            acquired = bool(await conn.fetchval("SELECT pg_try_advisory_lock($1)", key))
+        except Exception:
+            await holder.__aexit__(None, None, None)
+            raise
+        if not acquired:
+            await holder.__aexit__(None, None, None)
+            return False
+        self._lock_holder = (holder, conn)
+        return True
+
+    async def release_worker_lock(self, key: int = HISTORY_WORKER_LOCK_KEY) -> None:
+        """释放数据库级独占锁。"""
+        if self._lock_holder is None:
+            return
+        holder, conn = self._lock_holder
+        self._lock_holder = None
+        try:
+            await conn.execute("SELECT pg_advisory_unlock($1)", key)
+        except Exception:  # pragma: no cover - defensive
+            logger.warning("Failed to release history worker lock", exc_info=True)
+        finally:
+            await holder.__aexit__(None, None, None)
 
     # ==================== jobs ====================
 
@@ -164,7 +211,12 @@ class HistoryDatasetStore:
         storage = self._require_storage()
         async with storage.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM history_ingest_jobs WHERE job_id = $1",
+                """
+                SELECT j.*, d.research_dataset_id
+                FROM history_ingest_jobs j
+                LEFT JOIN history_datasets d ON d.dataset_id = j.dataset_id
+                WHERE j.job_id = $1
+                """,
                 job_id,
             )
             return dict(row) if row is not None else None
@@ -183,21 +235,22 @@ class HistoryDatasetStore:
         params: List[Any] = []
         if status:
             params.append(status)
-            clauses.append(f"status = ${len(params)}")
+            clauses.append(f"j.status = ${len(params)}")
         if symbol:
             params.append(symbol.upper())
-            clauses.append(f"symbol = ${len(params)}")
+            clauses.append(f"j.symbol = ${len(params)}")
         if month:
             params.append(month)
-            clauses.append(f"month = ${len(params)}")
+            clauses.append(f"j.month = ${len(params)}")
         if source:
             params.append(source)
-            clauses.append(f"source = ${len(params)}")
+            clauses.append(f"j.source = ${len(params)}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         query = (
-            "SELECT * FROM history_ingest_jobs "
-            f"{where} ORDER BY created_at DESC LIMIT ${len(params)}"
+            "SELECT j.*, d.research_dataset_id FROM history_ingest_jobs j "
+            "LEFT JOIN history_datasets d ON d.dataset_id = j.dataset_id "
+            f"{where} ORDER BY j.created_at DESC LIMIT ${len(params)}"
         )
         async with storage.acquire() as conn:
             rows = await conn.fetch(query, *params)

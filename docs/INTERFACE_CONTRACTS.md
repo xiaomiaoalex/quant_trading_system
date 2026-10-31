@@ -2575,8 +2575,11 @@ class ExecutionRepository:
 | `status` | `PENDING` \| `PUBLISHED` \| `FAILED` | 发布状态 |
 | `persistence_ok` | bool | FeatureStore 严格持久化是否成功 |
 | `backtest_eligible` | bool | 是否可用于回测 |
+| `research_dataset_id` | str \| null | 对应的 Research 数据集 ID（`ds_*`）；未桥接时为 null |
 
 数据集只有在**同时满足**下列条件时才可回测：`status=PUBLISHED`、`persistence_ok=true`、`backtest_eligible=true`、`gap_count=0`、`row_count=expected_points`。
+
+历史任务 `HistoryJobResponse` 同样新增可选字段 `research_dataset_id`（指向 `ds_*`），用于让前端在任务完成后直接跳转到研究数据集。
 
 ### 12.4 数据质量规则
 
@@ -2851,15 +2854,42 @@ warmup_source=None, on_block=None)`
 | 方法 | 路径 | 语义 |
 |------|------|------|
 | `POST` | `/v1/research/datasets` | 冻结数据集 |
+| `GET` | `/v1/research/datasets` | **数据集目录**（只含元数据，不含行情载荷） |
 | `GET` | `/v1/research/datasets/{dataset_id}` | 读取冻结数据集 |
+| `GET` | `/v1/research/strategies` | 列出允许提交回测的已安装策略及参数 |
 | `POST` | `/v1/research/backtests` | 提交冻结 manifest，返回持久 `run_id` |
 | `GET` | `/v1/research/backtests` | 列出任务 |
 | `GET` | `/v1/research/backtests/{run_id}` | 查询状态/结果 |
 | `POST` | `/v1/research/backtests/{run_id}/cancel` | 请求取消 |
+| `POST` | `/v1/research/backtests/{run_id}/retry` | 显式重试 `FAILED` 任务，返回 202 |
 
 - Worker 每次 claim 增加 `attempt` 与 `fencing_token`；`finish` 必须匹配租约和 token。
-- 失败任务保留冻结 manifest，可重新 claim 全量重跑；取消在 heartbeat 生效。
+- **`FAILED` 是终态**：claim 只领取 `QUEUED` 或租约过期的 `RUNNING`，绝不自动重跑确定性失败。
+  重试必须由调用方显式触发（`POST .../retry`），且保留 `run_id`、冻结 manifest 与 manifest 哈希，
+  `attempt` 累计增长；并发重试通过 `status='FAILED'` 的 CAS 保证幂等。
+- 非 `FAILED` 状态调用 retry 返回 409；不存在的 `run_id` 返回 404。
 - 旧租约提交必须失败；结果只发布一次。
+
+### 14.3.1 数据集目录
+
+`GET /v1/research/datasets` 只返回元数据（`dataset_id`、symbol/interval/month、bar 数、覆盖窗口、
+质量标记、provenance 摘要、是否官方可用），**绝不加载行情载荷**。
+
+| 参数 | 说明 |
+|------|------|
+| `symbol` | 按币对过滤 |
+| `month` | 按 `YYYY-MM` 过滤 |
+| `official_only` | 只返回具备可信发布关联的数据集 |
+| `limit` / `offset` | 分页，`limit` 默认 50、最大 200 |
+
+### 14.3.2 提交准入
+
+- `dataset_ids` 必须是 `ds_*` 且已存在。
+- `engine` 只允许 `event_runtime`；`purpose` 允许 `research_screening` 与 `admission_evidence`。
+  提交非事件引擎返回 422。旧 vectorbt 通路（`POST /v1/backtests`）保持不变。
+- 「官方可用」只来自**可信关联**（`research.dataset_links` + 已 `PUBLISHED` 的历史数据集），
+  绝不依据调用方声明的 `source` 字符串。提交时校验发布状态与 provenance，
+  执行前由 `ResearchExecutor` 复核冻结的 provenance 哈希与内容哈希。
 
 ### 14.4 回测报告模型标记
 
@@ -2922,3 +2952,91 @@ warmup_source=None, on_block=None)`
 - 回归用例：`trader/tests/test_execution_projection_cursor.py::test_projection_cursor_never_touches_postgres_when_pinned_to_memory`
   ——把 PG 探测伪造成「可用」，并把 `PostgreSQLStorage` 替换为「一旦构造就失败」的桩，
   以此证明内存仓库在任何环境下都不会触碰真实库。
+
+---
+
+## 16. 历史归档 → Research 桥接契约
+
+本节描述「币安公开归档 → Research 不可变数据集 → 事件回测」这条通路的接口契约。
+旧的手动导入（`POST /v1/data/ohlcv/import`）与旧的 vectorbt 回测路径保持不变。
+
+### 16.1 投影规则（纯函数）
+
+`trader.trading.research_bridge` 提供归档到 `BAR_V1` 的确定性映射，无 IO、无时钟：
+
+| 规则 | 说明 |
+|------|------|
+| 时间单位 | 一律整数毫秒，禁止浮点时间戳 |
+| `close_time_ms` | `open_time_ms + 60000` |
+| `available_at_ms` | 等于 `close_time_ms`（bar 在收盘后才可见、才可成交） |
+| OHLCV | 十进制字符串，保留精度，禁止 float |
+| 连续性 | 相邻 bar 必须恰好相差 60000ms，否则拒绝 |
+| `identity.version` | `<转换版本>_<归档 sha256[:12]>`，**不使用任务/作业随机 ID** |
+| `identity.venue` / `market_type` | `BINANCE` / `SPOT` |
+| `identity.base_asset` / `quote_asset` | 由白名单币对显式映射（`BTCUSDT` → `BTC`/`USDT`，`ETHUSDT` → `ETH`/`USDT`） |
+| `identity.source` | `binance_vision`（**只是声明，不构成官方资格**） |
+
+同一份归档字节永远产生同一个 `dataset_id`（内容哈希）。
+
+### 16.2 provenance 关联表
+
+`research.dataset_links` 记录「历史数据集 ↔ Research 数据集」的来源证据，
+**不重复存行情**：
+
+| 字段 | 说明 |
+|------|------|
+| `research_dataset_id` | 主键，`ds_*` |
+| `history_dataset_id` | 唯一，`hds_*` |
+| `source_url` / `checksum_url` | 官方来源地址 |
+| `official_sha256` / `archive_sha256` | 官方 CHECKSUM 摘要 / 实际计算摘要 |
+| `archive_version` | 归档修订版本号 |
+| `feature_version` | 对应的 FeatureStore 版本 |
+| `symbol` / `interval` / `month` | 定位信息 |
+| `coverage_start_ms` / `coverage_end_ms` | UTC 覆盖窗口 `[start, end)` |
+| `bar_count` | bar 数量 |
+| `conversion_version` | 投影规则版本 |
+| `quality` | 质量摘要（JSONB） |
+| `provenance_hash` | 上述字段的规范 JSON SHA-256 |
+| `official_eligible` | 由桥接事务在发布时写入 |
+
+### 16.3 原子发布
+
+归档导入的发布步骤在**同一个 PostgreSQL 事务**内完成：
+
+1. 写入 `research.datasets`（数据集 + 目录元数据）
+2. 写入 `research.dataset_links`（provenance 关联）
+3. 更新 `history_datasets` → `PUBLISHED`、`persistence_ok`、`backtest_eligible`、`research_dataset_id`
+4. 更新 `history_ingest_jobs` → `SUCCEEDED`
+
+任一步失败整体回滚：不会出现「Research 有数据但历史任务未完成」这类半成品被下游选中。
+重复发布同一份冻结输入是幂等的，不会产生第二个数据集。
+
+### 16.4 导入拓扑
+
+- 历史导入在**独立进程**运行：`python -m trader.runtime.history_worker_main`。
+- 进程通过 PostgreSQL **session advisory lock** 保证同一个数据库只有一个 owner；
+  只有 owner 才执行启动恢复（把残留 `RUNNING` 任务标记为 `FAILED` / `SERVICE_INTERRUPTED`）。
+  启动恢复失败会重试，**恢复成功之前不领取任何任务**。
+- 旧 API 的内嵌导入 worker 默认关闭（`QTS_ENABLE_EMBEDDED_HISTORY_WORKER=1` 可显式打开）。
+- 中断的任务标记为 `FAILED`，由用户显式重试。
+
+### 16.5 补录命令
+
+`python scripts/backfill_research_dataset_links.py [--apply]` 为「桥接之前就已发布」的历史数据集
+补登 Research 数据集与 provenance 关联。
+
+- 默认 **dry-run**，不写库。
+- 优先使用本地 ZIP，重新校验 SHA-256 与整月质量。
+- 本地缺失时从官方重新下载，**必须**等于已登记的 SHA-256；官方修订报 `CONFLICT`，绝不发布。
+- 不修改既有数据集 ID，也不回填历史报告。
+
+### 16.6 报告字段
+
+事件回测结果新增：
+
+- `equity_points`：带明确估值时间的权益点（`at_ms` 为该根 K 线的收盘时间）。
+  旧的 `equity_curve` 数组保留兼容。
+- `report`：数据集身份与月覆盖、provenance、策略源码 `code_hash`、runtime 版本与哈希、
+  成本（资金/费率/滑点/总费用）、收益与回撤、成交与拒绝统计、`limitations`。
+
+`provenance` 在提交时冻结进 manifest 并参与 manifest 哈希，执行前由 worker 复核。

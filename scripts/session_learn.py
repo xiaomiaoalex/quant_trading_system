@@ -25,7 +25,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 SKILLS_META_DIR = SKILLS_DIR / "_meta"
 EXPERIENCES_DIR = SKILLS_DIR / "_experiences"
