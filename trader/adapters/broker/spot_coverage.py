@@ -168,48 +168,17 @@ class BinanceSpotCoverageProver:
         )
 
     async def _collect(self, start_ms: int, end_ms: int) -> _Backfill:
+        # Symbols are independent reads; fetching them concurrently only
+        # shortens one proof pass. The result is sorted below, so ordering is
+        # still deterministic.
+        per_symbol = await asyncio.gather(
+            *(self._collect_symbol(symbol, start_ms, end_ms) for symbol in self.symbols)
+        )
         orders: dict[tuple[str, str], BrokerOrder] = {}
         trades: list[dict[str, Any]] = []
-        for symbol in self.symbols:
-            page, complete = await self.rest.fetch_orders(symbol, start_ms)
-            if not complete:
-                raise _Unproven(f"ORDER_PAGINATION_INCOMPLETE:{symbol}")
-            for order in page:
-                order_symbol = str(order.symbol).upper()
-                order_id = str(order.broker_order_id)
-                if not order_id:
-                    raise _Unproven(f"ORDER_WITHOUT_ID:{symbol}")
-                if order_symbol != symbol:
-                    raise _Unproven(f"ORDER_SYMBOL_MISMATCH:{symbol}")
-                if (order_symbol, order_id) in orders:
-                    raise _Unproven(f"DUPLICATE_ORDER:{symbol}")
-                orders[(order_symbol, order_id)] = order
-
-            page, complete = await self.rest.fetch_trades(symbol, start_ms)
-            if not complete:
-                raise _Unproven(f"TRADE_PAGINATION_INCOMPLETE:{symbol}")
-            last_time = None
-            for trade in page:
-                if str(trade.get("symbol", symbol)).upper() != symbol:
-                    raise _Unproven(f"TRADE_SYMBOL_MISMATCH:{symbol}")
-                item = {**trade, "symbol": symbol}
-                key = _trade_key(item)
-                if not key[1]:
-                    raise _Unproven(f"TRADE_WITHOUT_ID:{symbol}")
-                occurred = key[-1]
-                if occurred < start_ms or occurred > end_ms:
-                    raise _Unproven(f"TRADE_OUTSIDE_PROVEN_WINDOW:{symbol}")
-                if last_time is not None and occurred < last_time:
-                    # Venue timestamps must not move backwards inside one
-                    # backfill; a regression means the history is inconsistent.
-                    raise _Unproven(f"TRADE_TIME_REGRESSION:{symbol}")
-                last_time = occurred
-                order = orders.get((symbol, key[2]))
-                if order is None:
-                    raise _Unproven(f"UNMAPPED_EXTERNAL_TRADE:{symbol}")
-                if not str(order.cl_ord_id).startswith(self.order_prefix):
-                    raise _Unproven(f"FOREIGN_ORDER_TRADE:{symbol}")
-                trades.append(item)
+        for symbol_orders, symbol_trades in per_symbol:
+            orders.update(symbol_orders)
+            trades.extend(symbol_trades)
 
         seen: set[tuple[str, str]] = set()
         for trade in trades:
@@ -222,6 +191,56 @@ class BinanceSpotCoverageProver:
             orders=tuple(sorted(_order_key(order) for order in orders.values())),
             trades=tuple(sorted(_trade_key(trade) for trade in trades)),
         )
+
+    async def _collect_symbol(
+        self, symbol: str, start_ms: int, end_ms: int
+    ) -> tuple[dict[tuple[str, str], BrokerOrder], list[dict[str, Any]]]:
+        orders: dict[tuple[str, str], BrokerOrder] = {}
+        trades: list[dict[str, Any]] = []
+
+        (page, complete), (trade_page, trades_complete) = await asyncio.gather(
+            self.rest.fetch_orders(symbol, start_ms),
+            self.rest.fetch_trades(symbol, start_ms),
+        )
+        if not complete:
+            raise _Unproven(f"ORDER_PAGINATION_INCOMPLETE:{symbol}")
+        for order in page:
+            order_symbol = str(order.symbol).upper()
+            order_id = str(order.broker_order_id)
+            if not order_id:
+                raise _Unproven(f"ORDER_WITHOUT_ID:{symbol}")
+            if order_symbol != symbol:
+                raise _Unproven(f"ORDER_SYMBOL_MISMATCH:{symbol}")
+            if (order_symbol, order_id) in orders:
+                raise _Unproven(f"DUPLICATE_ORDER:{symbol}")
+            orders[(order_symbol, order_id)] = order
+
+        page, complete = trade_page, trades_complete
+        if not complete:
+            raise _Unproven(f"TRADE_PAGINATION_INCOMPLETE:{symbol}")
+        last_time = None
+        for trade in page:
+            if str(trade.get("symbol", symbol)).upper() != symbol:
+                raise _Unproven(f"TRADE_SYMBOL_MISMATCH:{symbol}")
+            item = {**trade, "symbol": symbol}
+            key = _trade_key(item)
+            if not key[1]:
+                raise _Unproven(f"TRADE_WITHOUT_ID:{symbol}")
+            occurred = key[-1]
+            if occurred < start_ms or occurred > end_ms:
+                raise _Unproven(f"TRADE_OUTSIDE_PROVEN_WINDOW:{symbol}")
+            if last_time is not None and occurred < last_time:
+                # Venue timestamps must not move backwards inside one
+                # backfill; a regression means the history is inconsistent.
+                raise _Unproven(f"TRADE_TIME_REGRESSION:{symbol}")
+            last_time = occurred
+            order = orders.get((symbol, key[2]))
+            if order is None:
+                raise _Unproven(f"UNMAPPED_EXTERNAL_TRADE:{symbol}")
+            if not str(order.cl_ord_id).startswith(self.order_prefix):
+                raise _Unproven(f"FOREIGN_ORDER_TRADE:{symbol}")
+            trades.append(item)
+        return orders, trades
 
     async def _now(self) -> int:
         value = self.exchange_clock()

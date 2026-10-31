@@ -1444,3 +1444,23 @@
     `POST /v1/trading/resolve/{code}`。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/UNIFIED_TRADING_RUNBOOK.md`、
   `docs/UNIFIED_TRADING_ACCEPTANCE.md`
+### 2026-11-01 - 私有流周期对齐耗时优化（只读并发，不改契约）
+
+- 背景: 24h 窗口重跑时就绪率只有约 37%。`_reconcile_loop` 每个周期调用
+  `PrivateTradingSession.align()`，对齐包含两次完整快照与两遍完整覆盖回填；所有
+  symbol 串行抓取，单次对齐约 25s，而快照 60s 即过期，可用性被结构性压缩。
+- 决策: 只做只读 HTTP 调用的并发化，不改 `pause_alignment`、两遍回填、无证明不就绪等契约语义。
+- 改动:
+  - `BinanceSpotSnapshotProvider.build`: 账户/挂单、最终一致性复核、按 symbol 的
+    订单与成交抓取、symbol 资产元数据均改为并发；装配仍按 symbol 排序。
+  - `BinanceSpotCoverageProver`: 两遍回填内部按 symbol 并发，symbol 内订单与成交并发；
+    结果仍排序后比较，保持两遍一致性判定不变。
+- 验证:
+  - 新增并发行为红测：`test_backfill_fetches_symbols_concurrently`、
+    `test_snapshot_fetches_symbols_concurrently`（先红后绿，用 inflight 计数断言）。
+  - 相关 9 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过。
+  - 本地实测两次快照 12.8s → 5.9s（首个快照含 exchangeInfo 缓存预热）。
+  - `mypy` 对该两个 adapter 仍为既有 1 处基线错误，未新增。
+- 风险/遗留: 就绪率理论上限仍受 60s 快照过期约束；若窗口仍不达标，再单独讨论
+  过期阈值或后台证明方案，不在本次夹带。
+- 关联文档: `docs/UNIFIED_TRADING_ACCEPTANCE.md`（24h 窗口仍未关闭）
