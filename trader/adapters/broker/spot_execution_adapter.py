@@ -333,36 +333,44 @@ class BinanceSpotSnapshotProvider:
 
         executions: list[Execution] = []
         venue_orders: list[VenueOrder] = []
+        seen_venue: set[str] = set()
+
+        def adoptable(order, symbol: str) -> VenueOrder:
+            base_asset, quote_asset = assets[symbol]
+            return VenueOrder(
+                cl_ord_id=order.cl_ord_id,
+                broker_order_id=order.broker_order_id,
+                symbol=symbol,
+                side=str(getattr(order.side, "value", order.side)).upper(),
+                order_type=str(getattr(order.order_type, "value", order.order_type)).upper(),
+                qty=Decimal(str(order.qty)),
+                price=Decimal(str(order.average_price or 0)),
+                filled_qty=Decimal(str(order.filled_qty)),
+                status=_status(order.status),
+                created_at_ms=int(order.created_at.timestamp() * 1000),
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+            )
+
+        # The open-order list is authoritative for a placement that the order
+        # history has not surfaced yet. It must be adoptable, not foreign.
+        for order in open_orders:
+            if order.cl_ord_id.startswith(self.order_prefix):
+                venue_orders.append(adoptable(order, order.symbol))
+                seen_venue.add(order.cl_ord_id)
+
         for symbol, orders, orders_complete, trades, trades_complete in fetched:
             complete = complete and orders_complete
             mapping = {order.broker_order_id: order.cl_ord_id for order in orders}
-            # Our own orders are adoptable evidence even while open: a placement
-            # can be visible at the venue before the local order transaction
-            # commits, and it must not be reported as foreign. Closed orders
-            # disappear from openOrders, so they are also reported as
+            # Our own orders are adoptable evidence even while open. Closed
+            # orders disappear from openOrders, so they are also reported as
             # observations for cancellations and fills.
             for order in orders:
                 if not order.cl_ord_id.startswith(self.order_prefix):
                     continue
-                base_asset, quote_asset = assets[symbol]
-                venue_orders.append(
-                    VenueOrder(
-                        cl_ord_id=order.cl_ord_id,
-                        broker_order_id=order.broker_order_id,
-                        symbol=symbol,
-                        side=str(getattr(order.side, "value", order.side)).upper(),
-                        order_type=str(
-                            getattr(order.order_type, "value", order.order_type)
-                        ).upper(),
-                        qty=Decimal(str(order.qty)),
-                        price=Decimal(str(order.average_price or 0)),
-                        filled_qty=Decimal(str(order.filled_qty)),
-                        status=_status(order.status),
-                        created_at_ms=int(order.created_at.timestamp() * 1000),
-                        base_asset=base_asset,
-                        quote_asset=quote_asset,
-                    )
-                )
+                if order.cl_ord_id not in seen_venue:
+                    venue_orders.append(adoptable(order, symbol))
+                    seen_venue.add(order.cl_ord_id)
                 if order.cl_ord_id not in open_cl_ord_ids:
                     observations.append(
                         OrderObservation(

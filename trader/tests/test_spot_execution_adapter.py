@@ -141,6 +141,21 @@ async def test_snapshot_reports_open_orders_as_adoptable_venue_orders():
 
 
 @pytest.mark.asyncio
+async def test_open_order_is_adoptable_even_when_order_history_omits_it():
+    broker = FakeBroker()
+    # The venue's open-order list is authoritative for a placement that the
+    # order-history endpoint has not surfaced yet.
+    broker.all_orders = []
+    provider = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=lambda: 1_000_100
+    )
+
+    snapshot = await provider.build()
+
+    assert any(order.cl_ord_id == "qts-1" for order in snapshot.venue_orders)
+
+
+@pytest.mark.asyncio
 async def test_place_outcomes_are_translated_to_port_results():
     broker = FakeBroker()
     port = BinanceSpotExchangePort(broker)
