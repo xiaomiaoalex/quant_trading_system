@@ -552,6 +552,7 @@ class BinanceSpotDemoBroker(BrokerPort):
         qty: Decimal,
         price: Optional[Decimal] = None,
         cl_ord_id: Optional[str] = None,
+        quote_qty: Optional[Decimal] = None,
     ) -> BrokerOrder:
         if not self._connected:
             raise ConnectionError("Broker not connected")
@@ -578,8 +579,8 @@ class BinanceSpotDemoBroker(BrokerPort):
                     # For MARKET BUY without price, we need the quote amount
                     # This should not happen if OMS sends price for pre-check
                     raise ValueError("MARKET BUY requires a price for quoteOrderQty calculation")
-                quote_qty = qty * price
-                params["quoteOrderQty"] = str(quote_qty)
+                amount = quote_qty if quote_qty is not None else qty * price
+                params["quoteOrderQty"] = str(amount)
             else:
                 # SELL uses quantity (base asset)
                 params["quantity"] = str(qty)
@@ -664,6 +665,45 @@ class BinanceSpotDemoBroker(BrokerPort):
 
         data = await self._request("GET", "/v3/openOrders", params=params, signed=True)
         return [self._parse_order_response(item) for item in data]
+
+    async def get_my_trades(
+        self,
+        symbol: str,
+        start_time_ms: Optional[int] = None,
+        from_id: Optional[int] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """Raw account trades. Adapter boundaries own the field mapping."""
+        if not self._connected:
+            raise ConnectionError("Broker not connected")
+        params: Dict[str, Any] = {
+            "symbol": self._normalize_symbol(symbol),
+            "limit": min(max(int(limit), 1), 1000),
+        }
+        if start_time_ms is not None:
+            params["startTime"] = int(start_time_ms)
+        if from_id is not None:
+            params["fromId"] = int(from_id)
+        data = await self._request("GET", "/v3/myTrades", params=params, signed=True)
+        return list(data or [])
+
+    async def get_all_orders(
+        self,
+        symbol: str,
+        start_time_ms: Optional[int] = None,
+        limit: int = 1000,
+    ) -> List[BrokerOrder]:
+        """All orders in the retained exchange window, used for recovery mapping."""
+        if not self._connected:
+            raise ConnectionError("Broker not connected")
+        params: Dict[str, Any] = {
+            "symbol": self._normalize_symbol(symbol),
+            "limit": min(max(int(limit), 1), 1000),
+        }
+        if start_time_ms is not None:
+            params["startTime"] = int(start_time_ms)
+        data = await self._request("GET", "/v3/allOrders", params=params, signed=True)
+        return [self._parse_order_response(item) for item in data or []]
 
     async def get_positions(self) -> List[BrokerPosition]:
         """

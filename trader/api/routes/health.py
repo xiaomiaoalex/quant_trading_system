@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
 
 from trader.adapters.persistence.postgres import (
     ASYNCPG_AVAILABLE,
@@ -35,6 +36,44 @@ from trader.storage import get_storage
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Health"])
+
+_trading_readiness_provider = None
+
+
+def configure_trading_readiness(provider) -> None:
+    """Control Plane injects the trading-runtime readiness probe."""
+    global _trading_readiness_provider
+    _trading_readiness_provider = provider
+
+
+@router.get("/health/trading")
+async def trading_readiness(request: Request):
+    """Trading readiness is separate from process liveness and API readiness."""
+    # An app that explicitly carries a readiness_provider state (including None)
+    # owns its answer. The module-level provider is only a legacy fallback for
+    # apps that never configure the state attribute at all.
+    if hasattr(request.app.state, "readiness_provider"):
+        provider = request.app.state.readiness_provider
+    else:
+        provider = _trading_readiness_provider
+    if provider is None:
+        return JSONResponse(
+            {
+                "status": "unavailable",
+                "ready": False,
+                "reasons": ["TRADING_RUNTIME_NOT_CONFIGURED"],
+            },
+            status_code=503,
+        )
+    try:
+        result = await provider.check()
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "unavailable", "ready": False, "reasons": [str(exc)]},
+            status_code=503,
+        )
+    result["status"] = "ok" if result.get("ready") else "blocked"
+    return JSONResponse(result, status_code=200 if result.get("ready") else 503)
 
 
 def _get_utc_time() -> str:

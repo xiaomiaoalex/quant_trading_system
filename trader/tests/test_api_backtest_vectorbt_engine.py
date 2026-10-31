@@ -10,6 +10,8 @@ from trader.adapters.persistence.feature_store import get_feature_store
 from trader.api.main import app
 from trader.storage.in_memory import get_storage
 
+pytest.importorskip("vectorbt", reason="vectorbt optional research dependency is not installed")
+
 
 def _wait_for_backtest(client: TestClient, run_id: str) -> dict:
     payload: dict = {}

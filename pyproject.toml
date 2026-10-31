@@ -2,7 +2,9 @@
 name = "workspace"
 version = "0.1.0"
 description = "Workspace"
-requires-python = "==3.12.5"
+# 只锁 minor，不锁 patch：3.12.x 补丁版本之间 ABI 一致，且 3.12 已进入
+# security-fixes-only 阶段，锁死补丁号会拿不到安全修复。需要精确复现见 .python-version。
+requires-python = ">=3.12,<3.13"
 
 dependencies = [
  "aiohttp==3.11.16",

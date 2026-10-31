@@ -6,9 +6,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from trader.api.models.schemas import BacktestRequest
 from trader.services.deployment import BacktestService
 from trader.storage.in_memory import get_storage
+
+pytest.importorskip("vectorbt", reason="vectorbt optional research dependency is not installed")
 
 
 def test_risk_adjusted_backtest_produces_risk_decisions():

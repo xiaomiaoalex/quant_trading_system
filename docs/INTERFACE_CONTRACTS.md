@@ -2592,3 +2592,162 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
   - SHA-256 一致 → 复用该文件，并补写缺失的 `.CHECKSUM`（崩溃窗口恢复）；
   - SHA-256 不一致 → 抛 `ArchiveChecksumMismatch`，**绝不覆盖**已有版本的证据。
 - `.CHECKSUM` 侧车文件用「临时文件 + 原子 replace」写入，避免出现半成品文件。
+---
+
+## 13. Unified Spot Trading Core 契约
+
+`trader/trading/` 是 Binance 现货的权威交易核心；控制面 API、策略运行时、paper、回测和恢复对账共享同一套订单、账本、预约和风控规则。
+
+### 13.1 订单与命令
+
+`PlaceOrderCommand` 字段：
+
+| 字段 | 类型 | 含义 |
+|------|------|------|
+| `command_id` | str | 意图稳定 ID；策略重试必须复用 |
+| `account_id` | str | 账户 |
+| `symbol` | str | 交易对 |
+| `base_asset` / `quote_asset` | str | 基础资产 / 计价资产 |
+| `side` | `BUY` \| `SELL` | 现货方向；`SHORT` / `CLOSE_SHORT` 明确拒绝 |
+| `qty` | Decimal | 数量 |
+| `price` | Decimal | 限价或市价支付上界 |
+| `deployment_id` | str | 策略运行实例 |
+| `order_type` | `LIMIT` \| `MARKET` | GTC 限价 / 市价 |
+| `time_in_force` | str | 默认 `GTC` |
+| `decision_id` | str | 决策追踪 ID，不参与幂等参数 |
+
+- `cl_ord_id` 由 `(account_id, command_id)` 确定性派生，首次受理后固定。
+- 同 `command_id` 同经济参数返回原 `CommandReceipt`；同 ID 不同参数返回 `Conflict`。
+- 命令传输状态：`QUEUED`、`SENDING`、`UNKNOWN`、`CONFIRMED`、`FAILED`；与订单业务状态分离。
+- 只有从 `QUEUED` 赢得 `SENDING` CAS 的调用可以发起一次网络下单。
+- 网络超时 / 结果未知进入 `UNKNOWN` 并保留预约；恢复只查询，不自动重发。
+- `QUEUED` 表示 `SENDING` 未提交、网络调用确定未发生；恢复可发送一次。中断的 `CONTROL` 命令标为 `UNKNOWN` + `CONTROL_INTERRUPTED`，不自动继续。
+- 撤单 API 返回 `202 + CommandReceipt`；`CONFIRMED` 只表示交易所受理撤单请求，订单只有收到 `CANCELLED` observation 后才显示已撤销。
+
+### 13.2 事实与账务
+
+| 类型 | 语义 |
+|------|------|
+| `OrderObservation` | REST/WS 累计观测；只更新 `observed_qty` / 状态 |
+| `Execution` | 真实逐笔成交；唯一键 `venue:account_id:symbol:exec_id` |
+| `Hold` | 本系统资金/资产预约；按 `cl_ord_id` 持有 |
+| `CommandReceipt` | 命令持久状态；受理不等于成交 |
+| `AccountRiskView` | 账户版本、同步代际、资产、预约、原因、估值完整性 |
+
+- 只有 `Execution` 可以记账；不得用 REST 累计量虚构成交（旧 `:init` 成交不得复用）。
+- 已撤销订单的迟到成交仍入账，但订单不得重新激活。
+- 成交写入同一账户事务内完成：幂等键去重、订单累计、资产账本、费用、策略持仓、剩余预约、领域事件、outbox。
+- 同键同内容重复成交是 no-op；同键不同内容是 `EXECUTION_KEY_CONFLICT`，成交数量越界是 `EXECUTION_QUANTITY_CONFLICT`；两者都保存证据并阻断新增风险。
+- 卖出可预约资产 = 已核对资产 − 外部锁定 − 本系统全部 hold；交易所 `locked` 不得再次扣减。
+- 费用以 `fee_asset` 原币种记账；缺少 `fee_asset` 的非零费用必须拒绝。
+
+### 13.3 交易所端口
+
+`ExchangePort` 必须区分：
+
+| 结果 | 本地行为 |
+|------|----------|
+| `ACCEPTED` | 命令 `CONFIRMED`，建立订单观测 |
+| `REJECTED` | 命令 `FAILED`，释放预约 |
+| `NOT_FOUND` | 查询场景明确无记录；下单场景按未知处理 |
+| `UNKNOWN` | 命令 `UNKNOWN`，保留预约，禁止自动重发 |
+| `UNAVAILABLE` | 命令 `UNKNOWN`，保留预约 |
+
+Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/adapters/broker/` 边界转换。
+
+### 13.4 恢复对账
+
+`ReconcileSnapshot` 字段：`account_id`、`checked_at_ms`、`generation`、`balances`、`external_locked`、`open_orders`、`executions`、`marks`、`stream_healthy`、`complete`。
+
+- 首份完整快照初始化余额；后续快照先应用新成交事实，再用 `旧余额 + 新成交` 与交易所余额比较。
+- 余额差异、未知外部成交、未知订单、未映射成交进入持久 `unresolved` 并阻断新增风险；人工 `resolve` 才能清除不可自动解释的差异。
+- 不完整分页、旧代际、旧时间戳、私有流不健康、未知 `SENDING/UNKNOWN` 命令都不得把账户恢复为 `READY`。
+- `FILLED` 观测早于逐笔成交时产生 `FILL_OBSERVATION_MISMATCH`；逐笔成交补齐后自动解除。其余关键差异需要人工核对。
+
+### 13.5 控制面 API
+
+| 方法 | 路径 | 语义 |
+|------|------|------|
+| `POST` | `/v1/auth/login` | 设置 HttpOnly 会话 Cookie，返回 CSRF token |
+| `POST` | `/v1/auth/logout` | 撤销会话 |
+| `GET` | `/v1/auth/me` | 返回会话身份 |
+| `POST` | `/v1/trading/orders` | 下单/策略重试；`202 + CommandReceipt` |
+| `POST` | `/v1/trading/orders/{cl_ord_id}/cancel` | 撤单；`202 + CommandReceipt` |
+| `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` |
+| `GET` | `/v1/commands/{command_id}?account_id=` | 查询命令持久状态 |
+| `GET` | `/v1/trading/orders/{cl_ord_id}?account_id=` | 查询订单与剩余数量 |
+| `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView` |
+| `GET` | `/v1/trading/metrics?account_id=` | UNKNOWN 命令、未补齐成交、余额异常、预约、对账年龄、outbox 积压 |
+| `POST` | `/v1/trading/executions` | 成交事实入口（WS/REST ingress） |
+| `POST` | `/v1/trading/observations` | 订单观测入口 |
+| `POST` | `/v1/trading/reconcile` | 提交完整对账快照 |
+| `POST` | `/v1/trading/resolve/{code}?account_id=` | 人工清除已核实的差异 |
+
+- 写操作必须携带会话 Cookie 与 `x-csrf-token`。
+- 审计身份只来自会话；请求体 `actor` / `requested_by` 不改变身份。
+- 未登录返回 `401`；CSRF/Origin 失败返回 `403`；登录限流返回 `429`。
+- `/health/live`、`/health/ready`、`/health/trading` 分别表示进程存活、API 可服务、交易就绪；交易未就绪返回 `503 + reasons`。
+- `CANCEL_ALL` 必须为每个活动订单调用同一 `cancel()` 执行入口，子命令 ID 为 `{control_command_id}:{cl_ord_id}`；任一子撤单 `UNKNOWN` 时控制命令保持 `UNKNOWN`，不得显示全部已撤销。
+- `BLOCK_NEW_RISK` 只阻断新增风险，查询和撤单仍可用；`RESUME_NEW_RISK` 解除人工阻断，但不能覆盖对账、余额或未知订单差异。
+
+### 13.6 运行拓扑
+
+- Control API 进程：认证、命令查询、下单/撤单请求、研究管理和 SSE。
+- Trading Runtime 进程：唯一账户执行实例；PostgreSQL `trading_runtime_leases` 租约防止双启动；启动顺序为存储 → 账本/风控/OMS → Adapter → 恢复对账 → 交易就绪 → 策略。
+- Research Worker 进程：`research.backtest_jobs` 租约 + fencing token；失败全量重跑；旧租约不得发布结果。
+- 进程间只通过 PostgreSQL 表协调，不引入消息中间件。
+
+## 14. Research Dataset / Event Runtime 契约
+
+### 14.1 Dataset
+
+`identity` 必填：`venue`、`market_type`（仅 `SPOT`）、`symbol`、`base_asset`、`quote_asset`、`interval`、`source`、`version`。
+
+- `dataset_id` 为内容哈希；相同内容幂等，不同内容生成不同 ID。
+- BAR_V1 要求固定周期、`close_time_ms = open_time_ms + interval_ms`、`available_at_ms = close_time_ms`。
+- 不允许未完成 K 线；不同 dataset 混跑前必须校验市场、venue、计价资产、周期和完整 bar calendar。
+- 数据集只读，不允许原地更新。
+
+### 14.2 Event Backtest Runtime
+
+- 信号在收盘 bar 产生，最早下一根 bar 开盘成交。
+- 市价单使用开盘价加不利滑点；限价单按开盘/触价成交且不突破限价。
+- 每个 bar 都产生净值；净值 = 现金 + 持仓市值。
+- 策略数量原样进入风控；现货 `SHORT` / `CLOSE_SHORT` 明确拒绝，不转换为平多。
+- 卖出不得超过当前持仓；第一笔成交后的持仓对后续信号可见。
+- 结果必须包含 `equity_curve`、`cash`、`positions`、`fees`、`fills`、`risk`（通过/拒绝）、`rejections`、`closed_trades`、`win_rate`、`max_drawdown`、`manifest_hash`。
+- `vectorbt` 只能用于 `research_screening`；`admission_evidence` 必须由 `event_runtime` 产生，且要求正费用与滑点。
+
+### 14.3 回测任务
+
+| 方法 | 路径 | 语义 |
+|------|------|------|
+| `POST` | `/v1/research/datasets` | 冻结数据集 |
+| `GET` | `/v1/research/datasets/{dataset_id}` | 读取冻结数据集 |
+| `POST` | `/v1/research/backtests` | 提交冻结 manifest，返回持久 `run_id` |
+| `GET` | `/v1/research/backtests` | 列出任务 |
+| `GET` | `/v1/research/backtests/{run_id}` | 查询状态/结果 |
+| `POST` | `/v1/research/backtests/{run_id}/cancel` | 请求取消 |
+
+- Worker 每次 claim 增加 `attempt` 与 `fencing_token`；`finish` 必须匹配租约和 token。
+- 失败任务保留冻结 manifest，可重新 claim 全量重跑；取消在 heartbeat 生效。
+- 旧租约提交必须失败；结果只发布一次。
+
+### 14.4 回测报告模型标记
+
+- `research.backtest_jobs` 查询记录必须返回 `model` 字段。
+- `model=event_runtime` 仅当成功结果包含 `engine=event_runtime`；其余历史成功结果返回 `model=legacy`，不得作为准入证据。
+- 旧结果不得原地改写；读取时标记，新运行使用冻结 manifest 全量重跑。
+
+### 13.7 运行期对账、交易所规则与沙箱验证
+
+- Trading Runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整 `ReconcileSnapshot`；撤单/成交终态必须来自快照中的订单观测或逐笔成交，不得由本地请求推断。
+- 快照必须同时报告：
+  - `openOrders` 中的本系统订单；
+  - `allOrders` 中本系统前缀（默认 `qts-`）已关闭订单的终态，避免撤单后订单从 `openOrders` 消失导致永久无法确认；
+  - 最近窗口内的逐笔成交。
+- `UNKNOWN_ORDER` 仅在本系统无法归属的外部订单仍出现在完整快照中时保持阻断；完整快照确认其已消失后自动解除并保留审计事件。`BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION` 仍需人工核对。
+- 交易所规则在 Adapter 边界归一化：`LOT_SIZE.stepSize` 向下取整数量、`PRICE_FILTER.tickSize` 取整价格、`NOTIONAL.minNotional` 预拒绝、`quoteAssetPrecision` 归一化 MARKET BUY 的 quote 金额；Core/Service 不接触原始 filter 字段。
+- MARKET BUY 以 quote 金额结算，交易所成交的 base 数量可能小于请求数量；只要逐笔成交可对上账，`FILLED` 观测不要求 `cumulative_qty == command.qty`。LIMIT 订单仍要求 `FILLED` 精确覆盖委托数量。
+- `POST /v1/trading/reconnect` 是运维主动重连入口，只重建交易所会话，不改变本地订单/账本；重连后必须等待 `/health/trading` 重新 `READY` 才能继续新增风险。
+- 沙箱验证脚本：`scripts/testnet_e2e.py`（下单/撤单/成交/重连，产出 `artifacts/e2e_evidence_final.json`）、`scripts/observe_trading_runtime.py` + `scripts/mark_observation.py` + `scripts/summarize_observation.py`（24h 观察窗口证据）。
