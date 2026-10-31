@@ -114,12 +114,13 @@ async def test_postgres_transaction_rolls_back_every_table_on_failure():
 
         state = await store.read("acct")
         assert state.executions == {}
-        assert state.ledger == []
+        # Only the opening balance survives; the failed execution wrote nothing.
+        assert [entry["kind"] for entry in state.ledger] == ["opening_balance"]
         assert state.balances["USDT"] == Decimal("1000")
         assert state.orders[receipt.cl_ord_id].booked_qty == Decimal("0")
         async with pool.acquire() as conn:
             assert await conn.fetchval("SELECT count(*) FROM trading_executions") == 0
-            assert await conn.fetchval("SELECT count(*) FROM trading_ledger") == 0
+            assert await conn.fetchval("SELECT count(*) FROM trading_ledger") == 1
 
         # The same write succeeds after the transient failure.
         assert await current.record_execution(
@@ -194,7 +195,10 @@ async def test_postgres_execution_dedup_and_restart_replay():
         state = await store.read("acct")
         assert state.orders[receipt.cl_ord_id].booked_qty == Decimal("1")
         assert state.balances["USDT"] == Decimal("899.9")
-        assert len(state.ledger) == 3
+        kinds = [entry["kind"] for entry in state.ledger]
+        # 1 opening balance + quote/base legs + the fee leg of a single fill.
+        assert kinds.count("opening_balance") == 1
+        assert len([kind for kind in kinds if kind in {"trade", "fee"}]) == 3
 
         conflicting = Execution(
             "acct",

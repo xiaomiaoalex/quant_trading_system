@@ -12,6 +12,7 @@ import json
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
+from trader.trading import core as trading_core
 from trader.trading.models import (
     TERMINAL,
     AccountRiskView,
@@ -31,7 +32,7 @@ from trader.trading.models import (
     TradingError,
     json_value,
 )
-from trader.trading.risk import RiskPolicy, SpotRiskEngine, available_balance
+from trader.trading.risk import RiskPolicy, SpotRiskEngine, available_balance, valuation_complete
 
 TERMINAL_COMMAND = {"CONFIRMED", "FAILED"}
 PERSISTENT_DIFFERENCES = {
@@ -77,12 +78,14 @@ class TradingService:
         exchange,
         policy: RiskPolicy | None = None,
         clock: Callable[[], int] | None = None,
+        defer_send: bool = False,
     ):
         self.store = store
         self.exchange = exchange
         self.risk = SpotRiskEngine(policy)
         self.policy = self.risk.policy
         self.clock = clock or (lambda: 0)
+        self.defer_send = defer_send
 
     # ------------------------------------------------------------------ commands
     async def place(self, command: PlaceOrderCommand, actor: str = "system") -> CommandReceipt:
@@ -98,12 +101,7 @@ class TradingService:
                 return self._receipt(state, existing)
 
             # Admission, reservation and the order intent commit atomically.
-            hold = self.risk.evaluate(state, command, now)
-            if cl_ord_id in state.orders:
-                raise Conflict("ORDER_ID_ALREADY_EXISTS")
-            order = OrderAggregate(cl_ord_id=cl_ord_id, command=command)
-            state.orders[cl_ord_id] = order
-            state.holds[cl_ord_id] = hold
+            trading_core.reserve_order(state, command, cl_ord_id, self.policy, now)
             record = CommandRecord(
                 command_id=command.command_id,
                 cl_ord_id=cl_ord_id,
@@ -130,6 +128,8 @@ class TradingService:
             )
 
         # Only the caller that wins the QUEUED -> SENDING transition may call the venue.
+        if self.defer_send:
+            return await self._current_receipt(command.account_id, command.command_id)
         if not await self._mark_sending(command.account_id, command.command_id):
             return await self._current_receipt(command.account_id, command.command_id)
 
@@ -171,6 +171,8 @@ class TradingService:
                 state, "cancel.queued", cl_ord_id, command_id, {"command_id": command_id}, now
             )
 
+        if self.defer_send:
+            return await self._current_receipt(account_id, command_id)
         if not await self._mark_sending(account_id, command_id):
             return await self._current_receipt(account_id, command_id)
 
@@ -186,76 +188,81 @@ class TradingService:
         account_id: str,
         action: str,
         actor: str = "system",
+        *,
+        _resume: bool = False,
     ) -> CommandReceipt:
-        """Human/system control actions are commands, not order-state shortcuts."""
-        if action not in {"BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL"}:
+        """Persist control intent; the execution owner resumes idempotent actions."""
+        if action not in {"BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT"}:
             raise TradingError("UNSUPPORTED_CONTROL_ACTION")
         payload_hash = _digest({"account_id": account_id, "action": action})
         now = self.clock()
-
-        active: list[str] = []
         async with self.store.transaction(account_id) as state:
             existing = state.commands.get(command_id)
             if existing is not None:
                 if existing.payload_hash != payload_hash:
                     raise Conflict("COMMAND_ID_REUSED_WITH_DIFFERENT_PARAMETERS")
-                return self._receipt(state, existing)
-            record = CommandRecord(
-                command_id=command_id,
-                cl_ord_id="",
-                kind="CONTROL",
-                payload_hash=payload_hash,
-                status="QUEUED",
-                actor=actor,
-            )
-            state.commands[command_id] = record
+                if not _resume or existing.status != "QUEUED":
+                    return self._receipt(state, existing)
+            else:
+                state.commands[command_id] = CommandRecord(
+                    command_id=command_id,
+                    cl_ord_id="",
+                    kind="CONTROL",
+                    payload_hash=payload_hash,
+                    actor=actor,
+                )
+                active = [
+                    o.cl_ord_id
+                    for o in state.orders.values()
+                    if o.status not in TERMINAL and o.remaining_qty > 0
+                ]
+                state.control.setdefault("requests", {})[command_id] = {
+                    "action": action,
+                    "active_orders": active,
+                }
+                self._emit(
+                    state,
+                    "control.requested",
+                    "",
+                    command_id,
+                    {"action": action, "active_orders": active},
+                    now,
+                )
+            request = state.control.get("requests", {}).get(command_id, {})
+            active = request.get("active_orders", [])
+            # Blocking takes effect at acceptance, even with an execution outage.
             if action == "BLOCK_NEW_RISK":
                 state.control["new_risk_blocked"] = True
-            elif action == "RESUME_NEW_RISK":
+            if self.defer_send or action == "RECONNECT":
+                return self._receipt(state, state.commands[command_id])
+            if action == "RESUME_NEW_RISK":
                 state.control["new_risk_blocked"] = False
-            else:
-                active = [
-                    order.cl_ord_id
-                    for order in state.orders.values()
-                    if order.status not in TERMINAL and order.remaining_qty > 0
-                ]
-            self._emit(
-                state,
-                "control.requested",
-                "",
-                command_id,
-                {"action": action, "active_orders": active},
-                now,
-            )
-
-        if action != "CANCEL_ALL":
-            async with self.store.transaction(account_id) as state:
-                record = state.commands[command_id]
-                record.status = "CONFIRMED"
+            if action != "CANCEL_ALL":
+                state.commands[command_id].status = "CONFIRMED"
                 self._emit(state, "control.applied", "", command_id, {"action": action}, now)
                 self._refresh_status(state)
-            return await self._current_receipt(account_id, command_id)
+                return self._receipt(state, state.commands[command_id])
 
-        outcomes: list[dict[str, str]] = []
+        outcomes = []
         for cl_ord_id in active:
-            try:
-                child = await self.cancel(
-                    f"{command_id}:{cl_ord_id}", account_id, cl_ord_id, actor=actor
-                )
-                outcomes.append({"cl_ord_id": cl_ord_id, "status": child.status})
-            except Exception as exc:
-                outcomes.append({"cl_ord_id": cl_ord_id, "status": "FAILED", "error": str(exc)})
-
+            child = await self.cancel(
+                f"{command_id}:{cl_ord_id}", account_id, cl_ord_id, actor=actor
+            )
+            outcomes.append({"cl_ord_id": cl_ord_id, "status": child.status})
         statuses = {item["status"] for item in outcomes}
         final = (
             "UNKNOWN"
             if "UNKNOWN" in statuses
-            else "FAILED" if "FAILED" in statuses else "CONFIRMED"
+            else (
+                "FAILED"
+                if "FAILED" in statuses
+                else "QUEUED" if statuses & {"QUEUED", "SENDING"} else "CONFIRMED"
+            )
         )
         async with self.store.transaction(account_id) as state:
             record = state.commands[command_id]
             record.status = final
-            record.error = "" if final == "CONFIRMED" else "CANCEL_ALL_INCOMPLETE"
+            record.error = "" if final in {"QUEUED", "CONFIRMED"} else "CANCEL_ALL_INCOMPLETE"
             self._emit(
                 state,
                 "control.applied",
@@ -268,42 +275,47 @@ class TradingService:
         return await self._current_receipt(account_id, command_id)
 
     # ------------------------------------------------------------------ recovery
-    async def resume_queued(self, account_id: str) -> list[CommandReceipt]:
-        """Send commands that provably never reached SENDING before a crash.
-
-        A QUEUED record means the pre-send SENDING marker was never committed, so
-        the venue call never happened. SENDING/UNKNOWN commands are never resent.
-        """
+    async def resume_queued(
+        self, account_id: str, *, allow_places: bool = True
+    ) -> list[CommandReceipt]:
+        """Drain durable commands; uncertain sends are never automatically repeated."""
+        if self.defer_send:
+            raise NotReady("CONTROL_PROCESS_CANNOT_EXECUTE")
         state = await self.store.read(account_id)
-        receipts: list[CommandReceipt] = []
-        for record in list(state.commands.values()):
+        receipts = []
+        # Execute place/cancel first, then reevaluate parent control receipts.
+        records = sorted(state.commands.values(), key=lambda record: record.kind == "CONTROL")
+        for record in records:
             if record.status != "QUEUED":
+                continue
+            if record.kind == "CONTROL":
+                request = state.control.get("requests", {}).get(record.command_id)
+                if request and request["action"] != "RECONNECT":
+                    receipts.append(
+                        await self.control(
+                            record.command_id,
+                            account_id,
+                            request["action"],
+                            actor=record.actor,
+                            _resume=True,
+                        )
+                    )
+                continue
+            if record.kind == "PLACE" and not allow_places:
                 continue
             if not await self._mark_sending(account_id, record.command_id):
                 continue
+            order = state.orders.get(record.cl_ord_id)
+            if order is None:
+                raise Conflict("QUEUED_ORDER_MISSING")
             if record.kind == "PLACE":
-                order = state.orders.get(record.cl_ord_id)
-                if order is None:
-                    continue
                 result = await self.exchange.place_order(order.command, order.cl_ord_id)
                 await self._apply_place_result(account_id, record.command_id, result)
             elif record.kind == "CANCEL":
-                order = state.orders.get(record.cl_ord_id)
-                symbol = order.command.symbol if order is not None else ""
                 result = await self.exchange.cancel_order(
-                    account_id, record.cl_ord_id, record.command_id, symbol
+                    account_id, record.cl_ord_id, record.command_id, order.command.symbol
                 )
                 await self._apply_cancel_result(account_id, record.command_id, result)
-            else:
-                async with self.store.transaction(account_id) as current:
-                    current.commands[record.command_id].status = "UNKNOWN"
-                    current.commands[record.command_id].error = "CONTROL_INTERRUPTED"
-                    self._add_unresolved(
-                        current,
-                        "CONTROL_INTERRUPTED",
-                        {"command_id": record.command_id},
-                    )
-                    self._refresh_status(current)
             receipts.append(await self._current_receipt(account_id, record.command_id))
         return receipts
 
@@ -439,8 +451,7 @@ class TradingService:
                         "booked_qty": order.booked_qty,
                     },
                 )
-            elif observation.status in TERMINAL:
-                self._resolve_unresolved(state, "FILL_OBSERVATION_MISMATCH")
+            elif order.status in TERMINAL:
                 self._release_remaining_hold(state, order.cl_ord_id)
 
             self._reconcile_order_evidence(state)
@@ -725,6 +736,7 @@ class TradingService:
                     now,
                     source="exchange",
                 )
+            self._reconcile_order_evidence(state)
             self._refresh_status(state)
 
     async def _apply_cancel_result(
@@ -776,25 +788,12 @@ class TradingService:
     def _apply_position(
         self, state: AccountState, command: PlaceOrderCommand, execution: Execution
     ) -> None:
-        signed = execution.qty if command.side == "BUY" else -execution.qty
-        state.positions[command.symbol] = state.positions.get(command.symbol, Decimal(0)) + signed
+        trading_core.apply_position(state, command, execution)
 
     def _apply_ledger(
         self, state: AccountState, command: PlaceOrderCommand, execution: Execution
     ) -> None:
-        quote = command.quote_asset
-        base = command.base_asset
-        charge = execution.qty * execution.price
-        if command.side == "BUY":
-            self._ledger_entry(state, execution, "quote", quote, -charge, "trade")
-            self._ledger_entry(state, execution, "base", base, execution.qty, "trade")
-        else:
-            self._ledger_entry(state, execution, "base", base, -execution.qty, "trade")
-            self._ledger_entry(state, execution, "quote", quote, charge, "trade")
-        if execution.fee > 0:
-            if not execution.fee_asset:
-                raise TradingError("FEE_ASSET_REQUIRED")
-            self._ledger_entry(state, execution, "fee", execution.fee_asset, -execution.fee, "fee")
+        trading_core.apply_ledger(state, command, execution)
 
     def _ledger_entry(
         self,
@@ -805,19 +804,7 @@ class TradingService:
         delta: Decimal,
         kind: str,
     ) -> None:
-        state.balances[asset] = state.balances.get(asset, Decimal(0)) + delta
-        state.ledger.append(
-            {
-                "entry_id": f"{execution.key}:{leg}",
-                "execution_key": execution.key,
-                "account_id": execution.account_id,
-                "cl_ord_id": execution.cl_ord_id,
-                "asset": asset,
-                "delta": str(delta),
-                "kind": kind,
-                "occurred_at_ms": execution.occurred_at_ms,
-            }
-        )
+        trading_core.ledger_entry(state, execution, leg, asset, delta, kind)
 
     def _release_hold(
         self,
@@ -826,28 +813,42 @@ class TradingService:
         execution: Execution,
         cl_ord_id: str,
     ) -> None:
-        hold = state.holds.get(cl_ord_id)
-        if hold is None:
-            return
-        if command.side == "BUY":
-            release = execution.qty * command.price * (Decimal(1) + self.policy.fee_rate)
-        else:
-            release = execution.qty
-        hold.amount -= release
-        if hold.amount <= 0:
-            state.holds.pop(cl_ord_id, None)
+        trading_core.release_hold(state, command, execution, cl_ord_id, self.policy)
 
     def _release_remaining_hold(self, state: AccountState, cl_ord_id: str) -> None:
         state.holds.pop(cl_ord_id, None)
 
     def _reconcile_order_evidence(self, state: AccountState) -> None:
+        # These are account-wide derived gates. Rebuild from every aggregate so
+        # settling one order can never clear another order's missing executions.
+        self._resolve_unresolved(state, "UNBOOKED_EXECUTIONS")
+        self._resolve_unresolved(state, "FILL_OBSERVATION_MISMATCH")
+        self._resolve_unresolved(state, "TERMINAL_EXECUTION_MISMATCH")
         for order in state.orders.values():
+            if order.status in {"CANCELLED", "EXPIRED"} and order.booked_qty > order.observed_qty:
+                self._add_unresolved(
+                    state,
+                    "TERMINAL_EXECUTION_MISMATCH",
+                    {
+                        "cl_ord_id": order.cl_ord_id,
+                        "observed_qty": order.observed_qty,
+                        "booked_qty": order.booked_qty,
+                    },
+                )
+            if order.observed_qty > order.booked_qty:
+                self._add_unresolved(state, "UNBOOKED_EXECUTIONS", {"cl_ord_id": order.cl_ord_id})
+            if (
+                order.status == "FILLED"
+                and order.command.order_type != "MARKET"
+                and order.booked_qty != order.command.qty
+            ):
+                self._add_unresolved(
+                    state, "FILL_OBSERVATION_MISMATCH", {"cl_ord_id": order.cl_ord_id}
+                )
             if order.booked_qty == order.command.qty:
                 if order.status not in TERMINAL:
                     order.status = "FILLED"
                 self._release_remaining_hold(state, order.cl_ord_id)
-                if order.observed_qty == order.command.qty:
-                    self._resolve_unresolved(state, "FILL_OBSERVATION_MISMATCH")
 
     def _post_execution(self, state: AccountState, execution: Execution) -> None:
         """Post-write invariant check. A failure rolls the whole account transaction back."""
@@ -867,6 +868,54 @@ class TradingService:
         expected = dict(state.balances)
 
         open_ids = {observation.cl_ord_id for observation in snapshot.open_orders}
+        venue_orders = {order.cl_ord_id: order for order in snapshot.venue_orders}
+
+        for execution in snapshot.executions:
+            key = execution.key
+            existing = state.executions.get(key)
+            if existing is not None:
+                if _canonical(existing) != _canonical(execution.content):
+                    self._add_unresolved(
+                        state,
+                        "EXECUTION_KEY_CONFLICT",
+                        {"existing": existing, "incoming": execution.content},
+                    )
+                continue
+            order = state.orders.get(execution.cl_ord_id)
+            if order is None:
+                order = self._adopt_venue_order(state, venue_orders, execution.cl_ord_id)
+                if order is None:
+                    state.executions[key] = dict(execution.content, applied=False)
+                    self._add_unresolved(
+                        state,
+                        "UNKNOWN_EXECUTION",
+                        {"execution_key": key, "cl_ord_id": execution.cl_ord_id},
+                    )
+                    continue
+            order.apply(execution)
+            self._apply_ledger(state, order.command, execution)
+            self._apply_position(state, order.command, execution)
+            self._release_hold(state, order.command, execution, execution.cl_ord_id)
+            state.executions[key] = execution.content
+            self._emit(
+                state,
+                "execution.booked",
+                execution.cl_ord_id,
+                execution.exec_id,
+                {
+                    "execution_key": key,
+                    "qty": execution.qty,
+                    "price": execution.price,
+                    "fee": execution.fee,
+                    "fee_asset": execution.fee_asset,
+                },
+                execution.occurred_at_ms or now,
+                source="rest_alignment",
+            )
+
+        # Orders that the venue reports but this system never owned stay
+        # unknown. Orders inside our own client-order namespace are adopted
+        # above, so they are no longer foreign.
         foreign_ids = {
             observation.cl_ord_id
             for observation in snapshot.open_orders
@@ -898,52 +947,13 @@ class TradingService:
                 kept.append(entry)
         state.reconciliation["unresolved"] = kept
 
-        for execution in snapshot.executions:
-            key = execution.key
-            existing = state.executions.get(key)
-            if existing is not None:
-                if _canonical(existing) != _canonical(execution.content):
-                    self._add_unresolved(
-                        state,
-                        "EXECUTION_KEY_CONFLICT",
-                        {"existing": existing, "incoming": execution.content},
-                    )
-                continue
-            order = state.orders.get(execution.cl_ord_id)
-            if order is None:
-                state.executions[key] = dict(execution.content, applied=False)
-                self._add_unresolved(
-                    state,
-                    "UNKNOWN_EXECUTION",
-                    {"execution_key": key, "cl_ord_id": execution.cl_ord_id},
-                )
-                continue
-            order.apply(execution)
-            self._apply_ledger(state, order.command, execution)
-            self._apply_position(state, order.command, execution)
-            self._release_hold(state, order.command, execution, execution.cl_ord_id)
-            state.executions[key] = execution.content
-            self._emit(
-                state,
-                "execution.booked",
-                execution.cl_ord_id,
-                execution.exec_id,
-                {
-                    "execution_key": key,
-                    "qty": execution.qty,
-                    "price": execution.price,
-                    "fee": execution.fee,
-                    "fee_asset": execution.fee_asset,
-                },
-                execution.occurred_at_ms or now,
-                source="rest_alignment",
-            )
-
         for observation in snapshot.open_orders:
             order = state.orders.get(observation.cl_ord_id)
             if order is None:
-                self._add_unknown_orders(state, foreign_ids)
-                continue
+                order = self._adopt_venue_order(state, venue_orders, observation.cl_ord_id)
+                if order is None:
+                    self._add_unknown_orders(state, {observation.cl_ord_id})
+                    continue
             try:
                 order.observe(observation)
             except Conflict as exc:
@@ -967,8 +977,7 @@ class TradingService:
                         "booked_qty": order.booked_qty,
                     },
                 )
-            elif observation.status in TERMINAL:
-                self._resolve_unresolved(state, "FILL_OBSERVATION_MISMATCH")
+            elif order.status in TERMINAL:
                 self._release_remaining_hold(state, order.cl_ord_id)
 
         after = dict(state.balances)
@@ -984,6 +993,10 @@ class TradingService:
             }
             if mismatch:
                 self._add_unresolved(state, "BALANCE_MISMATCH", mismatch)
+        else:
+            # The first reconciliation of an empty ledger defines the opening
+            # state: whatever the venue already held is booked explicitly.
+            self._record_opening_balances(state, snapshot, now, after)
 
         state.balances = {asset: Decimal(value) for asset, value in snapshot.balances.items()}
         state.external_locked = {
@@ -1078,20 +1091,7 @@ class TradingService:
         return "BLOCKED" if reasons else "READY"
 
     def _valuation_complete(self, state: AccountState, now: int) -> bool:
-        marks = state.reconciliation.get("marks", {})
-        symbols = {symbol for symbol, qty in state.positions.items() if qty != 0}
-        for order in state.orders.values():
-            if state.balances.get(order.command.base_asset, Decimal(0)) != 0:
-                symbols.add(order.command.symbol)
-        for symbol in symbols:
-            mark = marks.get(symbol)
-            if mark is None:
-                return False
-            if not 0 <= now - int(mark.get("at_ms", 0)) <= self.policy.max_mark_age_ms:
-                return False
-            if Decimal(str(mark.get("price", 0))) <= 0:
-                return False
-        return True
+        return valuation_complete(state, now, self.policy.max_mark_age_ms)
 
     def _add_unresolved(self, state: AccountState, code: str, detail: Any) -> None:
         entries = state.reconciliation.setdefault("unresolved", [])
@@ -1116,6 +1116,96 @@ class TradingService:
             return
         detail = existing.setdefault("detail", {})
         detail["cl_ord_ids"] = sorted(set(detail.get("cl_ord_ids", [])) | cl_ord_ids)
+
+    def _adopt_venue_order(
+        self,
+        state: AccountState,
+        venue_orders: dict[str, Any],
+        cl_ord_id: str,
+    ) -> OrderAggregate | None:
+        """Rebuild a lost order record from the venue's own evidence.
+
+        Only orders inside our client-order namespace are adopted: the venue
+        reports them, their fills are authoritative, and the account is
+        dedicated to this system. Foreign client-order ids stay unknown and
+        keep blocking new risk.
+        """
+        venue_order = venue_orders.get(cl_ord_id)
+        if venue_order is None:
+            return None
+        if cl_ord_id in state.orders:
+            return state.orders[cl_ord_id]
+        command = PlaceOrderCommand(
+            command_id=f"adopted:{cl_ord_id}",
+            account_id=state.account_id,
+            symbol=venue_order.symbol,
+            base_asset=venue_order.base_asset,
+            quote_asset=venue_order.quote_asset,
+            side=venue_order.side,
+            qty=venue_order.qty,
+            price=venue_order.price,
+            deployment_id="recovered",
+            order_type=venue_order.order_type,
+            time_in_force="GTC",
+            decision_id=f"adopted:{cl_ord_id}",
+        )
+        order = OrderAggregate(
+            cl_ord_id=cl_ord_id,
+            command=command,
+            broker_order_id=venue_order.broker_order_id,
+        )
+        state.orders[cl_ord_id] = order
+        self._emit(
+            state,
+            "order.adopted",
+            cl_ord_id,
+            "",
+            {
+                "broker_order_id": venue_order.broker_order_id,
+                "symbol": venue_order.symbol,
+                "side": venue_order.side,
+                "qty": str(venue_order.qty),
+                "price": str(venue_order.price),
+                "filled_qty": str(venue_order.filled_qty),
+                "status": venue_order.status,
+                "created_at_ms": venue_order.created_at_ms,
+            },
+            venue_order.created_at_ms or self.clock(),
+            source="rest_alignment",
+        )
+        return order
+
+    def _record_opening_balances(
+        self,
+        state: AccountState,
+        snapshot: ReconcileSnapshot,
+        now: int,
+        computed: dict[str, Decimal],
+    ) -> None:
+        """Make the ledger self-consistent with the venue's opening balances.
+
+        The first reconciliation of an empty ledger defines the opening state.
+        Whatever the venue already held cannot be attributed to a fill, so it
+        is booked as an explicit opening balance instead of being hidden.
+        """
+        assets = set(computed) | set(snapshot.balances)
+        for asset in sorted(assets):
+            venue = snapshot.balances.get(asset, Decimal(0))
+            delta = venue - computed.get(asset, Decimal(0))
+            if delta == 0:
+                continue
+            state.ledger.append(
+                {
+                    "entry_id": f"opening:{asset}",
+                    "execution_key": "",
+                    "account_id": state.account_id,
+                    "cl_ord_id": "",
+                    "asset": asset,
+                    "delta": str(delta),
+                    "kind": "opening_balance",
+                    "occurred_at_ms": now,
+                }
+            )
 
     def _resolve_unresolved(self, state: AccountState, code: str) -> None:
         entries = state.reconciliation.get("unresolved", [])

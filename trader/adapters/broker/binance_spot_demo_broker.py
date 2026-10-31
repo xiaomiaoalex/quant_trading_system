@@ -425,6 +425,22 @@ class BinanceSpotDemoBroker(BrokerPort):
         data = await self._request("GET", "/v3/time", signed=False)
         return int(data["serverTime"])
 
+    async def get_klines(
+        self, symbol: str, interval: str = "1m", limit: int = 200
+    ) -> List[List[Any]]:
+        """Public klines used to re-collect the strategy warm-up window."""
+        data = await self._request(
+            "GET",
+            "/v3/klines",
+            params={
+                "symbol": symbol.upper(),
+                "interval": interval,
+                "limit": int(limit),
+            },
+            signed=False,
+        )
+        return [list(row) for row in (data or [])]
+
     async def get_exchange_info(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         params = None
         if symbol:
@@ -692,6 +708,7 @@ class BinanceSpotDemoBroker(BrokerPort):
         symbol: str,
         start_time_ms: Optional[int] = None,
         limit: int = 1000,
+        from_order_id: Optional[int] = None,
     ) -> List[BrokerOrder]:
         """All orders in the retained exchange window, used for recovery mapping."""
         if not self._connected:
@@ -700,7 +717,9 @@ class BinanceSpotDemoBroker(BrokerPort):
             "symbol": self._normalize_symbol(symbol),
             "limit": min(max(int(limit), 1), 1000),
         }
-        if start_time_ms is not None:
+        if from_order_id is not None:
+            params["orderId"] = int(from_order_id)
+        elif start_time_ms is not None:
             params["startTime"] = int(start_time_ms)
         data = await self._request("GET", "/v3/allOrders", params=params, signed=True)
         return [self._parse_order_response(item) for item in data or []]

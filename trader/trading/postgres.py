@@ -2,8 +2,8 @@
 
 import json
 from contextlib import asynccontextmanager
-from pathlib import Path
 
+from .migrations import initialize_trading_schema
 from .models import AccountState, json_value
 from .store import decode_state
 
@@ -14,7 +14,7 @@ class PostgresTradingStore:
 
     async def initialize(self):
         async with self.pool.acquire() as connection:
-            await connection.execute(Path(__file__).with_name("001_trading.sql").read_text())
+            await initialize_trading_schema(connection)
 
     async def ping(self) -> bool:
         try:
@@ -41,17 +41,7 @@ class PostgresTradingStore:
                 old_events = len(state.events)
                 yield state
                 state.version += 1
-                for record in state.commands.values():
-                    await conn.execute(
-                        "INSERT INTO trading_commands(account_id,command_id,cl_ord_id,kind,status,payload_hash,data) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb) ON CONFLICT(account_id,command_id) DO UPDATE SET status=EXCLUDED.status,data=EXCLUDED.data",
-                        account_id,
-                        record.command_id,
-                        record.cl_ord_id,
-                        record.kind,
-                        record.status,
-                        record.payload_hash,
-                        json.dumps(json_value(record)),
-                    )
+                await self._write_query_projections(conn, state)
                 for key in set(state.executions) - old_execs:
                     execution = state.executions[key]
                     await conn.execute(
@@ -90,6 +80,55 @@ class PostgresTradingStore:
                     state.version,
                     json.dumps(json_value(state)),
                 )
+
+    @staticmethod
+    async def _write_query_projections(conn, state: AccountState) -> None:
+        for record in state.commands.values():
+            await conn.execute(
+                """INSERT INTO trading_commands(account_id,command_id,cl_ord_id,kind,status,payload_hash,data)
+                   VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)
+                   ON CONFLICT(account_id,command_id) DO UPDATE SET
+                   status=EXCLUDED.status,data=EXCLUDED.data""",
+                state.account_id,
+                record.command_id,
+                record.cl_ord_id,
+                record.kind,
+                record.status,
+                record.payload_hash,
+                json.dumps(json_value(record)),
+            )
+        for order in state.orders.values():
+            await conn.execute(
+                """INSERT INTO trading_order_projection(account_id,cl_ord_id,status,data)
+                   VALUES($1,$2,$3,$4::jsonb)
+                   ON CONFLICT(account_id,cl_ord_id) DO UPDATE SET
+                   status=EXCLUDED.status,data=EXCLUDED.data""",
+                state.account_id,
+                order.cl_ord_id,
+                order.status,
+                json.dumps(json_value(order)),
+            )
+
+    async def rebuild_query_projections(self, account_id: str) -> dict[str, int]:
+        """Replace disposable queries under the same lock as financial writes.
+
+        This never emits events, rebooks executions, changes account version or
+        resets delivery acknowledgements in the transactional outbox.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                raw = await conn.fetchval(
+                    "SELECT state FROM trading_accounts WHERE account_id=$1 FOR UPDATE", account_id
+                )
+                if raw is None:
+                    raise ValueError(f"Account not found: {account_id}")
+                state = decode_state(json.loads(raw) if isinstance(raw, str) else raw)
+                await conn.execute("DELETE FROM trading_commands WHERE account_id=$1", account_id)
+                await conn.execute(
+                    "DELETE FROM trading_order_projection WHERE account_id=$1", account_id
+                )
+                await self._write_query_projections(conn, state)
+        return {"commands": len(state.commands), "orders": len(state.orders)}
 
     async def pending_outbox(self, account_id):
         async with self.pool.acquire() as conn:

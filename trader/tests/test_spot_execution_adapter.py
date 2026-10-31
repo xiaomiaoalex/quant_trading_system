@@ -210,6 +210,27 @@ async def test_snapshot_is_incomplete_when_pagination_or_order_mapping_is_missin
 
 
 @pytest.mark.asyncio
+async def test_snapshot_timestamp_uses_the_venue_clock_when_the_clock_is_async():
+    """Snapshot time must not mix the local clock with venue time."""
+    broker = FakeBroker()
+
+    async def venue_clock():
+        return 2_000_500
+
+    provider = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=venue_clock
+    )
+    snapshot = await provider.build()
+    assert snapshot.checked_at_ms == 2_000_500
+    # A later snapshot must never move backwards, even with a lagging clock.
+    lagging = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=venue_clock
+    )
+    await lagging.build()
+    assert (await lagging.build()).checked_at_ms >= 2_000_500
+
+
+@pytest.mark.asyncio
 async def test_snapshot_reports_our_own_closed_orders_but_not_foreign_ones():
     broker = FakeBroker()
     broker.orders = []

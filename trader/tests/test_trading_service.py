@@ -336,7 +336,10 @@ async def test_execution_dedup_survives_restart_and_ordering():
     assert state.orders[receipt.cl_ord_id].booked_qty == Decimal("2")
     assert state.balances["USDT"] == Decimal("799.8")
     assert state.balances["BTC"] == Decimal("2")
-    assert len(state.ledger) == 6  # 2 executions x (asset leg + fee leg) + 2 cash legs
+    kinds = [entry["kind"] for entry in state.ledger]
+    # 1 opening balance + 2 executions x (asset leg + fee leg) + 2 cash legs
+    assert kinds.count("opening_balance") == 1
+    assert len([kind for kind in kinds if kind in {"trade", "fee"}]) == 6
     assert len(state.executions) == 2
 
 
@@ -602,7 +605,8 @@ async def test_ledger_write_failure_rolls_back_the_whole_execution():
 
     state = await service.store.read("acct")
     assert state.executions == {}
-    assert state.ledger == []
+    # Only the opening balance survives; the failed execution wrote nothing.
+    assert [entry["kind"] for entry in state.ledger] == ["opening_balance"]
     assert state.balances["USDT"] == Decimal("1000")
     assert state.orders[receipt.cl_ord_id].booked_qty == Decimal("0")
     assert receipt.cl_ord_id in state.holds

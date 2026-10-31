@@ -203,6 +203,12 @@ interface HistoryJobCreateRequest {
 
 ## 7. 已知契约缺口（统一标注）
 
+统一现货入口：`GET /v1/auth/me` 返回 `{ actor: string, csrf_token: string }`，
+会话检查成功后恢复写请求的内存 CSRF token，失败清除旧 token；响应禁止缓存。
+开发免登录模式 `csrf_token=""`。登录 Cookie 为 HttpOnly，前端不读取 Cookie。
+本地连接统一 Runtime 时，启动 Vite 前显式设置
+`QTS_CONTROL_API_TARGET=http://127.0.0.1:8090`；默认仍为旧控制面 8080。
+
 - 缺少回测列表 API
 - 缺少标准化报告详情 API
 - 缺少审计专用 API（`/api/audit/*`）

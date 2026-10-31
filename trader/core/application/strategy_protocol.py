@@ -376,6 +376,49 @@ class StrategyPlugin(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class PluginWarmupSpec:
+    """Declared indicator warm-up requirement of a strategy plugin.
+
+    ``stateful`` means the plugin keeps indicator state between calls, so a
+    restarted process must rebuild that state before any output is tradable.
+    ``events`` is the number of market observations the plugin needs. ``declared``
+    records whether the plugin stated its requirement explicitly; an undeclared
+    plugin is treated as stateful, which blocks trading until the deployment
+    configures a warm-up length.
+    """
+
+    stateful: bool
+    events: int
+    declared: bool
+
+
+def describe_plugin_warmup(plugin: Any) -> PluginWarmupSpec:
+    """Read the optional ``stateful_indicators`` / ``warmup_events`` declarations.
+
+    Plugins that keep indicator state must declare how many observations are
+    needed to rebuild it. The runtime never trusts a persisted indicator
+    snapshot: it re-collects the window and warms up again after a restart.
+    """
+    declared_stateful = getattr(plugin, "stateful_indicators", None)
+    declared_events = getattr(plugin, "warmup_events", None)
+    if declared_events is not None:
+        events = int(declared_events)
+        if events < 0:
+            raise ValueError("Plugin warmup_events must be non-negative")
+    else:
+        events = 0
+    if declared_stateful is None:
+        # Unknown plugins are treated as stateful unless they declare a
+        # zero-length warm-up; silence must not mean "safe to trade cold".
+        stateful = declared_events is None or events > 0
+        declared = declared_events is not None
+    else:
+        stateful = bool(declared_stateful)
+        declared = True
+    return PluginWarmupSpec(stateful=stateful, events=events, declared=declared)
+
+
 def validate_strategy_plugin(plugin: Any) -> tuple[bool, str]:
     """
     验证插件是否实现了 StrategyPlugin 协议。

@@ -1,7 +1,7 @@
 """Pure spot admission rules; called inside the account's storage transaction."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from trader.trading.models import AccountState, Hold, NotReady, PlaceOrderCommand, TradingError
 
@@ -75,6 +75,8 @@ class SpotRiskEngine:
             raise RiskRejected("INVALID_ORDER_AMOUNTS")
         if command.order_type not in ("LIMIT", "MARKET"):
             raise RiskRejected("UNSUPPORTED_ORDER_TYPE")
+        if command.order_type == "LIMIT" and command.time_in_force != "GTC":
+            raise RiskRejected("UNSUPPORTED_TIME_IN_FORCE")
         amount = command.qty
         asset = command.base_asset
         if command.side == "BUY":
@@ -88,6 +90,8 @@ class SpotRiskEngine:
         return Hold(asset, amount)
 
     def _check_valuation(self, state: AccountState, command: PlaceOrderCommand, now_ms: int):
+        if not valuation_complete(state, now_ms, self.policy.max_mark_age_ms):
+            raise NotReady("VALUATION_STALE_OR_MISSING")
         marks = state.reconciliation.get("marks", {})
         symbols = {symbol for symbol, qty in state.positions.items() if qty != 0}
         for order in state.orders.values():
@@ -152,3 +156,23 @@ class SpotRiskEngine:
 
 def evaluate(state: AccountState, command: PlaceOrderCommand, now_ms: int) -> Hold:
     return SpotRiskEngine().evaluate(state, command, now_ms)
+
+
+def valuation_complete(state: AccountState, now_ms: int, max_age_ms: int) -> bool:
+    """Every nonzero asset requires a finite, fresh USDT conversion mark."""
+    marks = state.reconciliation.get("marks", {})
+    symbols = {symbol for symbol, qty in state.positions.items() if qty != 0}
+    symbols.update(
+        asset + "USDT" for asset, qty in state.balances.items() if asset != "USDT" and qty != 0
+    )
+    try:
+        for symbol in symbols:
+            mark = marks.get(symbol)
+            if mark is None or not 0 <= now_ms - int(mark["at_ms"]) <= max_age_ms:
+                return False
+            price = Decimal(str(mark["price"]))
+            if not price.is_finite() or price <= 0:
+                return False
+    except (DecimalException, KeyError, TypeError, ValueError, OverflowError):
+        return False
+    return all(amount.is_finite() for amount in state.balances.values())

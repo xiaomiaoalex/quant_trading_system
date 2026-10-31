@@ -61,6 +61,16 @@ class DcaBtcStrategy:
             if not result.is_valid:
                 raise ValueError(f"DCA 初始化参数无效: {[e.message for e in result.errors]}")
 
+    @property
+    def stateful_indicators(self) -> bool:
+        """The dip reference price lives in process memory and is rebuilt on restart."""
+        return True
+
+    @property
+    def warmup_events(self) -> int:
+        """One observation establishes the reference price for dip detection."""
+        return 1
+
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         if self.max_total_buys > 0 and self._buy_count >= self.max_total_buys:
             return None

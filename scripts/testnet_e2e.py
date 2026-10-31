@@ -235,8 +235,19 @@ async def main() -> int:
                 raise RuntimeError("ledger read failed")
 
             if args.reconnect:
-                reconnect = await client.post("/v1/trading/reconnect", headers=headers)
+                reconnect_id = f"e2e-reconnect-{int(time.time() * 1000)}"
+                reconnect = await client.post(
+                    "/v1/trading/reconnect",
+                    headers=headers,
+                    json={"command_id": reconnect_id, "account_id": args.account_id},
+                )
                 reconnect.raise_for_status()
+                await wait_for(
+                    client,
+                    f"/v1/commands/{reconnect_id}?account_id={args.account_id}",
+                    lambda payload: payload.get("status") == "CONFIRMED",
+                    timeout=120.0,
+                )
                 record("reconnected", body=reconnect.json())
                 await wait_for(
                     client,

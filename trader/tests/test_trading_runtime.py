@@ -39,7 +39,9 @@ def snapshot(
     )
 
 
-def runtime(store=None, *, clock=None, owner="runtime-1", snap=None, notifier=None):
+def runtime(
+    store=None, *, clock=None, owner="runtime-1", snap=None, notifier=None, allowed_symbols=None
+):
     async def provider(account_id):
         return snap
 
@@ -54,6 +56,7 @@ def runtime(store=None, *, clock=None, owner="runtime-1", snap=None, notifier=No
         owner=owner,
         lease_seconds=30,
         outbox_interval_seconds=3600,
+        allowed_symbols=allowed_symbols,
     )
 
 
@@ -77,6 +80,26 @@ async def test_startup_reconciles_before_becoming_ready_and_allows_strategies():
     assert readiness["reasons"] == []
     await rt.stop()
     assert rt.strategy_start_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_symbol_outside_coverage_scope_never_reaches_the_venue():
+    snap = snapshot()
+    snap.marks["ETHUSDT"] = {"price": Decimal("100"), "at_ms": 1_000_000}
+    rt = runtime(snap=snap, allowed_symbols={"BTCUSDT"})
+    assert await rt.start()
+    try:
+        with pytest.raises(NotReady, match="SYMBOL_NOT_IN_COVERAGE_SCOPE"):
+            await rt.place(command(symbol="ETHUSDT", base_asset="ETH"))
+        # Queued commands bypass runtime.place; the IO boundary rejects them too.
+        receipt = await rt.service.place(command("cmd-eth", symbol="ETHUSDT", base_asset="ETH"))
+        assert receipt.status == "FAILED"
+        assert receipt.error == "SYMBOL_NOT_IN_COVERAGE_SCOPE"
+        assert rt.exchange.placed == []
+        state = await rt.store.read("acct")
+        assert not state.holds
+    finally:
+        await rt.stop()
 
 
 @pytest.mark.asyncio
@@ -317,3 +340,99 @@ async def test_runtime_retries_the_execution_lease_until_the_stale_owner_expires
     assert rt.lease_token is not None
     assert rt.started is True
     await rt.stop()
+
+
+@pytest.mark.asyncio
+async def test_expired_execution_lease_blocks_sends_before_background_renewal():
+    rt = runtime(snap=snapshot())
+    assert await rt.start()
+    rt.store.expire_lease(rt.lease_scope)
+    try:
+        with pytest.raises(NotReady):
+            await rt.place(command())
+        assert rt.exchange.placed == []
+        assert not rt.strategy_start_allowed
+    finally:
+        await rt.stop()
+
+
+@pytest.mark.asyncio
+async def test_conflicting_runtime_api_cannot_bypass_owner_using_ready_shared_account():
+    import httpx
+
+    from trader.api.trading_app import create_trading_app
+
+    store = MemoryTradingStore()
+    first = runtime(store, owner="owner", snap=snapshot())
+    second = runtime(store, owner="contender", snap=snapshot())
+    assert await first.start()
+    assert not await second.start()
+    app = create_trading_app(trading_service=second.service)
+    app.state.trading_runtime = second
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/v1/trading/orders",
+                json={
+                    "command_id": "conflicting-owner",
+                    "account_id": "acct",
+                    "symbol": "BTCUSDT",
+                    "base_asset": "BTC",
+                    "quote_asset": "USDT",
+                    "side": "BUY",
+                    "qty": "1",
+                    "price": "100",
+                },
+            )
+            assert response.status_code == 503
+            assert second.exchange.placed == []
+            assert "conflicting-owner" not in (await store.read("acct")).commands
+    finally:
+        await second.stop()
+        await first.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_service_send_boundary_rechecks_lease_after_order_admission():
+    rt = runtime(snap=snapshot())
+    assert await rt.start()
+    # A caller retaining the service must not bypass execution ownership.
+    rt.store.expire_lease(rt.lease_scope)
+    try:
+        with pytest.raises(NotReady):
+            await rt.service.place(command())
+        assert rt.exchange.placed == []
+    finally:
+        await rt.stop()
+
+
+@pytest.mark.asyncio
+async def test_cancel_available_while_risk_blocked_but_never_after_lease_loss():
+    rt = runtime(snap=snapshot())
+    assert await rt.start()
+    try:
+        placed = await rt.place(command())
+        await rt.control("block", "acct", "BLOCK_NEW_RISK")
+        rt.ready = False
+        receipt = await rt.cancel("cancel-owned", "acct", placed.cl_ord_id)
+        assert receipt.status == "CONFIRMED"
+        rt.store.expire_lease(rt.lease_scope)
+        with pytest.raises(NotReady):
+            await rt.cancel("cancel-unowned", "acct", placed.cl_ord_id)
+        assert len(rt.exchange.cancelled) == 1
+    finally:
+        await rt.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_cannot_send_for_account_outside_its_lease():
+    rt = runtime(snap=snapshot())
+    assert await rt.start()
+    try:
+        with pytest.raises(NotReady, match="EXECUTION_ACCOUNT_MISMATCH"):
+            await rt.place(command(account_id="another-account"))
+        assert rt.exchange.placed == []
+    finally:
+        await rt.stop()

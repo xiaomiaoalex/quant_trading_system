@@ -7,6 +7,7 @@ holds and balances remain owned by the trading service.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable
@@ -22,6 +23,7 @@ from trader.trading.models import (
     OrderObservation,
     PlaceOrderCommand,
     ReconcileSnapshot,
+    VenueOrder,
 )
 
 _STATUS_MAP = {
@@ -233,14 +235,46 @@ class BinanceSpotSnapshotProvider:
         self.order_prefix = order_prefix
         self._generation = 0
         self._last_checked_ms = 0
+        self._assets: dict[str, tuple[str, str]] = {}
+
+    async def _now(self) -> int:
+        """Read the snapshot timestamp in the venue clock domain.
+
+        The clock may be async (exchange server time). Snapshot timestamps must
+        not mix the local clock with venue time: the coverage proof compares
+        them against the stream connection boundary.
+        """
+        value = self.clock()
+        if inspect.isawaitable(value):
+            value = await value
+        return int(value)
+
+    async def _symbol_assets(self, symbol: str) -> tuple[str, str]:
+        """Base and quote asset of a symbol, taken from the venue's own metadata."""
+        cached = self._assets.get(symbol)
+        if cached is not None:
+            return cached
+        base, quote = "", ""
+        try:
+            info = await self.broker.get_exchange_info(symbol)
+            for item in (info or {}).get("symbols", []):
+                if str(item.get("symbol", "")).upper() == symbol:
+                    base = str(item.get("baseAsset", ""))
+                    quote = str(item.get("quoteAsset", ""))
+                    break
+        except Exception:
+            base, quote = "", ""
+        self._assets[symbol] = (base, quote)
+        return base, quote
 
     async def build(self, account_id: str | None = None) -> ReconcileSnapshot:
         account_id = account_id or self.account_id
-        now = max(self.clock(), self._last_checked_ms + 1)
+        now = max(await self._now(), self._last_checked_ms + 1)
         self._last_checked_ms = now
         complete = True
 
         account = await self.broker._fetch_account()
+        initial_balances = self._balance_fingerprint(account)
         balances: dict[str, Decimal] = {}
         for item in account.get("balances", []):
             asset = str(item.get("asset", ""))
@@ -253,6 +287,7 @@ class BinanceSpotSnapshotProvider:
                 balances[asset] = total
 
         open_orders = await self.broker.get_open_orders()
+        initial_orders = self._order_fingerprint(open_orders)
         observations: list[OrderObservation] = []
         for order in open_orders:
             observations.append(
@@ -279,12 +314,10 @@ class BinanceSpotSnapshotProvider:
                     marks[symbol] = {"price": Decimal(price), "at_ms": now}
 
         executions: list[Execution] = []
+        venue_orders: list[VenueOrder] = []
         for symbol in sorted(symbols):
-            orders = await self.broker.get_all_orders(
-                symbol, start_time_ms=now - self.lookback_ms, limit=self.page_limit
-            )
-            if len(orders) >= self.page_limit:
-                complete = False
+            orders, orders_complete = await self._orders(symbol, now)
+            complete = complete and orders_complete
             mapping = {order.broker_order_id: order.cl_ord_id for order in orders}
             # Closed orders disappear from openOrders; report our own terminal
             # orders so cancellations and fills are observed instead of guessed.
@@ -293,6 +326,25 @@ class BinanceSpotSnapshotProvider:
                     order.cl_ord_id.startswith(self.order_prefix)
                     and order.cl_ord_id not in open_cl_ord_ids
                 ):
+                    base_asset, quote_asset = await self._symbol_assets(symbol)
+                    venue_orders.append(
+                        VenueOrder(
+                            cl_ord_id=order.cl_ord_id,
+                            broker_order_id=order.broker_order_id,
+                            symbol=symbol,
+                            side=str(getattr(order.side, "value", order.side)).upper(),
+                            order_type=str(
+                                getattr(order.order_type, "value", order.order_type)
+                            ).upper(),
+                            qty=Decimal(str(order.qty)),
+                            price=Decimal(str(order.average_price or 0)),
+                            filled_qty=Decimal(str(order.filled_qty)),
+                            status=_status(order.status),
+                            created_at_ms=int(order.created_at.timestamp() * 1000),
+                            base_asset=base_asset,
+                            quote_asset=quote_asset,
+                        )
+                    )
                     observations.append(
                         OrderObservation(
                             account_id=account_id,
@@ -327,6 +379,16 @@ class BinanceSpotSnapshotProvider:
                     )
                 )
 
+        # REST calls are not an atomic exchange snapshot. A change during the
+        # collection invalidates this generation instead of enabling risk with
+        # balances from before a fill and executions from after it.
+        final_account = await self.broker._fetch_account()
+        final_orders = await self.broker.get_open_orders()
+        complete = (
+            complete
+            and initial_balances == self._balance_fingerprint(final_account)
+            and initial_orders == self._order_fingerprint(final_orders)
+        )
         self._generation = max(now, self._generation + 1)
         return ReconcileSnapshot(
             account_id=account_id,
@@ -336,18 +398,52 @@ class BinanceSpotSnapshotProvider:
             external_locked=self.external_locked,
             open_orders=observations,
             executions=executions,
+            venue_orders=venue_orders,
             marks=marks,
             stream_healthy=True,
             complete=complete,
         )
 
+    @staticmethod
+    def _balance_fingerprint(account: dict) -> tuple:
+        return tuple(
+            sorted(
+                (
+                    str(item["asset"]),
+                    Decimal(str(item.get("free", "0"))),
+                    Decimal(str(item.get("locked", "0"))),
+                )
+                for item in account.get("balances", [])
+            )
+        )
+
+    @staticmethod
+    def _order_fingerprint(orders: list) -> tuple:
+        return tuple(
+            sorted(
+                (
+                    order.symbol,
+                    order.cl_ord_id,
+                    order.broker_order_id,
+                    _status(order.status),
+                    order.qty,
+                    order.filled_qty,
+                )
+                for order in orders
+            )
+        )
+
     async def _trades(self, symbol: str, now: int) -> tuple[list[dict], bool]:
+        return await self.fetch_trades(symbol, now - self.lookback_ms)
+
+    async def fetch_trades(self, symbol: str, start_time_ms: int) -> tuple[list[dict], bool]:
+        """Complete paginated trade history; False means coverage is unproven."""
         trades: list[dict] = []
         from_id = None
         for _ in range(self.max_pages):
             page = await self.broker.get_my_trades(
                 symbol,
-                start_time_ms=now - self.lookback_ms,
+                start_time_ms=start_time_ms,
                 from_id=from_id,
                 limit=self.page_limit,
             )
@@ -356,6 +452,41 @@ class BinanceSpotSnapshotProvider:
                 return trades, True
             from_id = int(page[-1].get("id", 0)) + 1
         return trades, False
+
+    async def _orders(self, symbol: str, now: int) -> tuple[list, bool]:
+        return await self.fetch_orders(symbol, now - self.lookback_ms)
+
+    async def fetch_orders(self, symbol: str, start_time_ms: int) -> tuple[list, bool]:
+        """Complete paginated order history; False means coverage is unproven."""
+        orders = []
+        seen = set()
+        cursor = None
+        for _ in range(self.max_pages):
+            kwargs = {"start_time_ms": start_time_ms, "limit": self.page_limit}
+            if cursor is not None:
+                kwargs["from_order_id"] = cursor
+            try:
+                page = await self.broker.get_all_orders(symbol, **kwargs)
+            except TypeError:
+                # A legacy port without cursor support cannot prove completion.
+                if cursor is None:
+                    raise
+                return orders, False
+            for order in page:
+                if order.broker_order_id in seen:
+                    return orders, False
+                seen.add(order.broker_order_id)
+                orders.append(order)
+            if len(page) < self.page_limit:
+                return orders, True
+            try:
+                next_cursor = int(page[-1].broker_order_id) + 1
+            except (ValueError, TypeError):
+                return orders, False
+            if cursor is not None and next_cursor <= cursor:
+                return orders, False
+            cursor = next_cursor
+        return orders, False
 
 
 def observation_from_broker_order(

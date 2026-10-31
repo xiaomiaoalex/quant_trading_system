@@ -485,7 +485,7 @@ async def test_research_executor_runs_frozen_manifest_with_installed_plugin():
     assert finished["status"] == "SUCCEEDED", finished
     result = finished["result"]
     assert result["engine"] == "event_runtime"
-    assert result["admissible"] is True
+    assert result["admissible"] is False  # screening is not admission evidence
     assert isinstance(result["net_value"], str)
     assert len(result["equity_curve"]) == len(bar_list)
     assert result["manifest_hash"]
@@ -519,10 +519,17 @@ async def test_reports_without_event_runtime_evidence_are_marked_legacy():
     legacy = await store.get(job["run_id"])
     assert legacy["model"] == "legacy"
 
-    job2 = await store.enqueue({"dataset_ids": ["ds_y"]})
+    job2 = await store.enqueue({"dataset_ids": ["ds_y"], "runtime_version": "spot_bar_v2_shared"})
     await store.claim("worker-2", lease_seconds=30)
     await store.finish(
-        job2["run_id"], "worker-2", 1, result={"engine": "event_runtime", "net_value": "1000"}
+        job2["run_id"],
+        "worker-2",
+        1,
+        result={
+            "engine": "event_runtime",
+            "runtime_version": "spot_bar_v2_shared",
+            "net_value": "1000",
+        },
     )
     current = await store.get(job2["run_id"])
     assert current["model"] == "event_runtime"

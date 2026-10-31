@@ -57,6 +57,16 @@ class RsiGridStrategy:
             if not result.is_valid:
                 raise ValueError(f"RSI Grid 初始化参数无效: {[e.message for e in result.errors]}")
 
+    @property
+    def stateful_indicators(self) -> bool:
+        """The RSI window lives in process memory and must be rebuilt on restart."""
+        return True
+
+    @property
+    def warmup_events(self) -> int:
+        """Observations needed to fill the RSI window."""
+        return max(self.rsi_period * 4, self.rsi_period + 2)
+
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         price = market_data.price
         self._prices.append(price)

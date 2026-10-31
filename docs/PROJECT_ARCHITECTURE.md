@@ -1,5 +1,13 @@
 # 项目架构图
 
+### 第二轮：开发 schema 与查询重建
+
+统一交易表通过 `trader/trading/migrations.py` 执行带校验和的版本迁移；版本 3 添加可删除的 `trading_order_projection`。账户事务同次维护 commands/order 查询副本；`rebuild_query_projections` 在同一账户锁内从持久 `trading_accounts.state` 重建这两类查询表，不触碰 append-only 成交/账本/事件与 outbox 投递确认。该重建不是重新应用成交或恢复旧执行器。
+
+## 第二轮：共享现货纯核心
+
+`trader/trading/core.py` 提供无 IO 的订单准入与原币种账本、持仓、预约计算。live `TradingService` 在 PG 账户锁事务内调用；BAR 在历史时钟驱动的内存账户上调用。风险判断统一使用 `SpotRiskEngine` / `RiskPolicy`；撮合、报告闭合交易统计仍由 BAR 负责，传输命令和对账证据由 live 服务负责。
+
 > 本文档是当前运行架构的图文入口，用于快速理解系统边界、主数据流和关键闭环。
 > 长篇架构说明见 `docs/quant_trading_system Crypto v3.4.0_Architecture.md`；接口命名与 DTO 契约见 `docs/INTERFACE_CONTRACTS.md`。
 
@@ -783,7 +791,9 @@ flowchart TB
 4. 拉取完整 `ReconcileSnapshot` 并恢复（成交/订单/余额/代际）。
 5. 获取账户执行租约；冲突则交易未就绪。
 6. `/health/trading` 返回 200 后才允许策略启动。
-7. 策略运行；所有新风险命令经过同一 service 入口。
+7. 策略预热：重新采集已收盘行情回放插件，重建指标状态；预热完成前策略不产生
+   可交易输出，预热失败关闭新增风险。
+8. 策略运行；所有新风险命令经过同一 service 入口。
 
 **边界**：
 
@@ -792,7 +802,28 @@ flowchart TB
 - `trader/services/trading_ingress.py` 将 private stream 成交与订单更新转发给统一 service；不维护第二套订单状态。
 - `trader/api/routes/trading.py` / `research.py` 是控制面入口，不直接触达交易所或账本表。
 - `trading_runtime_leases` 保证同一账户只有一个执行实例；研究任务租约与 fencing 独立。
+- 已装配 Runtime 的 API 写命令通过 Runtime 入口检查账户执行所有权；Runtime 包装的
+  ExchangePort 在网络调用前再次通过 owner/token 续租验证。租约失效立即关闭本实例
+  ready/started，存储校验失败拒绝发送；持有效租约仍可在账户风控阻断时撤单。
+  已在途请求无法通过本地租约撤回，仍须保留 UNKNOWN 并对账。
 - Control API 与 Trading Runtime 可同进程启动用于本地开发，但生产部署按进程拆分。
+- 独立运行入口为 `runtime/control_main.py`、`runtime/trading_worker_main.py`、
+  `runtime/research_worker_main.py`。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
+  不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG 租约和
+  持久 runtime 元数据读取就绪。旧 `trader.api.main` 保留只读 connector/账户快照，
+  通过只读 broker 代理和生命周期退休门禁关闭旧发送器及自动恢复，旧投影撤单入口关闭。
+- 真实执行进程缺 private WS 覆盖证明时强制保持阻断，REST 快照不能代替流恢复屏障；
+  当前可验证闭环使用受控 fake，外部沙箱和 24h 最终切换尚未完成。
+- 执行器将 `PrivateTradingSession` 的世代缓冲、双快照和覆盖门禁装配到 Runtime
+  启动、周期对账及主动重连；失联先持久关闭 stream/ready。可选新 `UnifiedStrategyRunner`
+  从 ticker 输入生成稳定命令，读取统一账户库存；不会进入旧 Runner 的预算/OMS 路径。
+- 覆盖证明由 Adapter 侧端口提供（`BinanceSpotCoverageProver`）：以交易所服务器时间
+  界定窗口，完整分页回填订单与成交并逐笔映射本系统订单，连续两遍回填一致才返回
+  证明；任何不确定性返回 `None` 并保持 `PRIVATE_STREAM_COVERAGE_UNPROVEN`。核心层
+  不生成证明，也没有绕过开关。
+- 插件指标状态不跨进程持久化：预热窗口在每次进程启动时重新采集（生产实现为 Binance
+  已收盘 K 线回放），插件用 `stateful_indicators` / `warmup_events` 声明需求；未声明
+  的插件按有状态处理，未配置预热长度即阻断。
 - 旧 OMS/ExecutionBudget/AccountState 路径不得与新 service 同时发送订单；切换到新入口时必须以运行时租约和就绪门禁为唯一发送者。
 
 **监控字段**（`GET /v1/trading/metrics`）：
@@ -802,7 +833,8 @@ flowchart TB
 
 **运行期对账与恢复边界**：
 
-- 执行租约在恢复之前获取；租约冲突时进程保持存活并重试，不进入对账或发送。
+- 执行租约在恢复之前获取；独立执行进程租约冲突立即退出，不进入对账或发送。
+  Runtime 类的受控测试/合并开发入口保留显式后台重试能力。
 - 取得租约后完成首次完整对账、补齐 `QUEUED` 命令并进入 `READY`；此后每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒重复完整对账。
 - 完整快照必须包含本系统尚未终结的挂单、本系统已关闭订单的终态和最近逐笔成交；仅依赖 `openOrders` 会把已撤/已成交订单误判为未知状态。
 - 交易所规则归一化位于 Adapter；MARKET BUY 以 quote 金额结算，成交 base 数量与请求数量不要求相等。

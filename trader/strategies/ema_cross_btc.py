@@ -58,6 +58,16 @@ class EmaCrossBtcStrategy:
             if not result.is_valid:
                 raise ValueError(f"EMA Cross 初始化参数无效: {[e.message for e in result.errors]}")
 
+    @property
+    def stateful_indicators(self) -> bool:
+        """The EMA window lives in process memory and must be rebuilt on restart."""
+        return True
+
+    @property
+    def warmup_events(self) -> int:
+        """Observations needed to fill the EMA window (fast/slow + stability)."""
+        return max(self.slow_period * 3, self.slow_period + 2)
+
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         self._prices.append(market_data.price)
         keep = max(self.slow_period * 3, self.slow_period + 2)
