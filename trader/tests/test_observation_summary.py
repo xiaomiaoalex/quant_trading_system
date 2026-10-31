@@ -90,6 +90,26 @@ def test_markers_outside_observed_window_do_not_count(tmp_path, monkeypatch):
     assert "MISSING_MARKER:runtime_restart" in report["blockers"]
 
 
+def test_completed_restart_marker_pair_satisfies_the_drill_gate(tmp_path, monkeypatch):
+    drills = [
+        {"ts_ms": 120_000, "marker": "runtime_restart_start", "detail": "killed pid 1"},
+        {"ts_ms": 150_000, "marker": "runtime_restart_end", "detail": "READY again"},
+        {"ts_ms": 180_000, "marker": "active_reconnect", "detail": "reconnect evidence"},
+    ]
+    code, report = summarize(tmp_path, monkeypatch, samples() + drills)
+    assert code == 0 and report["ok"]
+
+
+def test_restart_start_without_a_completed_restart_still_blocks(tmp_path, monkeypatch):
+    drills = [
+        {"ts_ms": 120_000, "marker": "runtime_restart_start", "detail": "killed pid 1"},
+        {"ts_ms": 180_000, "marker": "active_reconnect", "detail": "reconnect evidence"},
+    ]
+    code, report = summarize(tmp_path, monkeypatch, samples() + drills)
+    assert code == 1
+    assert "MISSING_MARKER:runtime_restart" in report["blockers"]
+
+
 def test_out_of_order_sample_timestamps_block_delivery(tmp_path, monkeypatch):
     records = samples()
     records[1], records[2] = records[2], records[1]

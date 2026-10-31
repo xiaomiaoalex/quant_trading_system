@@ -1406,3 +1406,41 @@
   - `.env.postgres` 虽已 `git rm --cached`，内容仍存在于 git 历史中；其中的本地开发口令建议轮换（本次不改写历史）。
   - 归档契约仍只支持现货 `1m` + 按月 + BTCUSDT/ETHUSDT。
 - 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+### 2026-10-31 - 24h 观察窗口中断复核：成交重放假冲突修复与观察门禁
+
+- 背景: 复核 10-30 22:17 启动的第二次 24h 沙箱观察窗口。实际只跑到 10-31 13:48（15.5h），
+  账户进入永久 `BLOCKED` 后观察进程与 runtime 一起停止；`active_reconnect` marker 从未写入。
+- 根因（已用真实服务代码复现）:
+  1. 成交未入账时以 `dict(execution.content, applied=False)` 落库，把本地入账标记写进了成交内容；
+     再次投递同一笔成交时 `_canonical(existing) != _canonical(execution.content)` 因多一个
+     `applied` 键而误判 `EXECUTION_KEY_CONFLICT`，且该理由属于持久差异，账户无法自愈。
+  2. 私有流可能先于本地订单聚合送达成交；这类成交只被记为未入账，后续对账遇到已存在记录直接
+     `continue`，订单被领养后也不会补记，形成永久 `UNBOOKED_EXECUTIONS`。
+  3. 10-31 14:12 在 runtime 持租约运行时执行了开发库 `--drop` 重建：账户订单/账本被清空，
+     runtime 把 24h 内的历史成交当作新事实重放，恰好触发上面的误判。
+- 改动:
+  - `trader/trading/service.py`: 成交身份比较剔除 `applied`（`_execution_identity`）；
+    `record_execution` 与对账快照都支持订单已知后补记未入账成交（含超出交易所回看窗口的本地记录）；
+    `UNKNOWN_EXECUTION` 改为按实际未入账成交重建；只由本地标记造成的历史假冲突在下次对账时清除；
+    已被期初余额吸收的补记成交追加冲抵分录，避免重复计数；
+    真正内容不同的同 `exec_id` 成交、超量成交仍阻断，`EXECUTION_QUANTITY_CONFLICT` 不再被对账丢弃。
+  - `scripts/summarize_observation.py`: 重启证据接受 `runtime_restart` 或 `runtime_restart_start` +
+    `runtime_restart_end` 成对记录；只有 start 不算完成。
+  - `scripts/bootstrap_dev_schema.py`: `--drop` 前检查未过期 runtime 租约，存在即拒绝执行。
+  - 文档: `docs/INTERFACE_CONTRACTS.md` 成交重放约定、`docs/UNIFIED_TRADING_RUNBOOK.md`
+    观察窗口与重启/重建注意事项、`docs/UNIFIED_TRADING_ACCEPTANCE.md` 更正 24h 窗口实际状态。
+- 验证:
+  - 新增 `trader/tests/test_execution_recovery.py` 9 项：先红后绿，覆盖快照领养后补记、重复投递、幂等、
+    期初余额不重复计数、补记返回值、真实内容冲突、超量冲突、多笔中仍有未知成交时保持阻断、历史假冲突清除。
+  - 新增 `trader/tests/test_bootstrap_dev_schema.py` 3 项；`test_observation_summary.py` 新增 2 项。
+  - 交易相关回归 17 个文件 + P0 五件套全部通过；`black --check` / `isort --check-only` 对 `trader/` 通过。
+  - `mypy trader/` 仍为既有基线错误（75 errors / 15 files），本次新增文件无新增错误。
+  - 用 `--min-hours 24` 重跑既有窗口：`WINDOW_SHORTER_THAN_MIN`、`NOT_READY_AT_END`、
+    `MISSING_MARKER:active_reconnect`；重启 marker 现已按成对记录识别。
+- 风险/遗留:
+  - 修复不等于验收：必须停掉 runtime、确认账户恢复后重新开始满 24h 窗口，并在重连当下写入
+    `active_reconnect` marker；`artifacts/` 不入库，观察证据需另行归档。
+  - 重启前的历史假冲突会在下次对账自动清除；`EXECUTION_KEY_CONFLICT` 的真实内容冲突仍需人工
+    `POST /v1/trading/resolve/{code}`。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/UNIFIED_TRADING_RUNBOOK.md`、
+  `docs/UNIFIED_TRADING_ACCEPTANCE.md`

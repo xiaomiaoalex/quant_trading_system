@@ -206,6 +206,7 @@ jobs:
       - name: Run Trading Core Tests
         run: |
           python -m pytest -q trader/tests/test_trading_service.py --tb=short
+          python -m pytest -q trader/tests/test_execution_recovery.py trader/tests/test_bootstrap_dev_schema.py --tb=short
           python -m pytest -q trader/tests/test_shared_trading_core.py trader/tests/test_split_control_runtime.py --tb=short
           python -m pytest -q trader/tests/test_recovery_coordinator.py --tb=short
           python -m pytest -q trader/tests/test_private_execution_identity.py trader/tests/test_spot_recovery_pagination.py trader/tests/test_spot_coverage_proof.py --tb=short

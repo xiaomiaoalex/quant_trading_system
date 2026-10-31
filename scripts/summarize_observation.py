@@ -8,6 +8,13 @@ import math
 from collections import Counter
 from pathlib import Path
 
+# A drill marker may be written in one piece or as an explicit start/end pair.
+# Only the completed pair proves the runtime actually came back.
+REQUIRED_MARKERS: dict[str, frozenset[str]] = {
+    "runtime_restart": frozenset({"runtime_restart", "runtime_restart_end"}),
+    "active_reconnect": frozenset({"active_reconnect"}),
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize a trading observation window")
@@ -65,7 +72,6 @@ def main() -> int:
     errors = [s for s in samples if s.get("error")]
     sample_gaps = [right["ts_ms"] - left["ts_ms"] for left, right in zip(samples, samples[1:])]
     max_sample_gap_ms = max(sample_gaps, default=0)
-    required_markers = {"runtime_restart", "active_reconnect"}
     observed_markers = {marker["marker"] for marker in markers if first <= marker["ts_ms"] <= last}
     transitions = []
     previous = None
@@ -90,7 +96,7 @@ def main() -> int:
         "input": str(path),
         "samples": len(samples),
         "parse_errors": parse_errors,
-        "required_markers": sorted(required_markers),
+        "required_markers": sorted(REQUIRED_MARKERS),
         "observed_markers": sorted(observed_markers),
         "max_sample_gap_ms": max_sample_gap_ms,
         "allowed_sample_gap_ms": args.max_gap_seconds * 1000,
@@ -128,8 +134,9 @@ def main() -> int:
         blockers.append("NON_MONOTONIC_SAMPLES")
     if max_sample_gap_ms > args.max_gap_seconds * 1000:
         blockers.append("SAMPLE_GAP_EXCEEDED")
-    for marker in sorted(required_markers - observed_markers):
-        blockers.append(f"MISSING_MARKER:{marker}")
+    for marker, aliases in sorted(REQUIRED_MARKERS.items()):
+        if not aliases & observed_markers:
+            blockers.append(f"MISSING_MARKER:{marker}")
     if summary["max_balance_anomalies"] > 0:
         blockers.append("BALANCE_ANOMALY_OBSERVED")
     if summary["max_unknown_commands"] > 0:
