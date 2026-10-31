@@ -181,6 +181,9 @@ jobs:
           python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short
           python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short
           python -m pytest -q trader/tests/test_trading_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_trading_projection_rebuild.py --tb=short
+          python -m pytest -q trader/tests/test_split_control_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_unified_strategy_postgres.py --tb=short
           python -m pytest -q trader/tests/test_research_postgres.py --tb=short
 
   trading-core-gate:
@@ -203,12 +206,19 @@ jobs:
       - name: Run Trading Core Tests
         run: |
           python -m pytest -q trader/tests/test_trading_service.py --tb=short
+          python -m pytest -q trader/tests/test_shared_trading_core.py trader/tests/test_split_control_runtime.py --tb=short
+          python -m pytest -q trader/tests/test_recovery_coordinator.py --tb=short
+          python -m pytest -q trader/tests/test_private_execution_identity.py trader/tests/test_spot_recovery_pagination.py trader/tests/test_spot_coverage_proof.py --tb=short
+          python -m pytest -q trader/tests/test_unified_strategy_runner.py trader/tests/test_private_trading_session.py trader/tests/test_worker_assembly.py --tb=short
+          python -m pytest -q trader/tests/test_strategy_warmup.py --tb=short
+          python -m pytest -q trader/tests/test_trading_evidence.py trader/tests/test_spot_snapshot_consistency.py --tb=short
           python -m pytest -q trader/tests/test_trading_runtime.py --tb=short
           python -m pytest -q trader/tests/test_trading_api.py --tb=short
           python -m pytest -q trader/tests/test_trading_ingress.py --tb=short
           python -m pytest -q trader/tests/test_spot_execution_adapter.py --tb=short
           python -m pytest -q trader/tests/test_runtime_entrypoint.py --tb=short
           python -m pytest -q trader/tests/test_research_runtime.py --tb=short
+          python -m pytest -q trader/tests/test_research_safety.py trader/tests/test_research_worker_lifecycle.py trader/tests/test_observation_summary.py --tb=short
           python -m pytest -q trader/tests/test_trading_performance.py --tb=short
 
   frontend-gate:

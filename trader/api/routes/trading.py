@@ -57,7 +57,7 @@ class CancelRequest(BaseModel):
 class ControlRequest(BaseModel):
     command_id: str = Field(min_length=1, max_length=128)
     account_id: str = Field(min_length=1)
-    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL"]
+    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT"]
     actor: str | None = None
 
 
@@ -106,6 +106,13 @@ def _service(request: Request):
 
 def _receipt(receipt) -> dict:
     return json_value(receipt)
+
+
+def _executor(request: Request):
+    # Runtime owns the account lease. Direct service injection is for isolated
+    # tests and control applications that do not assemble an execution runtime.
+    runtime = getattr(request.app.state, "trading_runtime", None)
+    return runtime if runtime is not None else _service(request)
 
 
 def _handle(exc: Exception) -> HTTPException:
@@ -160,8 +167,15 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/v1/auth/me")
-async def me(request: Request):
-    return {"actor": request.state.actor}
+async def me(request: Request, response: Response):
+    # Session cookies survive reloads; the in-memory frontend CSRF token does not.
+    response.headers["Cache-Control"] = "no-store"
+    token = request.cookies.get("qts_session", "")
+    enabled = request.app.state.auth_settings.enabled
+    return {
+        "actor": request.state.actor,
+        "csrf_token": csrf_for(token) if enabled and token else "",
+    }
 
 
 @router.post("/v1/trading/orders", status_code=202)
@@ -181,7 +195,7 @@ async def place_order(payload: PlaceOrderRequest, request: Request):
         decision_id=payload.decision_id,
     )
     try:
-        receipt = await _service(request).place(command, actor=request.state.actor)
+        receipt = await _executor(request).place(command, actor=request.state.actor)
     except Exception as exc:
         raise _handle(exc) from exc
     return _receipt(receipt)
@@ -190,7 +204,7 @@ async def place_order(payload: PlaceOrderRequest, request: Request):
 @router.post("/v1/trading/orders/{cl_ord_id}/cancel", status_code=202)
 async def cancel_order(cl_ord_id: str, payload: CancelRequest, request: Request):
     try:
-        receipt = await _service(request).cancel(
+        receipt = await _executor(request).cancel(
             payload.command_id,
             payload.account_id,
             cl_ord_id,
@@ -204,7 +218,7 @@ async def cancel_order(cl_ord_id: str, payload: CancelRequest, request: Request)
 @router.post("/v1/trading/control", status_code=202)
 async def control_action(payload: ControlRequest, request: Request):
     try:
-        receipt = await _service(request).control(
+        receipt = await _executor(request).control(
             payload.command_id,
             payload.account_id,
             payload.action,
@@ -221,6 +235,17 @@ async def get_command(command_id: str, request: Request, account_id: str = Query
     if record is None:
         raise HTTPException(status_code=404, detail="Command not found")
     return record
+
+
+@router.post("/v1/trading/reconnect", status_code=202)
+async def request_reconnect(payload: CancelRequest, request: Request):
+    try:
+        receipt = await _executor(request).control(
+            payload.command_id, payload.account_id, "RECONNECT", actor=request.state.actor
+        )
+    except Exception as exc:
+        raise _handle(exc) from exc
+    return _receipt(receipt)
 
 
 @router.get("/v1/trading/orders")

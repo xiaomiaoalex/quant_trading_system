@@ -1,5 +1,45 @@
 # Interface Contracts - 接口契约与命名规范
 
+### 第三轮 private stream 入账边界
+
+`RawFillUpdate` 保留兼容 float 字段，同时新增 `qty_text/price_text/commission_text` 原金额字符串、`commission_asset`、`canonical_exec_id`（Binance trade `t`）和 `execution_ts_ms`（成交 `T`）。统一入口优先使用这些字段，使 WS 与 REST 同一逐笔事实保持相同身份、时间、精度和原币种手续费；legacy `exec_id` 保留原执行编号语义。订单累计量用 `cumulative_qty_text`，累计观测不生成成交。
+
+PrivateStreamManager 在关闭 socket 前通知 DISCONNECTED，在自动重连开始前通知 RECONNECT；session据此先阻断。REST `get_all_orders` 新增可选 `from_order_id`，恢复按交易所订单cursor分页；短页才能证明该请求范围完成，重复/不前进/超页数或端口无cursor能力均不完整。
+
+### 开发 schema 版本与查询投影重建（第二轮）
+
+- `initialize_trading_schema(connection)` 按版本与 SHA256 校验执行迁移，同一 schema 的初始化使用 PG advisory transaction lock；已应用版本不可修改，运行时拒绝比自身更高版本。
+- 版本 2 兼容采纳既有 `001_trading.sql`；版本 3 新增 `trading_order_projection`。`trading_accounts.state` 是统一账户持久状态，commands 与 order projection 是可重建查询副本；ledger/executions/events/outbox 不属于可删除查询投影。
+- `PostgresTradingStore.rebuild_query_projections(account_id)` 使用与交易写入相同的账户 `FOR UPDATE` 锁，原子替换该账户 commands/order 查询副本。不更改账户 version、余额、持仓、真实成交、账本、事件及 outbox 投递确认；缺失账户明确报错。
+- 开发工具 `scripts/bootstrap_dev_schema.py --target dev --rebuild-account <account_id>` 显式重建；`--drop` 与 `--rebuild-account` 不能混用。只有显式 `--target dev` 才能打开数据库执行建表、重建或删除；本轮仅在测试临时 schema 证明行为，未重建开发账户数据。
+
+### RecoveryCoordinator 恢复屏障（第二轮）
+
+- 第三轮装配 `PrivateTradingSession(service, account_id, stream_factory, snapshot_provider, coverage_provider, on_block, on_ready)`：`start/align/reconnect` 返回是否就绪；`stop` 先持久阻断。通过 `ExecutionIngress` 将原始 private 更新转换为真实成交与累计观测，再送入同代恢复缓冲；状态/成交解析失败不能仅记录日志后保持就绪。
+- 每个 stream 实例使用不可变代际 sink。断线、重连、stale、error 先关闭恢复屏障；后续重连创建新 stream 实例，旧连接迟到回调被拒绝。健康连续连接的周期 `align` 使用 `pause_alignment` 原代缓冲，不必反复重建 socket。
+- Session 读取 REST 双快照后只调用 Adapter 注入的 `coverage_provider(generation, first, last, connected_from_ms, buffered_through_ms)`；无证明返回未就绪，并且 `on_ready` 后还校验账户风险视图。Binance Adapter 的覆盖证明来自交易所时间界定的完整两遍 REST 回填；证明失败时保持 blocked，不因真实 stream 已连接而自动就绪。
+
+- `begin()` 先调用注入的持久阻断回调并创建连接代际；`ingest(generation, Execution | OrderObservation)` 忽略旧代事件，恢复中有界缓冲，溢出立即阻断且该代不可就绪。
+- `finish(generation, first, last, RecoveryCoverage | None)` 要求完整且经济内容一致的双快照，以及 Adapter 提供的同代权威连续游标覆盖证明；不存在证明必须保持阻断。REST 本地接收时间不能构造覆盖证明。
+- 恢复应用顺序为：stream_healthy=false 的快照 → 缓冲事实（相同内容只重放一次，冲突内容继续交给统一成交去重验证）→ 注入的最终就绪回调。账务应用失败关闭屏障并传播，旧代和失败代不得静默恢复。
+- 此模块自身不访问网络、不生成或伪造 Binance 的全流连续游标；Binance Adapter 尚无可信覆盖证明时不能因模块单测通过而声称真实 private WS 恢复完成。最终就绪回调仍须检查账户账务/风险差异。
+
+### 第二轮共享纯核心
+
+`trader.trading.core.reserve_order` 在调用方账户事务内执行 `SpotRiskEngine`、创建订单聚合并预占；`apply_ledger`、`apply_position`、`release_hold` 是 live 与 BAR 共用的无 IO 经济计算，BAR 的 `book_execution` 组合相同函数。live 保留证据冲突、事件/outbox 与持久事务编排，BAR 保留历史时钟、撮合和闭合交易指标。`policy_from_config` 严格解析 RiskPolicy 字段，未知配置拒绝，不默默忽略。API `defer_send=True` 仅持久受理命令，不调用交易所。
+
+### 统一交易成交证据约束（2026-10-31）
+
+- `UNBOOKED_EXECUTIONS`：任一订单累计观测量大于真实入账量时阻断新增风险，包含 MARKET、部分成交和撤销终态；只有真实成交补齐后消除。
+- `FILL_OBSERVATION_MISMATCH` 从全部订单重算，不能由另一订单的完成或撤销清除。观测只改变订单投影，不能生成账务。
+- 释放终态预约以聚合接受后的实际状态为准；被聚合忽略的旧终态观测不得释放活动订单预约。
+- LIMIT 仅支持 GTC；其他 `time_in_force` 在受理、预占和网络发送前明确拒绝。
+- `TERMINAL_EXECUTION_MISMATCH`：撤销/过期订单的真实已入账量超过终态累计观测时，保留账务和终态并阻断新增风险；经更新的终态观测核对一致后消除。
+- `ResearchExecutor.execute` 在创建插件前重新校验冻结策略 `code_hash`；源码变化拒绝执行。BAR 模拟 SELL 预约仅扣除相同 symbol 的未成交 SELL。
+- `BinanceSpotSnapshotProvider.build` 在订单/成交分页采集前后重复读取余额与活动订单；任一资产 free/locked、订单身份/状态/累计量变化均返回 `complete=False`。该稳定性检查不替代 WS 代际缓冲与覆盖水位证明。
+- 估值完整性与新增风险共同检查所有非零资产的 USDT 换算价，不依赖是否配置组合限额；缺失、过期、非有限或非正价格均阻断。
+- Research Worker 执行期间每 `lease_seconds / 3` 续租；取消停止本地执行并以有效 token 完成取消。失租或心跳失败停止本地执行并向调用方传播，不尝试旧 token 发布。异步 BAR 回放每 256 根让出调度。
+
 > 本文档是多人协作和 AI 修改代码时的接口单一真相源。
 > `docs/DATA_CONTRACT.md` 负责研究数据字段契约；本文负责代码接口、DTO、事件、跨层命名与变更流程。
 
@@ -2719,6 +2759,8 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - 写操作必须携带会话 Cookie 与 `x-csrf-token`。
 - 审计身份只来自会话；请求体 `actor` / `requested_by` 不改变身份。
 - 未登录返回 `401`；CSRF/Origin 失败返回 `403`；登录限流返回 `429`。
+- `GET /v1/auth/me` 经会话鉴权返回 `{actor, csrf_token}`，设置 `Cache-Control: no-store`。
+  前端刷新后以此恢复内存 CSRF token；开发免登录模式返回空 token；校验失败清除旧 token。
 - `/health/live`、`/health/ready`、`/health/trading` 分别表示进程存活、API 可服务、交易就绪；交易未就绪返回 `503 + reasons`。
 - `CANCEL_ALL` 必须为每个活动订单调用同一 `cancel()` 执行入口，子命令 ID 为 `{control_command_id}:{cl_ord_id}`；任一子撤单 `UNKNOWN` 时控制命令保持 `UNKNOWN`，不得显示全部已撤销。
 - `BLOCK_NEW_RISK` 只阻断新增风险，查询和撤单仍可用；`RESUME_NEW_RISK` 解除人工阻断，但不能覆盖对账、余额或未知订单差异。
@@ -2729,6 +2771,59 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - Trading Runtime 进程：唯一账户执行实例；PostgreSQL `trading_runtime_leases` 租约防止双启动；启动顺序为存储 → 账本/风控/OMS → Adapter → 恢复对账 → 交易就绪 → 策略。
 - Research Worker 进程：`research.backtest_jobs` 租约 + fencing token；失败全量重跑；旧租约不得发布结果。
 - 进程间只通过 PostgreSQL 表协调，不引入消息中间件。
+
+实际独立入口：`trader.runtime.control_main`、`trader.runtime.trading_worker_main`、
+`trader.runtime.research_worker_main`。控制面用 `TradingService(defer_send=True)` 在账户事务内
+保存命令/风控预约，直接返回 `QUEUED`，不持有交易所 IO 端口；Runtime 周期消费。
+`CONTROL` 请求在账户 `control.requests` 保留动作与活动订单，`CANCEL_ALL` 在所有子命令
+明确前不得确认父命令；恢复不会把 `QUEUED` 控制动作当作未知发送。
+控制面使用 PG 有效租约 owner/token 与账户 `control.runtime` 元数据交叉验证就绪，
+恢复未完成、所有者未对齐或租约无效时新增风险返回 503。
+旧 `trader.api.main` 在退休生命周期期间拒绝 `/v1/killswitch` 写操作，返回
+`503 LEGACY_EXECUTION_RETIRED` 且不进入旧控制副作用或投影撤单；GET 查询保留。
+独立入口强制会话鉴权，缺密码配置 fail-closed；缺 private WS 覆盖证明时真实执行入口
+保持 `PRIVATE_STREAM_UNHEALTHY`，不能从 REST 成功推断就绪。
+
+Runtime 的 `private_session_factory(runtime)` 在存储/service/账户租约之后构建
+`PrivateTradingSession`；初次调用 `start()`，周期调用 `align()`，主动重连调用
+`reconnect()`，均使用同一个 `RecoveryCoordinator` 门禁。`on_block(reason)` 持久关闭
+账户 stream 健康和 runtime ready；`on_ready()` 只恢复流标记，会话与账户风险状态
+均就绪后才最终发布 READY。缺会话报 `PRIVATE_SESSION_NOT_ASSEMBLED`，
+缺覆盖证明报 `PRIVATE_STREAM_COVERAGE_UNPROVEN`；socket CONNECTED 不足以通过。
+
+覆盖端口契约为
+`coverage_provider(generation, first, last, connected_from_ms, buffered_through_ms) -> RecoveryCoverage | None`。
+Binance 实现 `BinanceSpotCoverageProver` 仅以交易所服务器时间界定窗口：
+`fetch_orders`/`fetch_trades` 必须报告分页完整，成交必须映射到本系统 `qts-` 订单，
+窗口内无外部/重复成交，连续两遍回填逐字段一致，双快照成交均出现在回填中；
+缓冲水位不得越过已证明窗口。任一不满足返回 `None`，`RecoveryCoordinator` 继续阻断。
+REST 接收时间、本地 socket 状态或“观察到成交”均不能构造证明。
+覆盖证明只扫描配置的 `QTS_SYMBOLS`；Runtime 以同一集合作为下单 allowlist，
+`runtime.place()` 与持久 QUEUED 命令的 IO 边界都拒绝范围外 symbol，撤单/查询不限制。
+
+`UnifiedStrategyRunner(runtime, deployment_id, plugin, instruments, strategy_id, warmup_events=0,
+warmup_source=None, on_block=None)`
+由独立执行入口可选装配，`on_market_data(MarketData, event_id=...)` 通过 `runtime.place()`；
+事件重试使用相同持久命令，插件读取统一 `AccountRiskView`，不新建账本/预约/累计敞口。
+门禁在账户恢复检查之后、进程重启后重新计数，不提供绕过开关。
+
+指标预热契约（第四轮）：
+
+- 插件可选声明 `stateful_indicators: bool` 与 `warmup_events: int`，由
+  `describe_plugin_warmup(plugin)` 读取。未声明的插件按“有状态”处理：沉默不等于
+  “可以冷启动交易”。声明 `stateful_indicators=False` 的插件无需预热。
+- 预热长度取 `max(部署配置 warmup_events, 插件声明 warmup_events)`；插件声明是下界。
+- 预热状态为 `PENDING / WARMING_UP / WARM / BLOCKED`，按标的分别计数；所有标的都达到
+  预热长度才进入 `WARM`。预热期间观察仍传给插件，但产生的信号一律丢弃，不提交订单。
+- 预热窗口**重新采集**而非持久化：插件内部指标状态不可安全序列化，代码或参数变更后
+  持久快照即失效。`warmup_source` 返回重新采集的历史观测（生产实现为 Binance 已收盘
+  K 线），在恢复完成后回放；未完成 K 线不可见。
+- 阻断原因：`STRATEGY_WARMUP_NOT_CONFIGURED`（有状态插件无预热长度）、
+  `STRATEGY_WARMUP_HISTORY_EMPTY`、`STRATEGY_WARMUP_HISTORY_INCOMPLETE`、
+  `STRATEGY_WARMUP_HISTORY_FAILED`、`STRATEGY_WARMUP_FAILED`、`STRATEGY_PLUGIN_ERROR`。
+  阻断时 `on_block` 关闭账户新增风险，健康接口不得假装就绪。
+- 就绪响应增加 `strategy_warmup_remaining`、`strategy_warmup_state`、
+  `strategy_warmup_reason`、`strategy_ready`（未装配策略时为 `null`）。
 
 ## 14. Research Dataset / Event Runtime 契约
 
@@ -2772,6 +2867,17 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - `model=event_runtime` 仅当成功结果包含 `engine=event_runtime`；其余历史成功结果返回 `model=legacy`，不得作为准入证据。
 - 旧结果不得原地改写；读取时标记，新运行使用冻结 manifest 全量重跑。
 
+### 14.5 研究冻结输入与证据字段
+
+- 共享核心经济模型版本为 `spot_bar_v2_shared`，新任务 manifest 与结果均显式记录此版本。无版本或旧 `spot_bar_v1` 任务执行前拒绝；旧结果读取标为 `model=legacy`，即使其 engine 名称仍为 `event_runtime`。不得静默用新核心重跑旧冻结任务，必须新建 manifest。
+- `ResearchExecutor.execute` 在加载插件前重新校验冻结策略 `code_hash`，缺失或源码变化则拒绝；读取 dataset 后按 `freeze_dataset` 重算 ID，并校验实际 identity/bars 的内容哈希，不能在原 ID 下执行被修改的数据。
+- 新研究结果的 `manifest_hash` 是任务中完整冻结 manifest 的哈希，包含策略源码、版本、参数及风控配置；`runtime_manifest_hash` 单独保留 BAR 模拟参数哈希，不得代替完整输入证明。执行前必须校验任务 manifest 与持久 hash 一致。
+- `research_screening` 的 `admissible=false`；只有 `purpose=admission_evidence` 且无 `errors`、无执行拒绝时，事件运行结果才可报告 `admissible=true`。该字段不替代执行准入的其他门禁。
+- 报告 `limitations` 必须声明 `BAR data cannot validate queue priority or market impact.`。
+- BAR 与 `TradingService` 共用 `trader.trading.core.reserve_order`、`apply_ledger`、`apply_position`、`release_hold`，BAR 通过 `book_execution` 组合真实成交去重、聚合和账务；生产服务保留事务、冲突证据与 outbox 编排。BAR 撮合默认全量成交，部分成交通过共享逐笔入口验证。
+- `risk_config` 仅允许 `RiskPolicy` 字段；金额/费率转为 `Decimal`，新鲜度字段为整数毫秒，未知字段必须拒绝。BAR 使用历史开盘/收盘时点及对应估值更新账户视图，然后调用与实盘相同的 `SpotRiskEngine`；委托和剩余预约计入相同组合限额。
+- 策略持仓按实际基础资产净额计算：BUY 增加 qty、SELL 减少 qty；手续费资产为 base 时再扣 fee。手续费资产账本仍单列原币种费用，不能再重复扣余额。
+
 ### 13.7 运行期对账、交易所规则与沙箱验证
 
 - Trading Runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整 `ReconcileSnapshot`；撤单/成交终态必须来自快照中的订单观测或逐笔成交，不得由本地请求推断。
@@ -2782,7 +2888,10 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - `UNKNOWN_ORDER` 仅在本系统无法归属的外部订单仍出现在完整快照中时保持阻断；完整快照确认其已消失后自动解除并保留审计事件。`BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION` 仍需人工核对。
 - 交易所规则在 Adapter 边界归一化：`LOT_SIZE.stepSize` 向下取整数量、`PRICE_FILTER.tickSize` 取整价格、`NOTIONAL.minNotional` 预拒绝、`quoteAssetPrecision` 归一化 MARKET BUY 的 quote 金额；Core/Service 不接触原始 filter 字段。
 - MARKET BUY 以 quote 金额结算，交易所成交的 base 数量可能小于请求数量；只要逐笔成交可对上账，`FILLED` 观测不要求 `cumulative_qty == command.qty`。LIMIT 订单仍要求 `FILLED` 精确覆盖委托数量。
-- `POST /v1/trading/reconnect` 是运维主动重连入口，只重建交易所会话，不改变本地订单/账本；重连后必须等待 `/health/trading` 重新 `READY` 才能继续新增风险。
+- `POST /v1/trading/reconnect` 接收 `{command_id, account_id}`，返回 `202 + CommandReceipt`；
+  动作 `RECONNECT` 由独立 Runtime 消费，先持久关闭 stream/ready 门禁再重建会话并对账。
+  无覆盖证明保持阻断；必须等待命令确认及 `/health/trading` 重新 `READY`。
+  中断或结果未知不得自动重复重连，命令状态保持可见。
 - 沙箱验证脚本：`scripts/testnet_e2e.py`（下单/撤单/成交/重连，产出 `artifacts/e2e_evidence_final.json`）、`scripts/observe_trading_runtime.py` + `scripts/mark_observation.py` + `scripts/summarize_observation.py`（24h 观察窗口证据）。
 
 ---

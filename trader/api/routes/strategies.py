@@ -67,6 +67,7 @@ _broker_lock: asyncio.Lock = asyncio.Lock()
 
 # 全局实盘交易开关（默认关闭）
 _live_trading_enabled: bool | None = None
+_legacy_sender_retired: bool = False
 
 
 def _is_live_trading_enabled() -> bool:
@@ -78,6 +79,8 @@ def _is_live_trading_enabled() -> bool:
     3. 默认 False（安全优先）
     """
     global _live_trading_enabled
+    if _legacy_sender_retired:
+        return False
     if _live_trading_enabled is not None:
         return _live_trading_enabled
     env_val = os.environ.get("LIVE_TRADING_ENABLED", "").strip().lower()
@@ -122,13 +125,29 @@ def reset_strategy_route_state_for_tests() -> None:
     _pre_trade_risk_check = None
 
 
-async def _create_broker():
+class _ReadOnlyLegacyBroker:
+    def __init__(self, broker):
+        self._broker = broker
+
+    def __getattr__(self, name):
+        if name in {"place_order", "cancel_order", "cancel_all_orders", "replace_order"}:
+
+            async def reject(*args, **kwargs):
+                raise RuntimeError("LEGACY_EXECUTION_RETIRED")
+
+            return reject
+        return getattr(self._broker, name)
+
+
+async def _create_broker(*, read_only: bool = False):
     """创建 Broker 实例（延迟初始化，使用 asyncio.Lock 保证安全）
 
     根据 BINANCE_ENV 环境变量选择环境：
     - demo / 默认: Binance Spot Demo API
     - testnet / test: Binance Spot Testnet API
     """
+    if _legacy_sender_retired and not read_only:
+        raise RuntimeError("LEGACY_EXECUTION_RETIRED: use the unified trading runtime")
     global _broker_instance
     async with _broker_lock:
         if _broker_instance is None:
@@ -151,7 +170,8 @@ async def _create_broker():
                     api_key=api_key,
                     secret_key=secret_key,
                 )
-            _broker_instance = BinanceSpotDemoBroker(config)
+            broker = BinanceSpotDemoBroker(config)
+            _broker_instance = _ReadOnlyLegacyBroker(broker) if read_only else broker
             await _broker_instance.connect()
 
             # 注册broker到storage，以便Monitor API能获取adapter health
@@ -314,6 +334,8 @@ def get_fill_handler():
 async def ensure_fill_handler_ready():
     """确保 fill_handler 已初始化并返回。"""
     global _fill_handler
+    if _legacy_sender_retired:
+        return None
     if _fill_handler is None:
         await _get_oms_handler()
     return _fill_handler

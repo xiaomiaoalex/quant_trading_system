@@ -71,6 +71,15 @@ class FireTestStrategy:
             if not result.is_valid:
                 raise ValueError(f"Fire Test 初始化参数无效: {[e.message for e in result.errors]}")
 
+    @property
+    def stateful_indicators(self) -> bool:
+        """The fire test emits on a fixed cadence and keeps no indicator window."""
+        return False
+
+    @property
+    def warmup_events(self) -> int:
+        return 0
+
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
         if self.max_signals > 0 and self._emit_count >= self.max_signals:
             return None

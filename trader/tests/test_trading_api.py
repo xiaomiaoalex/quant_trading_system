@@ -178,6 +178,25 @@ async def test_logout_revokes_the_session():
 
 
 @pytest.mark.asyncio
+async def test_session_refresh_restores_csrf_without_new_login():
+    client, _, _ = await build_client()
+    try:
+        csrf = await login(client)
+        refreshed = await client.get("/v1/auth/me")
+        assert refreshed.status_code == 200
+        assert refreshed.json()["csrf_token"] == csrf
+        assert refreshed.headers["cache-control"] == "no-store"
+        placed = await client.post(
+            "/v1/trading/orders",
+            json=order_payload(),
+            headers={"x-csrf-token": refreshed.json()["csrf_token"]},
+        )
+        assert placed.status_code == 202
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_login_rate_limit_after_five_failures():
     client, _, _ = await build_client()
     try:

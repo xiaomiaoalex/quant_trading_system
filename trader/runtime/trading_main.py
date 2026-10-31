@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -108,7 +109,12 @@ async def lifespan(app):
                 clock=_clock_ms,
                 lookback_ms=int(os.getenv("QTS_RECONCILE_LOOKBACK_MS", "86400000")),
             )
-            snapshot_provider = snapshot.build
+
+            async def snapshot_provider(account):
+                # This legacy combined launcher has no private-stream recovery
+                # barrier. REST success alone must never enable execution.
+                return replace(await snapshot.build(account), stream_healthy=False)
+
         else:
 
             async def snapshot_provider(_account_id):
@@ -135,6 +141,13 @@ async def lifespan(app):
             lease_seconds=int(os.getenv("QTS_RUNTIME_LEASE_SECONDS", "30")),
             reconcile_interval_seconds=float(os.getenv("QTS_RECONCILE_INTERVAL_SECONDS", "30")),
         )
+        if broker is not None:
+
+            async def reconnect():
+                await broker.disconnect()
+                await broker.connect()
+
+            runtime.reconnect_callback = reconnect
         started = await runtime.start()
         app.state.trading_service = runtime.service
         app.state.readiness_provider = TradingReadinessProvider(runtime)
@@ -169,19 +182,6 @@ app = create_trading_app(
     lifespan=lifespan,
     include_sse=True,
 )
-
-
-@app.post("/v1/trading/reconnect")
-async def reconnect_venue():
-    """Operator-triggered active reconnect of the venue session."""
-    broker = getattr(app.state, "broker", None)
-    if broker is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=503, detail="Venue session is not configured")
-    await broker.disconnect()
-    await broker.connect()
-    return {"ok": True, "reconnected_at_ms": int(time.time() * 1000)}
 
 
 if __name__ == "__main__":

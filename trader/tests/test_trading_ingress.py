@@ -96,7 +96,9 @@ async def test_fee_without_commission_asset_falls_back_to_quote_asset():
     await ingress.on_fill(Fill(receipt.cl_ord_id, 1, 1.0, 100.0, 0.1, 1_000_100, exec_id="e-1"))
     state = await service.store.read("acct")
     assert state.balances["USDT"] == Decimal("899.9")
-    assert state.ledger[2]["asset"] == "USDT"
+    fees = [entry for entry in state.ledger if entry["kind"] == "fee"]
+    assert len(fees) == 1
+    assert fees[0]["asset"] == "USDT"
 
 
 @pytest.mark.asyncio
@@ -105,5 +107,5 @@ async def test_malformed_fill_without_ids_is_dropped_without_side_effects():
     assert await ingress.on_fill(Fill("", 0, 1.0, 100.0, 0.0, 1_000_100)) is False
     state = await service.store.read("acct")
     assert state.executions == {}
-    assert state.ledger == []
+    assert [entry for entry in state.ledger if entry["kind"] in {"trade", "fee"}] == []
     assert state.balances["USDT"] == Decimal("1000")

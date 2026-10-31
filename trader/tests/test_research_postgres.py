@@ -136,3 +136,21 @@ async def test_postgres_dataset_is_content_addressed_and_immutable():
         assert first["dataset_id"] == second["dataset_id"]
         assert first["dataset_id"] != changed["dataset_id"]
         assert (await store.get_dataset(first["dataset_id"]))["dataset_id"] == first["dataset_id"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_dataset_tampering_is_rejected_at_execution():
+    from trader.trading.research import ResearchExecutor
+
+    async with research_store() as (store, pool):
+        data = await store.register_dataset(identity(), bars())
+        job = await BacktestApplication(store).submit(manifest(data["dataset_id"]))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE research.datasets SET document=
+                   jsonb_set(document, '{bars,0,volume}', '"999"'::jsonb)
+                   WHERE dataset_id=$1""",
+                data["dataset_id"],
+            )
+        with pytest.raises(ValueError, match="Dataset content hash mismatch"):
+            await ResearchExecutor(store).execute(job)

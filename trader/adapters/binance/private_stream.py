@@ -72,6 +72,7 @@ class RawOrderUpdate:
     exchange_ts_ms: int
     local_receive_ts_ms: int
     source: str = "WS"
+    cumulative_qty_text: str | None = None
 
 
 @dataclass
@@ -91,6 +92,12 @@ class RawFillUpdate:
     symbol: Optional[str] = None
     exec_id: Optional[str] = None
     source: str = "WS"
+    commission_asset: str = ""
+    qty_text: str | None = None
+    price_text: str | None = None
+    commission_text: str | None = None
+    canonical_exec_id: str | None = None
+    execution_ts_ms: int | None = None
 
 
 @dataclass
@@ -698,6 +705,7 @@ class PrivateStreamManager(BaseStreamFSM):
 
     async def _disconnect(self) -> None:
         """断开 WebSocket 连接"""
+        await self._trigger_event(StreamEvent.DISCONNECTED)
         if self._recv_task and not self._recv_task.done():
             self._recv_task.cancel()
             try:
@@ -735,6 +743,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 await self._trigger_event(StreamEvent.ERROR, "Reconnect storm detected")
                 return
 
+            await self._trigger_event(StreamEvent.RECONNECT)
             self._set_state(StreamState.RECONNECTING)
             self._record_reconnect()
 
@@ -880,6 +889,7 @@ class PrivateStreamManager(BaseStreamFSM):
             status=data.get("X", "UNKNOWN"),
             filled_qty=filled_qty,
             avg_price=avg_price,
+            cumulative_qty_text=str(data.get("z", "0")),
             exchange_ts_ms=exchange_ts,
             local_receive_ts_ms=int(time.time() * 1000),
             source="WS",
@@ -954,6 +964,14 @@ class PrivateStreamManager(BaseStreamFSM):
                 broker_order_id=broker_order_id,
                 symbol=data.get("s"),
                 exec_id=exec_id,
+                commission_asset=str(data.get("N") or ""),
+                qty_text=str(data.get("l", "0")),
+                price_text=str(data.get("L", "0")),
+                commission_text=str(data.get("n", "0")),
+                canonical_exec_id=(
+                    str(trade_id) if data.get("t") is not None and trade_id >= 0 else None
+                ),
+                execution_ts_ms=self._parse_int(data.get("T"), default=exchange_ts),
                 source="WS",
             )
         except (ValueError, TypeError, KeyError) as e:

@@ -20,8 +20,15 @@ export class AuthAPI extends APIClient {
     }
   }
 
-  async me(): Promise<{ actor: string }> {
-    return this.get<{ actor: string }>('/v1/auth/me')
+  async me(): Promise<LoginResponse> {
+    try {
+      const response = await this.get<LoginResponse>('/v1/auth/me')
+      setCSRFToken(response.csrf_token)
+      return response
+    } catch (error) {
+      setCSRFToken(null)
+      throw error
+    }
   }
 }
 

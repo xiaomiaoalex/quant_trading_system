@@ -13,7 +13,9 @@ from typing import Any
 
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.trading.backtest import EventBacktestRuntime, StrategySignal
-from trader.trading.datasets import decimal_text
+from trader.trading.datasets import decimal_text, digest, freeze_dataset
+from trader.trading.jobs import freeze_strategy
+from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
 def load_plugin(module_path: str, params: dict[str, Any]):
@@ -85,15 +87,28 @@ class ResearchExecutor:
             raise ValueError("Only the event runtime may execute frozen backtests")
         if purpose == "admission_evidence" and engine != "event_runtime":
             raise ValueError("VectorBT results cannot be admission evidence")
+        if manifest.get("runtime_version") != SPOT_RUNTIME_VERSION:
+            raise ValueError("Legacy runtime version; submit a new frozen job manifest")
 
         datasets = []
         for dataset_id in manifest["dataset_ids"]:
             data = await self.store.get_dataset(dataset_id)
             if data is None:
                 raise ValueError(f"Dataset not found: {dataset_id}")
+            normalized = freeze_dataset(data["identity"], data["bars"])
+            content_id = "ds_" + digest({"identity": data["identity"], "bars": data["bars"]})
+            if not dataset_id == data.get("dataset_id") == normalized["dataset_id"] == content_id:
+                raise ValueError(f"Dataset content hash mismatch: {dataset_id}")
             datasets.append(data)
 
         strategy_spec = manifest["strategy"]
+        # Revalidate immediately before loading installed code. A queued job or
+        # retry must not silently run source different from its frozen manifest.
+        if not strategy_spec.get("code_hash"):
+            raise ValueError("Frozen strategy code_hash is required")
+        freeze_strategy(strategy_spec)
+        if record.get("manifest_hash") != digest(manifest):
+            raise ValueError("Frozen manifest hash mismatch")
         params = strategy_spec.get("params", {})
         adapters = {}
         for data in datasets:
@@ -118,9 +133,12 @@ class ResearchExecutor:
         curve = result.equity_curve
         return {
             "engine": "event_runtime",
+            "runtime_version": SPOT_RUNTIME_VERSION,
             "purpose": purpose,
-            "admissible": purpose != "vectorbt" and engine == "event_runtime",
-            "manifest_hash": result.manifest_hash,
+            "admissible": result.admissible,
+            "manifest_hash": record["manifest_hash"],
+            "runtime_manifest_hash": result.manifest_hash,
+            "limitations": ["BAR data cannot validate queue priority or market impact."],
             "dataset_ids": result.dataset_ids,
             "initial_cash": decimal_text(result.initial_cash),
             "cash": decimal_text(result.cash),

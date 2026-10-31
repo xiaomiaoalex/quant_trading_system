@@ -19,7 +19,7 @@ describe('LoginGate', () => {
   })
 
   it('renders children when the session is valid', async () => {
-    mockedMe.mockResolvedValue({ actor: 'owner' })
+    mockedMe.mockResolvedValue({ actor: 'owner', csrf_token: 'restored-token' })
     render(
       <LoginGate>
         <div>console</div>

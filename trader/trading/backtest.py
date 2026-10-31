@@ -1,18 +1,23 @@
-"""Deterministic event-driven spot runtime shared by paper, live and research.
+"""Deterministic event-driven spot BAR simulator for research.
 
 The runtime consumes only completed bars (visible at ``available_at_ms``),
-values the portfolio every bar, fills orders no earlier than the next bar open
-and routes every intent through the same pure risk rules. It never reads the
-machine clock, so replaying a frozen dataset is reproducible.
+values the portfolio every bar and fills orders no earlier than the next bar
+open. Admission, asset ledger, position and hold calculations use the same pure
+spot core as live account transactions. It never reads the machine clock.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Callable, Iterable
 
+from trader.trading import core as trading_core
 from trader.trading.datasets import INTERVAL_MS, decimal_text, digest
+from trader.trading.models import AccountState, Execution, PlaceOrderCommand, TradingError
+from trader.trading.risk import available_balance
+from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
 class RejectedIntent(ValueError):
@@ -137,10 +142,19 @@ class EventBacktestRuntime:
         self.slippage_rate = self.slippage_bps / Decimal(10000)
         self._validate_costs()
 
-        self.cash = self.initial_cash
-        self.positions: dict[str, Decimal] = {
-            data["identity"]["symbol"]: Decimal(0) for data in self.datasets
-        }
+        self.policy = trading_core.policy_from_config(self.config, self.fee_rate)
+        self.quote_asset = self.datasets[0]["identity"]["quote_asset"]
+        if self.quote_asset != "USDT":
+            raise ValueError("BAR portfolio reporting requires USDT quote datasets")
+        self.instruments = {data["identity"]["symbol"]: data["identity"] for data in self.datasets}
+        self.account = AccountState(
+            account_id="backtest", status="READY", balances={self.quote_asset: self.initial_cash}
+        )
+        self.account.positions = {data["identity"]["symbol"]: Decimal(0) for data in self.datasets}
+        for identity in self.instruments.values():
+            self.account.balances[identity["base_asset"]] = Decimal(0)
+        self._intent_seq = 0
+        self._event_ms = 0
         self.average_cost: dict[str, Decimal] = {
             data["identity"]["symbol"]: Decimal(0) for data in self.datasets
         }
@@ -154,10 +168,42 @@ class EventBacktestRuntime:
         self.errors: list[str] = []
         self._pending: list[dict[str, Any]] = []
         self._bars = self._calendar()
+        self._record_opening_balance()
+
+    @property
+    def cash(self) -> Decimal:
+        return self.account.balances[self.quote_asset]
+
+    @property
+    def positions(self) -> dict[str, Decimal]:
+        return self.account.positions
 
     def _validate_costs(self) -> None:
         if self.purpose == "admission_evidence" and (self.fee_bps <= 0 or self.slippage_bps <= 0):
             raise ValueError("Admission evidence requires fees and slippage")
+
+    def _record_opening_balance(self) -> None:
+        """Start the historical ledger from an explicit opening balance.
+
+        The live ledger books the venue's opening holdings the same way, so a
+        simulation and a live session expose the same ledger structure.
+        """
+        first_bar = self._bars[0] if self._bars else {}
+        occurred_at_ms = 0
+        if first_bar:
+            occurred_at_ms = int(next(iter(first_bar.values()))["open_time_ms"])
+        self.account.ledger.append(
+            {
+                "entry_id": f"opening:{self.quote_asset}",
+                "execution_key": "",
+                "account_id": self.account.account_id,
+                "cl_ord_id": "",
+                "asset": self.quote_asset,
+                "delta": str(self.initial_cash),
+                "kind": "opening_balance",
+                "occurred_at_ms": occurred_at_ms,
+            }
+        )
 
     def _calendar(self) -> list[dict[str, dict[str, Any]]]:
         calendar: list[dict[str, dict[str, Any]]] = []
@@ -190,8 +236,7 @@ class EventBacktestRuntime:
     def run(self) -> BacktestResult:
         self._last_close = {}
         for index, bars in enumerate(self._bars):
-            for symbol, bar in bars.items():
-                self._last_close[symbol] = Decimal(str(bar["close"]))
+            self._market_event(bars, "open", "open_time_ms")
             self._fill_pending(index, bars)
             self._mark(bars)
             for symbol, bar in bars.items():
@@ -206,8 +251,11 @@ class EventBacktestRuntime:
         """Same semantics as ``run`` for plugins with async market-data callbacks."""
         self._last_close = {}
         for index, bars in enumerate(self._bars):
-            for symbol, bar in bars.items():
-                self._last_close[symbol] = Decimal(str(bar["close"]))
+            if index % 256 == 0:
+                # Synchronous plugins may never suspend. Keep worker lease and
+                # cancellation tasks schedulable during long historical runs.
+                await asyncio.sleep(0)
+            self._market_event(bars, "open", "open_time_ms")
             self._fill_pending(index, bars)
             self._mark(bars)
             for symbol, bar in bars.items():
@@ -235,7 +283,11 @@ class EventBacktestRuntime:
             win_rate=self._win_rate(),
             **self._drawdowns(),
             errors=list(self.errors),
-            admissible=self.purpose != "vectorbt",
+            admissible=(
+                self.purpose == "admission_evidence"
+                and not self.errors
+                and not self.execution_rejections
+            ),
         )
 
     def _drawdowns(self) -> dict[str, Decimal]:
@@ -257,7 +309,7 @@ class EventBacktestRuntime:
                 "initial_cash": decimal_text(self.initial_cash),
                 "fee_bps": decimal_text(self.fee_bps),
                 "slippage_bps": decimal_text(self.slippage_bps),
-                "runtime_version": "spot_bar_v1",
+                "runtime_version": SPOT_RUNTIME_VERSION,
                 "config": self.config,
             }
         )
@@ -305,47 +357,37 @@ class EventBacktestRuntime:
         if candidate.symbol != symbol:
             reject("UNKNOWN_SYMBOL")
             return
-        if candidate.side not in {"BUY", "SELL"}:
-            reject("UNSUPPORTED_SPOT_INTENT")
-            return
-        if candidate.order_type not in {"MARKET", "LIMIT"}:
-            reject("UNSUPPORTED_ORDER_TYPE")
-            return
-        if not candidate.qty.is_finite() or candidate.qty <= 0:
-            reject("INVALID_ORDER_AMOUNTS")
-            return
-        if candidate.order_type == "LIMIT" and (
-            candidate.limit_price is None
-            or not candidate.limit_price.is_finite()
-            or candidate.limit_price <= 0
-        ):
-            reject("INVALID_ORDER_AMOUNTS")
-            return
-
         reference = (
             candidate.limit_price if candidate.order_type == "LIMIT" else Decimal(str(bar["close"]))
         )
-        if candidate.side == "BUY":
-            reserved = sum(
-                (
-                    order["qty"] * order["reference"] * (Decimal(1) + self.fee_rate)
-                    for order in self._pending
-                    if order["side"] == "BUY"
-                ),
-                Decimal(0),
+        self._intent_seq += 1
+        cl_ord_id = f"bar-{index}-{symbol}-{self._intent_seq}"
+        instrument = self.instruments[symbol]
+        command = PlaceOrderCommand(
+            command_id=cl_ord_id,
+            account_id=self.account.account_id,
+            symbol=symbol,
+            base_asset=instrument["base_asset"],
+            quote_asset=instrument["quote_asset"],
+            side=candidate.side,
+            qty=candidate.qty,
+            price=reference if reference is not None else Decimal(0),
+            deployment_id="backtest",
+            order_type=candidate.order_type,
+            decision_id=cl_ord_id,
+        )
+        try:
+            trading_core.reserve_order(
+                self.account, command, cl_ord_id, self.policy, self._event_ms
             )
-            required = candidate.qty * reference * (Decimal(1) + self.fee_rate)
-            if self.cash - reserved < required:
-                reject("INSUFFICIENT_CASH")
-                return
-        else:
-            reserved_qty = sum(
-                (order["qty"] for order in self._pending if order["side"] == "SELL"),
-                Decimal(0),
-            )
-            if self.positions.get(symbol, Decimal(0)) - reserved_qty < candidate.qty:
-                reject("INSUFFICIENT_POSITION")
-                return
+        except TradingError as exc:
+            code = str(exc)
+            # Keep legacy report labels while the economic decision is produced
+            # by the live risk engine and never implemented separately here.
+            if code == "INSUFFICIENT_AVAILABLE_BALANCE":
+                code = "INSUFFICIENT_CASH" if candidate.side == "BUY" else "INSUFFICIENT_POSITION"
+            reject(code)
+            return
 
         self.risk["approved"] += 1
         self._pending.append(
@@ -357,6 +399,7 @@ class EventBacktestRuntime:
                 "order_type": candidate.order_type,
                 "limit_price": candidate.limit_price,
                 "reference": reference,
+                "cl_ord_id": cl_ord_id,
                 "queued_at_index": index,
             }
         )
@@ -375,7 +418,7 @@ class EventBacktestRuntime:
             if price is None:
                 remaining.append(order)
                 continue
-            self._execute(order, price)
+            self._execute(order, price, index)
         self._pending = remaining
 
     def _fill_price(self, order: dict[str, Any], bar: dict[str, Any]) -> Decimal | None:
@@ -397,7 +440,7 @@ class EventBacktestRuntime:
             return limit
         return None
 
-    def _execute(self, order: dict[str, Any], price: Decimal) -> None:
+    def _execute(self, order: dict[str, Any], price: Decimal, index: int) -> None:
         qty = order["qty"]
         notional = qty * price
         fee = notional * self.fee_rate
@@ -406,22 +449,39 @@ class EventBacktestRuntime:
         def reject(code: str) -> None:
             self.execution_rejections[code] = self.execution_rejections.get(code, 0) + 1
             self.errors.append(f"{code}:{symbol}")
+            self.account.orders[order["cl_ord_id"]].status = "REJECTED"
+            self.account.holds.pop(order["cl_ord_id"], None)
 
+        aggregate = self.account.orders[order["cl_ord_id"]]
+        hold = self.account.holds[order["cl_ord_id"]]
+        available = available_balance(self.account, hold.asset) + hold.amount
         if order["side"] == "BUY":
-            if self.cash < notional + fee:
+            if available < notional + fee:
                 reject("INSUFFICIENT_CASH")
                 return
-            self.cash -= notional + fee
-            previous = self.positions.get(symbol, Decimal(0))
-            self.positions[symbol] = previous + qty
+        else:
+            if available < qty:
+                reject("INSUFFICIENT_POSITION")
+                return
+
+        previous = self.positions.get(symbol, Decimal(0))
+        execution = Execution(
+            account_id=self.account.account_id,
+            cl_ord_id=order["cl_ord_id"],
+            symbol=symbol,
+            exec_id=order["cl_ord_id"],
+            qty=qty,
+            price=price,
+            fee=fee,
+            fee_asset=aggregate.command.quote_asset,
+            occurred_at_ms=self._event_ms,
+            venue="bar_simulator",
+        )
+        trading_core.book_execution(self.account, execution, self.policy)
+        if order["side"] == "BUY":
             total_cost = self.average_cost.get(symbol, Decimal(0)) * previous + notional + fee
             self.average_cost[symbol] = total_cost / self.positions[symbol]
         else:
-            if self.positions.get(symbol, Decimal(0)) < qty:
-                reject("INSUFFICIENT_POSITION")
-                return
-            self.cash += notional - fee
-            self.positions[symbol] -= qty
             cost_basis = self.average_cost.get(symbol, Decimal(0)) * qty
             pnl = notional - fee - cost_basis
             self.closed_trades.append(pnl)
@@ -435,13 +495,24 @@ class EventBacktestRuntime:
                 "qty": qty,
                 "price": price,
                 "fee": fee,
-                "bar_index": order["queued_at_index"] + 1,
+                "bar_index": index,
             }
         )
 
-    def _mark(self, bars: dict[str, dict[str, Any]]) -> None:
+    def _market_event(self, bars: dict[str, dict[str, Any]], price_key: str, time_key: str) -> None:
+        """Only the open is visible to old fills; close marks precede decisions."""
+        self._event_ms = int(next(iter(bars.values()))[time_key])
+        marks = {}
         for symbol, bar in bars.items():
-            self._last_close[symbol] = Decimal(str(bar["close"]))
+            price = Decimal(str(bar[price_key]))
+            self._last_close[symbol] = price
+            marks[symbol] = {"price": price, "at_ms": self._event_ms}
+        self.account.reconciliation.update(
+            checked_at_ms=self._event_ms, marks=marks, stream_healthy=True, unresolved=[]
+        )
+
+    def _mark(self, bars: dict[str, dict[str, Any]]) -> None:
+        self._market_event(bars, "close", "close_time_ms")
         self.equity_curve.append(self.equity)
 
     def _win_rate(self) -> Decimal:

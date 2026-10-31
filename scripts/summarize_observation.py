@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -12,8 +13,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Summarize a trading observation window")
     parser.add_argument("--input", default="artifacts/observation.jsonl")
     parser.add_argument("--min-hours", type=float, default=24.0)
+    parser.add_argument(
+        "--max-gap-seconds",
+        type=float,
+        default=180.0,
+        help="Maximum allowed gap between recorded samples (default: 180 seconds)",
+    )
     parser.add_argument("--json-out", default="")
     args = parser.parse_args()
+    if not math.isfinite(args.min_hours) or args.min_hours <= 0:
+        parser.error("--min-hours must be finite and positive")
+    if not math.isfinite(args.max_gap_seconds) or args.max_gap_seconds <= 0:
+        parser.error("--max-gap-seconds must be finite and positive")
 
     path = Path(args.input)
     if not path.exists():
@@ -31,6 +42,14 @@ def main() -> int:
         except json.JSONDecodeError:
             parse_errors += 1
             continue
+        if (
+            not isinstance(item, dict)
+            or type(item.get("ts_ms")) is not int
+            or item["ts_ms"] < 0
+            or ("marker" in item and not isinstance(item["marker"], str))
+        ):
+            parse_errors += 1
+            continue
         if "marker" in item:
             markers.append(item)
         else:
@@ -42,9 +61,12 @@ def main() -> int:
     first = samples[0]["ts_ms"]
     last = samples[-1]["ts_ms"]
     duration_hours = (last - first) / 3_600_000
-    ready_samples = [s for s in samples if (s.get("health") or {}).get("body", {}).get("ready")]
     ready = sum(1 for s in samples if (s.get("health") or {}).get("body", {}).get("ready"))
     errors = [s for s in samples if s.get("error")]
+    sample_gaps = [right["ts_ms"] - left["ts_ms"] for left, right in zip(samples, samples[1:])]
+    max_sample_gap_ms = max(sample_gaps, default=0)
+    required_markers = {"runtime_restart", "active_reconnect"}
+    observed_markers = {marker["marker"] for marker in markers if first <= marker["ts_ms"] <= last}
     transitions = []
     previous = None
     for sample in samples:
@@ -68,6 +90,10 @@ def main() -> int:
         "input": str(path),
         "samples": len(samples),
         "parse_errors": parse_errors,
+        "required_markers": sorted(required_markers),
+        "observed_markers": sorted(observed_markers),
+        "max_sample_gap_ms": max_sample_gap_ms,
+        "allowed_sample_gap_ms": args.max_gap_seconds * 1000,
         "first_ts_ms": first,
         "last_ts_ms": last,
         "duration_hours": round(duration_hours, 3),
@@ -96,6 +122,14 @@ def main() -> int:
     summary["final_ready"] = final_ready
 
     blockers = []
+    if parse_errors:
+        blockers.append("INVALID_EVIDENCE_LINES")
+    if any(gap <= 0 for gap in sample_gaps):
+        blockers.append("NON_MONOTONIC_SAMPLES")
+    if max_sample_gap_ms > args.max_gap_seconds * 1000:
+        blockers.append("SAMPLE_GAP_EXCEEDED")
+    for marker in sorted(required_markers - observed_markers):
+        blockers.append(f"MISSING_MARKER:{marker}")
     if summary["max_balance_anomalies"] > 0:
         blockers.append("BALANCE_ANOMALY_OBSERVED")
     if summary["max_unknown_commands"] > 0:

@@ -257,8 +257,11 @@ async def _fetch_spot_account_balances(account_provider: Any) -> list[dict]:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _legacy_readonly_lifespan(app: FastAPI):
     global _binance_connector_instance, _binance_cascade_controller
+
+    # This legacy API keeps research and query surfaces, but may never run a
+    # second sender beside the unified account execution owner.
 
     # 初始化策略
     _seed_strategies()
@@ -638,7 +641,9 @@ async def lifespan(app: FastAPI):
 
             account_snapshot_provider = get_oms_broker()
             if account_snapshot_provider is None:
-                raise RuntimeError("OMS broker is not initialized for account REST snapshot")
+                from trader.api.routes.strategies import _create_broker
+
+                account_snapshot_provider = await _create_broker(read_only=True)
 
             async def _fetch_balances() -> list[dict]:
                 return await _fetch_spot_account_balances(account_snapshot_provider)
@@ -673,7 +678,7 @@ async def lifespan(app: FastAPI):
             try:
                 from trader.api.routes.strategies import _create_broker
 
-                await _create_broker()
+                await _create_broker(read_only=True)
                 logger.info("[Lifespan] Broker registered on startup")
             except Exception as exc:
                 logger.warning("[Lifespan] Initial broker registration failed (non-fatal): %s", exc)
@@ -692,6 +697,9 @@ async def lifespan(app: FastAPI):
                 4. 恢复策略到 RUNNING 状态
                 5. 发布 strategy.recovered 事件
                 """
+                if strategies._legacy_sender_retired:
+                    logger.info("[Recovery] Legacy execution retired; no strategy auto-start")
+                    return
                 from trader.adapters.persistence.runtime_state_repository import (
                     get_runtime_state_repository,
                 )
@@ -985,6 +993,17 @@ async def lifespan(app: FastAPI):
     await reconciler_service.stop()
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    previous_retirement = strategies._legacy_sender_retired
+    strategies._legacy_sender_retired = True
+    try:
+        async with _legacy_readonly_lifespan(app):
+            yield
+    finally:
+        strategies._legacy_sender_retired = previous_retirement
+
+
 app = FastAPI(
     title="Systematic Trader Control Plane API",
     description="Strategy-first trading system control plane API",
@@ -993,6 +1012,31 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def reject_legacy_order_mutation(request, call_next):
+    legacy_cancel = (
+        request.method == "POST"
+        and request.url.path.startswith("/v1/orders/")
+        and request.url.path.endswith("/cancel")
+    )
+    legacy_control = (
+        strategies._legacy_sender_retired
+        and request.method not in {"GET", "HEAD", "OPTIONS"}
+        and request.url.path.rstrip("/") == "/v1/killswitch"
+    )
+    if legacy_cancel or legacy_control:
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "detail": "LEGACY_EXECUTION_RETIRED: submit a durable control or cancellation command to the unified Control API"
+            },
+            status_code=503,
+        )
+    return await call_next(request)
+
 
 app.include_router(health.router)
 app.include_router(strategies.router)

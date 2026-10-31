@@ -38,14 +38,20 @@ class ExecutionIngress:
 
     async def on_fill(self, update: Any) -> bool:
         cl_ord_id = getattr(update, "cl_ord_id", None)
-        exec_id = getattr(update, "exec_id", None) or getattr(update, "trade_id", None)
+        exec_id = (
+            getattr(update, "canonical_exec_id", None)
+            or getattr(update, "exec_id", None)
+            or getattr(update, "trade_id", None)
+        )
         if not cl_ord_id or not exec_id:
             logger.warning("Dropping fill without cl_ord_id/exec_id")
             return False
         order = await self.service.order(self.account_id, cl_ord_id)
         symbol = getattr(update, "symbol", None) or (order["symbol"] if order else "")
         quote_asset = order["quote_asset"] if order else ""
-        commission = Decimal(str(getattr(update, "commission", 0) or 0))
+        commission = Decimal(
+            str(getattr(update, "commission_text", None) or getattr(update, "commission", 0) or 0)
+        )
         fee_asset = getattr(update, "commission_asset", None) or ""
         if commission > 0 and not fee_asset:
             fee_asset = quote_asset
@@ -54,11 +60,15 @@ class ExecutionIngress:
             cl_ord_id=str(cl_ord_id),
             symbol=str(symbol),
             exec_id=str(exec_id),
-            qty=Decimal(str(getattr(update, "qty", 0))),
-            price=Decimal(str(getattr(update, "price", 0))),
+            qty=Decimal(str(getattr(update, "qty_text", None) or getattr(update, "qty", 0))),
+            price=Decimal(str(getattr(update, "price_text", None) or getattr(update, "price", 0))),
             fee=commission,
             fee_asset=fee_asset,
-            occurred_at_ms=int(getattr(update, "exchange_ts_ms", 0) or 0),
+            occurred_at_ms=int(
+                getattr(update, "execution_ts_ms", None)
+                or getattr(update, "exchange_ts_ms", 0)
+                or 0
+            ),
             venue=self.venue,
         )
         try:
@@ -81,7 +91,13 @@ class ExecutionIngress:
             account_id=self.account_id,
             cl_ord_id=str(cl_ord_id),
             status=status,
-            cumulative_qty=Decimal(str(getattr(update, "filled_qty", 0) or 0)),
+            cumulative_qty=Decimal(
+                str(
+                    getattr(update, "cumulative_qty_text", None)
+                    or getattr(update, "filled_qty", 0)
+                    or 0
+                )
+            ),
             broker_order_id=str(getattr(update, "broker_order_id", "") or ""),
             observed_at_ms=int(getattr(update, "exchange_ts_ms", 0) or 0),
             source=str(getattr(update, "source", "WS") or "WS"),

@@ -66,6 +66,30 @@ class OrderObservation:
 
 
 @dataclass(frozen=True)
+class VenueOrder:
+    """Venue-side facts about an order inside our own client-order namespace.
+
+    The venue is authoritative for the order state. When the local ledger lost
+    the order intent (a rebuilt ledger or a restore), these facts let recovery
+    rebuild the mapping instead of treating our own history as foreign
+    activity.
+    """
+
+    cl_ord_id: str
+    broker_order_id: str
+    symbol: str
+    side: str
+    order_type: str
+    qty: Decimal
+    price: Decimal
+    filled_qty: Decimal
+    status: str
+    created_at_ms: int = 0
+    base_asset: str = ""
+    quote_asset: str = ""
+
+
+@dataclass(frozen=True)
 class Execution:
     account_id: str
     cl_ord_id: str
@@ -142,6 +166,7 @@ class ReconcileSnapshot:
     external_locked: dict[str, Decimal] = field(default_factory=dict)
     open_orders: list[OrderObservation] = field(default_factory=list)
     executions: list[Execution] = field(default_factory=list)
+    venue_orders: list[VenueOrder] = field(default_factory=list)
     marks: dict[str, dict[str, Any]] = field(default_factory=dict)
     stream_healthy: bool = True
     complete: bool = True

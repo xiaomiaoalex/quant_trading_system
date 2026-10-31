@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -11,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from trader.trading.datasets import canonical, decimal_text, digest, freeze_dataset
+from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
 def freeze_strategy(spec: dict) -> dict:
@@ -38,10 +40,16 @@ def freeze_strategy(spec: dict) -> dict:
 
 
 def _model_marker(record: dict) -> str:
+    if record.get("manifest", {}).get("runtime_version") != SPOT_RUNTIME_VERSION:
+        return "legacy"
     if record.get("status") != "SUCCEEDED":
         return "event_runtime"
     result = record.get("result")
-    if isinstance(result, dict) and result.get("engine") == "event_runtime":
+    if (
+        isinstance(result, dict)
+        and result.get("engine") == "event_runtime"
+        and result.get("runtime_version") == SPOT_RUNTIME_VERSION
+    ):
         return "event_runtime"
     # Results produced before the event runtime existed are not admission evidence.
     return "legacy"
@@ -204,9 +212,14 @@ class ResearchWorker:
     """Claims one durable job, executes it and publishes under a fencing token."""
 
     def __init__(self, store, owner: str, lease_seconds: int = 30):
+        if lease_seconds <= 0:
+            raise ValueError("Worker lease must be positive")
         self.store = store
         self.owner = owner
         self.lease_seconds = lease_seconds
+
+    async def _wait_heartbeat(self):
+        await asyncio.sleep(self.lease_seconds / 3)
 
     async def run_once(self, execute):
         record = await self.store.claim(self.owner, self.lease_seconds)
@@ -218,21 +231,47 @@ class ResearchWorker:
             return await self.store.finish(
                 record["run_id"], self.owner, record["fencing_token"], cancelled=True
             )
+
+        async def keep_lease():
+            while True:
+                await self._wait_heartbeat()
+                if await self.store.heartbeat(
+                    record["run_id"], self.owner, record["fencing_token"], self.lease_seconds
+                ):
+                    return True
+
+        async def invoke():
+            return await execute(record)
+
+        execution = asyncio.create_task(invoke())
+        heartbeat = asyncio.create_task(keep_lease())
         try:
-            result = await execute(record)
-        except Exception as exc:  # failure is recorded, never published as success
-            return await self.store.finish(
-                record["run_id"],
-                self.owner,
-                record["fencing_token"],
-                error=str(exc),
+            done, _ = await asyncio.wait(
+                (execution, heartbeat), return_when=asyncio.FIRST_COMPLETED
             )
-        return await self.store.finish(
-            record["run_id"],
-            self.owner,
-            record["fencing_token"],
-            result=result,
-        )
+            if heartbeat in done:
+                # Lease errors propagate without attempting finish with an old
+                # token. Cancellation is published only under a valid lease.
+                heartbeat.result()
+                execution.cancel()
+                await asyncio.gather(execution, return_exceptions=True)
+                return await self.store.finish(
+                    record["run_id"], self.owner, record["fencing_token"], cancelled=True
+                )
+            try:
+                result = execution.result()
+            except Exception as exc:
+                return await self.store.finish(
+                    record["run_id"], self.owner, record["fencing_token"], error=str(exc)
+                )
+            return await self.store.finish(
+                record["run_id"], self.owner, record["fencing_token"], result=result
+            )
+        finally:
+            # Also stop local work on caller cancellation or storage failure.
+            execution.cancel()
+            heartbeat.cancel()
+            await asyncio.gather(execution, heartbeat, return_exceptions=True)
 
 
 class PostgresResearchStore:
@@ -404,7 +443,7 @@ class BacktestApplication:
             "slippage_bps": decimal_text(manifest.get("slippage_bps", "5")),
             "engine": engine,
             "purpose": purpose,
-            "runtime_version": "spot_bar_v1",
+            "runtime_version": SPOT_RUNTIME_VERSION,
             "risk_config": manifest.get("risk_config", {}),
         }
         from decimal import Decimal
