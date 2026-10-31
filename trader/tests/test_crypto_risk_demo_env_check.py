@@ -107,6 +107,9 @@ def test_demo_preflight_cli_runs_from_repo_root_without_pythonpath() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     process_env = os.environ.copy()
     process_env.pop("PYTHONPATH", None)
+    # The root conftest loads the developer's .env, so an inherited
+    # BINANCE_ENV would hide the missing-env case this CLI test asserts.
+    process_env.pop("BINANCE_ENV", None)
 
     result = subprocess.run(
         [
