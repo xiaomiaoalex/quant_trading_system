@@ -1464,3 +1464,24 @@
 - 风险/遗留: 就绪率理论上限仍受 60s 快照过期约束；若窗口仍不达标，再单独讨论
   过期阈值或后台证明方案，不在本次夹带。
 - 关联文档: `docs/UNIFIED_TRADING_ACCEPTANCE.md`（24h 窗口仍未关闭）
+### 2026-11-01 - 观察窗口的订单在途/外部订单阻断修正
+
+- 背景: 第 7~9 次窗口重跑中，每次下单后仍会出现一次 `UNKNOWN_ORDER`。抓取真实证据后确认两个独立来源：
+  1. 私有流在本地订单事务提交前送达本系统命名空间的订单观测；
+  2. 共享 demo 账户上的外部订单（实测 `Mz6l1bM0SVLuatn07FsAAG`，状态 `CANCELLED`）实时上报。
+- 改动:
+  - `TradingService` 增加 `order_prefix`（默认 `qts-`）：`observe()` 对本前缀的未知订单不再写持久阻断，
+    由 REST 证据领养后恢复；外部订单的 `CANCELLED/EXPIRED/REJECTED` 终态不构成实时风险，不写阻断；
+    `OPEN/PARTIALLY_FILLED/FILLED` 外部订单与外部成交仍分别经 `UNKNOWN_ORDER`/`UNKNOWN_EXECUTION` 阻断。
+  - `UNKNOWN_ORDER` 证据补充 `status` 与 `observed_at_ms`，便于区分实时风险与历史回放。
+  - `BinanceSpotSnapshotProvider`: 领养证据同时来自 `get_open_orders()`（历史接口可能尚未返回刚下的挂单）
+    与订单历史，并按 `cl_ord_id` 去重；本系统在途挂单因此可被领养。
+  - `scripts/testnet_e2e.py`: 下单后轮询命令回执等待 `CONFIRMED`，并在开始时等待就绪采样。
+- 验证:
+  - 新增先红后绿测试：在途本系统订单不阻断、外部终态订单不阻断、外部未终态订单仍阻断、
+    未知订单证据含状态/时间、开放挂单在历史缺失时仍可领养。
+  - 交易相关 12 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过。
+  - 第 10 次窗口早期门禁（`--min-hours 0.1`）首次 `blockers=[]`：无未解决差异、无未知命令、
+    无账务异常；观察进程改为 25h 时长以保证采样跨度越过 24h。
+- 风险/遗留: 24h 最终门禁尚未到期；共享 demo 账户上的外部活动仍可能带来真实阻断
+  （外部成交按设计阻断），需要在窗口结束时以 24h 门禁复核。
