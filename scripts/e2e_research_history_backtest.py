@@ -470,6 +470,33 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
             pass
 
 
+def _run_worker_process(module: str, *, env: dict, root: Path, timeout: int, attempts: int = 3):
+    """Run a ``--once`` worker process, retrying transient socket failures.
+
+    On Windows a just-terminated process can leave the loopback stack briefly
+    unable to open a new connection (``WinError 121``); retrying keeps the
+    acceptance run from failing for an environment hiccup.
+    """
+    import subprocess
+
+    last = None
+    for attempt in range(1, attempts + 1):
+        completed = subprocess.run(
+            [sys.executable, "-m", module, "--once"],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if completed.returncode == 0:
+            return completed
+        last = completed
+        print(f"[e2e] {module} attempt {attempt} failed, retrying")
+        time.sleep(2.0)
+    return last
+
+
 async def _process_restart_phase(
     test_dsn: str, args: argparse.Namespace, dataset_ids: List[str]
 ) -> Dict[str, Any]:
@@ -575,13 +602,8 @@ async def _process_restart_phase(
             api.kill()
 
     # ---- 历史 worker 进程 ----
-    history_worker = subprocess.run(
-        [sys.executable, "-m", "trader.runtime.history_worker_main", "--once"],
-        cwd=str(root),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
+    history_worker = _run_worker_process(
+        "trader.runtime.history_worker_main", env=env, root=root, timeout=600
     )
     assert (
         history_worker.returncode == 0
@@ -617,12 +639,10 @@ async def _process_restart_phase(
         status = "QUEUED"
         while attempts < 30 and status not in {"SUCCEEDED", "FAILED", "CANCELLED"}:
             attempts += 1
-            worker = subprocess.run(
-                [sys.executable, "-m", "trader.runtime.research_worker_main", "--once"],
-                cwd=str(root),
+            worker = _run_worker_process(
+                "trader.runtime.research_worker_main",
                 env=env,
-                capture_output=True,
-                text=True,
+                root=root,
                 timeout=900,
             )
             assert (
