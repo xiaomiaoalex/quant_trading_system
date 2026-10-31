@@ -1331,3 +1331,78 @@
   - Portfolio proposal PostgreSQL 测试因未配置 PostgreSQL skip；memory store 测试通过
 - 风险/遗留: 全量 pytest 仍需在更长超时时间或 CI 环境中重跑；PostgreSQL 集成路径需启动 Docker/Postgres 后单独验证。当前 mypy 已清零，但后续新增测试 fake/monkeypatch 仍应优先局部收窄，避免重新积累类型债。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-31 - 真实历史行情落库 + 测试隔离修复（.env.postgres 撤出跟踪）
+
+- 背景:
+  1. `trading` 库里没有任何 OHLCV 历史行情，Binance Vision 归档管线虽然合入，但从未在本地真实库里跑通「归档 → 数据集 → 真实回测」全链路。
+  2. `.env.postgres` 被版本控制跟踪，`conftest.py` 检测到该文件就 `load_dotenv`，导致本地 PostgreSQL 可用时单元测试静默连真实库：`trader/tests/test_execution_projection_cursor.py` 读到真实 `trading.executions` 的遗留 859 行 UUID 记录，而不是测试自己写入的 `exec-1/exec-2`。
+- 决策:
+  - 数据范围遵循归档管线的既有契约（现货 `1m`、按月、仅 BTCUSDT/ETHUSDT），选择 BTCUSDT `1m` 2024-01~2024-06（6 个月 / 6 个数据集）。原计划的「1h + 跨 6 个月单一区间」在现有契约下不可表达，不做管线扩周期。
+  - 摄取走 Control Plane 真实路径（`POST /v1/data/history/jobs` + `HistoryJobWorker`），不写脚本绕过服务层。
+  - 测试隔离用三层组合：`.env.postgres` 撤出跟踪 + conftest 不再隐式加载 + 用例显式 `allow_postgres=False`；不删任何真实 PG 路径覆盖。
+- 改动:
+  - `.gitignore`: 修复两条失效模式（`.env.* <-- ...` / `!.env.example <-- ...` 带行尾注释，实际从未匹配）；改为 `.env.*` + `!.env.example` + `!.env.postgres.example`，并显式忽略 `.env.postgres`。
+  - `.env.postgres`: `git rm --cached`（保留本地文件），模板 `.env.postgres.example` 继续入库。
+  - `conftest.py` / `trader/tests/conftest.py`: 删除 `.env.postgres` 的隐式加载，只 `load_dotenv()`；补充隔离约定注释。
+  - `trader/adapters/persistence/execution_repository.py`: 新增 `allow_postgres: bool = True` 关键字参数（向后兼容）与只读属性 `allow_postgres` / `postgres_active`；`allow_postgres=False` 时 `_ensure_postgres()` 直接返回 `False`，不探测、不构造 `PostgreSQLStorage`。
+  - `trader/tests/test_execution_projection_cursor.py`: 两个用例改为显式内存仓库；新增 `test_projection_cursor_never_touches_postgres_when_pinned_to_memory`（把 PG 探测伪造成可用 + 把 `PostgreSQLStorage` 换成「构造即失败」的桩）。
+  - `docs/INTERFACE_CONTRACTS.md`: 新增 11.4（`ExecutionRepository` 存储后端选择）与第 13 节（测试隔离与本地 Postgres）。
+- 数据摄取结果（真实输出）:
+  - 6 个任务全部 `SUCCEEDED / PUBLISHED`，`feature_values` 共 262,080 行：
+    2024-01 44,640 / 2024-02 41,760 / 2024-03 44,640 / 2024-04 43,200 / 2024-05 44,640 / 2024-06 43,200。
+  - 每个数据集 `row_count == expected_points`、`gap_count = 0`、`persistence_ok = t`、`backtest_eligible = t`；
+    `archive_sha256 == official_sha256`（与币安官方 `.CHECKSUM` 一致）。
+- 真实回测结果（同一数据集 `hds_ce20e8094b1f4de4` = BTCUSDT 1m 2024-01，44,640 根）:
+  - `risk_mode=raw_only`（vectorbt）: total_return −92.65%，annualized_return −100%，sharpe −68.643，max_drawdown 92.69%，833 笔，win_rate 9%，profit_factor 0.1408，final_equity 7,350.72；
+    权益曲线 44,640 点，时间戳覆盖 2024-01-01 00:00 → 2024-01-31 23:59。
+  - `risk_mode=risk_adjusted`（vectorbt）: total_return −72.999%，sharpe −52.5744，max_drawdown 73.1166%，833 笔；
+    该路径 `annualized_return` / `volatility` / `var_95` 在 `vectorbt_risk_adapter.py` 中硬编码为 0.0。
+  - `risk_mode=event_replay`: COMPLETED，1667 / 246 笔订单，权益曲线非空；该转换路径存在既有缺陷（见风险）。
+  - 数据证据：`data_quality_summary` 报 `total_points = expected_points = 44640`、`coverage_percent = 100`、`gap_count = 0`、`integrity_verified = True`，
+    `feature_version = binance_spot_1m_BTCUSDT_2024-01_40b78258091a`。
+- 验证:
+  - `python -m pytest trader/tests/test_execution_projection_cursor.py -q` -> 2 passed（无 PG 环境变量）
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest trader/tests/test_execution_projection_cursor.py -q` -> 2 passed（本地 PG 可用时同样通过）
+  - 5 个历史测试文件 + projection cursor：`test_binance_vision_archive.py test_ohlcv_archive_domain.py test_history_data_ingestion.py test_backtest_dataset_resolution.py test_api_data_history.py test_execution_projection_cursor.py` -> 110 passed（0 failed）
+  - `mypy trader/` -> 40 errors（与合并基线持平，未新增）
+  - `black --check --line-length 100 trader/` / `isort --check-only --profile black trader/` -> passed
+- 风险/遗留:
+  - 归档管线仅支持现货 `1m`、按月、BTCUSDT/ETHUSDT；跨月单一回测区间与 `1h` 需要扩展 `ARCHIVE_SUPPORTED_INTERVAL` 与数据集合并逻辑，本次未做。
+  - `_event_replay_result_to_simulation` 存在既有缺陷：`max_drawdown_pct = max_drawdown(货币) × 100`（单位错误）、权益曲线时间戳按 bar 下标而非订单时间对齐、`sharpe/volatility/var_95` 恒为 0、`trades` 恒为空、`win_rate` 实为订单通过率。本次仅记录，未修复（超出范围）。
+  - `VectorBTAdapterWithRisk` 将 `annualized_return/volatility/var_95` 硬编码为 0.0，需要后续补齐。
+  - 为跑通默认 vectorbt 引擎，在 **worktree 本地 `.venv`** 安装了 `vectorbt 0.28.5` 并把 `plotly` 固定到 5.24.1（vectorbt 0.28.5 不兼容 plotly 7.x 的 `scattermapbox` 移除）、`pandas` 3.0.1 → 2.3.3。主仓 venv 与全局环境未改动。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-31 - 复核补轮：归档路径迁出临时 worktree + 存储口径澄清
+
+- 背景: 上一轮把数据集摄取进本地库后，`history_datasets.archive_path` 记录的是 Paseo worktree 内的
+  `...\worktrees\0hgwfib0\history-data-and-test-isolation\data\market\...`。worktree 一旦被 archive/清理，
+  这条证据路径就失效，数据集的 provenance 与「可复核性」不成立。
+- 事实澄清（上一轮表述需要更精确）:
+  - **K 线本体在 PG**：`feature_values`（`feature_name='ohlcv'`）共 262,080 行，分属 6 个 `feature_version`；
+    回测取数走 `HistoryDatasetOHLCVDataProvider → FeatureStoreOHLCVDataProvider → FeatureStore.read_feature_range`，
+    读的就是这张表。因此「行情只在磁盘 zip 里」并不成立。
+  - **元数据在 PG**：`history_datasets` 6 条 + `history_ingest_jobs` 6 条（SUCCEEDED）。
+  - **原始归档在磁盘**：zip/CHECKSUM 是导入的来源证据，`archive_path` 只用于 provenance，**不参与回测取数**。
+  - 准确口径：PG 存「K 线行 + 数据集/任务元数据」，磁盘存「原始归档证据」，三层缺一不可、职责不同。
+- 改动:
+  - 把 6 个 `.zip` 与 6 个 `.zip.CHECKSUM` 复制到稳定路径
+    `D:\Code of Python\quant_trading_system\data\market\binance\spot\raw\klines\BTCUSDT\1m\`
+    （已被 `.gitignore` 的 `data/market/` 覆盖，未入库）。
+  - 逐文件校验：复制前后 SHA-256 全部一致；更新后每条 `history_datasets.archive_path` 指向稳定路径，
+    其文件 SHA-256 与 DB 的 `archive_sha256` 逐条比对全部 OK。
+  - `UPDATE history_datasets SET archive_path = replace(...)`：只匹配 worktree 前缀，`UPDATE 6`；
+    复核 `strpos(archive_path, '.paseo\worktrees') > 0` 的记录数为 0。
+  - 注意：PostgreSQL `LIKE` 默认把 `\` 当转义符，`LIKE 'C:\Users\...'` 会匹配失败（首次执行 `UPDATE 0`），
+    改用 `strpos(...) = 1` 做前缀判断。
+- 验证:
+  - worktree 的 `data/market` 整目录改名为 `data/market.disabled` 后重跑
+    `POST /v1/backtests`（`dataset_id=hds_ce20e8094b1f4de4`，`risk_mode=risk_adjusted`）→ COMPLETED：
+    total_return −72.999%，sharpe −52.5744，max_drawdown 73.1166%，833 笔，
+    `data_provenance.archive_path` = `D:\Code of Python\quant_trading_system\data\market\...\BTCUSDT-1m-2024-01-v1.zip`。
+    与 worktree 在位时逐项一致；随后恢复目录。
+- 风险/遗留:
+  - `.env.postgres` 虽已 `git rm --cached`，内容仍存在于 git 历史中；其中的本地开发口令建议轮换（本次不改写历史）。
+  - 归档契约仍只支持现货 `1m` + 按月 + BTCUSDT/ETHUSDT。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

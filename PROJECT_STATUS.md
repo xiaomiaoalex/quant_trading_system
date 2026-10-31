@@ -4,9 +4,54 @@
 > 更新方法：`run_tests.bat` 后手动更新本文件，或运行 `scripts/update_project_status.py`
 
 ## 最后更新时间
-2026-10-29 17:40 (北京时间)
+2026-10-31 14:30 (北京时间)
 
 ## 最近开发记录（滚动式）
+
+### 本次任务：真实历史行情落库 + 测试隔离修复
+- 完成时间: 2026-10-31 14:30 (北京时间)
+- 状态: 已完成
+- 目标: (1) 把 Binance Vision 真实历史行情真正摄取进本地 `trading` 库，并用它跑通一次真实历史回测；
+  (2) 修复 `.env.postgres` 被跟踪导致的测试隔离问题。
+- 开发前状态:
+  - `trading` 库中**没有任何 OHLCV 历史行情**（`feature_values` 仅 6 行无关数据，`history_datasets` 0 行），真实历史回测无法发起。
+  - `.env.postgres` 被版本控制跟踪；`conftest.py` 检测到该文件就 `load_dotenv`，
+    本地 PostgreSQL 可用时 `ExecutionRepository._ensure_postgres()` 返回 True，
+    `test_execution_projection_cursor.py` 去读真实 `trading.executions`（859 行遗留 UUID），断言必然失败。
+  - `.gitignore` 中 `.env.*` / `!.env.example` 两条模式带行尾中文注释，实际是字面量，从未生效。
+- 开发后状态:
+  - **K 线数据已经写进 PG**：`feature_values`（`feature_name='ohlcv'`）共 **262,080 行**，
+    分属 6 个 `feature_version`（2024-01 44,640 / 02 41,760 / 03 44,640 / 04 43,200 / 05 44,640 / 06 43,200）。
+    回测的行情读取路径（`FeatureStoreOHLCVDataProvider → FeatureStore.read_feature_range`）读的就是这张表。
+  - **元数据在 PG**：`history_datasets` 6 条（每个数据集 `row_count == expected_points`、`gap_count = 0`、
+    `archive_sha256 == official_sha256`、`persistence_ok/backtest_eligible = t`）+ `history_ingest_jobs` 6 条 SUCCEEDED。
+  - **原始归档在磁盘**：6 个 `.zip` 与 `.CHECKSUM` 存放在稳定路径
+    `D:\Code of Python\quant_trading_system\data\market\binance\spot\raw\klines\BTCUSDT\1m\`
+    （已被 `.gitignore` 的 `data/market/` 覆盖），逐文件 SHA-256 与 DB 中的 `archive_sha256` 一致；
+    `history_datasets.archive_path` 指向该稳定路径，**不再指向 Paseo worktree 临时目录**。
+  - 真实回测已跑通（`POST /v1/backtests` + `dataset_id`，vectorbt 引擎）：
+    `raw_only` total_return −92.65% / sharpe −68.643 / max_drawdown 92.69% / annualized_return −100%；
+    `risk_adjusted` total_return −72.999% / sharpe −52.5744 / max_drawdown 73.1166%。
+    数据证据：`total_points = expected_points = 44640`、`coverage_percent = 100`、`gap_count = 0`、`integrity_verified = True`。
+    把 worktree 的 `data/market` 目录整体改名后重跑，结果与 provenance 完全不变（`data_provenance.archive_path`
+    指向稳定路径），证明回测已不依赖 worktree 临时文件。
+  - `.env.postgres` 已 `git rm --cached` 并被 `.gitignore` 忽略；`.env.postgres.example` 保留；
+    `conftest.py` 不再隐式加载 `.env.postgres`。
+    **注意**：该文件仍留在 git 历史中，其中的本地开发口令建议轮换（本次不改写历史）。
+  - `ExecutionRepository` 新增 `allow_postgres` 关键字参数（默认 True，向后兼容）；
+    单元测试可显式 `allow_postgres=False` 强制内存存储。
+- Issue 状态迁移:
+  - 「单元测试在本地 PG 可用时读真实库」：`待确认` → `已验证`
+  - 「`trading` 库没有真实历史行情」：`待确认` → `已验证`
+- 验证结果:
+  - `python -m pytest trader/tests/test_execution_projection_cursor.py -q` → 2 passed（无 PG 环境变量）
+  - `POSTGRES_CONNECTION_STRING=postgresql://trader:trader_pwd@127.0.0.1:5432/trading python -m pytest trader/tests/test_execution_projection_cursor.py -q` → 2 passed（本地 PG 可用时同样通过）
+  - 5 个历史测试文件 + projection cursor → 110 passed
+  - `mypy trader/` → 40 errors（与合并基线持平）；`black` / `isort` 检查通过
+- 风险/遗留:
+  - 归档管线仍只支持现货 `1m` + 按月 + BTCUSDT/ETHUSDT，跨月单一区间与 `1h` 未支持。
+  - event_replay 指标转换存在既有缺陷（drawdown 单位、权益曲线时间戳对齐、sharpe/volatility 恒 0），本次仅记录。
+- 关联文档: `docs/INTERFACE_CONTRACTS.md`（§11.4 / §13）、`DEVELOPMENT_LOG.md`、`docs/EXPERIENCE_SUMMARY.md`
 
 ### 本次任务：历史归档通路第 1 轮审核修复（R1–R10）
 - 完成时间: 2026-10-29 19:05 (北京时间)

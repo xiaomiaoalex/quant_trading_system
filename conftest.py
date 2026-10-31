@@ -1,3 +1,12 @@
+"""Root pytest configuration.
+
+测试隔离约定（见 docs/INTERFACE_CONTRACTS.md「测试隔离与本地 Postgres」）：
+
+- **绝不隐式加载本地 Postgres DSN**。`.env.postgres` 曾经被版本控制跟踪，
+  导致只要本地 Postgres 可用，单元测试就会静默连上真实库。
+- 需要真实 PostgreSQL 的集成测试必须显式传入 DSN（CI 与 run_tests.bat 已这样做）。
+"""
+
 import logging
 import os
 from collections.abc import Iterator
@@ -5,11 +14,8 @@ from collections.abc import Iterator
 import pytest
 from dotenv import load_dotenv
 
-# 优先加载 postgres 测试环境
-if os.path.exists(".env.postgres"):
-    load_dotenv(".env.postgres")
-else:
-    load_dotenv()
+# 只加载 .env（开发用 Binance 演示配置）。绝不加载 .env.postgres。
+load_dotenv()
 
 
 _SANITIZED_ENV_KEYS = (
