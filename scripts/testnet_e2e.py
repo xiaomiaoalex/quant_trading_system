@@ -86,16 +86,22 @@ async def main() -> int:
         record("login", actor="authenticated", csrf=bool(csrf))
         headers = {"x-csrf-token": csrf}
 
-        health = await client.get("/health/trading")
-        record(
-            "health",
-            status_code=health.status_code,
-            body=health.json(),
-        )
-        if health.status_code != 200:
+        try:
+            # Readiness is momentarily withdrawn for each periodic private-stream
+            # alignment, so wait for a ready sample instead of sampling once.
+            health_body = await wait_for(
+                client,
+                "/health/trading",
+                lambda payload: payload.get("ready") is True,
+                timeout=180.0,
+                interval=3.0,
+            )
+        except TimeoutError as exc:
+            record("health", status_code=503, body={"ready": False, "error": str(exc)})
             record("aborted", reason="trading runtime not ready")
             await _write(args.out, evidence)
             return 2
+        record("health", status_code=200, body=health_body)
 
         metrics_before = (
             await client.get("/v1/trading/metrics", params={"account_id": args.account_id})

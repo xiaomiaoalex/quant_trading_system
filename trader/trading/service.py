@@ -95,6 +95,7 @@ class TradingService:
         policy: RiskPolicy | None = None,
         clock: Callable[[], int] | None = None,
         defer_send: bool = False,
+        order_prefix: str = "qts-",
     ):
         self.store = store
         self.exchange = exchange
@@ -102,6 +103,7 @@ class TradingService:
         self.policy = self.risk.policy
         self.clock = clock or (lambda: 0)
         self.defer_send = defer_send
+        self.order_prefix = order_prefix
 
     # ------------------------------------------------------------------ commands
     async def place(self, command: PlaceOrderCommand, actor: str = "system") -> CommandReceipt:
@@ -412,6 +414,13 @@ class TradingService:
         async with self.store.transaction(observation.account_id) as state:
             order = state.orders.get(observation.cl_ord_id)
             if order is None:
+                if observation.cl_ord_id.startswith(self.order_prefix):
+                    # Our own placement can be visible on the private stream
+                    # before the local transaction commits. Recovery adopts it
+                    # from REST evidence; a transient WS observation must not
+                    # block the account.
+                    self._refresh_status(state)
+                    return True
                 self._add_unresolved(
                     state,
                     "UNKNOWN_ORDER",
