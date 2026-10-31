@@ -10,8 +10,15 @@ import re
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
-from trader.trading.datasets import canonical, decimal_text, digest, freeze_dataset
+from trader.trading.datasets import (
+    canonical,
+    dataset_metadata,
+    decimal_text,
+    digest,
+    freeze_dataset,
+)
 from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
@@ -89,8 +96,35 @@ class MemoryResearchStore:
         data = self.datasets.get(dataset_id)
         return copy.deepcopy(data) if data is not None else None
 
-    async def list_datasets(self):
-        return [copy.deepcopy(data) for data in self.datasets.values()]
+    async def get_dataset_link(self, dataset_id: str):
+        """In-memory stores never carry a trusted archive provenance link."""
+        return None
+
+    async def list_datasets(self, **filters: Any) -> list[dict]:
+        """Catalog listing: metadata only, never the bar payload."""
+        records = []
+        for dataset_id, data in self.datasets.items():
+            record = {
+                "dataset_id": dataset_id,
+                **dataset_metadata(data),
+                "history_dataset_id": None,
+                "official_eligible": False,
+                "provenance_hash": None,
+                "published_at": None,
+                "created_at": None,
+            }
+            records.append(record)
+        symbol = filters.get("symbol")
+        if symbol:
+            records = [r for r in records if r.get("symbol") == symbol.upper()]
+        month = filters.get("month")
+        if month:
+            records = [r for r in records if r.get("month") == month]
+        if filters.get("official_only"):
+            records = [r for r in records if r.get("official_eligible")]
+        limit = int(filters.get("limit") or 50)
+        offset = int(filters.get("offset") or 0)
+        return records[offset : offset + limit]
 
     async def enqueue(self, manifest: dict) -> dict:
         run_id = "bt_" + uuid.uuid4().hex
@@ -137,6 +171,20 @@ class MemoryResearchStore:
         record["updated_at"] = self.clock()
         return copy.deepcopy(record)
 
+    async def retry(self, run_id: str):
+        """Re-queue a FAILED run, keeping its frozen inputs and run id."""
+        record = self.jobs.get(run_id)
+        if record is None:
+            return None
+        if record["status"] != "FAILED":
+            raise ValueError(f"Run {run_id} is {record['status']}; only FAILED runs can be retried")
+        record["status"] = "QUEUED"
+        record["error"] = None
+        record["lease_owner"] = None
+        record["lease_until"] = None
+        record["updated_at"] = self.clock()
+        return copy.deepcopy(record)
+
     async def claim(self, owner: str, lease_seconds: int = 30):
         now = self.clock()
         for record in sorted(self.jobs.values(), key=lambda job: job["created_at"]):
@@ -150,9 +198,9 @@ class MemoryResearchStore:
                 continue
             if record["cancel_requested"]:
                 continue
-            if record["status"] not in {"QUEUED", "FAILED"} and not (
-                record["status"] == "RUNNING" and expired
-            ):
+            # FAILED is a terminal state: a deterministic failure must never be
+            # picked up again automatically. Only an explicit retry re-queues it.
+            if record["status"] != "QUEUED" and not (record["status"] == "RUNNING" and expired):
                 continue
             record["status"] = "RUNNING"
             record["attempt"] += 1
@@ -286,9 +334,11 @@ class PostgresResearchStore:
         data = freeze_dataset(identity, bars)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO research.datasets(dataset_id,document) VALUES($1,$2::jsonb) ON CONFLICT DO NOTHING",
+                "INSERT INTO research.datasets(dataset_id,document,metadata) VALUES($1,$2::jsonb,$3::jsonb) "
+                "ON CONFLICT (dataset_id) DO UPDATE SET metadata=EXCLUDED.metadata",
                 data["dataset_id"],
                 canonical(data),
+                canonical(dataset_metadata(data)),
             )
         return data
 
@@ -298,6 +348,81 @@ class PostgresResearchStore:
                 "SELECT document FROM research.datasets WHERE dataset_id=$1", dataset_id
             )
         return json.loads(raw) if isinstance(raw, str) else raw
+
+    async def get_dataset_link(self, dataset_id: str):
+        """Trusted provenance link of a dataset imported from an official archive."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM research.dataset_links WHERE research_dataset_id=$1",
+                dataset_id,
+            )
+        if row is None:
+            return None
+        record = dict(row)
+        for key, value in list(record.items()):
+            if hasattr(value, "isoformat"):
+                record[key] = value.isoformat()
+        return record
+
+    async def list_datasets(
+        self,
+        *,
+        symbol: str | None = None,
+        month: str | None = None,
+        official_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Catalog listing.
+
+        Only catalog metadata and provenance are read; the (potentially very
+        large) bar payload is never loaded.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if symbol:
+            params.append(symbol.upper())
+            clauses.append(f"COALESCE(l.symbol, d.metadata->>'symbol') = ${len(params)}")
+        if month:
+            params.append(month)
+            clauses.append(f"l.month = ${len(params)}")
+        if official_only:
+            clauses.append("COALESCE(l.official_eligible, FALSE) = TRUE")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(min(max(int(limit), 1), 200))
+        params.append(max(int(offset), 0))
+        query = f"""
+            SELECT d.dataset_id, d.metadata, d.created_at,
+                   l.history_dataset_id, l.source_url, l.checksum_url, l.official_sha256,
+                   l.archive_sha256, l.archive_version, l.feature_version, l.month,
+                   l.coverage_start_ms, l.coverage_end_ms, l.bar_count, l.conversion_version,
+                   l.quality, l.provenance_hash, l.official_eligible, l.published_at
+            FROM research.datasets d
+            LEFT JOIN research.dataset_links l ON l.research_dataset_id = d.dataset_id
+            {where}
+            ORDER BY d.created_at DESC, d.dataset_id
+            LIMIT ${len(params) - 1} OFFSET ${len(params)}
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        records = []
+        for row in rows:
+            record = dict(row)
+            metadata = record.pop("metadata", None)
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            metadata = metadata or {}
+            quality = record.get("quality")
+            if isinstance(quality, str):
+                quality = json.loads(quality)
+            record["metadata"] = metadata
+            record["quality"] = quality or {}
+            for key, value in list(record.items()):
+                if hasattr(value, "isoformat"):
+                    record[key] = value.isoformat()
+            record["official_eligible"] = bool(record.get("official_eligible"))
+            records.append(record)
+        return records
 
     async def enqueue(self, manifest: dict) -> dict:
         async with self.pool.acquire() as conn:
@@ -335,6 +460,30 @@ class PostgresResearchStore:
                 )
             )
 
+    async def retry(self, run_id):
+        """Re-queue a FAILED run.
+
+        The run id, the frozen manifest and its hash are preserved; only the
+        attempt counter keeps growing. The compare-and-set on ``status='FAILED'``
+        makes concurrent retries idempotent.
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE research.backtest_jobs SET status='QUEUED',error=NULL,lease_owner=NULL,lease_until=NULL,"
+                "updated_at=clock_timestamp() WHERE run_id=$1 AND status='FAILED' RETURNING *",
+                run_id,
+            )
+            if row is None:
+                current = await conn.fetchrow(
+                    "SELECT status FROM research.backtest_jobs WHERE run_id=$1", run_id
+                )
+                if current is None:
+                    return None
+                raise ValueError(
+                    f"Run {run_id} is {current['status']}; only FAILED runs can be retried"
+                )
+            return _record(row)
+
     async def claim(self, owner, lease_seconds=30):
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute(
@@ -344,7 +493,7 @@ class PostgresResearchStore:
                 await conn.fetchrow(
                     """WITH candidate AS (
               SELECT run_id FROM research.backtest_jobs WHERE NOT cancel_requested AND
-              (status IN ('QUEUED','FAILED') OR (status='RUNNING' AND lease_until<clock_timestamp()))
+              (status='QUEUED' OR (status='RUNNING' AND lease_until<clock_timestamp()))
               ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
               UPDATE research.backtest_jobs j SET status='RUNNING',attempt=attempt+1,
               fencing_token=fencing_token+1,lease_owner=$1,
@@ -391,8 +540,24 @@ class PostgresResearchStore:
 
 
 class BacktestApplication:
-    def __init__(self, store):
+    def __init__(self, store, eligibility=None):
         self.store = store
+        # Optional async callable ``(dataset_id) -> bool``. When present, a
+        # dataset that is not backed by a trusted, published provenance link is
+        # refused. The eligibility decision never trusts a caller supplied
+        # source string.
+        self._eligibility = eligibility
+
+    async def _dataset_links(self, dataset_ids: list[str]) -> dict[str, dict]:
+        getter = getattr(self.store, "get_dataset_link", None)
+        if getter is None:
+            return {}
+        links = {}
+        for dataset_id in dataset_ids:
+            link = await getter(dataset_id)
+            if link:
+                links[dataset_id] = link
+        return links
 
     async def submit(self, manifest: dict):
         if set(manifest) - {
@@ -404,11 +569,15 @@ class BacktestApplication:
             "engine",
             "purpose",
             "risk_config",
+            "provenance",
         }:
             raise ValueError("Unknown backtest manifest fields")
         ids = manifest.get("dataset_ids", [])
         if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
             raise ValueError("Provide unique dataset_ids")
+        for dataset_id in ids:
+            if not isinstance(dataset_id, str) or not dataset_id.startswith("ds_"):
+                raise ValueError("dataset_ids must reference Research datasets (ds_*)")
         datasets = []
         for dataset_id in ids:
             data = await self.store.get_dataset(dataset_id)
@@ -428,13 +597,24 @@ class BacktestApplication:
                 raise ValueError("Datasets must share quote asset and bar calendar")
         engine = manifest.get("engine", "event_runtime")
         purpose = manifest.get("purpose", "research_screening")
-        if engine not in {"event_runtime", "vectorbt"} or purpose not in {
-            "research_screening",
-            "admission_evidence",
-        }:
-            raise ValueError("Unsupported engine/purpose")
-        if engine == "vectorbt" and purpose != "research_screening":
-            raise ValueError("Vectorbt results cannot be admission evidence")
+        if engine != "event_runtime":
+            raise ValueError("Only the event runtime may execute frozen backtests")
+        if purpose not in {"research_screening", "admission_evidence"}:
+            raise ValueError("Unsupported purpose")
+        if self._eligibility is not None:
+            for dataset_id in ids:
+                if not await self._eligibility(dataset_id):
+                    raise ValueError("Dataset has no trusted published provenance: " + dataset_id)
+        links = await self._dataset_links(ids)
+        provenance = manifest.get("provenance")
+        if provenance is None:
+            provenance = {
+                dataset_id: link.get("provenance_hash")
+                for dataset_id, link in links.items()
+                if link.get("provenance_hash")
+            }
+        if not isinstance(provenance, dict):
+            raise ValueError("provenance must be an object")
         frozen = {
             "dataset_ids": sorted(ids),
             "strategy": freeze_strategy(manifest.get("strategy", {})),
@@ -445,6 +625,7 @@ class BacktestApplication:
             "purpose": purpose,
             "runtime_version": SPOT_RUNTIME_VERSION,
             "risk_config": manifest.get("risk_config", {}),
+            "provenance": provenance,
         }
         from decimal import Decimal
 
@@ -468,3 +649,7 @@ class BacktestApplication:
 
     async def cancel(self, run_id):
         return await self.store.cancel(run_id)
+
+    async def retry(self, run_id):
+        """Re-queue a FAILED run with its frozen inputs untouched."""
+        return await self.store.retry(run_id)
