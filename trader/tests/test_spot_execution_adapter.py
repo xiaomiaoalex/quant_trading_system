@@ -127,6 +127,20 @@ def command():
 
 
 @pytest.mark.asyncio
+async def test_snapshot_reports_open_orders_as_adoptable_venue_orders():
+    broker = FakeBroker()
+    provider = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=lambda: 1_000_100
+    )
+
+    snapshot = await provider.build()
+
+    # A placement in flight is visible at the venue before the local order
+    # transaction commits. It must be adoptable, not reported as foreign.
+    assert any(order.cl_ord_id == "qts-1" for order in snapshot.venue_orders)
+
+
+@pytest.mark.asyncio
 async def test_place_outcomes_are_translated_to_port_results():
     broker = FakeBroker()
     port = BinanceSpotExchangePort(broker)
