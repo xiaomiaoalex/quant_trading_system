@@ -467,7 +467,7 @@ class PostgreSQLStorage:
                     persistence_ok BOOLEAN NOT NULL DEFAULT FALSE,
                     backtest_eligible BOOLEAN NOT NULL DEFAULT FALSE,
                     job_id VARCHAR(64),
-                    research_dataset_id VARCHAR(64),
+                    research_dataset_id VARCHAR(80),
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
                     published_at TIMESTAMP WITH TIME ZONE,
                     CONSTRAINT uq_history_datasets_version
@@ -481,7 +481,14 @@ class PostgreSQLStorage:
             await conn.execute(
                 """
                 ALTER TABLE history_datasets
-                    ADD COLUMN IF NOT EXISTS research_dataset_id VARCHAR(64)
+                    ADD COLUMN IF NOT EXISTS research_dataset_id VARCHAR(80)
+                """
+            )
+
+            await conn.execute(
+                """
+                ALTER TABLE history_datasets
+                    ALTER COLUMN research_dataset_id TYPE VARCHAR(80)
                 """
             )
 

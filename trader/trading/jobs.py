@@ -19,6 +19,7 @@ from trader.trading.datasets import (
     digest,
     freeze_dataset,
 )
+from trader.trading.research_schema import research_schema_sql
 from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
@@ -328,7 +329,7 @@ class PostgresResearchStore:
 
     async def initialize(self):
         async with self.pool.acquire() as conn:
-            await conn.execute(Path(__file__).with_name("research_schema.sql").read_text())
+            await conn.execute(research_schema_sql())
 
     async def register_dataset(self, identity: dict, bars: list[dict]) -> dict:
         data = freeze_dataset(identity, bars)

@@ -9,9 +9,9 @@
 4. 更新 "最后更新时间" 为当前时间
 """
 
-import subprocess
-import re
 import os
+import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -63,9 +63,11 @@ def run_pytest(test_file: str) -> dict:
         result = subprocess.run(
             [
                 str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"),
-                "-m", "pytest",
+                "-m",
+                "pytest",
                 str(test_path),
-                "-v", "--tb=short",
+                "-v",
+                "--tb=short",
                 "--no-header",
             ],
             capture_output=True,
@@ -119,12 +121,7 @@ def run_pytest(test_file: str) -> dict:
                 if error_match:
                     failed = int(error_match.group(1))
 
-        return {
-            "passed": passed,
-            "failed": failed,
-            "total": total,
-            "error": None
-        }
+        return {"passed": passed, "failed": failed, "total": total, "error": None}
 
     except subprocess.TimeoutExpired:
         return {"passed": 0, "failed": 0, "total": 0, "error": "测试超时"}
@@ -144,17 +141,15 @@ def parse_test_results() -> dict:
 
         print(f"\n[{len(results) + 1}/{len(TEST_FILES)}] {module_name}")
         result = run_pytest(test_file)
-        results[filename] = {
-            "module": module_name,
-            "test_file": test_file,
-            **result
-        }
+        results[filename] = {"module": module_name, "test_file": test_file, **result}
 
         if result["error"]:
             print(f"    ❌ 错误: {result['error']}")
         else:
             status = "✅" if result["failed"] == 0 else "❌"
-            print(f"    {status} 通过: {result['passed']}, 失败: {result['failed']}, 总计: {result['total']}")
+            print(
+                f"    {status} 通过: {result['passed']}, 失败: {result['failed']}, 总计: {result['total']}"
+            )
 
     return results
 

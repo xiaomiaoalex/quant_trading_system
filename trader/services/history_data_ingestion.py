@@ -821,11 +821,15 @@ class HistoryJobWorker:
         unavailable_logged = False
         while not self._stopping:
             if not recovered:
-                recovered = True
                 try:
                     await self._service.recover_interrupted_jobs()
-                except Exception as exc:  # noqa: BLE001 - startup recovery must not kill the loop
+                    recovered = True
+                except Exception as exc:  # noqa: BLE001 - recovery must not kill the loop
+                    # 恢复失败必须重试；在恢复成功之前不领取任何任务，
+                    # 否则可能把别的实例正在执行的任务误标为中断。
                     logger.warning("History job recovery failed: %s", exc)
+                    await asyncio.sleep(self._unavailable_backoff_seconds)
+                    continue
 
             try:
                 processed = await self._service.process_next_queued_job()

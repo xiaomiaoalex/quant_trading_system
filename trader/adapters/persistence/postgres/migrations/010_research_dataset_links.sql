@@ -9,8 +9,13 @@
 CREATE SCHEMA IF NOT EXISTS research;
 
 -- ==================== History dataset -> Research dataset ====================
+-- The Research dataset id is "ds_" + a 64 character digest, so the column
+-- needs 80 characters.
 ALTER TABLE history_datasets
-    ADD COLUMN IF NOT EXISTS research_dataset_id VARCHAR(64);
+    ADD COLUMN IF NOT EXISTS research_dataset_id VARCHAR(80);
+
+ALTER TABLE history_datasets
+    ALTER COLUMN research_dataset_id TYPE VARCHAR(80);
 
 CREATE INDEX IF NOT EXISTS idx_history_datasets_research_dataset
     ON history_datasets(research_dataset_id);

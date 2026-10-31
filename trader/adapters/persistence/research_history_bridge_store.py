@@ -88,12 +88,24 @@ class ResearchHistoryBridgeStore:
             raise ResearchHistoryStoreUnavailableError("Research bridge store is not connected")
         return self._storage
 
+    async def ensure_research_schema(self) -> None:
+        """确保 Research 平面 schema 存在。
+
+        历史导入进程会直接写入 ``research.datasets`` 与 ``research.dataset_links``，
+        因此它必须能独立把 Research schema 建好。
+        """
+        from trader.trading.research_schema import research_schema_sql
+
+        storage = self._require_storage()
+        async with storage.acquire() as conn:
+            await conn.execute(research_schema_sql())
+
     # ==================== publish ====================
 
     async def publish_dataset(
         self,
         *,
-        job_id: str,
+        job_id: Optional[str],
         history_dataset_id: str,
         feature_version: str,
         row_count: int,
@@ -233,30 +245,35 @@ class ResearchHistoryBridgeStore:
                     raise ResearchHistoryStoreError(
                         f"History dataset {history_dataset_id} not found"
                     )
-                job = await conn.fetchrow(
-                    """
-                    UPDATE history_ingest_jobs
-                    SET status = 'SUCCEEDED',
-                        stage = 'PUBLISHED',
-                        dataset_id = $2,
-                        feature_version = $3,
-                        rows_processed = $4,
-                        bytes_downloaded = COALESCE(bytes_downloaded, 0),
-                        error_code = NULL,
-                        error_reason = NULL,
-                        finished_at = NOW(),
-                        updated_at = NOW()
-                    WHERE job_id = $1
-                    RETURNING *
-                    """,
-                    job_id,
-                    history_dataset_id,
-                    feature_version,
-                    row_count,
-                )
-                if job is None:
-                    raise ResearchHistoryStoreError(f"History job {job_id} not found")
-                return {"dataset": dict(dataset), "job": dict(job)}
+                job = None
+                if job_id:
+                    job = await conn.fetchrow(
+                        """
+                        UPDATE history_ingest_jobs
+                        SET status = 'SUCCEEDED',
+                            stage = 'PUBLISHED',
+                            dataset_id = $2,
+                            feature_version = $3,
+                            rows_processed = $4,
+                            bytes_downloaded = COALESCE(bytes_downloaded, 0),
+                            error_code = NULL,
+                            error_reason = NULL,
+                            finished_at = NOW(),
+                            updated_at = NOW()
+                        WHERE job_id = $1
+                        RETURNING *
+                        """,
+                        job_id,
+                        history_dataset_id,
+                        feature_version,
+                        row_count,
+                    )
+                    if job is None:
+                        raise ResearchHistoryStoreError(f"History job {job_id} not found")
+                return {
+                    "dataset": dict(dataset),
+                    "job": dict(job) if job is not None else None,
+                }
 
     # ==================== queries ====================
 
