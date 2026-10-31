@@ -8,6 +8,7 @@ Fake History Store / Archive Client / Feature Store
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import os
@@ -22,6 +23,7 @@ from trader.adapters.market_data.binance_vision import (
     DownloadedArchive,
 )
 from trader.adapters.persistence.feature_store import FeatureStoreStrictError
+from trader.adapters.persistence.research_history_bridge_store import ResearchHistoryStoreError
 from trader.core.domain.services.ohlcv_archive import KlineBar
 
 JobKey = Tuple[str, str, str, str]
@@ -256,6 +258,7 @@ class FakeHistoryDatasetStore:
             "persistence_ok": fields.get("persistence_ok", False),
             "backtest_eligible": fields.get("backtest_eligible", False),
             "job_id": fields.get("job_id"),
+            "research_dataset_id": fields.get("research_dataset_id"),
             "created_at": self._now(),
             "published_at": None,
         }
@@ -324,6 +327,7 @@ class FakeHistoryDatasetStore:
                 "first_ts_ms": fields["first_ts_ms"],
                 "last_ts_ms": fields["last_ts_ms"],
                 "quality": fields["quality"],
+                "research_dataset_id": fields.get("research_dataset_id"),
                 "published_at": self._now(),
             }
         )
@@ -349,6 +353,63 @@ class FakeHistoryDatasetStore:
             dataset["persistence_ok"] = False
             dataset["backtest_eligible"] = False
             dataset["quality"] = {**dataset["quality"], "error": fields.get("reason")}
+
+
+class FakeResearchHistoryBridgeStore:
+    """桥接存储替身。
+
+    模拟「Research 数据集 + provenance 关联 + 历史数据集/任务发布」在同一个
+    原子步骤内完成，并保留足够的记录用于断言。
+    """
+
+    def __init__(self, history_store: "FakeHistoryDatasetStore") -> None:
+        self.history_store = history_store
+        self.datasets: Dict[str, Dict[str, Any]] = {}
+        self.links: Dict[str, Dict[str, Any]] = {}
+        self.publish_calls: List[Dict[str, Any]] = []
+        self.fail_publish = False
+
+    async def publish_dataset(self, **fields: Any) -> Dict[str, Any]:
+        self.publish_calls.append(dict(fields))
+        if self.fail_publish:
+            raise ResearchHistoryStoreError("simulated atomic publish failure")
+        document = fields.get("research_document")
+        if document is not None:
+            research_dataset_id = str(document["dataset_id"])
+            self.datasets[research_dataset_id] = copy.deepcopy(document)
+        else:
+            research_dataset_id = str(fields.get("research_dataset_id"))
+            if research_dataset_id not in self.datasets:
+                raise ResearchHistoryStoreError(f"Research dataset {research_dataset_id} not found")
+        link = fields["link"]
+        self.links[research_dataset_id] = {
+            "research_dataset_id": research_dataset_id,
+            "provenance_hash": link["provenance_hash"],
+            "official_eligible": True,
+            **link["payload"],
+        }
+        return await self.history_store.publish_dataset_with_job(
+            job_id=fields["job_id"],
+            dataset_id=fields["history_dataset_id"],
+            feature_version=fields["feature_version"],
+            row_count=fields["row_count"],
+            expected_points=fields["expected_points"],
+            gap_count=fields["gap_count"],
+            first_ts_ms=fields["first_ts_ms"],
+            last_ts_ms=fields["last_ts_ms"],
+            quality=fields["quality"],
+            research_dataset_id=research_dataset_id,
+        )
+
+    async def find_link_by_research_dataset(self, research_dataset_id: str):
+        link = self.links.get(research_dataset_id)
+        return dict(link) if link else None
+
+    async def find_link_by_history_dataset(self, history_dataset_id: str):
+        for link in self.links.values():
+            if link.get("history_dataset_id") == history_dataset_id:
+                return dict(link)
+        return None
 
 
 class FakeFeatureStore:
@@ -474,5 +535,6 @@ __all__ = [
     "FakeArchiveClient",
     "FakeFeatureStore",
     "FakeHistoryDatasetStore",
+    "FakeResearchHistoryBridgeStore",
     "make_zip_bytes",
 ]

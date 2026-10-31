@@ -91,6 +91,11 @@ class HistoryDatasetStore:
             raise HistoryStoreUnavailableError("History dataset store is not connected")
         return self._storage
 
+    @property
+    def storage(self) -> Optional[PostgreSQLStorage]:
+        """底层连接（供需要同一事务的桥接存储复用）。"""
+        return self._storage
+
     # ==================== jobs ====================
 
     async def create_job(
@@ -164,7 +169,12 @@ class HistoryDatasetStore:
         storage = self._require_storage()
         async with storage.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM history_ingest_jobs WHERE job_id = $1",
+                """
+                SELECT j.*, d.research_dataset_id
+                FROM history_ingest_jobs j
+                LEFT JOIN history_datasets d ON d.dataset_id = j.dataset_id
+                WHERE j.job_id = $1
+                """,
                 job_id,
             )
             return dict(row) if row is not None else None
@@ -183,21 +193,22 @@ class HistoryDatasetStore:
         params: List[Any] = []
         if status:
             params.append(status)
-            clauses.append(f"status = ${len(params)}")
+            clauses.append(f"j.status = ${len(params)}")
         if symbol:
             params.append(symbol.upper())
-            clauses.append(f"symbol = ${len(params)}")
+            clauses.append(f"j.symbol = ${len(params)}")
         if month:
             params.append(month)
-            clauses.append(f"month = ${len(params)}")
+            clauses.append(f"j.month = ${len(params)}")
         if source:
             params.append(source)
-            clauses.append(f"source = ${len(params)}")
+            clauses.append(f"j.source = ${len(params)}")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         query = (
-            "SELECT * FROM history_ingest_jobs "
-            f"{where} ORDER BY created_at DESC LIMIT ${len(params)}"
+            "SELECT j.*, d.research_dataset_id FROM history_ingest_jobs j "
+            "LEFT JOIN history_datasets d ON d.dataset_id = j.dataset_id "
+            f"{where} ORDER BY j.created_at DESC LIMIT ${len(params)}"
         )
         async with storage.acquire() as conn:
             rows = await conn.fetch(query, *params)

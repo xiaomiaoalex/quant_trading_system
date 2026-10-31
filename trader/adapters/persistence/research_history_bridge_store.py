@@ -102,33 +102,52 @@ class ResearchHistoryBridgeStore:
         first_ts_ms: Optional[int],
         last_ts_ms: Optional[int],
         quality: Dict[str, Any],
-        research_document: Dict[str, Any],
-        research_metadata: Dict[str, Any],
         link: Dict[str, Any],
+        research_document: Optional[Dict[str, Any]] = None,
+        research_metadata: Optional[Dict[str, Any]] = None,
+        research_dataset_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         在同一个事务内完成 Research 数据集、provenance 关联与历史发布。
 
+        ``research_document`` 为 None 时表示 Research 数据集已经存在（例如复用
+        同一份归档），此时只校验其存在并补齐关联，不会重新写入行情。
+
         幂等：同一份冻结输入重复调用得到相同结果，不会产生第二个数据集。
         """
         storage = self._require_storage()
-        research_dataset_id = str(research_document["dataset_id"])
         payload = link["payload"]
         link_quality = payload.get("quality") or {}
         link_json = json.dumps(link_quality)
+        if research_document is not None:
+            resolved_research_dataset_id = str(research_document["dataset_id"])
+        else:
+            resolved_research_dataset_id = str(research_dataset_id or "")
+            if not resolved_research_dataset_id:
+                raise ResearchHistoryStoreError("research dataset id is required")
 
         async with storage.acquire() as conn:
             async with conn.transaction():
-                await conn.execute(
-                    """
-                    INSERT INTO research.datasets (dataset_id, document, metadata)
-                    VALUES ($1, $2::jsonb, $3::jsonb)
-                    ON CONFLICT (dataset_id) DO UPDATE SET metadata = EXCLUDED.metadata
-                    """,
-                    research_dataset_id,
-                    json.dumps(research_document),
-                    json.dumps(research_metadata),
-                )
+                if research_document is not None:
+                    await conn.execute(
+                        """
+                        INSERT INTO research.datasets (dataset_id, document, metadata)
+                        VALUES ($1, $2::jsonb, $3::jsonb)
+                        ON CONFLICT (dataset_id) DO UPDATE SET metadata = EXCLUDED.metadata
+                        """,
+                        resolved_research_dataset_id,
+                        json.dumps(research_document),
+                        json.dumps(research_metadata or {}),
+                    )
+                else:
+                    exists = await conn.fetchval(
+                        "SELECT 1 FROM research.datasets WHERE dataset_id = $1",
+                        resolved_research_dataset_id,
+                    )
+                    if exists is None:
+                        raise ResearchHistoryStoreError(
+                            f"Research dataset {resolved_research_dataset_id} not found"
+                        )
                 await conn.execute(
                     """
                     INSERT INTO research.dataset_links (
@@ -164,7 +183,7 @@ class ResearchHistoryBridgeStore:
                         provenance_hash = EXCLUDED.provenance_hash,
                         official_eligible = TRUE
                     """,
-                    research_dataset_id,
+                    resolved_research_dataset_id,
                     payload.get("history_dataset_id"),
                     payload.get("source_url"),
                     payload.get("checksum_url"),
@@ -208,7 +227,7 @@ class ResearchHistoryBridgeStore:
                     first_ts_ms,
                     last_ts_ms,
                     json.dumps(quality),
-                    research_dataset_id,
+                    resolved_research_dataset_id,
                 )
                 if dataset is None:
                     raise ResearchHistoryStoreError(
