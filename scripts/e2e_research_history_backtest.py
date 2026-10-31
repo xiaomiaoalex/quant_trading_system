@@ -177,6 +177,12 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
 
     application = BacktestApplication(research, eligibility=dataset_eligible)
 
+    # The isolated database is never dropped, so cancel queued runs left over
+    # from earlier runs of this script before the worker executes anything.
+    for leftover in await research.list(limit=500):
+        if leftover["status"] == "QUEUED":
+            await research.cancel(str(leftover["run_id"]))
+
     try:
         # ==================== 1. import + publish ====================
         for symbol in symbols:
@@ -588,7 +594,7 @@ async def _process_restart_phase(
     # ---- Research worker 进程 ----
     import asyncpg
 
-    from trader.trading.jobs import PostgresResearchStore
+    from trader.trading.jobs import BacktestApplication, PostgresResearchStore
 
     pool = await asyncpg.create_pool(test_dsn, min_size=1, max_size=4)
     research = PostgresResearchStore(pool)

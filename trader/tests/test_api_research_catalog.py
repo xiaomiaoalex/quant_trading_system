@@ -83,9 +83,7 @@ async def test_catalog_filters_by_symbol_month_and_official_eligibility():
     client, store, _ = build_client()
     async with client:
         btc = await store.register_dataset(identity(), bars())
-        eth = await store.register_dataset(
-            identity(symbol="ETHUSDT", base_asset="ETH"), bars()
-        )
+        eth = await store.register_dataset(identity(symbol="ETHUSDT", base_asset="ETH"), bars())
 
         by_symbol = await client.get("/v1/research/datasets", params={"symbol": "ETHUSDT"})
         assert [item["dataset_id"] for item in by_symbol.json()] == [eth["dataset_id"]]
@@ -93,9 +91,7 @@ async def test_catalog_filters_by_symbol_month_and_official_eligibility():
         other_month = await client.get("/v1/research/datasets", params={"month": "2026-09"})
         assert other_month.json() == []
 
-        official = await client.get(
-            "/v1/research/datasets", params={"official_only": "true"}
-        )
+        official = await client.get("/v1/research/datasets", params={"official_only": "true"})
         assert official.json() == []
         assert btc["dataset_id"] != eth["dataset_id"]
 

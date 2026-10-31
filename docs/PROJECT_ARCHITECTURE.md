@@ -872,7 +872,9 @@ flowchart TB
 - 独立运行入口为 `runtime/control_main.py`、`runtime/trading_worker_main.py`、
   `runtime/research_worker_main.py`、`runtime/history_worker_main.py`。
 - 历史归档导入进程 `runtime/history_worker_main.py` 用 PostgreSQL session advisory lock 保证同库单 owner；
-  只有 owner 执行启动恢复，恢复成功前不领取任务。旧 `trader.api.main` 的内嵌导入 worker 默认关闭。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
+  只有 owner 执行启动恢复，恢复成功前不领取任务。旧 `trader.api.main` 的内嵌导入 worker 默认关闭。
+- 前端反代按路径拆分：`/v1/research/*` 与 `/v1/data/history/*` 指向新 Control API，其余 `/v1/*` 保持旧 API。
+  `QTS_CONTROL_API_TARGET` 未设置时两者仍指向同一目标，避免整体切端口导致旧页面失效。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
   不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG 租约和
   持久 runtime 元数据读取就绪。旧 `trader.api.main` 保留只读 connector/账户快照，
   通过只读 broker 代理和生命周期退休门禁关闭旧发送器及自动恢复，旧投影撤单入口关闭。

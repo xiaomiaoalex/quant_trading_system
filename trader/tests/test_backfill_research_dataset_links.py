@@ -19,9 +19,7 @@ from trader.tests.fakes.fake_history_store import (
     FakeResearchHistoryBridgeStore,
 )
 
-_SCRIPT = (
-    Path(__file__).resolve().parents[2] / "scripts" / "backfill_research_dataset_links.py"
-)
+_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "backfill_research_dataset_links.py"
 
 YEAR = 2026
 MONTH = 9
@@ -120,28 +118,20 @@ async def test_apply_backfills_the_link_idempotently(backfill_module, tmp_path):
     store, dataset = _published_dataset(tmp_path)
     bridge = FakeResearchHistoryBridgeStore(store)
 
-    first = await backfill_module.backfill(
-        apply=True, store=store, bridge=bridge, client=object()
-    )
-    second = await backfill_module.backfill(
-        apply=True, store=store, bridge=bridge, client=object()
-    )
+    first = await backfill_module.backfill(apply=True, store=store, bridge=bridge, client=object())
+    second = await backfill_module.backfill(apply=True, store=store, bridge=bridge, client=object())
 
     assert first[0]["outcome"] == backfill_module.OUTCOME_APPLIED
     assert second[0]["outcome"] == backfill_module.OUTCOME_ALREADY_LINKED
     assert len(bridge.publish_calls) == 1
     assert len(bridge.datasets) == 1
     research_dataset_id = first[0]["research_dataset_id"]
-    assert store.datasets[dataset["dataset_id"]]["research_dataset_id"] == (
-        research_dataset_id
-    )
+    assert store.datasets[dataset["dataset_id"]]["research_dataset_id"] == (research_dataset_id)
     assert bridge.links[research_dataset_id]["official_eligible"] is True
 
 
 @pytest.mark.asyncio
-async def test_archive_revision_is_reported_as_conflict(
-    backfill_module, tmp_path, monkeypatch
-):
+async def test_archive_revision_is_reported_as_conflict(backfill_module, tmp_path, monkeypatch):
     store, dataset = _published_dataset(tmp_path)
     bridge = FakeResearchHistoryBridgeStore(store)
     monkeypatch.setattr(backfill_module, "sha256_file", lambda path: "f" * 64)

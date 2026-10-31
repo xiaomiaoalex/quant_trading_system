@@ -119,9 +119,7 @@ class MemoryResearchStore:
             )
         symbol = filters.get("symbol")
         if symbol:
-            records = [
-                r for r in records if r["metadata"].get("symbol") == symbol.upper()
-            ]
+            records = [r for r in records if r["metadata"].get("symbol") == symbol.upper()]
         month = filters.get("month")
         if month:
             records = [r for r in records if r.get("month") == month]

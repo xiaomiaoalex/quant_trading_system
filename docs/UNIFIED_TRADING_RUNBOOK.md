@@ -124,6 +124,20 @@ cd Frontend
 npm run dev
 ```
 
+只把新接口切到 Control API、旧页面继续走旧 API 时，再加一个旧目标：
+
+```powershell
+$env:QTS_CONTROL_API_TARGET = "http://127.0.0.1:8090"   # /v1/research/*、/v1/data/history/*
+$env:QTS_LEGACY_API_TARGET  = "http://127.0.0.1:8080"   # 其余 /v1/*、/api、/health
+```
+
+未设置 `QTS_LEGACY_API_TARGET` 时两者指向同一目标，保持原有整体切换行为。
+
+历史归档导入已改为独立进程：`python -m trader.runtime.history_worker_main`
+（同一数据库只会有一个 owner，靠 PostgreSQL session advisory lock 保证）。
+旧 `trader.api.main` 的内嵌导入 worker 默认关闭，需要时用
+`QTS_ENABLE_EMBEDDED_HISTORY_WORKER=1` 显式打开。
+
 登录后的页面刷新通过 `/v1/auth/me` 恢复 CSRF token，无需重新登录。
 
 ```powershell
