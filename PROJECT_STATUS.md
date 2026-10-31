@@ -20,14 +20,24 @@
     `test_execution_projection_cursor.py` 去读真实 `trading.executions`（859 行遗留 UUID），断言必然失败。
   - `.gitignore` 中 `.env.*` / `!.env.example` 两条模式带行尾中文注释，实际是字面量，从未生效。
 - 开发后状态:
-  - 真实行情已落库：BTCUSDT 现货 `1m`，2024-01 ~ 2024-06 共 **6 个已发布数据集 / 262,080 行**，
-    每个数据集 `row_count == expected_points`、`gap_count = 0`、`archive_sha256 == official_sha256`、`backtest_eligible = t`。
+  - **K 线数据已经写进 PG**：`feature_values`（`feature_name='ohlcv'`）共 **262,080 行**，
+    分属 6 个 `feature_version`（2024-01 44,640 / 02 41,760 / 03 44,640 / 04 43,200 / 05 44,640 / 06 43,200）。
+    回测的行情读取路径（`FeatureStoreOHLCVDataProvider → FeatureStore.read_feature_range`）读的就是这张表。
+  - **元数据在 PG**：`history_datasets` 6 条（每个数据集 `row_count == expected_points`、`gap_count = 0`、
+    `archive_sha256 == official_sha256`、`persistence_ok/backtest_eligible = t`）+ `history_ingest_jobs` 6 条 SUCCEEDED。
+  - **原始归档在磁盘**：6 个 `.zip` 与 `.CHECKSUM` 存放在稳定路径
+    `D:\Code of Python\quant_trading_system\data\market\binance\spot\raw\klines\BTCUSDT\1m\`
+    （已被 `.gitignore` 的 `data/market/` 覆盖），逐文件 SHA-256 与 DB 中的 `archive_sha256` 一致；
+    `history_datasets.archive_path` 指向该稳定路径，**不再指向 Paseo worktree 临时目录**。
   - 真实回测已跑通（`POST /v1/backtests` + `dataset_id`，vectorbt 引擎）：
     `raw_only` total_return −92.65% / sharpe −68.643 / max_drawdown 92.69% / annualized_return −100%；
     `risk_adjusted` total_return −72.999% / sharpe −52.5744 / max_drawdown 73.1166%。
     数据证据：`total_points = expected_points = 44640`、`coverage_percent = 100`、`gap_count = 0`、`integrity_verified = True`。
+    把 worktree 的 `data/market` 目录整体改名后重跑，结果与 provenance 完全不变（`data_provenance.archive_path`
+    指向稳定路径），证明回测已不依赖 worktree 临时文件。
   - `.env.postgres` 已 `git rm --cached` 并被 `.gitignore` 忽略；`.env.postgres.example` 保留；
     `conftest.py` 不再隐式加载 `.env.postgres`。
+    **注意**：该文件仍留在 git 历史中，其中的本地开发口令建议轮换（本次不改写历史）。
   - `ExecutionRepository` 新增 `allow_postgres` 关键字参数（默认 True，向后兼容）；
     单元测试可显式 `allow_postgres=False` 强制内存存储。
 - Issue 状态迁移:

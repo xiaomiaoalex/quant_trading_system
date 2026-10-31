@@ -1373,3 +1373,36 @@
   - `VectorBTAdapterWithRisk` 将 `annualized_return/volatility/var_95` 硬编码为 0.0，需要后续补齐。
   - 为跑通默认 vectorbt 引擎，在 **worktree 本地 `.venv`** 安装了 `vectorbt 0.28.5` 并把 `plotly` 固定到 5.24.1（vectorbt 0.28.5 不兼容 plotly 7.x 的 `scattermapbox` 移除）、`pandas` 3.0.1 → 2.3.3。主仓 venv 与全局环境未改动。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`
+
+### 2026-10-31 - 复核补轮：归档路径迁出临时 worktree + 存储口径澄清
+
+- 背景: 上一轮把数据集摄取进本地库后，`history_datasets.archive_path` 记录的是 Paseo worktree 内的
+  `...\worktrees\0hgwfib0\history-data-and-test-isolation\data\market\...`。worktree 一旦被 archive/清理，
+  这条证据路径就失效，数据集的 provenance 与「可复核性」不成立。
+- 事实澄清（上一轮表述需要更精确）:
+  - **K 线本体在 PG**：`feature_values`（`feature_name='ohlcv'`）共 262,080 行，分属 6 个 `feature_version`；
+    回测取数走 `HistoryDatasetOHLCVDataProvider → FeatureStoreOHLCVDataProvider → FeatureStore.read_feature_range`，
+    读的就是这张表。因此「行情只在磁盘 zip 里」并不成立。
+  - **元数据在 PG**：`history_datasets` 6 条 + `history_ingest_jobs` 6 条（SUCCEEDED）。
+  - **原始归档在磁盘**：zip/CHECKSUM 是导入的来源证据，`archive_path` 只用于 provenance，**不参与回测取数**。
+  - 准确口径：PG 存「K 线行 + 数据集/任务元数据」，磁盘存「原始归档证据」，三层缺一不可、职责不同。
+- 改动:
+  - 把 6 个 `.zip` 与 6 个 `.zip.CHECKSUM` 复制到稳定路径
+    `D:\Code of Python\quant_trading_system\data\market\binance\spot\raw\klines\BTCUSDT\1m\`
+    （已被 `.gitignore` 的 `data/market/` 覆盖，未入库）。
+  - 逐文件校验：复制前后 SHA-256 全部一致；更新后每条 `history_datasets.archive_path` 指向稳定路径，
+    其文件 SHA-256 与 DB 的 `archive_sha256` 逐条比对全部 OK。
+  - `UPDATE history_datasets SET archive_path = replace(...)`：只匹配 worktree 前缀，`UPDATE 6`；
+    复核 `strpos(archive_path, '.paseo\worktrees') > 0` 的记录数为 0。
+  - 注意：PostgreSQL `LIKE` 默认把 `\` 当转义符，`LIKE 'C:\Users\...'` 会匹配失败（首次执行 `UPDATE 0`），
+    改用 `strpos(...) = 1` 做前缀判断。
+- 验证:
+  - worktree 的 `data/market` 整目录改名为 `data/market.disabled` 后重跑
+    `POST /v1/backtests`（`dataset_id=hds_ce20e8094b1f4de4`，`risk_mode=risk_adjusted`）→ COMPLETED：
+    total_return −72.999%，sharpe −52.5744，max_drawdown 73.1166%，833 笔，
+    `data_provenance.archive_path` = `D:\Code of Python\quant_trading_system\data\market\...\BTCUSDT-1m-2024-01-v1.zip`。
+    与 worktree 在位时逐项一致；随后恢复目录。
+- 风险/遗留:
+  - `.env.postgres` 虽已 `git rm --cached`，内容仍存在于 git 历史中；其中的本地开发口令建议轮换（本次不改写历史）。
+  - 归档契约仍只支持现货 `1m` + 按月 + BTCUSDT/ETHUSDT。
+- 关联文档: `PROJECT_STATUS.md`、`docs/EXPERIENCE_SUMMARY.md`

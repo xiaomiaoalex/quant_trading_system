@@ -5573,3 +5573,18 @@ worker 循环里每轮都执行「把残留 RUNNING 标记为 FAILED」，结果
   而不是去读私有字段。
 - 默认值 `True` 保证生产行为零变化；真实 PG 路径的覆盖仍由独立的 PG 集成测试（`skip_if_no_postgres`）承担，
   不会因为「让单测好过」而丢掉真实库覆盖。
+
+### 29.16 踩坑：把「临时工作区路径」写进持久化元数据
+
+**场景**：
+在 git worktree / CI 容器 / 临时目录里跑摄取，`archive_path` 被原样写进 `history_datasets`：
+`...\worktrees\0hgwfib0\history-data-and-test-isolation\data\market\...`。
+目录一被清理，数据集记录里的证据路径就全是死链接。
+
+**经验**：
+- 持久化元数据里只放**稳定路径**：项目级的 `data/market/`、对象存储 key，或相对根目录的相对路径。
+  临时工作区、容器内路径、`/tmp` 一律不能进库。
+- 迁移时做三步：复制 → **逐文件 SHA-256 比对** → `UPDATE` 指向新路径；最后再查一次「没有残留旧前缀」。
+- 想证明「真的不依赖旧路径」，最直接的做法是**把旧目录改名后重跑**，而不是只改数据库就宣布完成。
+- PostgreSQL 冷知识：`LIKE` 的默认转义符就是反斜杠，Windows 路径模式会静默匹配失败（`UPDATE 0`）；
+  判前缀用 `strpos(col, '...') = 1` 或 `col LIKE '...' ESCAPE ''` 更稳。
