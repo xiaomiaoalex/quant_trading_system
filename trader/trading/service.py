@@ -35,6 +35,9 @@ from trader.trading.models import (
 from trader.trading.risk import RiskPolicy, SpotRiskEngine, available_balance, valuation_complete
 
 TERMINAL_COMMAND = {"CONFIRMED", "FAILED"}
+# Terminal foreign orders carry no live exposure. FILLED is deliberately absent:
+# a fill without execution evidence must keep blocking.
+NON_EXPOSURE_TERMINAL = {"CANCELLED", "EXPIRED", "REJECTED"}
 PERSISTENT_DIFFERENCES = {
     "EXECUTION_KEY_CONFLICT",
     "BALANCE_MISMATCH",
@@ -421,10 +424,21 @@ class TradingService:
                     # block the account.
                     self._refresh_status(state)
                     return True
+                if observation.status in NON_EXPOSURE_TERMINAL:
+                    # A cancelled/expired/rejected foreign order is history, not
+                    # live exposure. A real fill still arrives as an execution
+                    # and blocks through UNKNOWN_EXECUTION.
+                    self._refresh_status(state)
+                    return True
                 self._add_unresolved(
                     state,
                     "UNKNOWN_ORDER",
-                    {"cl_ord_id": observation.cl_ord_id, "source": observation.source},
+                    {
+                        "cl_ord_id": observation.cl_ord_id,
+                        "source": observation.source,
+                        "status": observation.status,
+                        "observed_at_ms": observation.observed_at_ms,
+                    },
                 )
                 self._refresh_status(state)
                 return False

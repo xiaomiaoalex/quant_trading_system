@@ -31,7 +31,7 @@ PrivateStreamManager 在关闭 socket 前通知 DISCONNECTED，在自动重连�
 ### 统一交易成交证据约束（2026-10-31）
 
 - 成交去重身份只由交易所事实决定：`account_id/cl_ord_id/symbol/exec_id/qty/price/fee/fee_asset/occurred_at_ms/venue`。本地入账标记 `applied` 不是成交内容，不得参与 `EXECUTION_KEY_CONFLICT` 比较。
-- 本系统命名空间（默认 `qts-`）内的订单在本地事务提交前可能已被行情/私有流观测到。快照必须把这类在途订单作为可领养证据提供；`observe()` 对本前缀的未知订单不写持久阻断，待 REST 证据领养后恢复。外部 `cl_ord_id` 的未知订单仍按 `UNKNOWN_ORDER` 阻断。
+- 本系统命名空间（默认 `qts-`）内的订单在本地事务提交前可能已被行情/私有流观测到。快照必须把这类在途订单作为可领养证据提供；`observe()` 对本前缀的未知订单不写持久阻断，待 REST 证据领养后恢复。外部 `cl_ord_id` 的 `OPEN`/`PARTIALLY_FILLED`/`FILLED` 观测仍按 `UNKNOWN_ORDER` 阻断；外部订单的 `CANCELLED`/`EXPIRED`/`REJECTED` 终态不构成实时风险，不写阻断，其实质成交仍经 `UNKNOWN_EXECUTION` 阻断。
 - 私有流先于本地订单聚合到达的成交以未入账状态保留；订单由 REST 证据领养后，`record_execution` 与对账快照都必须补记这笔成交（含超出交易所回看窗口的本地记录），补记成功即视为解决，`UNKNOWN_EXECUTION` 随之按实际未入账成交重建。内容真正不同的同 `exec_id` 成交仍按 `EXECUTION_KEY_CONFLICT` 阻断。
 - `UNBOOKED_EXECUTIONS`：任一订单累计观测量大于真实入账量时阻断新增风险，包含 MARKET、部分成交和撤销终态；只有真实成交补齐后消除。
 - `FILL_OBSERVATION_MISMATCH` 从全部订单重算，不能由另一订单的完成或撤销清除。观测只改变订单投影，不能生成账务。
