@@ -13,7 +13,6 @@ import os
 import sys
 from pathlib import Path
 
-
 # IO-related imports and functions that are forbidden in Core plane
 FORBIDDEN_IO_PATTERNS = {
     # Network libraries
@@ -51,9 +50,7 @@ class CoreIOVisitor(ast.NodeVisitor):
         for alias in node.names:
             name = alias.name.split(".")[0]
             if name in FORBIDDEN_IO_PATTERNS:
-                self.violations.append(
-                    f"  Line {node.lineno}: Import '{name}' (IO operation)"
-                )
+                self.violations.append(f"  Line {node.lineno}: Import '{name}' (IO operation)")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
@@ -68,17 +65,13 @@ class CoreIOVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call):
         # Check for open()
         if isinstance(node.func, ast.Name) and node.func.id == "open":
-            self.violations.append(
-                f"  Line {node.lineno}: open() call (file IO)"
-            )
+            self.violations.append(f"  Line {node.lineno}: open() call (file IO)")
         elif isinstance(node.func, ast.Attribute):
             # Check for time.sleep, os.getenv etc
             attr_name = node.func.attr
             if isinstance(node.func.value, ast.Name):
                 if node.func.value.id == "time" and attr_name == "sleep":
-                    self.violations.append(
-                        f"  Line {node.lineno}: time.sleep() (blocking IO)"
-                    )
+                    self.violations.append(f"  Line {node.lineno}: time.sleep() (blocking IO)")
                 elif node.func.value.id == "os" and attr_name in ("getenv", "environ"):
                     self.violations.append(
                         f"  Line {node.lineno}: os.{attr_name}() (environment access)"
@@ -105,33 +98,33 @@ def check_directory(core_dir: str) -> dict[str, list[str]]:
     """Check all Python files in a directory."""
     violations = {}
     core_path = Path(core_dir)
-    
+
     if not core_path.exists():
         print(f"Warning: {core_dir} does not exist")
         return violations
-    
+
     for py_file in core_path.rglob("*.py"):
         # Skip __pycache__ and test files
         if "__pycache__" in str(py_file) or py_file.name.startswith("test_"):
             continue
-        
+
         file_violations = check_file(str(py_file))
         if file_violations:
             violations[str(py_file)] = file_violations
-    
+
     return violations
 
 
 def main():
     # Default to checking trader/core/
     path = sys.argv[1] if len(sys.argv) > 1 else "trader/core"
-    
+
     print(f"Checking architecture compliance: Core plane no IO")
     print(f"Target: {path}")
     print("-" * 60)
-    
+
     violations = check_directory(path)
-    
+
     if violations:
         print("❌ ARCHITECTURE VIOLATION: IO operations found in Core plane")
         print()

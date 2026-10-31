@@ -79,6 +79,25 @@ class ResearchExecutor:
     def __init__(self, store):
         self.store = store
 
+    async def _verify_provenance(self, manifest: dict, datasets: list[dict]) -> None:
+        """核验冻结的 provenance 与当前可信关联一致。
+
+        只要 manifest 冻结了某个数据集的 provenance，执行前就必须重新核对；
+        对不上说明数据来源在排队期间发生了变化，直接失败。
+        """
+        frozen = manifest.get("provenance") or {}
+        if not frozen:
+            return
+        getter = getattr(self.store, "get_dataset_link", None)
+        for dataset in datasets:
+            dataset_id = dataset["dataset_id"]
+            expected = frozen.get(dataset_id)
+            if not expected:
+                continue
+            link = await getter(dataset_id) if getter is not None else None
+            if not link or link.get("provenance_hash") != expected:
+                raise ValueError(f"Frozen provenance mismatch: {dataset_id}")
+
     async def execute(self, record: dict[str, Any]) -> dict[str, Any]:
         manifest = record["manifest"]
         engine = manifest.get("engine", "event_runtime")
@@ -109,6 +128,7 @@ class ResearchExecutor:
         freeze_strategy(strategy_spec)
         if record.get("manifest_hash") != digest(manifest):
             raise ValueError("Frozen manifest hash mismatch")
+        await self._verify_provenance(manifest, datasets)
         params = strategy_spec.get("params", {})
         adapters = {}
         for data in datasets:
@@ -131,6 +151,51 @@ class ResearchExecutor:
         )
         result = await runtime.run_async()
         curve = result.equity_curve
+        limitations = ["BAR data cannot validate queue priority or market impact."]
+        report = {
+            "datasets": [
+                {
+                    "dataset_id": data["dataset_id"],
+                    "identity": data["identity"],
+                    "quality": data.get("quality", {}),
+                }
+                for data in datasets
+            ],
+            "provenance": manifest.get("provenance", {}),
+            "strategy": {
+                "module_path": strategy_spec["module_path"],
+                "params": strategy_spec.get("params", {}),
+                "version": strategy_spec.get("version"),
+                "code_hash": strategy_spec.get("code_hash"),
+            },
+            "runtime": {
+                "engine": "event_runtime",
+                "runtime_version": SPOT_RUNTIME_VERSION,
+                "manifest_hash": record["manifest_hash"],
+                "runtime_manifest_hash": result.manifest_hash,
+            },
+            "costs": {
+                "initial_cash": decimal_text(result.initial_cash),
+                "fee_bps": decimal_text(Decimal(str(manifest["fee_bps"]))),
+                "slippage_bps": decimal_text(Decimal(str(manifest["slippage_bps"]))),
+                "total_fees": decimal_text(result.fees),
+            },
+            "performance": {
+                "net_value": decimal_text(result.net_value),
+                "total_return": decimal_text(
+                    (result.net_value - result.initial_cash) / result.initial_cash
+                ),
+                "max_drawdown_pct": decimal_text(result.max_drawdown_pct),
+                "max_drawdown_amount": decimal_text(result.max_drawdown_amount),
+                "win_rate": decimal_text(result.win_rate),
+            },
+            "executions": {
+                "fill_count": len(result.fills),
+                "rejections": result.rejections,
+                "execution_rejections": result.execution_rejections,
+            },
+            "limitations": limitations,
+        }
         return {
             "engine": "event_runtime",
             "runtime_version": SPOT_RUNTIME_VERSION,
@@ -138,7 +203,8 @@ class ResearchExecutor:
             "admissible": result.admissible,
             "manifest_hash": record["manifest_hash"],
             "runtime_manifest_hash": result.manifest_hash,
-            "limitations": ["BAR data cannot validate queue priority or market impact."],
+            "limitations": limitations,
+            "report": report,
             "dataset_ids": result.dataset_ids,
             "initial_cash": decimal_text(result.initial_cash),
             "cash": decimal_text(result.cash),
@@ -152,6 +218,10 @@ class ResearchExecutor:
             "max_drawdown_pct": decimal_text(result.max_drawdown_pct),
             "max_drawdown_amount": decimal_text(result.max_drawdown_amount),
             "equity_curve": [decimal_text(value) for value in curve],
+            "equity_points": [
+                {"at_ms": int(point["at_ms"]), "equity": decimal_text(point["equity"])}
+                for point in result.equity_points
+            ],
             "positions": {
                 symbol: decimal_text(value) for symbol, value in result.positions.items()
             },

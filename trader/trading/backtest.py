@@ -53,6 +53,8 @@ class BacktestResult:
     max_drawdown_pct: Decimal = Decimal("0")
     errors: list[str] = field(default_factory=list)
     admissible: bool = True
+    equity_points: list[dict[str, Any]] = field(default_factory=list)
+    """带明确估值时间的权益点（at_ms 为该根 K 线的收盘时间）。"""
 
     @property
     def total_fees(self) -> Decimal:
@@ -165,6 +167,7 @@ class EventBacktestRuntime:
         self.execution_rejections: dict[str, int] = {}
         self.risk = {"approved": 0, "rejected": 0}
         self.equity_curve: list[Decimal] = []
+        self.equity_points: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self._pending: list[dict[str, Any]] = []
         self._bars = self._calendar()
@@ -275,6 +278,10 @@ class EventBacktestRuntime:
             positions=dict(self.positions),
             fees=self.fees,
             equity_curve=list(self.equity_curve),
+            equity_points=[
+                {"at_ms": int(point["at_ms"]), "equity": point["equity"]}
+                for point in self.equity_points
+            ],
             fills=list(self.fills),
             risk=dict(self.risk),
             rejections=dict(self.rejections),
@@ -514,6 +521,7 @@ class EventBacktestRuntime:
     def _mark(self, bars: dict[str, dict[str, Any]]) -> None:
         self._market_event(bars, "close", "close_time_ms")
         self.equity_curve.append(self.equity)
+        self.equity_points.append({"at_ms": self._event_ms, "equity": self.equity})
 
     def _win_rate(self) -> Decimal:
         if not self.closed_trades:

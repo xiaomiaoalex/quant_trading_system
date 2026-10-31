@@ -374,6 +374,50 @@ Truth Gaps：
 
 ---
 
+## 页面：Research Data（P1，路由 `/research/data`）
+
+| API | 方法 | 状态 | 用途 | 刷新模式 |
+|---|---|---|---|---|
+| `/v1/research/datasets` | GET | 已存在 | Research 数据集目录（只读元数据，`symbol`/`month`/`official_only`/`limit`/`offset`） | 手动 + 发布后自动刷新 |
+| `/v1/data/history/jobs` | GET/POST | 已存在 | 归档导入任务（下载 / 校验 / 发布） | 有活动任务时 2s |
+| `/v1/data/history/jobs/{job_id}/retry` | POST | 已存在 | 重试失败导入任务 | 按需 |
+| `/v1/data/history/datasets` | GET | 已存在 | 历史数据集（发布 / 持久化状态） | 轮询 |
+
+关键字段与状态：
+- `official_eligible`（只有 true 才允许提交 Research 事件回测）
+- `history_dataset_id` / `provenance_hash` / `archive_sha256` / `official_sha256`
+- 导入任务新增 `research_dataset_id`（发布后指向 `ds_*`）
+- 状态：loading / empty / error / stale（有缓存但刷新失败）
+
+请求/响应示例（关键）：见 `contract_models.md` §5.1 / §5.2。
+
+缺失能力：
+- 无（目录、导入、发布均为现有后端能力）
+
+## 页面：Research Backtests（P1，路由 `/research/backtests`）
+
+| API | 方法 | 状态 | 用途 | 刷新模式 |
+|---|---|---|---|---|
+| `/v1/research/datasets` | GET | 已存在 | 数据集选择与资格门禁 | 页面加载 |
+| `/v1/research/strategies` | GET | 已存在 | 已安装策略选择（唯一来源） | 页面加载 |
+| `/v1/research/backtests` | POST | 已存在 | 提交事件回测（202） | 按需 |
+| `/v1/research/backtests?limit=100` | GET | 已存在 | 运行列表 | 有 QUEUED/RUNNING 时 2s |
+| `/v1/research/backtests/{run_id}` | GET | 已存在 | 运行状态 / 报告 | 活动运行时 2s |
+| `/v1/research/backtests/{run_id}/retry` | POST | 已存在 | 重试 FAILED 运行（非 FAILED → 409） | 按需 |
+| `/v1/research/backtests/{run_id}/cancel` | POST | 已存在 | 取消运行（API 适配已接，页面暂未暴露按钮） | 按需 |
+
+关键字段与状态：
+- `status`：`QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED`（终态停止轮询）
+- `model`：`event_runtime/legacy`（legacy 结果不作为准入证据）
+- `result.report`：数据集身份、来源与 SHA、质量、策略 code_hash、runtime、成本、收益与回撤、
+  成交与拒绝统计、限制说明
+- 资质校验：`official_eligible=false` 或目录查询失败时禁用提交并列出阻塞原因
+
+刷新恢复：选中运行写入 URL `?run_id=`，刷新后按 run_id 重新查询。
+
+缺失能力：
+- 无（事件回测列表 / 详情 / 重试均已存在）
+
 ## 全局 Truth Gaps Summary
 
 - 文档路径与代码路径存在偏差：`/api/v1/*` vs `/v1/*`

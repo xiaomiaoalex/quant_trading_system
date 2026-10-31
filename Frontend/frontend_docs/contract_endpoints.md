@@ -183,6 +183,60 @@ interface HistoryJobCreateRequest {
 前端轮询约定：存在 `QUEUED` / `RUNNING` 任务时每 2 秒轮询一次，全部进入终态后停止轮询；
 出现 `SUCCEEDED` 任务时刷新数据集缓存。
 
+## 5.2 Research 数据集与事件回测
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/research/datasets` | Research 数据集目录（只读元数据；`symbol`/`month`/`official_only`/`limit`/`offset`） |
+| GET | `/v1/research/strategies` | 已安装、允许提交回测的策略与参数 |
+| POST | `/v1/research/backtests` | 提交事件回测（202） |
+| GET | `/v1/research/backtests?limit=100` | 运行记录列表 |
+| GET | `/v1/research/backtests/{run_id}` | 运行记录详情 |
+| POST | `/v1/research/backtests/{run_id}/retry` | 重试 FAILED 运行（202；非 FAILED → 409，不存在 → 404） |
+| POST | `/v1/research/backtests/{run_id}/cancel` | 取消运行（202） |
+
+参数与前置条件：
+
+- `GET /v1/research/datasets`：`limit` 默认 50、范围 1..200；`offset` 默认 0。
+  返回数组，元素只含元数据（见 `contract_models.md` §5.2），不含行情载荷。
+- 只有 `official_eligible === true` 的 Research 数据集允许提交回测；前端在
+  `official_eligible=false` 或资格查询失败时禁用提交并展示阻断原因。
+- 单次提交只允许一个 `dataset_ids` 元素（单币、单月）。
+
+请求体：
+
+```typescript
+interface ResearchBacktestCreateRequest {
+  manifest: {
+    dataset_ids: string[]          // 恰好一个 ds_*
+    strategy: { module_path: string; params?: Record<string, unknown> }
+    initial_cash: string           // 十进制字符串，> 0
+    fee_bps: string                // 0..100
+    slippage_bps: string           // 0..1000
+    engine: 'event_runtime'        // 固定值，其它值 → 422
+    purpose: 'research_screening'  // 固定值
+  }
+}
+```
+
+错误语义：
+
+- 422：manifest 非法（未知字段、非 event_runtime、未知 dataset、冻结 provenance 不一致等），
+  `detail` 为字符串。
+- 404：运行不存在；409：重试非 FAILED 运行。
+- 503：Research store / application 不可用。
+
+前端轮询约定：
+
+- 运行列表在存在 `QUEUED` / `RUNNING` 时每 2 秒轮询；全部进入 `SUCCEEDED` / `FAILED` /
+  `CANCELLED` 后停止轮询。
+- 运行详情按 `run_id` 查询；选中运行的 `run_id` 写入 URL（`?run_id=`），刷新后按 `run_id`
+  重新查询，正在运行或已完成的历史运行都能恢复。
+- 报告界面展示数据集身份与月覆盖、来源与 SHA、质量、策略源码 hash、runtime 版本、成本、
+  收益与回撤、成交与拒绝统计、限制说明。
+- `engine` / `purpose` / `module_path` 由系统固定或来自后端已安装列表，前端不提供手填代码、
+  不上传策略源码、不触发任何部署动作。
+
 ## 6. AI Lab
 
 | 方法 | 路径 | 说明 |

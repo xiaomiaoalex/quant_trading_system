@@ -941,10 +941,21 @@ async def _legacy_readonly_lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"[OHLCVIngestion] Failed to start from env: {e}")
 
-    try:
-        await data_history.start_history_worker()
-    except Exception as e:
-        logger.error(f"[HistoryData] Failed to start ingestion worker: {e}")
+    if os.getenv("QTS_ENABLE_EMBEDDED_HISTORY_WORKER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        try:
+            await data_history.start_history_worker()
+        except Exception as e:
+            logger.error(f"[HistoryData] Failed to start ingestion worker: {e}")
+    else:
+        logger.info(
+            "[HistoryData] Embedded ingestion worker is disabled by default; "
+            "run trader.runtime.history_worker_main as a standalone process "
+            "(set QTS_ENABLE_EMBEDDED_HISTORY_WORKER=1 to opt in)"
+        )
 
     health.configure_heartbeat(
         heartbeat_service=_heartbeat_service,

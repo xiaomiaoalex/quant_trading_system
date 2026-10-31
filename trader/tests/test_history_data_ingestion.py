@@ -8,6 +8,7 @@ History Data Ingestion Service Tests
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -33,11 +34,13 @@ from trader.services.history_data_ingestion import (
     ERROR_QUALITY,
     HistoryIngestionError,
     HistoryIngestionService,
+    HistoryJobWorker,
 )
 from trader.tests.fakes.fake_history_store import (
     FakeArchiveClient,
     FakeFeatureStore,
     FakeHistoryDatasetStore,
+    FakeResearchHistoryBridgeStore,
 )
 
 YEAR = 2026
@@ -83,6 +86,7 @@ def _service(
         store=store,
         archive_client=archive_client,
         feature_store=feature_store,
+        bridge_store=FakeResearchHistoryBridgeStore(store),
     )
     return service, store, feature_store, archive_client
 
@@ -224,6 +228,77 @@ async def test_run_job_publishes_dataset_and_marks_job_succeeded():
     assert dataset["expected_points"] == 43200
     assert dataset["gap_count"] == 0
     assert feature_store.write_calls == 43200
+
+
+async def test_run_job_publishes_research_dataset_with_frozen_provenance():
+    service, store, _, _ = _service()
+    job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
+    result = await service.run_job(job["job_id"])
+
+    bridge = service.bridge_store
+    assert len(bridge.datasets) == 1
+    research_dataset_id, document = next(iter(bridge.datasets.items()))
+    assert research_dataset_id.startswith("ds_")
+    assert document["dataset_id"] == research_dataset_id
+    assert document["identity"]["symbol"] == "BTCUSDT"
+    assert document["identity"]["base_asset"] == "BTC"
+    assert document["identity"]["quote_asset"] == "USDT"
+    assert document["identity"]["source"] == "binance_vision"
+    assert document["quality"]["bar_count"] == 43200
+    first_bar = document["bars"][0]
+    assert first_bar["close_time_ms"] == first_bar["open_time_ms"] + 60_000
+    assert first_bar["available_at_ms"] == first_bar["close_time_ms"]
+
+    link = bridge.links[research_dataset_id]
+    assert link["official_eligible"] is True
+    assert link["provenance_hash"]
+    assert link["archive_sha256"]
+    assert link["month"] == FULL_MONTH
+    assert link["bar_count"] == 43200
+    assert link["symbol"] == "BTCUSDT"
+
+    # 历史数据集必须指向同一个 Research 数据集
+    history_dataset = store.datasets[result["dataset_id"]]
+    assert history_dataset["research_dataset_id"] == research_dataset_id
+
+
+async def test_reimport_of_the_same_archive_is_idempotent_in_the_research_plane():
+    service, store, _, _ = _service()
+    first = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+    await service.run_job(first["job_id"])
+    second = await store.create_job(
+        job_id="hjob_same_hash",
+        source="binance_vision",
+        market="spot",
+        symbol="BTCUSDT",
+        interval="1m",
+        month=FULL_MONTH,
+    )
+
+    await service.run_job(second["job_id"])
+
+    bridge = service.bridge_store
+    assert len(bridge.datasets) == 1
+    assert len(bridge.links) == 1
+    assert len(store.datasets) == 1
+
+
+async def test_failed_atomic_publish_leaves_no_selectable_half_product():
+    service, store, _, _ = _service()
+    service.bridge_store.fail_publish = True
+    job = await service.submit_job(symbol="BTCUSDT", month=FULL_MONTH)
+
+    result = await service.run_job(job["job_id"])
+
+    assert result["status"] == "FAILED"
+    assert result["error_code"] == ERROR_PERSISTENCE
+    assert len(store.datasets) == 1
+    dataset = next(iter(store.datasets.values()))
+    assert dataset["status"] != "PUBLISHED"
+    assert dataset["backtest_eligible"] is False
+    assert dataset["research_dataset_id"] is None
+    assert service.bridge_store.datasets == {}
 
 
 async def test_run_job_reuses_dataset_for_same_hash():
@@ -438,3 +513,42 @@ async def test_list_datasets_reports_published_dataset():
     assert len(datasets) == 1
     assert len(eligible) == 1
     assert eligible[0]["backtest_eligible"] is True
+
+
+async def test_worker_retries_startup_recovery_before_claiming_any_job():
+    """启动恢复失败必须重试；恢复成功之前不领取任何任务。"""
+    calls: list[str] = []
+
+    class FlakyService:
+        def __init__(self) -> None:
+            self.recoveries = 0
+
+        async def recover_interrupted_jobs(self) -> int:
+            self.recoveries += 1
+            calls.append("recover")
+            if self.recoveries < 2:
+                raise RuntimeError("postgres not ready")
+            return 0
+
+        async def process_next_queued_job(self):
+            calls.append("claim")
+            return None
+
+    worker = HistoryJobWorker(
+        FlakyService(),
+        poll_interval_seconds=0.01,
+        unavailable_backoff_seconds=0.01,
+    )
+    await worker.start()
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while "claim" not in calls and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+    finally:
+        await worker.stop()
+
+    assert calls[0] == "recover"
+    assert calls[1] == "recover"
+    assert "claim" in calls
+    assert calls.index("claim") > calls.index("recover", 1)

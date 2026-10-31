@@ -13,11 +13,24 @@
 
 ## 文档状态
 
-- 最后更新: 2026-10-29 (北京时间)
+- 最后更新: 2026-10-31 (北京时间)
 - 维护规则: 任何影响层级边界、模块职责、跨层调用、主数据流、持久化路径、风控闭环、部署/运行拓扑的架构变更，必须同步更新本文档。
 - 当前架构基线: 五层平面架构 + Event Sourcing + Adapter 边界清洗 + Policy Fail-Closed + Strategy Lab 风控回测集成 + promote-paper 原子晋级 + CapitalAllocator OMS 前置门禁 + 策略级机构式仓位预算 profile + 币安公开归档历史数据通路（真实历史回测）。
 
-### 本次变更摘要（2026-10-29）
+### 本次变更摘要（2026-10-31）
+
+1. **新增历史归档 → Research 桥接**: `trader/trading/research_bridge.py` 提供归档 K 线到 `BAR_V1` 的纯函数投影；
+   `trader/adapters/persistence/research_history_bridge_store.py` 在**单个 PostgreSQL 事务**内发布
+   Research 数据集、provenance 关联、历史数据集与历史任务，失败整体回滚。
+2. **新增 provenance 契约**: 新增 `research.dataset_links`（迁移 `010_research_dataset_links.sql`）与
+   `research.datasets.metadata`；关联表只存来源证据，不重复存行情，目录接口不加载行情载荷。
+3. **部署拓扑变化**: 历史导入改为独立进程 `runtime/history_worker_main.py`，用 PG session advisory lock 保证单 owner；
+   旧 API 内嵌 worker 默认关闭。`FAILED` 回测任务改为终态，重试必须显式调用 retry 接口。
+4. **新增研究目录接口**: 新 Control API 提供 `GET /v1/research/datasets`（元数据目录）、
+   `GET /v1/research/strategies`、`POST /v1/research/backtests/{run_id}/retry`；
+   官方资格只来自可信关联，绝不依据调用方声明的 source 字符串。
+
+### 上次变更摘要（2026-10-29）
 
 1. **新增历史归档数据通路**: Adapter Plane 增加 `trader/adapters/market_data/binance_vision.py`（固定币安公开归档 URL、流式下载、SHA-256 校验、原子提交、只读预期 CSV 成员），Core Plane 增加 `trader/core/domain/services/ohlcv_archive.py`（纯解析 / 校验 / 覆盖度）。
 2. **新增持久化契约**: 新增 `history_ingest_jobs` / `history_datasets` 两张表（迁移 `009_history_datasets.sql`）；`FeatureStore` 增加严格模式，PG 不可用 / 读写失败一律抛错，不再静默回退内存。
@@ -381,6 +394,55 @@ PostgreSQL feature_values"]
 - 真实历史回测只支持**单币对**，禁止 `symbols[0]` 静默丢弃其它币对；执行阶段 Provider 会再次核验
   market / interval / 质量与真实读取完整性。
 - 旧入口（`POST /v1/data/ohlcv/import` 手动导入、`/v1/data/ohlcv/worker/*` 实时 worker）保留为高级入口，语义不变。
+
+### 历史归档 → Research 数据集通路（Binance Vision → 事件回测）
+
+在上面的旧 vectorbt 通路之外，新 Research 平面有一条独立通路：
+
+```mermaid
+flowchart LR
+    Worker["历史导入 worker 独立进程
+trader.runtime.history_worker_main"] --> Lock["PG session advisory lock
+单 owner"]
+    Lock --> Svc2["HistoryIngestionService"]
+    Svc2 --> Adapter2["BinanceVisionArchiveClient
+下载 + SHA-256 + 官方 CHECKSUM"]
+    Adapter2 --> Core3["ohlcv_archive 纯校验
+整月覆盖 / 缺口 / 冲突"]
+    Core3 --> Strict2["FeatureStore 严格模式"]
+    Strict2 --> Bridge["ResearchHistoryBridgeStore
+单事务原子发布"]
+    Bridge --> RD["research.datasets
+内容哈希不可变数据集"]
+    Bridge --> Links["research.dataset_links
+provenance 关联"]
+    Bridge --> HD["history_datasets / history_ingest_jobs"]
+    RD --> Exec["ResearchExecutor
+复核内容哈希 + provenance"]
+    Links --> Exec
+    Exec --> BAR["EventBacktestRuntime
+共享现货纯核心"]
+    BAR --> Report["research.backtest_jobs.result
+持久报告 + 带时间权益点"]
+```
+
+- 新增 `trader/trading/research_bridge.py`：归档 K 线到 `BAR_V1` 的**纯函数**投影
+  （整数毫秒、`close = available_at = open + 60000`、十进制字符串、版本由归档摘要派生）。
+- 新增 `trader/adapters/persistence/research_history_bridge_store.py`：把 Research 数据集、
+  provenance 关联、历史数据集与历史任务在**同一个 PostgreSQL 事务**内发布，失败整体回滚。
+- 新增 `research.dataset_links`（迁移 `010_research_dataset_links.sql`）：只保存来源证据
+  （URL、官方/实际 SHA、归档版本、UTC 覆盖、质量、转换版本、provenance 哈希），**不重复存行情**。
+- 新增 `research.datasets.metadata` 列：目录接口只读元数据，避免加载行情载荷。
+- 历史导入改为**独立进程** `trader/runtime/history_worker_main`：
+  - PostgreSQL session advisory lock 保证同库单 owner；
+  - 只有 owner 执行启动恢复，且恢复成功前不领取任务；
+  - 旧 API 的内嵌 worker 默认关闭（`QTS_ENABLE_EMBEDDED_HISTORY_WORKER=1` 可打开）。
+- 新 Control API 承载 `/v1/data/history/*` 与 `/v1/research/*`；`/v1/research/datasets` 是**元数据目录**，
+  `/v1/research/strategies` 列出允许提交的已安装策略。
+- `FAILED` 的回测任务是终态：claim 只取 `QUEUED` 或租约过期的 `RUNNING`，
+  重试必须显式调用 `POST /v1/research/backtests/{run_id}/retry`（保留 run id、冻结 manifest 与哈希）。
+- 补录命令 `scripts/backfill_research_dataset_links.py` 默认 dry-run，
+  为桥接之前就已发布的历史数据集补登 Research 数据集与 provenance（官方修订报冲突，不覆盖既有 ID）。
 
 ### Research / Fast Backtest / Risk Replay 三层收敛
 
@@ -808,7 +870,11 @@ flowchart TB
   已在途请求无法通过本地租约撤回，仍须保留 UNKNOWN 并对账。
 - Control API 与 Trading Runtime 可同进程启动用于本地开发，但生产部署按进程拆分。
 - 独立运行入口为 `runtime/control_main.py`、`runtime/trading_worker_main.py`、
-  `runtime/research_worker_main.py`。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
+  `runtime/research_worker_main.py`、`runtime/history_worker_main.py`。
+- 历史归档导入进程 `runtime/history_worker_main.py` 用 PostgreSQL session advisory lock 保证同库单 owner；
+  只有 owner 执行启动恢复，恢复成功前不领取任务。旧 `trader.api.main` 的内嵌导入 worker 默认关闭。
+- 前端反代按路径拆分：`/v1/research/*` 与 `/v1/data/history/*` 指向新 Control API，其余 `/v1/*` 保持旧 API。
+  `QTS_CONTROL_API_TARGET` 未设置时两者仍指向同一目标，避免整体切端口导致旧页面失效。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
   不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG 租约和
   持久 runtime 元数据读取就绪。旧 `trader.api.main` 保留只读 connector/账户快照，
   通过只读 broker 代理和生命周期退休门禁关闭旧发送器及自动恢复，旧投影撤单入口关闭。

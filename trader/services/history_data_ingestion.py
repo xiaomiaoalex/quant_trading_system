@@ -54,6 +54,11 @@ from trader.adapters.persistence.history_dataset_store import (
     HistoryStoreError,
     HistoryStoreUnavailableError,
 )
+from trader.adapters.persistence.research_history_bridge_store import (
+    ResearchHistoryBridgeStore,
+    ResearchHistoryStoreError,
+    ResearchHistoryStoreUnavailableError,
+)
 from trader.core.domain.services.ohlcv_archive import (
     ARCHIVE_SOURCE_NAME,
     ARCHIVE_SUPPORTED_INTERVAL,
@@ -67,6 +72,12 @@ from trader.core.domain.services.ohlcv_archive import (
     expected_points_for_month,
     parse_month,
     validate_month_coverage,
+)
+from trader.trading.datasets import dataset_metadata
+from trader.trading.research_bridge import (
+    CONVERSION_VERSION,
+    build_research_dataset,
+    build_research_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,11 +208,13 @@ class HistoryIngestionService:
         archive_client: Optional[BinanceVisionArchiveClient] = None,
         feature_store: Optional[FeatureStore] = None,
         market_data_root: Optional[str] = None,
+        bridge_store: Optional[ResearchHistoryBridgeStore] = None,
     ) -> None:
         self._store = store
         self._archive_client = archive_client
         self._feature_store = feature_store
         self._market_data_root = market_data_root
+        self._bridge_store = bridge_store
         self._owned_archive_client: Optional[BinanceVisionArchiveClient] = None
 
     # ==================== dependencies ====================
@@ -210,6 +223,28 @@ class HistoryIngestionService:
         if self._store is not None:
             return self._store
         return await get_history_dataset_store()
+
+    def _get_bridge_store(self, store: HistoryDatasetStore) -> ResearchHistoryBridgeStore:
+        """桥接存储：与历史存储共用同一条 PostgreSQL 连接池。
+
+        没有底层连接时直接失败：桥接发布必须和历史发布在同一个事务里完成，
+        绝不允许悄悄新建一个数据库连接。
+        """
+        if self._bridge_store is not None:
+            return self._bridge_store
+        storage = getattr(store, "storage", None)
+        if storage is None:
+            raise HistoryIngestionError(
+                ERROR_PERSISTENCE,
+                "History store has no PostgreSQL connection; cannot publish to Research",
+            )
+        self._bridge_store = ResearchHistoryBridgeStore(storage=storage)
+        return self._bridge_store
+
+    @property
+    def bridge_store(self) -> Optional[ResearchHistoryBridgeStore]:
+        """当前使用的桥接存储（测试与诊断用）。"""
+        return self._bridge_store
 
     def _get_archive_client(self) -> BinanceVisionArchiveClient:
         if self._archive_client is not None:
@@ -489,8 +524,12 @@ class HistoryIngestionService:
             month=month,
             archive_sha256=downloaded.sha256,
         )
-        if existing is not None and existing["status"] == "PUBLISHED":
-            # 同 hash 已有可用数据集：复用，不重复导入（丢弃临时文件）
+        if (
+            existing is not None
+            and existing["status"] == "PUBLISHED"
+            and existing.get("research_dataset_id")
+        ):
+            # 同 hash 已有可用数据集（且已桥接进 Research）：复用，不重复导入
             client.discard(downloaded)
             await store.update_job(
                 job_id,
@@ -499,7 +538,8 @@ class HistoryIngestionService:
                 feature_version=existing["feature_version"],
                 rows_processed=existing["row_count"],
             )
-            published = await store.publish_dataset_with_job(
+            published = await self._publish_dataset(
+                store=store,
                 job_id=job_id,
                 dataset_id=str(existing["dataset_id"]),
                 feature_version=str(existing["feature_version"]),
@@ -509,6 +549,19 @@ class HistoryIngestionService:
                 first_ts_ms=existing["first_ts_ms"],
                 last_ts_ms=existing["last_ts_ms"],
                 quality=_as_dict(existing["quality"]),
+                provenance=_provenance_fields(
+                    symbol=symbol,
+                    interval=interval,
+                    month=month,
+                    source_url=str(existing["source_url"]),
+                    checksum_url=str(existing["checksum_url"]),
+                    official_sha256=existing.get("official_sha256"),
+                    archive_sha256=str(existing["archive_sha256"]),
+                    archive_version=int(existing["version"]),
+                    feature_version=str(existing["feature_version"]),
+                ),
+                research_document=None,
+                research_dataset_id=str(existing["research_dataset_id"]),
             )
             return published["job"]
 
@@ -609,18 +662,94 @@ class HistoryIngestionService:
             await store.fail_dataset(dataset_id, reason=message)
             raise HistoryIngestionError(ERROR_PERSISTENCE, message)
 
-        published = await store.publish_dataset_with_job(
-            job_id=job_id,
-            dataset_id=dataset_id,
-            feature_version=feature_version,
-            row_count=len(bars),
-            expected_points=expected,
-            gap_count=coverage.gap_count,
-            first_ts_ms=coverage.first_ts_ms,
-            last_ts_ms=coverage.last_ts_ms,
-            quality=quality,
-        )
+        try:
+            published = await self._publish_dataset(
+                store=store,
+                job_id=job_id,
+                dataset_id=dataset_id,
+                feature_version=feature_version,
+                row_count=len(bars),
+                expected_points=expected,
+                gap_count=coverage.gap_count,
+                first_ts_ms=coverage.first_ts_ms,
+                last_ts_ms=coverage.last_ts_ms,
+                quality=quality,
+                provenance=_provenance_fields(
+                    symbol=symbol,
+                    interval=interval,
+                    month=month,
+                    source_url=ref.zip_url,
+                    checksum_url=ref.checksum_url,
+                    official_sha256=downloaded.official_sha256,
+                    archive_sha256=downloaded.sha256,
+                    archive_version=version,
+                    feature_version=feature_version,
+                ),
+                research_document=build_research_dataset(
+                    bars,
+                    symbol=symbol,
+                    archive_sha256=downloaded.sha256,
+                    month=month,
+                ),
+                research_dataset_id=None,
+            )
+        except HistoryIngestionError as exc:
+            # 原子发布失败：数据集保持不可选，绝不留下半成品
+            await store.fail_dataset(dataset_id, reason=exc.reason, job_id=None)
+            raise
         return published["job"]
+
+    async def _publish_dataset(
+        self,
+        *,
+        store: HistoryDatasetStore,
+        job_id: str,
+        dataset_id: str,
+        feature_version: str,
+        row_count: int,
+        expected_points: int,
+        gap_count: int,
+        first_ts_ms: Optional[int],
+        last_ts_ms: Optional[int],
+        quality: Dict[str, Any],
+        provenance: Dict[str, Any],
+        research_document: Optional[Dict[str, Any]],
+        research_dataset_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """把已校验的历史归档原子地发布到 Research 平面并完成任务。"""
+        bridge = self._get_bridge_store(store)
+        coverage_start, coverage_end = _coverage_window(quality, first_ts_ms, last_ts_ms)
+        link = build_research_provenance(
+            history_dataset_id=dataset_id,
+            coverage_start_ms=coverage_start,
+            coverage_end_ms=coverage_end,
+            bar_count=row_count,
+            conversion_version=CONVERSION_VERSION,
+            quality=quality,
+            **provenance,
+        )
+        try:
+            return await bridge.publish_dataset(
+                job_id=job_id,
+                history_dataset_id=dataset_id,
+                feature_version=feature_version,
+                row_count=row_count,
+                expected_points=expected_points,
+                gap_count=gap_count,
+                first_ts_ms=first_ts_ms,
+                last_ts_ms=last_ts_ms,
+                quality=quality,
+                link=link,
+                research_document=research_document,
+                research_metadata=(
+                    dataset_metadata(research_document) if research_document else None
+                ),
+                research_dataset_id=research_dataset_id,
+            )
+        except ResearchHistoryStoreUnavailableError as exc:
+            raise HistoryIngestionError(ERROR_PERSISTENCE, str(exc)) from exc
+        except ResearchHistoryStoreError as exc:
+            raise HistoryIngestionError(ERROR_PERSISTENCE, str(exc)) from exc
 
     async def _import_bars(
         self,
@@ -702,11 +831,15 @@ class HistoryJobWorker:
         unavailable_logged = False
         while not self._stopping:
             if not recovered:
-                recovered = True
                 try:
                     await self._service.recover_interrupted_jobs()
-                except Exception as exc:  # noqa: BLE001 - startup recovery must not kill the loop
+                    recovered = True
+                except Exception as exc:  # noqa: BLE001 - recovery must not kill the loop
+                    # 恢复失败必须重试；在恢复成功之前不领取任何任务，
+                    # 否则可能把别的实例正在执行的任务误标为中断。
                     logger.warning("History job recovery failed: %s", exc)
+                    await asyncio.sleep(self._unavailable_backoff_seconds)
+                    continue
 
             try:
                 processed = await self._service.process_next_queued_job()
@@ -749,6 +882,47 @@ def _as_dict(value: Any) -> Dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _provenance_fields(
+    *,
+    symbol: str,
+    interval: str,
+    month: str,
+    source_url: str,
+    checksum_url: str,
+    official_sha256: Optional[str],
+    archive_sha256: str,
+    archive_version: int,
+    feature_version: str,
+) -> Dict[str, Any]:
+    """provenance 的稳定字段（不包含时间戳，保证可重复计算）。"""
+    return {
+        "symbol": symbol,
+        "interval": interval,
+        "month": month,
+        "source_url": source_url,
+        "checksum_url": checksum_url,
+        "official_sha256": official_sha256,
+        "archive_sha256": archive_sha256,
+        "archive_version": int(archive_version),
+        "feature_version": feature_version,
+    }
+
+
+def _coverage_window(
+    quality: Dict[str, Any],
+    first_ts_ms: Optional[int],
+    last_ts_ms: Optional[int],
+) -> Tuple[Optional[int], Optional[int]]:
+    """UTC 覆盖窗口 [start, end)：结束时间为最后一根 K 线的收盘时间。"""
+    start = quality.get("month_start_ms")
+    end = quality.get("month_end_exclusive_ms")
+    if start is None:
+        start = first_ts_ms
+    if end is None and last_ts_ms is not None:
+        end = int(last_ts_ms) + 60_000
+    return start, end
 
 
 def dataset_feature_version_prefix() -> str:

@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from trader.adapters.persistence.history_dataset_store import (
     HistoryStoreError,
@@ -54,6 +54,18 @@ def get_history_worker() -> HistoryJobWorker:
     if _history_worker is None:
         _history_worker = HistoryJobWorker(HistoryIngestionService())
     return _history_worker
+
+
+def history_service(request: Request) -> HistoryIngestionService:
+    """取得历史导入服务。
+
+    新 Control API 通过 ``app.state.history_service`` 注入依赖；旧 API 未注入时
+    回退到默认服务（保持旧路径兼容）。
+    """
+    service = getattr(request.app.state, "history_service", None)
+    if service is not None:
+        return service
+    return HistoryIngestionService()
 
 
 async def start_history_worker() -> None:
@@ -95,6 +107,7 @@ def _job_payload(row: Dict[str, Any]) -> HistoryJobResponse:
         stage=str(row.get("stage") or row["status"]),
         dataset_id=row.get("dataset_id"),
         feature_version=row.get("feature_version"),
+        research_dataset_id=row.get("research_dataset_id"),
         rows_processed=int(row.get("rows_processed") or 0),
         bytes_downloaded=int(row.get("bytes_downloaded") or 0),
         error_code=row.get("error_code"),
@@ -139,6 +152,7 @@ def _dataset_payload(row: Dict[str, Any]) -> HistoryDatasetResponse:
         status=str(row.get("status") or "PENDING"),
         persistence_ok=bool(row.get("persistence_ok")),
         backtest_eligible=bool(row.get("backtest_eligible")),
+        research_dataset_id=row.get("research_dataset_id"),
         created_at=_iso(row.get("created_at")),
         published_at=_iso(row.get("published_at")),
     )
@@ -158,14 +172,14 @@ def _iso(value: Any) -> Optional[str]:
     response_model=HistoryJobResponse,
     status_code=202,
 )
-async def create_history_job(request: HistoryJobCreateRequest):
+async def create_history_job(payload: HistoryJobCreateRequest, request: Request):
     """创建历史归档导入任务。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         job = await service.submit_job(
-            symbol=request.symbol,
-            month=request.month,
-            requested_by=request.requested_by,
+            symbol=payload.symbol,
+            month=payload.month,
+            requested_by=payload.requested_by,
         )
     except OhlcvRequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -182,9 +196,10 @@ async def list_history_jobs(
     symbol: Optional[str] = Query(default=None),
     month: Optional[str] = Query(default=None),
     limit: int = Query(100, ge=1, le=500),
+    request: Request = None,
 ):
     """查询历史导入任务（真实阶段 / 已下载字节 / 已处理行数 / 错误码）。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         jobs = await service.list_jobs(status=status, symbol=symbol, month=month, limit=limit)
     except HistoryStoreUnavailableError as exc:
@@ -195,9 +210,9 @@ async def list_history_jobs(
 
 
 @router.get("/v1/data/history/jobs/{job_id}", response_model=HistoryJobResponse)
-async def get_history_job(job_id: str = Path(...)):
+async def get_history_job(job_id: str = Path(...), request: Request = None):
     """查询单个导入任务。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         job = await service.get_job(job_id)
     except HistoryStoreUnavailableError as exc:
@@ -214,9 +229,9 @@ async def get_history_job(job_id: str = Path(...)):
     response_model=HistoryJobResponse,
     status_code=202,
 )
-async def retry_history_job(job_id: str = Path(...)):
+async def retry_history_job(job_id: str = Path(...), request: Request = None):
     """重试 FAILED 任务（幂等：复用同一个 job_id）。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         job = await service.retry_job(job_id)
     except KeyError as exc:
@@ -236,9 +251,10 @@ async def list_history_datasets(
     month: Optional[str] = Query(default=None),
     only_eligible: bool = Query(default=False),
     limit: int = Query(200, ge=1, le=500),
+    request: Request = None,
 ):
     """列出历史数据集（覆盖 / 质量 / 持久化状态 / 回测资格）。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         datasets = await service.list_datasets(
             symbol=symbol,
@@ -254,9 +270,9 @@ async def list_history_datasets(
 
 
 @router.get("/v1/data/history/datasets/{dataset_id}", response_model=HistoryDatasetResponse)
-async def get_history_dataset(dataset_id: str = Path(...)):
+async def get_history_dataset(dataset_id: str = Path(...), request: Request = None):
     """查询单个历史数据集（按 id 直接查询，不做列表扫描）。"""
-    service = HistoryIngestionService()
+    service = history_service(request)
     try:
         row = await service.get_dataset(dataset_id)
     except HistoryStoreUnavailableError as exc:

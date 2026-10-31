@@ -364,7 +364,7 @@ async def test_worker_claims_executes_and_publishes_once():
 
 
 @pytest.mark.asyncio
-async def test_worker_failure_is_recorded_and_retry_can_succeed():
+async def test_worker_failure_is_terminal_until_an_explicit_retry():
     store = MemoryResearchStore()
     job = await store.enqueue({"dataset_ids": ["ds_x"]})
     worker = ResearchWorker(store, owner="worker-1")
@@ -376,6 +376,7 @@ async def test_worker_failure_is_recorded_and_retry_can_succeed():
     assert failed["status"] == "FAILED"
     assert "engine exploded" in failed["error"]
 
+    # A FAILED run is terminal: no worker may pick it up again on its own.
     retry = ResearchWorker(store, owner="worker-2")
     published = []
 
@@ -383,9 +384,21 @@ async def test_worker_failure_is_recorded_and_retry_can_succeed():
         published.append(record["run_id"])
         return {"ok": True}
 
+    assert await retry.run_once(ok) is None
+    assert published == []
+    assert (await store.get(job["run_id"]))["status"] == "FAILED"
+
+    # An explicit retry re-queues the very same run with its frozen inputs.
+    requeued = await store.retry(job["run_id"])
+    assert requeued["run_id"] == job["run_id"]
+    assert requeued["status"] == "QUEUED"
+    assert requeued["manifest"] == job["manifest"]
+    assert requeued["manifest_hash"] == job["manifest_hash"]
+
     finished = await retry.run_once(ok)
     assert finished["status"] == "SUCCEEDED"
     assert published == [job["run_id"]]
+    assert finished["attempt"] == 2
 
 
 @pytest.mark.asyncio

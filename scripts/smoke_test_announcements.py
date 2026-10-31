@@ -22,24 +22,23 @@ from datetime import datetime, timezone
 sys.path.insert(0, ".")
 
 from trader.adapters.announcements.binance_crawler import (
-    BinanceAnnouncementCrawler,
     AnnouncementType,
+    BinanceAnnouncementCrawler,
 )
-from trader.adapters.announcements.ws_source import BinanceWsAnnouncementSource
 from trader.adapters.announcements.html_source import BinanceHtmlAnnouncementSource
+from trader.adapters.announcements.ws_source import BinanceWsAnnouncementSource
 from trader.adapters.persistence.event_store import EventStoreWithFallback
 from trader.adapters.persistence.memory.event_store import InMemoryEventStore
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
 async def test_ws_source():
     """测试 WebSocket Source - v3 调整
-    
+
     验证:
     1. connect - 建立连接
     2. subscribe - 订阅主题
@@ -51,9 +50,9 @@ async def test_ws_source():
     print("\n" + "=" * 60)
     print("WebSocket Source Smoke Test (v3)")
     print("=" * 60)
-    
+
     ws_source = BinanceWsAnnouncementSource()
-    
+
     # 创建 crawler 实例用于符号提取（WS 源本身不提取符号）
     memory_store = InMemoryEventStore()
     event_store = EventStoreWithFallback(
@@ -64,24 +63,24 @@ async def test_ws_source():
         event_store=event_store,
         use_ws_primary=True,
     )
-    
+
     connection_ok = False
     subscribe_ok = False
     receive_ok = False
-    
+
     try:
         # 1. 测试连接
         print("\n[1] Testing WebSocket connect...")
         await ws_source.connect()
         print("    Connected to WebSocket")
         connection_ok = True
-        
+
         # 2. 测试订阅
         print("\n[2] Testing subscribe...")
         await ws_source.subscribe()
         print("    Subscribed to com_announcement_en")
         subscribe_ok = True
-        
+
         # 3. 测试定时接收 (30 秒时间窗口)
         print("\n[3] Testing recv_one (30s window)...")
         try:
@@ -104,23 +103,24 @@ async def test_ws_source():
             # 连接稳定但未收到消息，不应视为完全成功
             # receive_ok 保持 False，因为这是 smoke test
             receive_ok = False
-        
+
     except ConnectionError as e:
         print(f"    WS test FAILED: Connection error: {e}")
         return False
     except Exception as e:
         print(f"    WS test FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         return False
-    
+
     finally:
         # 清理
         print("\n[4] Cleanup...")
         await crawler.close()
         await ws_source.disconnect()
         print("    Disconnected")
-    
+
     # 只有 connection_ok/subscribe_ok/receive_ok 都为 True 才返回 True
     return connection_ok and subscribe_ok and receive_ok
 
@@ -130,30 +130,31 @@ async def test_html_source():
     print("\n" + "=" * 60)
     print("HTML Source Smoke Test")
     print("=" * 60)
-    
+
     html_source = BinanceHtmlAnnouncementSource()
-    
+
     try:
         print("\n[1] Fetching initial announcements from HTML source...")
         announcements = await html_source.fetch_initial(max_results=20)
         print(f"    Fetched {len(announcements)} announcements")
-        
+
         if announcements:
             print("\n[2] Sample announcement:")
             sample = announcements[0]
             print(f"    Title: {(sample.title or 'N/A')[:50]}...")
             print(f"    Source: {sample.source}")
             print(f"    URL: {sample.detail_url}")
-        
+
         print("\nHTML source smoke test: PASSED")
         return True
-        
+
     except Exception as e:
         print(f"    HTML test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
-    
+
     finally:
         await html_source.close()
 
@@ -163,43 +164,43 @@ async def test_crawler_integration():
     print("\n" + "=" * 60)
     print("Crawler Integration Smoke Test")
     print("=" * 60)
-    
+
     # Create event store (memory mode for testing)
     memory_store = InMemoryEventStore()
     event_store = EventStoreWithFallback(
         pg_event_store=None,
         memory_event_store=memory_store,
     )
-    
+
     # Create crawler
     crawler = BinanceAnnouncementCrawler(
         event_store=event_store,
         poll_interval_seconds=300,
         use_ws_primary=False,  # 使用 HTML 源因为 WS 需要更长测试时间
     )
-    
+
     print("\n[1] Fetching and processing announcements...")
     try:
         processed_count = await crawler.fetch_and_process()
         print(f"    Processed {processed_count} announcements")
-        
+
         # Check if events were written
         events = await event_store.read_stream("announcements")
         print(f"    Events in store: {len(events)}")
-        
+
         if events:
             print("\n[2] Sample event structure:")
             sample_event = events[0]
             print(f"    Event type: {sample_event.event_type}")
             print(f"    Aggregate ID: {sample_event.aggregate_id}")
             print(f"    Data keys: {list(sample_event.data.keys())}")
-            
+
             if "type" in sample_event.data:
                 print(f"    Original type: {sample_event.data['type']}")
-            
+
             if "symbols" in sample_event.data:
                 print(f"    Symbols: {sample_event.data['symbols']}")
-        
+
         print("\n[3] Testing symbol extraction...")
         sample_titles = [
             "Binance Will List PIXEL and Open Trading Pairs for PIXEL/USDT",
@@ -207,22 +208,23 @@ async def test_crawler_integration():
             "Binance Will Delist Multiple Trading Pairs",
             "Binance System Maintenance Notice",
         ]
-        
+
         for title in sample_titles:
             symbols = crawler._extract_symbols(title)
             ann_type = crawler._classify_announcement(title)
             print(f"    Title: {title[:40]}...")
             print(f"      -> Type: {ann_type.value}, Symbols: {symbols}")
-        
+
         print("\nCrawler integration smoke test: PASSED")
         return True
-        
+
     except Exception as e:
         print(f"    Integration test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
-    
+
     finally:
         await crawler.close()
 
@@ -232,22 +234,22 @@ async def main():
     print("=" * 60)
     print("Binance Announcement Crawler Smoke Test (v2)")
     print("=" * 60)
-    
+
     results = {}
-    
+
     # 1. 先测试 HTML 源 (更快更可靠)
     results["html_source"] = await test_html_source()
-    
+
     # 2. 测试 WebSocket 源
     print("\n" + "-" * 60)
     print("Note: WS test may timeout if no new announcements")
     print("-" * 60)
     results["ws_source"] = await test_ws_source()
-    
+
     # 3. 测试 Crawler 集成
     print("\n" + "-" * 60)
     results["crawler_integration"] = await test_crawler_integration()
-    
+
     # 总结
     print("\n" + "=" * 60)
     print("Smoke Test Summary")
@@ -255,7 +257,7 @@ async def main():
     for test_name, passed in results.items():
         status = "PASSED" if passed else "FAILED"
         print(f"  {test_name}: {status}")
-    
+
     all_passed = all(results.values())
     if all_passed:
         print("\nAll smoke tests: PASSED")
@@ -271,4 +273,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n\nSmoke Test: FAILED with error: {e}")
         import traceback
+
         traceback.print_exc()

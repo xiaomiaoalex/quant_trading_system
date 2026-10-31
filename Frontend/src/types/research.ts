@@ -64,6 +64,8 @@ export interface HistoryJob {
   status: HistoryJobStatus
   stage: string
   dataset_id?: string | null
+  /** 发布后指向 Research 平面的 `ds_*` 数据集；尚未发布时为 null。 */
+  research_dataset_id?: string | null
   feature_version?: string | null
   rows_processed: number
   bytes_downloaded: number
@@ -99,8 +101,179 @@ export interface HistoryDataset {
   status: HistoryDatasetStatus
   persistence_ok: boolean
   backtest_eligible: boolean
+  /** 对应的 Research 平面数据集 ID（`ds_*`），未桥接时为 null。 */
+  research_dataset_id?: string | null
   created_at?: string | null
   published_at?: string | null
+}
+
+// ==================== Research plane (datasets / strategies / event backtests) ====================
+
+/**
+ * Research 数据集目录条目（只读元数据，不含行情载荷）。
+ * 运行时由 `@/contracts/research` 的 Zod schema 校验。
+ */
+export interface ResearchDatasetSummary {
+  dataset_id: string
+  symbol: string | null
+  interval: string | null
+  month: string | null
+  venue: string | null
+  market_type: string | null
+  base_asset: string | null
+  quote_asset: string | null
+  source: string | null
+  version: string | null
+  bar_count: number | null
+  coverage_start_ms: number | null
+  coverage_end_ms: number | null
+  complete: boolean
+  history_dataset_id: string | null
+  official_eligible: boolean
+  archive_sha256: string | null
+  official_sha256: string | null
+  source_url: string | null
+  checksum_url: string | null
+  provenance_hash: string | null
+  conversion_version: string | null
+  published_at: string | null
+  created_at: string | null
+}
+
+export interface ResearchStrategyParam {
+  name: string
+  type: string
+  default: string | null
+  required: boolean
+}
+
+/** 后端允许提交事件回测的已安装策略。 */
+export interface ResearchStrategySummary {
+  module_path: string
+  strategy_id: string
+  name: string
+  version: string
+  code_hash: string
+  params: ResearchStrategyParam[]
+}
+
+export type ResearchBacktestStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+export type ResearchBacktestModel = 'event_runtime' | 'legacy'
+
+export interface ResearchEquityPoint {
+  at_ms: number
+  equity: string
+}
+
+export interface ResearchBacktestReportDataset {
+  dataset_id: string
+  identity: Record<string, unknown>
+  quality: Record<string, unknown>
+}
+
+export interface ResearchBacktestReport {
+  datasets: ResearchBacktestReportDataset[]
+  provenance: Record<string, string>
+  strategy: {
+    module_path: string
+    params: Record<string, unknown>
+    version: string | null
+    code_hash: string | null
+  }
+  runtime: {
+    engine: string
+    runtime_version: string
+    manifest_hash: string
+    runtime_manifest_hash: string
+  }
+  costs: {
+    initial_cash: string
+    fee_bps: string
+    slippage_bps: string
+    total_fees: string
+  }
+  performance: {
+    net_value: string
+    total_return: string
+    max_drawdown_pct: string
+    max_drawdown_amount: string
+    win_rate: string
+  }
+  executions: {
+    fill_count: number
+    rejections: Record<string, number>
+    execution_rejections: Record<string, number>
+  }
+  limitations: string[]
+}
+
+export interface ResearchBacktestResult {
+  engine?: string
+  runtime_version?: string
+  admissible?: boolean
+  manifest_hash?: string
+  runtime_manifest_hash?: string
+  limitations?: string[]
+  net_value?: string
+  total_return?: string
+  total_fees?: string
+  max_drawdown?: string
+  max_drawdown_pct?: string
+  max_drawdown_amount?: string
+  win_rate?: string
+  equity_curve?: string[]
+  equity_points?: ResearchEquityPoint[]
+  positions?: Record<string, string>
+  fills?: Array<Record<string, unknown>>
+  rejections?: Record<string, number>
+  execution_rejections?: Record<string, number>
+  closed_trades?: string[]
+  errors?: string[]
+  report?: ResearchBacktestReport
+}
+
+/** Research 事件回测运行记录（GET /v1/research/backtests*）。 */
+export interface ResearchBacktestRun {
+  run_id: string
+  status: ResearchBacktestStatus
+  model: ResearchBacktestModel
+  manifest?: Record<string, unknown> | null
+  result?: ResearchBacktestResult | null
+  error?: string | null
+  created_at?: string | number | null
+  updated_at?: string | number | null
+}
+
+/**
+ * 提交事件回测的冻结 manifest。
+ *
+ * engine / purpose 固定为 event_runtime / research_screening，由前端常量写入；
+ * module_path 只能取自后端已安装策略列表。
+ */
+export interface ResearchBacktestManifest {
+  dataset_ids: string[]
+  strategy: {
+    module_path: string
+    params?: Record<string, unknown>
+  }
+  initial_cash: string
+  fee_bps: string
+  slippage_bps: string
+  engine: 'event_runtime'
+  purpose: 'research_screening'
+}
+
+export interface ResearchBacktestCreateRequest {
+  manifest: ResearchBacktestManifest
+}
+
+/** 数据集目录查询参数。 */
+export interface ResearchDatasetQuery {
+  symbol?: string
+  month?: string
+  official_only?: boolean
+  limit?: number
+  offset?: number
 }
 
 export interface HistoryJobCreateRequest {

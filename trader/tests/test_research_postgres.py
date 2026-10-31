@@ -116,6 +116,14 @@ async def test_postgres_worker_failure_retry_and_cancel():
         async def ok(record):
             return {"net_value": "1000", "dataset_ids": record["manifest"]["dataset_ids"]}
 
+        # A FAILED run is terminal: it is only picked up again after an
+        # explicit retry, and the retry keeps the frozen inputs.
+        assert await retry.run_once(ok) is None
+        requeued = await store.retry(job["run_id"])
+        assert requeued["status"] == "QUEUED"
+        assert requeued["run_id"] == job["run_id"]
+        assert requeued["manifest_hash"] == job["manifest_hash"]
+
         succeeded = await retry.run_once(ok)
         assert succeeded["status"] == "SUCCEEDED"
         assert succeeded["result"]["net_value"] == "1000"
