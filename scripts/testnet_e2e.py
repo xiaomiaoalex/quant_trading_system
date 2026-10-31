@@ -143,8 +143,17 @@ async def main() -> int:
             place.raise_for_status()
             limit_receipt = place.json()
             record("place_limit", receipt=limit_receipt)
-            if limit_receipt["status"] != "CONFIRMED":
-                record("aborted", reason="venue rejected the limit order")
+            # The Control API only queues the command; the execution process
+            # confirms it against the venue, so the receipt starts as QUEUED.
+            limit_command = await wait_for(
+                client,
+                f"/v1/commands/{limit_receipt['command_id']}?account_id={args.account_id}",
+                lambda payload: payload["status"] in {"CONFIRMED", "FAILED", "UNKNOWN"},
+                timeout=120.0,
+            )
+            record("limit_command", command=limit_command)
+            if limit_command["status"] != "CONFIRMED":
+                record("aborted", reason="venue rejected the limit order", command=limit_command)
                 await _write(args.out, evidence)
                 return 3
             cl_ord_id = limit_receipt["cl_ord_id"]
