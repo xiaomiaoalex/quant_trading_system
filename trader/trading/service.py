@@ -1954,6 +1954,10 @@ class TradingService:
         state.reconciliation["generation"] = snapshot.generation
         state.reconciliation["complete"] = snapshot.complete
 
+        # Adopted orders are rebuilt from venue evidence, so their reservation
+        # has to be rebuilt as well before any new risk is admitted.
+        self._restore_order_holds(state)
+
         # Commands whose venue visibility was ambiguous are resolved by the snapshot.
         for record in state.commands.values():
             if record.kind == "PLACE" and record.status in {"SENDING", "UNKNOWN"}:
@@ -2239,6 +2243,47 @@ class TradingService:
         detail = existing.setdefault("detail", {})
         detail["cl_ord_ids"] = sorted(set(detail.get("cl_ord_ids", [])) | cl_ord_ids)
 
+    def _restore_order_holds(self, state: AccountState) -> None:
+        """Make every live order own the funds the venue has locked for it.
+
+        ``available_balance`` subtracts local holds only while the snapshot
+        carries the venue's total balance, so a live order without a hold makes
+        already-locked funds look spendable and keeps its notional out of the
+        exposure limits. An adopted order therefore rebuilds its reservation
+        from the reference price. When that price cannot support a hold, new
+        risk stays blocked instead of trading against funds that are not there.
+        """
+        blocked = False
+        for cl_ord_id, order in state.orders.items():
+            if cl_ord_id in state.holds:
+                continue
+            if order.status in NON_EXPOSURE_TERMINAL or order.remaining_qty <= 0:
+                continue
+            price = order.command.price
+            asset = order.command.base_asset
+            amount = order.remaining_qty
+            if order.command.side == "BUY":
+                asset = order.command.quote_asset
+                amount = amount * price * (Decimal(1) + self.policy.fee_rate)
+            if (
+                (order.command.side == "BUY" and (not price.is_finite() or price <= 0))
+                or not amount.is_finite()
+                or amount <= 0
+            ):
+                blocked = True
+                self._add_unresolved(
+                    state,
+                    "ORDER_HOLD_UNRECONSTRUCTED",
+                    {"cl_ord_id": cl_ord_id, "symbol": order.command.symbol},
+                )
+                continue
+            state.holds[cl_ord_id] = Hold(asset, amount)
+        # An adopted order has no strategy book, so the layer that reports a
+        # spendable balance must show the same reservation.
+        book_ledger.mirror_account_holds(state)
+        if not blocked:
+            self._resolve_unresolved(state, "ORDER_HOLD_UNRECONSTRUCTED")
+
     def _adopt_venue_order(
         self,
         state: AccountState,
@@ -2250,7 +2295,8 @@ class TradingService:
         Only orders inside our client-order namespace are adopted: the venue
         reports them, their fills are authoritative, and the account is
         dedicated to this system. Foreign client-order ids stay unknown and
-        keep blocking new risk.
+        keep blocking new risk. The funds this order still locks are restored
+        by ``_restore_order_holds`` once the snapshot has been applied.
         """
         venue_order = venue_orders.get(cl_ord_id)
         if venue_order is None:

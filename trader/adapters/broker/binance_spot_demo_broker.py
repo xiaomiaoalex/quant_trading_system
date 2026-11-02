@@ -550,6 +550,10 @@ class BinanceSpotDemoBroker(BrokerPort):
         if avg_price_raw in (None, "", "0.00000000"):
             avg_price_raw = "0"
 
+        limit_price_raw = data.get("price")
+        if limit_price_raw in (None, "", "0.00000000"):
+            limit_price_raw = "0"
+
         return BrokerOrder(
             broker_order_id=str(data.get("orderId", "")),
             cl_ord_id=str(data.get("clientOrderId", "")),
@@ -561,6 +565,7 @@ class BinanceSpotDemoBroker(BrokerPort):
             average_price=Decimal(str(avg_price_raw)),
             status=self._parse_order_status(str(data.get("status", ""))),
             created_at=datetime.fromtimestamp(transact_time / 1000, tz=timezone.utc),
+            limit_price=Decimal(str(limit_price_raw)),
         )
 
     async def place_order(
