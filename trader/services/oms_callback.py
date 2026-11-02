@@ -196,6 +196,22 @@ class OMSCallbackHandler:
         # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
         self._risk_mode_callback: Optional[Callable[[str], "RiskMode"]] = None
 
+    @staticmethod
+    def _resolve_signal_order_type(signal: Signal) -> OrderType:
+        """Resolve the explicitly declared order type or fail closed.
+
+        Price never selects MARKET versus LIMIT: a nonzero reference price on a
+        market signal is still a market signal, and a missing or unsupported
+        type must be refused before any broker or economic side effect.
+        """
+        declared = signal.order_type
+        if declared is None:
+            raise OMSCallbackError("ORDER_TYPE_REQUIRED")
+        try:
+            return OrderType(declared)
+        except (TypeError, ValueError):
+            raise OMSCallbackError(f"UNSUPPORTED_ORDER_TYPE: {declared!r}") from None
+
     @property
     def _lot_mgr(self):
         """获取 PositionLedgerManager：优先注入，否则用全局单例"""
@@ -936,6 +952,16 @@ class OMSCallbackHandler:
             self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
             raise OMSCallbackError(f"Invalid signal quantity: {signal.quantity}")
 
+        # A missing or unsupported order type is refused before risk checks,
+        # balances, broker IO or any economic side effect.
+        try:
+            order_type = self._resolve_signal_order_type(signal)
+        except OMSCallbackError as exc:
+            self._order_submit_reject += 1
+            reason = str(exc)
+            self._reject_reason_counts[reason] = self._reject_reason_counts.get(reason, 0) + 1
+            raise
+
         # ==================== RiskMode Final Gate（阶段2） ====================
         # OMS 作为 final gate，必须持有 RiskMode 状态并按动作矩阵执行
         # 动作矩阵：
@@ -1063,12 +1089,8 @@ class OMSCallbackHandler:
             logger.warning(f"[OMSCallback] Quantity quantization failed: {e}")
             quantity = Decimal(str(signal.quantity))
 
-        # ==================== 方向、订单类型、参考价格 ====================
+        # ==================== 方向、参考价格 ====================
         side, is_emergency = self._determine_order_side(signal)
-        order_type = OrderType.MARKET
-        if signal.price and signal.price > 0:
-            order_type = OrderType.LIMIT
-
         price = signal.price or Decimal("0")
         try:
             reference_price = await self._resolve_reference_price(signal.symbol, price)

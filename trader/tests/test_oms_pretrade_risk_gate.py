@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from trader.core.application.risk_engine import RejectionReason, RiskCheckResult, RiskLevel
-from trader.core.domain.models.order import OrderStatus
+from trader.core.domain.models.order import OrderStatus, OrderType
 from trader.core.domain.models.risk_decision import RiskSizingDecision, RiskSizingDecisionType
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import OMSCallbackHandler, RiskRejectedError
@@ -41,6 +41,7 @@ def _broker() -> MagicMock:
 def _signal() -> Signal:
     return Signal(
         signal_type=SignalType.LONG,
+        order_type=OrderType.MARKET,
         symbol="BTCUSDT",
         quantity=Decimal("0.01"),
         price=Decimal("50000"),

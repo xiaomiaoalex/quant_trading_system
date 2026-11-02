@@ -950,3 +950,57 @@ flowchart TB
   无 eligibility checker 的应用。
 - 两处安全基线的 `xfail` 标记已移除，断言转为普通通过；真实验收证据见
   `trader/tests/test_phase0_foundation_safety.py` 与 `trader/tests/test_phase1_foundation_safety.py`。
+
+### 8.2 阶段 2 已实现：统一订单规格与 book 子账簿（2026-11-02）
+
+本节是阶段 2 对第 8 / 8.1 节的增量事实；接口细节见 `docs/INTERFACE_CONTRACTS.md` 13.12，
+迁移步骤见 `docs/PHASE2_BOOK_LEDGER_MIGRATION.md`。
+
+**订单规格单入口**
+
+- `trader/trading/order_spec.py` 的 `build_order_spec()` / `OrderSpec.to_command()` 是策略到命令的
+  唯一规格路径；`Signal.order_type` 与 `Signal.time_in_force` 显式声明，`signal.metadata` 不再
+  提供隐式默认。`validate_order_command()` 在 service 与 Binance adapter 两处校验同一契约。
+- LIMIT 价格取信号价；MARKET 参考价及其来源/时点写入 `PlaceOrderCommand`、`order.queued`
+  事件和订单查询。当前生产 ticker 输入标为 `MARKET_REFERENCE_TICKER`；closed-bar 替换属阶段 3。
+
+**book 子账簿与双层预约**
+
+- `AccountState.books` 把账户资产稳定分区为 `UNALLOCATED` + `book:{strategy_id}`；
+  `trader/trading/books.py` 负责守恒、划拨、归属证据和逐 book 快照。
+- 一笔订单在同一账户事务内创建账户层 `state.holds` 与 book 层 `books[book_id].holds`；
+  成交按数量释放两层，撤单/拒绝/终态释放剩余预约，任一层失败回滚整个事务。
+- 同一 book 同 symbol 的未终结反向订单先拒绝 `BOOK_OPPOSITE_ORDER_IN_FLIGHT`。
+  book 预算只来自自身余额与持仓，不借用其他 book 或账户总余额；账户级 `SpotRiskEngine`
+  风控仍独立生效。
+- `ALLOCATE` 是 Control→PostgreSQL→Execution 的持久幂等命令；`GET /v1/trading/books`
+  提供阶段 4 需要的逐 book 权益/预算查询。Control 仍不写账户经济状态。
+
+**归属与迁移**
+
+- 旧快照在 `decode_state()` 中把存量资产放入 `UNALLOCATED`，既有在途订单/预约保守保留并
+  标记 `BOOK_ATTRIBUTION_UNKNOWN`；不猜测策略、不清库、不改写旧 ledger/events/订单。
+- 归属不明的成交按 `UNALLOCATED` 记账以保持守恒，同时阻断新增风险；只有逐单证据的
+  `RESOLVE` 才能解除。旧无 scope `UNKNOWN_COMMAND` 仅在能证明 `command_id` 归属时迁移。
+- 新栈准入风控仍只有 `SpotRiskEngine`；执行入口通过 `QTS_RISK_POLICY_JSON` / `QTS_FEE_RATE`
+  读取 `RiskPolicy`，未知字段拒绝。旧 `RiskService` 不构成第二套准入。
+
+**结算口径与联合回测（第 2 轮审核修复）**
+
+- `PlaceOrderCommand.settlement` 显式区分结算口径：`QUOTE` 表示交易所按 `qty * price` 的报价
+  额度成交（市价买入可换回多于 `qty` 的 base，但报价支出不得超过额度）；`BASE` 表示按请求的
+  base 数量成交（历史 bar 模拟器）。LIMIT 边界不变。
+- 成交释放两层预约使用真实成交：`qty * execution.price` + 仅 quote 币种的 fee；admission
+  `fee_rate` 只是缓冲。quote-settled MARKET BUY 不以 `booked_qty == command.qty` 推断完成，
+  只有报价预算耗尽或终态观察/显式终态事实才清真实剩余；LIMIT/BASE 完全成交语义不变。
+- 所有生产信号消费者都读取显式 `order_type`：内置 `fire_test` 声明 MARKET；`Signal.to_order_params`
+  缺失/非法 fail-closed；旧 OMS `execute_signal` 在 broker/经济副作用前校验，缺失/不支持分别
+  稳定拒绝 `ORDER_TYPE_REQUIRED` / `UNSUPPORTED_ORDER_TYPE`，价格不再决定订单类型。旧 OMS
+  未接入新服务/账簿，部署拓扑不变。
+- 所有业务命令由 `trader/trading/order_spec.py` 统一构造，策略、Control API、回测共用；
+  生产代码只允许 `store.decode_state()` 解码持久化命令。
+- `EventBacktestRuntime` 支持显式的 `strategy_books`（`strategy_id -> book:{strategy_id}`）与
+  `initial_allocations`：多策略联合回测里每个信号按 `strategy_id` 路由到自己的 book，
+  预算不足被该 book 拒绝；`BacktestResult.books` 复用 `books.book_snapshot` 输出逐 book
+  余额/持仓/预约/可用预算/权益，阶段 4 可直接读取。初始资金分配必须显式，剩余留在
+  `UNALLOCATED`，不按策略隐式归集，也不做任何内部撮合或净额。

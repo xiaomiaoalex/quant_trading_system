@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import OMSCallbackHandler
 from trader.storage.in_memory import ControlPlaneInMemoryStorage
@@ -61,6 +62,7 @@ class TestOMSCallbackObservableMetrics:
         """Helper to create a test signal."""
         return Signal(
             signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
             symbol=symbol,
             quantity=quantity,
             price=price,
@@ -136,6 +138,7 @@ class TestOMSCallbackObservableMetrics:
         """Test that missing symbol is tracked as rejection."""
         signal = Signal(
             signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
             symbol="",  # Empty symbol
             quantity=Decimal("0.01"),
             price=Decimal("50000"),

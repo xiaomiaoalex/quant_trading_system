@@ -123,6 +123,10 @@ def command():
         side="BUY",
         qty=Decimal("1"),
         price=Decimal("100"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
 
 
@@ -291,6 +295,9 @@ async def test_market_buy_rounds_the_quote_amount_to_the_asset_precision():
             qty=Decimal("0.0002"),
             price=Decimal("77551.96"),
             order_type="MARKET",
+            book_id="book:test",
+            price_source="MARKET_REFERENCE_TICKER",
+            price_at_ms=1_000_000,
         ),
         "qts-m",
     )
@@ -315,6 +322,9 @@ async def test_market_sell_quantity_is_floored_to_the_step_size():
             qty=Decimal("0.001234567"),
             price=Decimal("77551.96"),
             order_type="MARKET",
+            book_id="book:test",
+            price_source="MARKET_REFERENCE_TICKER",
+            price_at_ms=1_000_000,
         ),
         "qts-s",
     )
@@ -336,6 +346,9 @@ async def test_limit_below_minimum_notional_is_rejected_without_sending():
             qty=Decimal("0.0001"),
             price=Decimal("100"),
             order_type="LIMIT",
+            book_id="book:test",
+            price_source="SIGNAL_LIMIT",
+            price_at_ms=1_000_000,
         ),
         "qts-small",
     )

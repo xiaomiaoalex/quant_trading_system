@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from trader.runtime.trading_worker_main import build_runtime
-from trader.tests.test_trading_runtime import snapshot
+from trader.tests.test_trading_runtime import snapshot, start_runtime
 from trader.tests.test_trading_service import Clock, FakeExchange, command
 from trader.trading.models import NotReady
 from trader.trading.store import MemoryTradingStore
@@ -23,6 +23,7 @@ def build(**overrides):
         clock=Clock(),
         command_interval_seconds=0,
         reconcile_interval_seconds=0,
+        strategy_id="test",
     )
     args.update(overrides)
     return build_runtime(**args)
@@ -66,7 +67,7 @@ def test_strategy_instruments_must_be_inside_the_coverage_symbols():
 async def test_worker_without_private_session_stays_explicitly_blocked():
     rt = build()
     try:
-        assert not await rt.start()
+        assert not await start_runtime(rt)
         assert "PRIVATE_SESSION_NOT_ASSEMBLED" in (await rt.readiness())["reasons"]
         with pytest.raises(NotReady):
             await rt.place(command())
@@ -78,7 +79,7 @@ async def test_worker_without_private_session_stays_explicitly_blocked():
 @pytest.mark.asyncio
 async def test_worker_constructs_session_after_lease_and_waits_for_recovery():
     rt = build(private_session_factory=CoveredSession)
-    assert await rt.start()
+    assert await start_runtime(rt)
     assert rt.ready
     session = rt.private_session
     await rt.place(command())
@@ -90,7 +91,7 @@ async def test_worker_constructs_session_after_lease_and_waits_for_recovery():
 @pytest.mark.asyncio
 async def test_session_block_closes_live_command_and_strategy_gate():
     rt = build(private_session_factory=CoveredSession)
-    assert await rt.start()
+    assert await start_runtime(rt)
     try:
         await rt.block("PRIVATE_STREAM_DISCONNECTED")
         assert not rt.strategy_start_allowed
@@ -131,7 +132,7 @@ def session_factory(*, covered):
 async def test_worker_real_session_without_coverage_reports_precise_blocker():
     rt = build(private_session_factory=session_factory(covered=False))
     try:
-        assert not await rt.start()
+        assert not await start_runtime(rt)
         assert "PRIVATE_STREAM_COVERAGE_UNPROVEN" in (await rt.readiness())["reasons"]
         assert not (await rt.store.read("acct")).control["runtime"]["ready"]
     finally:
@@ -159,7 +160,7 @@ async def test_worker_strategy_to_ws_fill_uses_one_ledger_and_disconnect_blocks_
             return {"BTCUSDT": Decimal("100")}
 
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         await feed_market_once(rt, Market(), {"BTCUSDT": ("BTC", "USDT")})
         assert len(rt.exchange.placed) == 1
         order_id = rt.exchange.placed[0][1]
@@ -209,7 +210,7 @@ async def test_worker_blocks_when_the_strategy_warmup_cannot_be_satisfied():
         deployment_id="worker-warmup",
     )
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         assert await enforce_strategy_warmup(rt) is False
         readiness = await rt.readiness()
         assert "STRATEGY_WARMUP_NOT_CONFIGURED" in readiness["reasons"]
@@ -242,7 +243,7 @@ async def test_worker_warms_a_declared_plugin_from_the_recollected_window():
     )
     rt.strategy_runner.warmup_source = source
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         from datetime import datetime, timezone
         from decimal import Decimal
 

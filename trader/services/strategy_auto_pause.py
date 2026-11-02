@@ -410,6 +410,7 @@ class StrategyAutoPauseService:
 
     def _make_dummy_signal(self, strategy_id: str) -> "Signal":
         """构造一个最小化的 dummy Signal 用于风险探测。"""
+        from trader.core.domain.models.order import OrderType
         from trader.core.domain.models.signal import Signal, SignalType
 
         return Signal(
@@ -417,6 +418,7 @@ class StrategyAutoPauseService:
             strategy_name=strategy_id,
             symbol="BTCUSDT",
             signal_type=SignalType.BUY,  # 保守地测试开多方向
+            order_type=OrderType.MARKET,
             quantity=Decimal("0.001"),
             price=Decimal("50000"),
             metadata={"strategy_id": strategy_id, "auto_pause_probe": True},

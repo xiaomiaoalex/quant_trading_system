@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.trading import books as book_ledger
 from trader.trading.models import (
     AccountState,
     CancelOrderCommand,
@@ -26,6 +27,8 @@ from trader.trading.models import (
 from trader.trading.risk import RiskPolicy
 from trader.trading.service import TradingService
 from trader.trading.store import MemoryTradingStore
+
+TEST_BOOK = "book:test"
 
 
 class FakeExchange:
@@ -69,8 +72,16 @@ def command(command_id="cmd-1", **overrides) -> PlaceOrderCommand:
         price=Decimal("100"),
         deployment_id="dep-1",
         decision_id="dec-1",
+        order_type="LIMIT",
+        book_id=TEST_BOOK,
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     values.update(overrides)
+    if "price_source" not in overrides:
+        values["price_source"] = (
+            "SIGNAL_LIMIT" if values.get("order_type") == "LIMIT" else "MARKET_REFERENCE_TICKER"
+        )
     return PlaceOrderCommand(**values)
 
 
@@ -91,6 +102,24 @@ def make_service(exchange=None, clock=None, store=None, policy=None):
     )
 
 
+async def fund_book(service, book_id: str, allocations: dict[str, Decimal]) -> None:
+    """Explicitly fund a test book from the account's UNALLOCATED bucket.
+
+    This is fixture setup through the same pure allocation rule; the durable
+    allocation command itself is covered by the phase 2 safety tests.
+    """
+    state = await service.store.read("acct")
+    existing = state.books.get(book_id)
+    if existing is not None and any(amount > 0 for amount in existing.balances.values()):
+        return
+    async with service.store.transaction("acct") as state:
+        book_ledger.migrate_book_ledger(state)
+        for asset, amount in allocations.items():
+            if amount <= 0:
+                continue
+            book_ledger.allocate(state, book_id, asset, amount)
+
+
 async def bootstrap(
     service,
     *,
@@ -103,14 +132,14 @@ async def bootstrap(
     open_orders=(),
     executions=(),
     marks=None,
+    book_id=TEST_BOOK,
 ):
+    balances = balances if balances is not None else {"USDT": Decimal("1000"), "BTC": Decimal("0")}
     snapshot = ReconcileSnapshot(
         account_id="acct",
         checked_at_ms=checked,
         generation=generation,
-        balances=(
-            balances if balances is not None else {"USDT": Decimal("1000"), "BTC": Decimal("0")}
-        ),
+        balances=balances,
         external_locked=external_locked or {},
         open_orders=list(open_orders),
         executions=list(executions),
@@ -118,7 +147,9 @@ async def bootstrap(
         complete=complete,
         stream_healthy=stream_healthy,
     )
-    return await service.recover(snapshot)
+    view = await service.recover(snapshot)
+    await fund_book(service, book_id, dict(balances))
+    return view
 
 
 @pytest.mark.asyncio

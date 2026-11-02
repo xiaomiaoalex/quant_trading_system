@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from trader.core.domain.models.order import OrderStatus
+from trader.core.domain.models.order import OrderStatus, OrderType
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import (
     InsufficientBalanceError,
@@ -41,6 +41,7 @@ def _signal(
     signal_type: SignalType = SignalType.BUY,
     quantity: Decimal = Decimal("0.01"),
     price: Decimal = Decimal("50000"),
+    order_type: OrderType | None = OrderType.MARKET,
 ) -> Signal:
     return Signal(
         strategy_name="test_strategy",
@@ -48,6 +49,7 @@ def _signal(
         symbol="BTCUSDT",
         quantity=quantity,
         price=price,
+        order_type=order_type,
     )
 
 
@@ -153,3 +155,109 @@ async def test_local_reservation_prevents_sequential_overcommit() -> None:
     stats = handler.get_dedup_stats()
     assert stats["order_submit_ok"] == 1
     assert stats["reject_reason_counts"]["INSUFFICIENT_BALANCE"] == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_oms_market_signal_with_nonzero_price_stays_market() -> None:
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+            {"asset": "BTC", "free": "1", "locked": "0"},
+        ]
+    )
+    broker.place_order.return_value = _submitted_order()
+    handler = OMSCallbackHandler(
+        broker=broker,
+        storage=ControlPlaneInMemoryStorage(),
+        live_trading_enabled=True,
+    )
+
+    await handler.execute_signal(
+        "test_strategy",
+        _signal(quantity=Decimal("0.001"), price=Decimal("50000")),
+    )
+
+    call = broker.place_order.await_args.kwargs
+    assert call["order_type"] is OrderType.MARKET
+    # The legacy broker receives the reference price for a MARKET BUY; it is
+    # not reinterpreted as a limit order.
+    assert call["price"] == Decimal("50000")
+
+
+@pytest.mark.asyncio
+async def test_legacy_oms_explicit_limit_signal_carries_the_declared_price() -> None:
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+            {"asset": "BTC", "free": "1", "locked": "0"},
+        ]
+    )
+    broker.place_order.return_value = _submitted_order()
+    handler = OMSCallbackHandler(
+        broker=broker,
+        storage=ControlPlaneInMemoryStorage(),
+        live_trading_enabled=True,
+    )
+
+    await handler.execute_signal(
+        "test_strategy",
+        _signal(
+            quantity=Decimal("0.001"),
+            price=Decimal("49000"),
+            order_type=OrderType.LIMIT,
+        ),
+    )
+
+    call = broker.place_order.await_args.kwargs
+    assert call["order_type"] is OrderType.LIMIT
+    assert call["price"] == Decimal("49000")
+
+
+@pytest.mark.asyncio
+async def test_legacy_oms_missing_order_type_is_refused_before_broker() -> None:
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+            {"asset": "BTC", "free": "1", "locked": "0"},
+        ]
+    )
+    handler = OMSCallbackHandler(
+        broker=broker,
+        storage=ControlPlaneInMemoryStorage(),
+        live_trading_enabled=True,
+    )
+
+    with pytest.raises(OMSCallbackError, match="ORDER_TYPE_REQUIRED"):
+        await handler.execute_signal(
+            "test_strategy",
+            _signal(quantity=Decimal("0.001"), price=Decimal("50000"), order_type=None),
+        )
+
+    broker.place_order.assert_not_awaited()
+    broker.get_symbol_step_size.assert_not_awaited()
+    assert handler.get_dedup_stats()["reject_reason_counts"]["ORDER_TYPE_REQUIRED"] == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_oms_unsupported_order_type_is_refused_before_broker() -> None:
+    broker = _broker_with_balances(
+        [
+            {"asset": "USDT", "free": "10000", "locked": "0"},
+            {"asset": "BTC", "free": "1", "locked": "0"},
+        ]
+    )
+    handler = OMSCallbackHandler(
+        broker=broker,
+        storage=ControlPlaneInMemoryStorage(),
+        live_trading_enabled=True,
+    )
+
+    with pytest.raises(OMSCallbackError, match="UNSUPPORTED_ORDER_TYPE"):
+        await handler.execute_signal(
+            "test_strategy",
+            _signal(quantity=Decimal("0.001"), price=Decimal("50000"), order_type="STOP"),  # type: ignore[arg-type]
+        )
+
+    broker.place_order.assert_not_awaited()
+    broker.get_symbol_step_size.assert_not_awaited()
+    assert handler.get_dedup_stats()["reject_reason_counts"]["UNSUPPORTED_ORDER_TYPE: 'STOP'"] == 1

@@ -2,7 +2,7 @@
 
 import pytest
 
-from trader.tests.test_trading_runtime import runtime, snapshot
+from trader.tests.test_trading_runtime import runtime, snapshot, start_runtime
 from trader.tests.test_trading_service import Clock, FakeExchange, bootstrap, command, make_service
 from trader.trading.models import NotReady
 from trader.trading.service import TradingService
@@ -29,7 +29,7 @@ async def test_deferred_cancel_all_remains_queued_and_runtime_finishes_children(
 @pytest.mark.asyncio
 async def test_running_runtime_drains_commands_accepted_by_independent_control_service():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     control = TradingService(rt.store, FakeExchange(), clock=Clock(), defer_send=True)
     try:
         receipt = await control.place(command())
@@ -51,7 +51,7 @@ async def test_remote_api_enqueues_without_exchange_access_and_requires_live_own
     )
 
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     valid = True
 
     async def lease_reader(scope):
@@ -77,7 +77,7 @@ async def test_remote_api_enqueues_without_exchange_access_and_requires_live_own
 @pytest.mark.asyncio
 async def test_durable_reconnect_request_runs_only_on_execution_process():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     calls = []
 
     async def reconnect():
@@ -209,7 +209,7 @@ async def test_retired_legacy_killswitch_write_is_rejected_before_any_effect(mon
 @pytest.mark.asyncio
 async def test_reconnect_blocks_orders_before_touching_connection_and_recovers_after_alignment():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     calls = []
 
     async def reconnect():

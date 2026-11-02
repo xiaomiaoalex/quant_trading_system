@@ -26,6 +26,7 @@ from trader.trading.jobs import (
 from trader.trading.models import NotReady
 from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
+from trader.trading.risk import risk_policy_from_env
 from trader.trading.service import TradingService
 
 
@@ -91,6 +92,23 @@ class QueuedTradingControl:
         if account_id != self.readiness.account_id:
             raise NotReady("EXECUTION_ACCOUNT_MISMATCH")
         return await self.service.cancel(command_id, account_id, cl_ord_id, actor=actor)
+
+    async def allocate(
+        self, command_id, account_id, book_id, asset, amount, actor="system", reason=""
+    ):
+        # Allocation is an accounting intent, not new risk: it may be queued
+        # while the account is blocked. Only the execution owner applies it.
+        if account_id != self.readiness.account_id:
+            raise NotReady("EXECUTION_ACCOUNT_MISMATCH")
+        return await self.service.allocate(
+            command_id,
+            account_id,
+            book_id,
+            asset,
+            amount,
+            actor=actor,
+            reason=reason,
+        )
 
     async def control(
         self, command_id, account_id, action, actor="system", *, code="", evidence=None
@@ -159,7 +177,11 @@ async def lifespan(app):
         await research.initialize()
         account_id = os.getenv("QTS_ACCOUNT_ID", "binance_spot")
         service = TradingService(
-            store, NoExchangeIO(), clock=lambda: int(time.time() * 1000), defer_send=True
+            store,
+            NoExchangeIO(),
+            policy=risk_policy_from_env(),
+            clock=lambda: int(time.time() * 1000),
+            defer_send=True,
         )
 
         async def lease_reader(scope):

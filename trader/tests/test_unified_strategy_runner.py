@@ -7,8 +7,9 @@ from decimal import Decimal
 import pytest
 
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
-from trader.tests.test_trading_runtime import runtime, snapshot
+from trader.tests.test_trading_runtime import runtime, snapshot, start_runtime
 from trader.trading.models import Conflict, Execution, NotReady
 from trader.trading.strategy import UnifiedStrategyRunner
 
@@ -28,7 +29,11 @@ class Plugin:
     async def on_market_data(self, data):
         self.calls += 1
         return Signal(
-            signal_type=self.side, symbol=data.symbol, price=data.price, quantity=self.qty
+            signal_type=self.side,
+            order_type=OrderType.MARKET,
+            symbol=data.symbol,
+            price=data.price,
+            quantity=self.qty,
         )
 
 
@@ -47,6 +52,7 @@ def runner(rt, plugin=None, warmup_events=0):
         deployment_id="deployment-1",
         plugin=plugin or Plugin(),
         instruments={"BTCUSDT": ("BTC", "USDT")},
+        book_id="book:test",
         warmup_events=warmup_events,
     )
 
@@ -54,7 +60,7 @@ def runner(rt, plugin=None, warmup_events=0):
 @pytest.mark.asyncio
 async def test_runner_buy_fill_sell_and_reentry_share_the_account_risk_and_inventory():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin()
     strategy = runner(rt, plugin)
     try:
@@ -102,7 +108,7 @@ async def test_runner_buy_fill_sell_and_reentry_share_the_account_risk_and_inven
 @pytest.mark.asyncio
 async def test_runner_retry_and_restart_reuse_event_command_without_rerunning_plugin():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(qty="0.123")
     strategy = runner(rt, plugin)
     try:
@@ -127,7 +133,7 @@ async def test_runner_retry_and_restart_reuse_event_command_without_rerunning_pl
 @pytest.mark.asyncio
 async def test_runner_never_invokes_plugin_before_account_recovery():
     rt = runtime(snap=None)
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin()
     try:
         with pytest.raises(NotReady):
@@ -142,7 +148,7 @@ async def test_runner_never_invokes_plugin_before_account_recovery():
 @pytest.mark.parametrize("side", [SignalType.SHORT, SignalType.CLOSE_SHORT])
 async def test_runner_rejects_short_intents_without_converting_to_sell(side):
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     try:
         with pytest.raises(ValueError, match="UNSUPPORTED_SPOT_INTENT"):
             await runner(rt, Plugin(side)).on_market_data(market(), event_id="short")
@@ -154,23 +160,43 @@ async def test_runner_rejects_short_intents_without_converting_to_sell(side):
 @pytest.mark.asyncio
 async def test_signal_retry_preserves_command_id_and_rejects_changed_quantity():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     strategy = runner(rt)
     try:
-        signal = Signal(signal_type=SignalType.BUY, symbol="BTCUSDT", quantity=Decimal("1"))
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
+            symbol="BTCUSDT",
+            quantity=Decimal("1"),
+        )
         first = await strategy.submit_signal(
-            signal, decision_id="decision-1", reference_price=Decimal("100")
+            signal,
+            decision_id="decision-1",
+            reference_price=Decimal("100"),
+            reference_price_source="MARKET_REFERENCE_TICKER",
+            reference_at_ms=1_000_000,
+            decision_at_ms=1_000_000,
         )
         signal.signal_id = "new-uuid-from-plugin-retry"
         second = await strategy.submit_signal(
-            signal, decision_id="decision-1", reference_price=Decimal("100")
+            signal,
+            decision_id="decision-1",
+            reference_price=Decimal("100"),
+            reference_price_source="MARKET_REFERENCE_TICKER",
+            reference_at_ms=1_000_000,
+            decision_at_ms=1_000_000,
         )
         assert first.command_id == second.command_id
         assert len(rt.exchange.placed) == 1
         signal.quantity = Decimal("2")
         with pytest.raises(Conflict):
             await strategy.submit_signal(
-                signal, decision_id="decision-1", reference_price=Decimal("100")
+                signal,
+                decision_id="decision-1",
+                reference_price=Decimal("100"),
+                reference_price_source="MARKET_REFERENCE_TICKER",
+                reference_at_ms=1_000_000,
+                decision_at_ms=1_000_000,
             )
     finally:
         await rt.stop()
@@ -179,13 +205,15 @@ async def test_signal_retry_preserves_command_id_and_rejects_changed_quantity():
 @pytest.mark.asyncio
 async def test_only_real_fill_creates_sellable_inventory_and_base_fees_reduce_it():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin()
     strategy = runner(rt, plugin)
     try:
         buy = await strategy.on_market_data(market(), event_id="buy")
         plugin.side = SignalType.SELL
-        with pytest.raises(ValueError, match="INSUFFICIENT_AVAILABLE_BALANCE"):
+        # Selling before the buy is filled is refused: the same book already
+        # has an opposite in-flight order, before any inventory exists.
+        with pytest.raises(ValueError, match="BOOK_OPPOSITE_ORDER_IN_FLIGHT"):
             await strategy.on_market_data(market(), event_id="sell-before-fill")
         await rt.service.record_execution(
             Execution(
@@ -213,7 +241,7 @@ async def test_only_real_fill_creates_sellable_inventory_and_base_fees_reduce_it
 @pytest.mark.asyncio
 async def test_warmup_observations_feed_the_plugin_without_trading():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True)
     strategy = runner(rt, plugin, warmup_events=2)
     rt.strategy_runner = strategy
@@ -235,7 +263,7 @@ async def test_warmup_observations_feed_the_plugin_without_trading():
 @pytest.mark.asyncio
 async def test_restart_starts_a_fresh_warmup_period():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     try:
         first = runner(rt, Plugin(stateful=True), warmup_events=1)
         assert await first.on_market_data(market(), event_id="before-restart") is None
@@ -256,7 +284,7 @@ async def test_restart_starts_a_fresh_warmup_period():
 @pytest.mark.asyncio
 async def test_warmup_never_bypasses_account_recovery():
     rt = runtime(snap=None)
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin()
     try:
         with pytest.raises(NotReady):
@@ -270,17 +298,25 @@ async def test_warmup_never_bypasses_account_recovery():
 @pytest.mark.asyncio
 async def test_strategy_rejects_conditional_or_unfinished_intents():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     strategy = runner(rt)
     try:
         signal = Signal(
             signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("1"),
             stop_loss=Decimal("90"),
         )
         with pytest.raises(ValueError, match="UNSUPPORTED_SPOT_CONDITIONS"):
-            await strategy.submit_signal(signal, decision_id="stop", reference_price=Decimal("100"))
+            await strategy.submit_signal(
+                signal,
+                decision_id="stop",
+                reference_price=Decimal("100"),
+                reference_price_source="MARKET_REFERENCE_TICKER",
+                reference_at_ms=1_000_000,
+                decision_at_ms=1_000_000,
+            )
         incomplete = market()
         incomplete.data_type = MarketDataType.KLINE
         incomplete.metadata["complete"] = False

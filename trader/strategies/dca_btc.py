@@ -15,6 +15,7 @@ from trader.core.application.strategy_protocol import (
     ValidationError,
     ValidationResult,
 )
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
 
 
@@ -112,6 +113,7 @@ class DcaBtcStrategy:
         return Signal(
             strategy_name=self.strategy_id,
             signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
             symbol=market_data.symbol,
             price=price,
             quantity=quantity,

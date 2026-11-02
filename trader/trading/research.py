@@ -15,6 +15,7 @@ from trader.core.application.strategy_protocol import MarketData, MarketDataType
 from trader.trading.backtest import EventBacktestRuntime, StrategySignal
 from trader.trading.datasets import decimal_text, digest, freeze_dataset
 from trader.trading.jobs import freeze_strategy
+from trader.trading.models import TradingError
 from trader.trading.version import SPOT_RUNTIME_VERSION
 
 
@@ -53,12 +54,17 @@ class PluginStrategyAdapter:
             return []
         signal_type = getattr(signal, "signal_type", None)
         side = getattr(signal_type, "value", str(signal_type))
+        order_type = getattr(signal, "order_type", None)
+        if order_type is None:
+            # The plugin declares the order type; the simulator never defaults
+            # it to a market order behind the plugin's back.
+            raise TradingError("ORDER_TYPE_REQUIRED")
         return [
             StrategySignal(
                 symbol=self.symbol,
                 side=str(side),
                 qty=Decimal(str(getattr(signal, "quantity", 0) or 0)),
-                order_type="MARKET",
+                order_type=str(getattr(order_type, "value", order_type)).upper(),
                 reason=str(getattr(signal, "reason", "") or ""),
             )
         ]

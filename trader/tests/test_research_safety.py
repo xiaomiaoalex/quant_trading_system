@@ -30,9 +30,9 @@ async def frozen_job(store, *, purpose="research_screening", strategy_version="1
 def test_sell_holds_are_partitioned_by_instrument():
     def strategy(context, bar):
         if context.bar_index == 0:
-            return [StrategySignal(bar["symbol"], "BUY", Decimal("1"))]
+            return [StrategySignal(bar["symbol"], "BUY", Decimal("1"), order_type="MARKET")]
         if context.bar_index == 1:
-            return [StrategySignal(bar["symbol"], "SELL", Decimal("1"))]
+            return [StrategySignal(bar["symbol"], "SELL", Decimal("1"), order_type="MARKET")]
         return []
 
     result = EventBacktestRuntime(
@@ -185,7 +185,11 @@ async def test_execution_error_disqualifies_admission_evidence(monkeypatch):
         async def on_market_data(self, market):
             self.count += 1
             if self.count == 1:
-                return SimpleNamespace(signal_type=SimpleNamespace(value="BUY"), quantity="60")
+                return SimpleNamespace(
+                    signal_type=SimpleNamespace(value="BUY"),
+                    order_type=SimpleNamespace(value="MARKET"),
+                    quantity="60",
+                )
             return None
 
     monkeypatch.setattr("trader.trading.research.load_plugin", lambda module, params: Plugin())

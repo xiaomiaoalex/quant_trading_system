@@ -23,6 +23,7 @@ import pytest
 
 from trader.core.application.ports import BrokerAccount
 from trader.core.application.strategy_protocol import MarketData, MarketDataType
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
 from trader.services.oms_callback import OMSCallbackHandler, create_oms_callback
 from trader.services.strategy_runner import StrategyRunner, StrategyStatus
@@ -74,6 +75,7 @@ class FakeStrategyPlugin:
             return Signal(
                 strategy_name=self.name,
                 signal_type=SignalType.LONG,
+                order_type=OrderType.MARKET,
                 symbol=data.symbol,
                 quantity=Decimal("0.001"),
                 price=data.price,
@@ -317,6 +319,7 @@ class TestOMSCallbackHandler:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("50000"),
@@ -339,6 +342,7 @@ class TestOMSCallbackHandler:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("50000"),
@@ -558,6 +562,7 @@ class TestOrderIdempotency:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("0"),  # Price=0 triggers MARKET order which fills immediately
@@ -579,6 +584,7 @@ class TestOrderIdempotency:
         signal2 = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("0"),
@@ -621,6 +627,7 @@ class TestOrderIdempotency:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("0"),  # No price = MARKET order
@@ -667,6 +674,7 @@ class TestLiveTradingDynamicCheck:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("50000"),
@@ -694,6 +702,7 @@ class TestLiveTradingDynamicCheck:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.001"),
             price=Decimal("50000"),
@@ -909,6 +918,7 @@ class TestMinNotionalDynamic:
         signal = Signal(
             strategy_name="test",
             signal_type=SignalType.LONG,
+            order_type=OrderType.MARKET,
             symbol="BTCUSDT",
             quantity=Decimal("0.00001"),
             price=Decimal("400"),

@@ -182,6 +182,8 @@ jobs:
           python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short
           python -m pytest -q trader/tests/test_trading_postgres.py --tb=short
           python -m pytest -q trader/tests/test_trading_projection_rebuild.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_independent_postgres.py --tb=short
           python -m pytest -q trader/tests/test_split_control_postgres.py --tb=short
           python -m pytest -q trader/tests/test_unified_strategy_postgres.py --tb=short
           python -m pytest -q trader/tests/test_research_postgres.py --tb=short
@@ -215,6 +217,13 @@ jobs:
           python -m pytest -q trader/tests/test_trading_evidence.py trader/tests/test_spot_snapshot_consistency.py --tb=short
           python -m pytest -q trader/tests/test_trading_runtime.py --tb=short
           python -m pytest -q trader/tests/test_trading_api.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_foundation_safety.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_independent_acceptance.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_review2_reproduction.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_round2_fixes.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_independent_review2_b1_b5.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_independent_round4.py --tb=short
+          python -m pytest -q trader/tests/test_phase2_round4_fixes.py --tb=short
           python -m pytest -q trader/tests/test_trading_ingress.py --tb=short
           python -m pytest -q trader/tests/test_spot_execution_adapter.py --tb=short
           python -m pytest -q trader/tests/test_runtime_entrypoint.py --tb=short

@@ -1,9 +1,21 @@
 """Pure spot admission rules; called inside the account's storage transaction."""
 
+import json
+import os
 from dataclasses import dataclass
-from decimal import Decimal, DecimalException
+from decimal import Decimal, DecimalException, InvalidOperation
+from typing import Mapping
 
-from trader.trading.models import AccountState, Hold, NotReady, PlaceOrderCommand, TradingError
+from trader.trading import books as book_ledger
+from trader.trading.models import (
+    TERMINAL,
+    AccountState,
+    Hold,
+    NotReady,
+    PlaceOrderCommand,
+    TradingError,
+)
+from trader.trading.order_spec import validate_order_command
 
 
 class RiskRejected(TradingError):
@@ -38,6 +50,31 @@ def available_balance(state: AccountState, asset: str) -> Decimal:
     return total - external - sum(holds, Decimal(0))
 
 
+def risk_policy_from_env(environ: Mapping[str, str] | None = None) -> RiskPolicy:
+    """The verifiable configuration path into the new stack's admission rules.
+
+    ``QTS_RISK_POLICY_JSON`` accepts only the explicit ``RiskPolicy`` fields;
+    unknown keys are refused by the shared pure core instead of being ignored.
+    The old ``RiskService`` persistence remains a legacy configuration API and
+    is never a second admission decision.
+    """
+    env = os.environ if environ is None else environ
+    raw = str(env.get("QTS_RISK_POLICY_JSON", "") or "").strip()
+    try:
+        config = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"QTS_RISK_POLICY_JSON is not valid JSON: {exc}") from exc
+    if not isinstance(config, dict):
+        raise ValueError("QTS_RISK_POLICY_JSON must be an object")
+    try:
+        fee_rate = Decimal(str(env.get("QTS_FEE_RATE", "0.001")))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError("QTS_FEE_RATE must be a decimal") from None
+    from trader.trading.core import policy_from_config
+
+    return policy_from_config(config, fee_rate)
+
+
 class SpotRiskEngine:
     def __init__(self, policy: RiskPolicy | None = None):
         self.policy = policy or RiskPolicy()
@@ -56,16 +93,17 @@ class SpotRiskEngine:
             raise NotReady("PRIVATE_STREAM_UNHEALTHY")
         if state.reconciliation.get("unresolved", []):
             raise NotReady("UNRESOLVED_ACCOUNT_DIFFERENCES")
+        book_reasons = book_ledger.book_reasons(state)
+        if book_reasons:
+            # An unattributed fact or an inconsistent book partition blocks new
+            # risk even before the evidence is persisted by a write transaction.
+            raise NotReady(book_reasons[0])
         if state.control.get("new_risk_blocked"):
             raise NotReady("NEW_RISK_BLOCKED")
-        if command.side not in ("BUY", "SELL"):
-            raise RiskRejected("UNSUPPORTED_SPOT_INTENT")
-        if (
-            not command.base_asset
-            or not command.quote_asset
-            or command.base_asset == command.quote_asset
-        ):
-            raise RiskRejected("INVALID_INSTRUMENT")
+        try:
+            validate_order_command(command)
+        except TradingError as exc:
+            raise RiskRejected(str(exc)) from None
         if (
             not command.qty.is_finite()
             or not command.price.is_finite()
@@ -73,21 +111,47 @@ class SpotRiskEngine:
             or command.price <= 0
         ):
             raise RiskRejected("INVALID_ORDER_AMOUNTS")
-        if command.order_type not in ("LIMIT", "MARKET"):
-            raise RiskRejected("UNSUPPORTED_ORDER_TYPE")
-        if command.order_type == "LIMIT" and command.time_in_force != "GTC":
-            raise RiskRejected("UNSUPPORTED_TIME_IN_FORCE")
         amount = command.qty
         asset = command.base_asset
         if command.side == "BUY":
             asset = command.quote_asset
             amount = command.qty * command.price * (Decimal(1) + self.policy.fee_rate)
+        book = self._book_for_command(state, command)
         if available_balance(state, asset) < amount:
             raise RiskRejected("INSUFFICIENT_AVAILABLE_BALANCE")
+        try:
+            book_available = book_ledger.book_available(book, asset)
+        except TradingError as exc:
+            raise NotReady("BOOK_LEDGER_INCONSISTENT") from exc
+        if book_available < amount:
+            raise RiskRejected("BOOK_INSUFFICIENT_AVAILABLE_BALANCE")
         if command.side == "BUY":
             self._check_valuation(state, command, now_ms)
             self._check_exposure(state, command, now_ms)
         return Hold(asset, amount)
+
+    def _book_for_command(self, state: AccountState, command: PlaceOrderCommand):
+        """Book existence and same-book opposite in-flight conflict come first."""
+        book = state.books.get(command.book_id)
+        if book is None:
+            raise RiskRejected("BOOK_NOT_FOUND")
+        for order in state.orders.values():
+            if order.command.book_id != command.book_id:
+                continue
+            if order.command.symbol != command.symbol or order.command.side == command.side:
+                continue
+            # Any non-terminal order is still in flight, even when its base
+            # request is fully covered: a quote-settled MARKET BUY may still
+            # spend the rest of its quote budget. A terminal order only stays
+            # active while a reservation remains.
+            active = (
+                order.status not in TERMINAL
+                or order.cl_ord_id in state.holds
+                or order.cl_ord_id in book.holds
+            )
+            if active:
+                raise RiskRejected("BOOK_OPPOSITE_ORDER_IN_FLIGHT")
+        return book
 
     def _check_valuation(self, state: AccountState, command: PlaceOrderCommand, now_ms: int):
         if not valuation_complete(state, now_ms, self.policy.max_mark_age_ms):

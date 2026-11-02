@@ -286,12 +286,15 @@ async def run():
             plugin = load_plugin(module, config)
             await plugin.initialize(config)
 
+        from trader.trading.risk import risk_policy_from_env
+
         runtime = build_runtime(
             store=PostgresTradingStore(pool),
             exchange=BinanceSpotExchangePort(broker),
             account_id=account_id,
             snapshot_provider=provider.build,
             clock=clock,
+            policy=risk_policy_from_env(),
             owner=os.getenv("QTS_RUNTIME_OWNER", f"{socket.gethostname()}:{os.getpid()}"),
             reconnect_callback=reconnect,
             reconcile_interval_seconds=float(os.getenv("QTS_RECONCILE_INTERVAL_SECONDS", "30")),

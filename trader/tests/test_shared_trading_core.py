@@ -18,7 +18,9 @@ from trader.trading.backtest import EventBacktestRuntime, StrategySignal
 def test_bar_executes_frozen_risk_policy_limits(config, reason):
     result = EventBacktestRuntime(
         datasets=[dataset()],
-        strategy=lambda context, bar: [StrategySignal("BTCUSDT", "BUY", Decimal("1"))],
+        strategy=lambda context, bar: [
+            StrategySignal("BTCUSDT", "BUY", Decimal("1"), order_type="MARKET")
+        ],
         config=config,
     ).run()
     assert result.fills == []
@@ -38,8 +40,8 @@ def test_pending_buy_consumes_the_shared_portfolio_limit():
     def strategy(context, bar):
         if context.bar_index == 0:
             return [
-                StrategySignal("BTCUSDT", "BUY", Decimal("1")),
-                StrategySignal("BTCUSDT", "BUY", Decimal("1")),
+                StrategySignal("BTCUSDT", "BUY", Decimal("1"), order_type="MARKET"),
+                StrategySignal("BTCUSDT", "BUY", Decimal("1"), order_type="MARKET"),
             ]
         return []
 
@@ -57,9 +59,9 @@ async def test_bar_and_live_have_identical_ledger_after_same_buy_and_sell():
 
     def strategy(context, bar):
         if context.bar_index == 0:
-            return [StrategySignal("BTCUSDT", "BUY", Decimal("1"))]
+            return [StrategySignal("BTCUSDT", "BUY", Decimal("1"), order_type="MARKET")]
         if context.bar_index == 1:
-            return [StrategySignal("BTCUSDT", "SELL", Decimal("1"))]
+            return [StrategySignal("BTCUSDT", "SELL", Decimal("1"), order_type="MARKET")]
         return []
 
     runtime = EventBacktestRuntime(
@@ -101,7 +103,7 @@ def test_shared_risk_uses_historical_event_clock_for_freshness(monkeypatch):
     monkeypatch.setattr("time.time", lambda: 9_999_999_999)
 
     def strategy(context, bar):
-        return [StrategySignal("BTCUSDT", "BUY", Decimal("1"))]
+        return [StrategySignal("BTCUSDT", "BUY", Decimal("1"), order_type="MARKET")]
 
     result = EventBacktestRuntime(
         datasets=[dataset()],
@@ -115,7 +117,7 @@ def test_shared_risk_uses_historical_event_clock_for_freshness(monkeypatch):
 def test_closed_positions_release_shared_limit_for_reentry():
     def strategy(context, bar):
         side = "SELL" if context.bar_index == 1 else "BUY"
-        return [StrategySignal("BTCUSDT", side, Decimal("1"))]
+        return [StrategySignal("BTCUSDT", side, Decimal("1"), order_type="MARKET")]
 
     result = EventBacktestRuntime(
         datasets=[dataset()], strategy=strategy, config={"max_gross_notional": "100"}
@@ -191,7 +193,7 @@ async def test_bar_price_change_and_sale_nav_match_live_replayed_fills():
     def strategy(context, bar):
         if context.bar_index in {0, 1}:
             side = "BUY" if context.bar_index == 0 else "SELL"
-            return [StrategySignal("BTCUSDT", side, Decimal("1"))]
+            return [StrategySignal("BTCUSDT", side, Decimal("1"), order_type="MARKET")]
         return []
 
     runtime = EventBacktestRuntime(

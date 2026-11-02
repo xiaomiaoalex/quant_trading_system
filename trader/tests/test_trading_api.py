@@ -75,6 +75,10 @@ def order_payload(**overrides):
         "qty": "1",
         "price": "100",
         "deployment_id": "dep-1",
+        "order_type": "LIMIT",
+        "book_id": "book:test",
+        "price_source": "MANUAL_LIMIT",
+        "price_at_ms": 1_000_000,
     }
     values.update(overrides)
     return values

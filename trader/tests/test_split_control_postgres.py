@@ -6,7 +6,7 @@ import pytest
 
 from trader.runtime.control_main import NoExchangeIO, QueuedTradingControl, RemoteTradingReadiness
 from trader.tests.test_trading_postgres import pg_store
-from trader.tests.test_trading_runtime import runtime, snapshot
+from trader.tests.test_trading_runtime import runtime, snapshot, start_runtime
 from trader.tests.test_trading_service import Clock, command
 from trader.trading.service import TradingService
 
@@ -16,7 +16,7 @@ async def test_postgres_control_queue_execution_shutdown_and_live_owner_gate():
     async with pg_store() as (store, pool):
         rt = runtime(store=store, snap=snapshot())
         rt.command_interval_seconds = 0
-        assert await rt.start()
+        assert await start_runtime(rt)
 
         async def lease_reader(scope):
             return await pool.fetchrow(

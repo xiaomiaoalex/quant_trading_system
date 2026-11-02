@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from trader.tests.test_trading_postgres import pg_store
-from trader.tests.test_trading_runtime import runtime, snapshot
+from trader.tests.test_trading_runtime import runtime, snapshot, start_runtime
 from trader.tests.test_trading_service import Clock
 from trader.tests.test_unified_strategy_runner import Plugin, market, runner
 from trader.trading.models import OrderObservation
@@ -16,7 +16,7 @@ async def test_strategy_accepted_event_survives_runtime_restart_without_resendin
     async with pg_store() as (store, _pool):
         clock = Clock(1_000_200)
         first = runtime(store, clock=clock, snap=snapshot())
-        assert await first.start()
+        assert await start_runtime(first)
         try:
             receipt = await runner(first).on_market_data(market(), event_id="durable-event")
             assert len(first.exchange.placed) == 1
@@ -37,7 +37,7 @@ async def test_strategy_accepted_event_survives_runtime_restart_without_resendin
                 ],
             ),
         )
-        assert await recovered.start()
+        assert await start_runtime(recovered)
         try:
             plugin = Plugin()
             duplicate = await runner(recovered, plugin).on_market_data(

@@ -359,6 +359,28 @@ class TradingRuntime:
         await self.require_ownership(account_id)
         return await self.service.cancel(command_id, account_id, cl_ord_id, actor=actor)
 
+    async def allocate(
+        self,
+        command_id: str,
+        account_id: str,
+        book_id: str,
+        asset: str,
+        amount,
+        actor: str = "system",
+        reason: str = "",
+    ) -> CommandReceipt:
+        """Explicit allocation is applied only by the execution owner."""
+        await self.require_ownership(account_id)
+        return await self.service.allocate(
+            command_id,
+            account_id,
+            book_id,
+            asset,
+            amount,
+            actor=actor,
+            reason=reason,
+        )
+
     async def control(
         self,
         command_id: str,

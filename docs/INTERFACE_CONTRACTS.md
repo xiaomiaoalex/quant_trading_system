@@ -2690,10 +2690,14 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 | `side` | `BUY` \| `SELL` | 现货方向；`SHORT` / `CLOSE_SHORT` 明确拒绝 |
 | `qty` | Decimal | 数量 |
 | `price` | Decimal | 限价或市价支付上界 |
-| `deployment_id` | str | 策略运行实例 |
-| `order_type` | `LIMIT` \| `MARKET` | GTC 限价 / 市价 |
-| `time_in_force` | str | 默认 `GTC` |
+| `deployment_id` | str | 策略运行实例（命令归属，不承担资产隔离） |
+| `order_type` | `LIMIT` \| `MARKET` | 必须显式；无隐式默认 |
+| `time_in_force` | str | 仅 `GTC` |
 | `decision_id` | str | 决策追踪 ID，不参与幂等参数 |
+| `book_id` | str | 稳定策略子账簿 `book:{strategy_id}`；参与经济幂等身份 |
+| `price_source` | str | 显式价格来源；参与经济幂等身份 |
+| `price_at_ms` | int | 价格观测/决策时点（毫秒，>=0）；审计字段，不参与幂等 |
+| `settlement` | str | 结算口径：`QUOTE`（市价买入按 `qty * price` 报价额度结算，交易所决定买到的 base 数量）/ `BASE`（按请求的 base 数量成交）；参与经济幂等身份 |
 
 - `cl_ord_id` 由 `(account_id, command_id)` 确定性派生，首次受理后固定。
 - 同 `command_id` 同经济参数返回原 `CommandReceipt`；同 ID 不同参数返回 `Conflict`。
@@ -2704,6 +2708,21 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 - `UNKNOWN_COMMAND` 按 `command_id` 定向解除（未决项带 `scope=command_id`）：只有该命令自身的订单被完整快照证明可见、或该命令自身的结果为 `ACCEPTED`/`REJECTED` 时才清除它的阻断；其他命令的成功/失败都不影响它。`UNKNOWN_COMMAND` 不接受操作员命令清除，只能由交易所证据解除。
 - `QUEUED` 表示 `SENDING` 未提交、网络调用确定未发生；恢复可发送一次。中断的 `CONTROL` 命令标为 `UNKNOWN` + `CONTROL_INTERRUPTED`，不自动继续。
 - 撤单 API 返回 `202 + CommandReceipt`；`CONFIRMED` 只表示交易所受理撤单请求，订单只有收到 `CANCELLED` observation 后才显示已撤销。
+- 新订单必须带显式 `book_id`、`order_type`、`price_source`、`price_at_ms`。`trader/trading/order_spec.py`
+  是策略侧唯一规格构造入口；API、回测和适配器复用同一 `PlaceOrderCommand` 校验（`validate_order_command`）。
+  `signal.metadata` 不再决定订单类型或价格来源。
+- 划拨命令 `ALLOCATE`：`command_id + (account_id, book_id, asset, amount, reason)` 幂等；Control 只落
+  `QUEUED`，Execution 在同一账户事务内应用；重复投递不会重复划拨，同 ID 不同金额返回 `Conflict`。
+- 经济幂等身份包含 `book_id`、`price_source` 与 `settlement`；`price_at_ms` 只作审计，重试允许相同价格的不同观测时点。
+- **唯一构造入口**：所有业务下单命令都由 `trader/trading/order_spec.py` 的 `build_order_spec()` /
+  `OrderSpec.to_command()` 构造。策略、Control API、回测共用同一工厂；生产代码里除
+  `store.decode_state()` 的持久化解码外，不得直接构造 `PlaceOrderCommand`。
+  交易所证据重建订单意图走 `order_spec.adopted_venue_command()`：book 与价格来源保持为空，
+  归属仍然未知，不得猜测。
+- **市价买入的结算口径**：报价结算（`QUOTE`）时交易所用 `qty * price` 的报价额度成交，
+  更好的成交价可以换回比 `qty` 更多的 base，因此 base 数量不再以 `qty` 为上界，
+  但报价支出（累计 `execution.qty * execution.price`）不得超过 `qty * price`。
+  `BASE` 口径（历史 bar 模拟器）仍以请求的 base 数量为上界。LIMIT 订单的边界完全不变。
 
 ### 13.2 事实与账务
 
@@ -2721,6 +2740,33 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 - 同键同内容重复成交是 no-op；同键不同内容是 `EXECUTION_KEY_CONFLICT`，成交数量越界是 `EXECUTION_QUANTITY_CONFLICT`；两者都保存证据并阻断新增风险。
 - 卖出可预约资产 = 已核对资产 − 外部锁定 − 本系统全部 hold；交易所 `locked` 不得再次扣减。
 - 费用以 `fee_asset` 原币种记账；缺少 `fee_asset` 的非零费用必须拒绝。
+- `AccountState.books` 是账户内的稳定分区：`UNALLOCATED` + `book:{strategy_id}`。对每个资产，
+  `account_total == UNALLOCATED + Σ books` 必须在每次提交时成立；`core.assert_book_conservation`
+  在事务内校验，失败即整体回滚。
+- 同一订单的账户层 `state.holds[cl_ord_id]` 与 book 层 `books[book_id].holds[cl_ord_id]` 在同一事务内创建、
+  按成交比例释放、在撤单/拒绝/终态时一起释放；任一层失败都回滚整个账户事务。
+- 归属不明的成交/订单不猜测策略：事实按 `UNALLOCATED` 记账以保持守恒，同时持久化
+  `BOOK_ATTRIBUTION_UNKNOWN` 未决项并阻断新增风险；只有带逐单证据的 `RESOLVE` 才能解除。
+- 报价结算的市价买入按累计报价支出记账：超出 `qty * price` 的成交被拒
+  （`Execution exceeds the market quote budget`），不会静默多记账。
+- **成交释放两层预约的真实口径**：BUY 每笔释放
+  `execution.qty * execution.price`，仅当 `execution.fee_asset == command.quote_asset` 时再加
+  `execution.fee`。admission 的 `fee_rate` 只是预约缓冲，不是实际成交费；BASE/第三币种手续费
+  已在各自币种入账，不释放 quote hold。零费部分成交不得凭空消耗缓冲；账户层与 book 层完全同步。
+- **终态清理覆盖两层**：终态观察、拒绝与剩余释放都按预约归属解析 book 层；迁移订单与
+  仍无归属的订单，其镜像预约在 `UNALLOCATED` 上，必须与账户层一起释放，否则资金会被永久
+  搁浅（`UNALLOCATED` 可用额度被幽灵预约占用）。
+- **quote-settled MARKET BUY 的完成判据**：`booked_qty == command.qty` 不构成 FILLED，
+  也不触发提前清理剩余预约；该订单在**报价预算耗尽**（`booked_quote >= qty * price`，交易所已无预算可花）
+  或交易所终态观察（`FILLED` / `CANCELLED` / `REJECTED` 等）之前保持 PARTIALLY_FILLED，
+  并保留真实剩余 quote 预算与配置缓冲。终态清理只释放真实剩余，不以请求 base 数量为完成目标。
+  LIMIT 与 BASE-settled 的完全成交语义不变。
+- 同一 book 同 symbol 存在**任何未终结订单**时，新的反向命令先拒绝
+  `BOOK_OPPOSITE_ORDER_IN_FLIGHT`；报价结算的市价买入即使 base 已被超额覆盖，
+  在交易所报告终态前仍属于未终结订单。终态订单只有在仍有预约时才继续阻断。
+- 旧快照迁移时，归属仍属 `UNALLOCATED` 的账户层预约在 `UNALLOCATED` 账簿上**镜像**同一经济预约：
+  这是同一笔预留的两层视图，不是第二次资产占用；`book_available` 因此反映真实可用额度。
+  已有策略 book 的预约若缺失，属于缺陷，不会被迁移静默修复。
 
 ### 13.3 交易所端口
 
@@ -2758,6 +2804,8 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 | `POST` | `/v1/trading/orders` | 下单/策略重试；`202 + CommandReceipt` |
 | `POST` | `/v1/trading/orders/{cl_ord_id}/cancel` | 撤单；`202 + CommandReceipt` |
 | `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` / `RECONNECT` / `RESOLVE` |
+| `POST` | `/v1/trading/allocations` | 显式 book 划拨命令（`ALLOCATE`）；`202 + CommandReceipt` |
+| `GET` | `/v1/trading/books?account_id=` | 逐 book 余额、持仓、预约、可用预算、权益与估值完整性 |
 | `GET` | `/v1/commands/{command_id}?account_id=` | 查询命令持久状态 |
 | `GET` | `/v1/trading/orders/{cl_ord_id}?account_id=` | 查询订单与剩余数量 |
 | `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView`，含 `venue_balances` 与 `balance_differences` |
@@ -2779,6 +2827,8 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - `/health/live`、`/health/ready`、`/health/trading` 分别表示进程存活、API 可服务、交易就绪；交易未就绪返回 `503 + reasons`。
 - `CANCEL_ALL` 必须为每个活动订单调用同一 `cancel()` 执行入口，子命令 ID 为 `{control_command_id}:{cl_ord_id}`；任一子撤单 `UNKNOWN` 时控制命令保持 `UNKNOWN`，不得显示全部已撤销。
 - `BLOCK_NEW_RISK` 只阻断新增风险，查询和撤单仍可用；`RESUME_NEW_RISK` 解除人工阻断，但不能覆盖对账、余额或未知订单差异。
+- `ALLOCATE` 与 `RESOLVE` 都是持久命令：控制面只做结构检查并落 `QUEUED`，执行面在账户事务中校验余额/证据后应用。
+  划拨不改变账户总额，未划拨资产始终保留在 `UNALLOCATED`。
 
 ### 13.6 运行拓扑
 
@@ -2794,6 +2844,9 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 明确前不得确认父命令；恢复不会把 `QUEUED` 控制动作当作未知发送。
 控制面使用 PG 有效租约 owner/token 与账户 `control.runtime` 元数据交叉验证就绪，
 恢复未完成、所有者未对齐或租约无效时新增风险返回 503。
+新栈准入风控只有 `SpotRiskEngine`；执行进程通过 `risk.risk_policy_from_env()` 读取
+`QTS_RISK_POLICY_JSON`（仅 `RiskPolicy` 字段，未知字段拒绝）与 `QTS_FEE_RATE`。
+旧 `RiskService` 只是遗留配置/持久化 API，不构成第二套订单准入。
 旧 `trader.api.main` 在退休生命周期期间拒绝 `/v1/killswitch` 写操作，返回
 `503 LEGACY_EXECUTION_RETIRED` 且不进入旧控制副作用或投影撤单；GET 查询保留。
 独立入口强制会话鉴权，缺密码配置 fail-closed；缺 private WS 覆盖证明时真实执行入口
@@ -2958,9 +3011,11 @@ warmup_source=None, on_block=None)`
 - 进程间只通过 PostgreSQL 协调；不引入消息中间件。
 - 覆盖范围与既有 13.6 运行拓扑一致；本节只把"谁持有凭据、谁能写事实"写成可判定条目。
 
-### 13.9 `book_id` 策略子账本数据契约（阶段 2 落地；阶段 0 只冻结）
+### 13.9 `book_id` 策略子账本数据契约（阶段 2 已实现）
 
-本节只冻结契约，**本阶段不建表、不实现多策略、不写迁移脚本**。
+> 2026-11-02：阶段 2 已按本节契约实现（`AccountState.books`、双层预约、`ALLOCATE` 命令、
+> `BOOK_ATTRIBUTION_UNKNOWN`、逐 book 查询）。以下冻结定义保持不变，实现细节与证据见 13.12；
+> 历史“阶段 0 只冻结”的描述仅作基线记录。
 
 **标识**
 
@@ -2984,9 +3039,17 @@ warmup_source=None, on_block=None)`
 - 无法明确归属到某个 `book_id` 的成交 / 余额差异：记入未决原因码并**阻断**新增风险。
   **不得猜测历史归属**，不得按 symbol、比例、时间顺序等启发式规则分摊。
 
+**划拨**
+
+- 显式划拨在余额不足时被拒绝（`ALLOCATION_INSUFFICIENT_UNALLOCATED`），账户总额与任何
+  book 余额都不变。目标 book 的可见性按路径区分：直接（非 deferred）划拨在转账前登记目标 book，
+  失败后空 book 可观察；Control 排队阶段不登记 book；Execution 处理失败时命令置 `FAILED`
+  并写 `book.allocation_failed`。
+
 **迁移**
 
-- 迁移**不猜测历史归属**：存量资产一律留在 `UNALLOCATED`，直到人工显式划拨。
+- 迁移**不猜测历史归属**：存量资产一律留在 `UNALLOCATED`，直到人工显式划拨；
+  归属仍在未分配账簿的存量预约也在该账簿上镜像，策略 book 的预约缺失不会被迁移修复。
 - 迁移**不清库、不改写历史**：既有 `trading_accounts` 快照、`trading_ledger`、`trading_events`
   原样保留；`book_id` 以新增字段 / 新增投影方式落地。
 
@@ -3023,6 +3086,109 @@ warmup_source=None, on_block=None)`
 
 约束：以上调整不引入新表、不改订单规格、不改部署拓扑；`UNKNOWN` 命令仍不自动重发；
 操作员命令不能指定任何金额，调整额只能由 Execution 依据自身观测到的差异计算。
+
+### 13.12 阶段 2 实现与验收证据（2026-11-02）
+
+**统一订单规格（2.1–2.3）**
+
+- `trader/trading/order_spec.py` 是策略侧唯一规格入口：`build_order_spec()` 从
+  `Signal.order_type`、`Signal.price`、参考价、参考来源和时点构造 `OrderSpec`；
+  `OrderSpec.to_command()` 生成 `PlaceOrderCommand`。`validate_order_command()` 同时用于
+  service 准入与 Binance adapter，未知/缺失规格在本地拒绝，不静默换类型。
+- `Signal` 新增显式 `order_type` / `time_in_force`；`signal.metadata` 不再读取订单类型或价格来源。
+  内置策略显式声明 `OrderType.MARKET`。
+- 价格来源枚举：`SIGNAL_LIMIT`、`MANUAL_LIMIT`、`MARKET_REFERENCE_TICKER`、
+  `MARKET_REFERENCE_CLOSED_BAR`、`MANUAL_REFERENCE`、`BACKTEST_CLOSED_BAR`。
+  LIMIT 保留信号价；MARKET 使用参考价并把来源/时点写入命令、`order.queued` 事件和订单查询。
+  当前生产 ticker 输入如实标记为 `MARKET_REFERENCE_TICKER`，不伪称已收盘 bar；阶段 3 才替换输入。
+
+**book 子账簿（2.4–2.10）**
+
+- `trader/trading/books.py` 定义 `UNALLOCATED`、`book:{strategy_id}`、`BookLedger` 与
+  `AccountState.books`。`book_id` 稳定于部署/重启/回测，`deployment_id` 只保留命令归属语义。
+- 每次写事务校验逐资产守恒 `account_total == UNALLOCATED + Σ books`；失败关闭并回滚。
+- 新订单在同一账户事务创建账户层与 book 层预约；成交按数量比例释放两层；撤单/拒绝/终态释放剩余预约。
+- 同一 book 同 symbol 的未终结反向订单先拒绝 `BOOK_OPPOSITE_ORDER_IN_FLIGHT`；不排队、不净额。
+  book 可用资产只来自自身余额减自身预约，账户余额不足或 book 预算不足分别返回
+  `INSUFFICIENT_AVAILABLE_BALANCE` / `BOOK_INSUFFICIENT_AVAILABLE_BALANCE`。
+- `ALLOCATE` 命令通过 Control→PostgreSQL→Execution 执行，幂等且只能从 `UNALLOCATED` 划入
+  `book:{strategy_id}`；`GET /v1/trading/books` 返回每 book 的权益/预算，供阶段 4 使用。
+- 归属不明的订单/成交：事实按 `UNALLOCATED` 记账（守恒），同时持久化
+  `BOOK_ATTRIBUTION_UNKNOWN` 未决项并阻断新增风险；`RESOLVE` 要求逐单证据且只接受已完全成交、
+  无剩余预约的订单，防止迟到成交使归属失效。旧无 scope `UNKNOWN_COMMAND` 仅在能证明
+  `command_id` 归属时迁移，否则保留 `LEGACY_UNKNOWN_COMMAND_UNATTRIBUTED` 阻断。
+
+**迁移（2.12）**
+
+- `store.decode_state()` 对缺失 `books` 的旧快照把既有 `balances`/`positions` 全量放入
+  `UNALLOCATED`，并标记既有在途订单为归属不明；不猜测策略、不清库、不改写
+  `trading_ledger` / `trading_events` / 既有订单意图。完整操作步骤见
+  `docs/PHASE2_BOOK_LEDGER_MIGRATION.md`。
+- 重复解码/事务迁移幂等；真实 PG 用例验证旧行保持、重启后 book 与权益查询一致。
+
+**风险配置（L9 / 2.9）**
+
+- `risk.risk_policy_from_env()` 从 `QTS_RISK_POLICY_JSON` 读取 `RiskPolicy` 字段，
+  `QTS_FEE_RATE` 提供费率；未知字段/非法值拒绝。Control 与 Execution 都使用该显式配置；
+  Execution 在 `resume_queued` 发送 QUEUED PLACE 前用自身 policy 复检（临时移除该订单自身预约）：
+  `RiskRejected` 标记命令 FAILED、订单 REJECTED 且释放两层预约；`NotReady` 保持 QUEUED 等待重试。
+  旧 `RiskService` 不再参与新栈准入判断。
+
+**验收证据**
+
+| 验收 | 主要证据 |
+|---|---|
+| 2.1 / 2.2 | `test_phase2_foundation_safety.py::test_strategy_order_type_comes_from_the_signal_field_not_metadata`、`test_limit_and_market_specs_are_explicit_auditable_and_idempotent`、`test_adapter_refuses_an_unsupported_spec_before_any_venue_io` |
+| 2.3 | `test_market_reference_price_source_and_time_are_recorded`、`test_closed_bar_reference_is_labelled_as_a_closed_bar_not_a_ticker` |
+| 2.4 | `test_book_id_is_stable_across_service_restart_and_queried_per_book`、`test_deployment_id_never_becomes_a_book_key...`、`test_phase2_postgres.py::test_postgres_books_allocation_and_order_survive_restart` |
+| 2.5 | `test_every_commit_keeps_account_total_equal_to_book_partitions`、PG 原子回滚用例 |
+| 2.6 | `test_allocation_is_a_durable_idempotent_control_to_execution_command`、`test_allocation_rejects_invalid_or_insufficient_requests...`、`test_concurrent_allocations...`、API 用例 |
+| 2.7 | `test_account_and_book_holds_are_created_and_released_together`、`test_book_hold_failure_rolls_back...`、`test_execution_book_write_failure_rolls_back...`、PG 双层回滚用例 |
+| 2.8 | `test_same_book_opposite_in_flight_order_is_refused_without_new_risk`、`test_sell_first_then_buy_on_the_same_book_is_refused`、`test_risk_engine_treats_an_unknown_order_hold...` |
+| 2.9 | `test_account_balance_alone_cannot_fund_a_book_and_vice_versa`、`test_risk_policy_configuration_refuses_unknown_or_invalid_fields`、`test_execution_owner_rechecks_a_queued_order_against_its_own_limits` |
+| 2.10 | `test_legacy_fill_without_a_book_is_recorded_in_unallocated_and_blocks`、`test_cancelled_partial_legacy_order...`、`test_legacy_unknown_command_is_migrated_only_when_its_owner_is_provable`、PG 归属证据用例 |
+| 2.11 | `test_order_status_advances_monotonically...`、`test_stale_observation_cannot_regress_status_and_terminal_is_final`、阶段 0/1 安全回归 |
+| 2.12 | `test_legacy_snapshot_migration_preserves_facts_and_is_idempotent`、`test_postgres_legacy_state_migrates_without_rewriting_history`、PG 投影重建后 book 查询一致、迁移 runbook |
+
+### 13.13 阶段 2 第 2 轮审核修复（2026-11-02）
+
+第 2 轮独立审核（report `phase2-review-round2-ec1f5c75`）判定 overall=fail，2.1–2.12 的
+实现判据均通过，但指出了 4 项必须修复的缺陷。本节记录修复后的契约收敛与证据。
+
+| # | 缺陷 | 修复后的契约 | 证据 |
+|---|---|---|---|
+| B1 | `backtest.py` 与 `api/routes/trading.py` 仍直接构造 `PlaceOrderCommand`，策略才是唯一规格入口 | 所有业务命令经 `order_spec.build_order_spec()` / `OrderSpec.to_command()` 构造；`StrategySignal.order_type` 改为必填，`metadata` 不再提供任何默认 | `test_phase2_round2_fixes.py::test_production_code_never_builds_a_place_order_command_outside_the_factory`、`::test_api_and_backtest_build_their_command_through_the_factory`、`::test_a_simulated_signal_must_state_its_order_type` |
+| B2 | 市价买入按报价结算，交易所可换回多于 `qty` 的 base，但 `OrderAggregate.apply/observe` 仍以 `qty` 为上界 | 报价结算（`settlement=QUOTE`）时 base 数量上界改为报价预算 `qty * price`，超出即拒（`Execution exceeds the market quote budget`）；`BASE` 口径与 LIMIT 边界不变 | `test_phase2_review2_reproduction.py::test_b2_market_buy_overfill_must_be_booked_not_conflicted`、`::test_b2_market_filled_observation_may_exceed_order_qty`、`test_phase2_round2_fixes.py::test_market_buy_may_overfill_base_inside_the_quote_budget`、`::test_market_buy_may_not_spend_more_than_the_quote_budget`、`::test_limit_orders_keep_the_exact_base_boundary`、`::test_a_quote_settled_market_buy_stays_in_flight_for_opposite_orders` |
+| B4 | 旧快照迁移只复制余额/持仓，账户层预约没有进入 `UNALLOCATED`，划拨可以动用已预留资金 | 归属仍在 `UNALLOCATED` 的存量预约在 `UNALLOCATED` 账簿上镜像同一经济预约（不是第二次占用）；`book_available` 真实；策略 book 的预约缺失属缺陷、不被迁移修复 | `test_phase2_review2_reproduction.py::test_b4_migration_mirrors_legacy_hold_into_unallocated`、`::test_b4_allocation_cannot_spend_reserved_unallocated_funds`、`test_phase2_round2_fixes.py::test_a_legacy_hold_is_mirrored_into_unallocated_only`、`::test_the_migration_mirror_is_idempotent_and_never_invents_a_strategy_book` |
+| B5 | 回测固定使用 `book:backtest`，结果没有逐 book 输出 | `EventBacktestRuntime` 支持显式 `strategy_books`（`strategy_id -> book:{strategy_id}`）与显式 `initial_allocations`；每个信号按 `strategy_id` 路由到自己的 book；`BacktestResult.books` 复用 `books.book_snapshot` 输出逐 book 余额/持仓/预约/可用预算/权益；两个 `strategy_id` 映射到同一 book 时在建立账户/划拨前拒绝（`ValueError`，信息含 book id），不合并预算 | `test_phase2_round2_fixes.py::test_a_joint_backtest_reports_every_book_equity_and_budget`、`::test_a_joint_backtest_keeps_each_strategy_inside_its_own_budget`、`::test_a_joint_backtest_requires_explicit_allocations_and_explicit_strategy_books`、`::test_a_joint_backtest_refuses_a_signal_without_a_resolvable_book`、`::test_the_single_strategy_backtest_path_still_runs_and_reports_its_book` |
+
+联合回测配置校验：`strategy_books` 的每个值必须唯一；重复映射在解析阶段拒绝
+（`ValueError`，信息含 book id），此时尚未创建账户、未划拨、未产生事件。单策略无
+`strategy_id` 的兼容路径不受影响；合法的 `alpha`/`beta` 映射与既有 `manifest_hash` 语义不变。
+该补丁的工程师自测见 `test_phase2_round2_fixes.py`；独立复验由测试员/父 Agent 重新执行，
+本节不宣称整体通过。
+
+未改动的守卫：第 2 轮审核提到的 B3（终态 MARKET 成交释放两层预约）由独立测试证明无缺陷，
+本轮未修改该路径，未改变任何独立测试的断言。唯一的独立测试文件改动是
+`test_phase2_review2_reproduction.py` 的 import 顺序（isort）：该文件在本轮之前就已被
+`artifacts/foundation/phase2/repro2-isort-1.log` 记录为 isort 失败，排序修正不改变任何
+用例、断言或预期值。
+
+
+### 13.14 阶段 2 第 4 轮修复（R3-B2-HOLDRELEASE / R3-B1-FIRETEST）
+
+第 3 轮审核（`phase2-review-round3-26e58df`）指出两项生产缺陷；本轮按父 Agent 工作单修复，
+不改变阶段 2 的其它契约，也不宣称整体通过。
+
+| # | 缺陷 | 修复后的契约 | 工程师证据 |
+|---|---|---|---|
+| R4-F1 | 迁移/无归属订单终态只清账户层，UNALLOCATED 镜像预约永久滞留 | 终态释放按预约归属解析 book 层（`execution_book_id`）：无策略 book 的订单在 `UNALLOCATED` 上的镜像预约与账户层一起释放，资金不再搁浅；归属阻断语义保持不变 | `trader/tests/test_phase2_round4_fixes.py::test_a_legacy_terminal_order_releases_the_mirrored_unallocated_hold` |
+| R3-B2 | BUY 部分成交用 `command.price * (1 + fee_rate)` 估算释放，零费成交也会消耗缓冲；quote-settled MARKET BUY 在 `booked_qty == qty` 时被本地判为完成并清掉真实剩余预算 | 释放 = 实际 `qty * execution.price` + 仅 quote 币种的实际 fee；admission `fee_rate` 仅为缓冲；BASE/第三币种费不释放 quote。quote-settled MARKET BUY 在报价预算耗尽或终态观察/显式终态事实时完成，终态清理释放真实剩余；LIMIT/BASE 完全成交语义不变 | `trader/tests/test_phase2_round4_fixes.py`（真实成交释放、零费缓冲、quote/base/第三币种费、同 book 预算不被早释放侵占、多笔累计与重放、终态清理、LIMIT/BASE 边界）；工程师自有 round2 测试同步修正为合同手算值 |
+| R3-B1 | 内置 `fire_test` 未声明 `order_type`；`Signal.to_order_params` 硬编码 MARKET；旧 OMS `execute_signal` 按 `signal.price > 0` 猜 LIMIT | `fire_test` 显式 `OrderType.MARKET`（非零 price 仅参考价）；`to_order_params` 使用显式 `order_type`，缺失/非法 fail-closed，LIMIT 携带声明价、MARKET 不伪造限价；旧 OMS 在 broker/经济副作用前校验并使用显式 `order_type`，缺失 → `OMSCallbackError("ORDER_TYPE_REQUIRED")`，不支持 → `UNSUPPORTED_ORDER_TYPE`，不再按价格猜类型；不改旧 OMS 到新服务的接线与部署拓扑 | `test_phase2_round4_fixes.py`（fire_test、全部内置策略、to_order_params）；`test_builtin_strategies.py`；`test_oms_pretrade_balance.py`（MARKET 非零参考价、显式 LIMIT、缺失/非法零 broker 调用） |
+
+独立测试的旧 hold 常量需由测试员按本契约重算（例如 1@90 零费部分成交后两层应保留真实剩余，
+而不是清空；部分成交的 50.05 旧值应按实际成交价重算）。工程师未修改任何独立测试资产。
+
 
 ---
 ## 15. 测试隔离与本地 Postgres

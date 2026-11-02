@@ -5,7 +5,19 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from decimal import Decimal
 
-from .models import AccountState, CommandRecord, Hold, OrderAggregate, PlaceOrderCommand
+from .books import migrate_book_ledger
+from .models import AccountState, BookLedger, CommandRecord, Hold, OrderAggregate, PlaceOrderCommand
+
+
+def _decode_book(book_id: str, value: dict) -> BookLedger:
+    return BookLedger(
+        book_id=book_id,
+        balances={k: Decimal(v) for k, v in (value.get("balances") or {}).items()},
+        positions={k: Decimal(v) for k, v in (value.get("positions") or {}).items()},
+        holds={
+            k: Hold(v["asset"], Decimal(v["amount"])) for k, v in (value.get("holds") or {}).items()
+        },
+    )
 
 
 def decode_state(data: dict) -> AccountState:
@@ -28,6 +40,10 @@ def decode_state(data: dict) -> AccountState:
         k: Hold(v["asset"], Decimal(v["amount"])) for k, v in data.get("holds", {}).items()
     }
     state.commands = {k: CommandRecord(**v) for k, v in data.get("commands", {}).items()}
+    state.books = {
+        book_id: _decode_book(book_id, value)
+        for book_id, value in (data.get("books") or {}).items()
+    }
     for key, value in data.get("orders", {}).items():
         fields = dict(value)
         command = dict(fields.pop("command"))
@@ -35,6 +51,9 @@ def decode_state(data: dict) -> AccountState:
         for name in ("booked_qty", "booked_quote", "observed_qty"):
             fields[name] = Decimal(fields[name])
         state.orders[key] = OrderAggregate(command=PlaceOrderCommand(**command), **fields)
+    # A snapshot written before the book contract keeps every existing balance
+    # in UNALLOCATED; migration never invents a strategy attribution.
+    migrate_book_ledger(state)
     return state
 
 

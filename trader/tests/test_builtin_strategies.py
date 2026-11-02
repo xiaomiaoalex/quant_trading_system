@@ -13,6 +13,7 @@ from trader.core.application.strategy_protocol import (
     MarketDataType,
     validate_strategy_plugin,
 )
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import SignalType
 from trader.services.strategy_runner import StrategyRunner, StrategyStatus
 
@@ -157,9 +158,12 @@ async def test_fire_test_alternates_and_respects_interval_and_max_signals() -> N
     exceeded = await plugin.on_market_data(_market_data("104", start + timedelta(seconds=30)))
 
     assert first is not None and first.signal_type == SignalType.BUY
+    assert first.order_type is OrderType.MARKET
     assert too_early is None
     assert second is not None and second.signal_type == SignalType.SELL
+    assert second.order_type is OrderType.MARKET
     assert third is not None and third.signal_type == SignalType.BUY
+    assert third.order_type is OrderType.MARKET
     assert exceeded is None
 
 

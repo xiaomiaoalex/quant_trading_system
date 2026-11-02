@@ -30,9 +30,21 @@ class OrderStatus(str, Enum):
 
 TERMINAL = {"FILLED", "CANCELLED", "EXPIRED", "REJECTED"}
 
+# Venue settlement semantics of an order.
+SETTLEMENT_QUOTE = "QUOTE"
+SETTLEMENT_BASE = "BASE"
+SETTLEMENTS = {SETTLEMENT_QUOTE, SETTLEMENT_BASE}
+
 
 @dataclass(frozen=True)
 class PlaceOrderCommand:
+    """The single order specification consumed by every admission boundary.
+
+    ``book_id`` is the stable strategy sub-ledger key. ``price_source`` names
+    where the economic price came from and ``price_at_ms`` records when that
+    price was observed; neither is a free-form exchange parameter.
+    """
+
     command_id: str
     account_id: str
     symbol: str
@@ -42,9 +54,18 @@ class PlaceOrderCommand:
     qty: Decimal
     price: Decimal
     deployment_id: str = "manual"
-    order_type: str = "LIMIT"
+    order_type: str = ""
     time_in_force: str = "GTC"
     decision_id: str = ""
+    book_id: str = ""
+    price_source: str = ""
+    price_at_ms: int = -1
+    # How the venue settles this order:
+    #   QUOTE - a market buy spends ``qty * price`` of quote and the venue
+    #           chooses the base quantity it buys with that quote;
+    #   BASE  - the venue fills exactly the requested base quantity at its
+    #           own price (the historical bar simulator).
+    settlement: str = "QUOTE"
 
 
 @dataclass(frozen=True)
@@ -203,6 +224,45 @@ class AccountRiskView:
         return self.status == "READY" and not self.reasons
 
 
+# Business-order status advances through one monotonic entry. Non-terminal
+# statuses only move forward; a terminal status is final. A venue observation
+# that arrives late (older timestamp or smaller cumulative quantity) is ignored
+# before it reaches this table.
+_STATUS_RANK = {
+    "PENDING_ACCEPTANCE": 0,
+    "OPEN": 1,
+    "PARTIALLY_FILLED": 2,
+    "FILLED": 3,
+    "CANCELLED": 3,
+    "EXPIRED": 3,
+    "REJECTED": 3,
+}
+
+
+def advance_order_status(order: "OrderAggregate", status: str) -> bool:
+    """The only transition entry for an order's business status.
+
+    Returns True when the status changed, False for an idempotent or stale
+    observation. Conflicting terminal states raise ``Conflict`` instead of
+    silently picking one.
+    """
+    target = OrderStatus(status).value
+    current = order.status
+    if target == current:
+        return False
+    if current in TERMINAL:
+        if target in TERMINAL:
+            raise Conflict("Conflicting terminal order observations")
+        return False
+    if target in TERMINAL:
+        order.status = target
+        return True
+    if _STATUS_RANK[target] < _STATUS_RANK[current]:
+        return False
+    order.status = target
+    return True
+
+
 @dataclass
 class OrderAggregate:
     cl_ord_id: str
@@ -216,11 +276,39 @@ class OrderAggregate:
 
     @property
     def remaining_qty(self) -> Decimal:
-        return self.command.qty - self.booked_qty
+        """Base quantity still requested.
+
+        A quote-settled MARKET BUY may be filled with more base than requested;
+        the residual request is then zero, never negative.
+        """
+        residual = self.command.qty - self.booked_qty
+        return residual if residual > 0 else Decimal(0)
+
+    def is_quote_settled_market_buy(self) -> bool:
+        """A quote-settled MARKET BUY.
+
+        The live adapter sends ``quoteOrderQty = qty * price``, so the venue
+        chooses how much base that quote buys: a better fill yields more base
+        than requested while spending no more than the quote budget. A
+        base-settled order (the bar simulator) is bounded by the requested
+        quantity as before.
+        """
+        return (
+            self.command.order_type == "MARKET"
+            and self.command.side == "BUY"
+            and self.command.settlement == SETTLEMENT_QUOTE
+        )
+
+    @property
+    def quote_budget(self) -> Decimal:
+        """Quote amount a quote-settled MARKET BUY may spend in total."""
+        return self.command.qty * self.command.price
 
     def observe(self, observation: OrderObservation) -> None:
         status = OrderStatus(observation.status).value
-        if observation.cumulative_qty < 0 or observation.cumulative_qty > self.command.qty:
+        if observation.cumulative_qty < 0:
+            raise Conflict("Observed execution quantity outside order bounds")
+        if not self.is_quote_settled_market_buy() and observation.cumulative_qty > self.command.qty:
             raise Conflict("Observed execution quantity outside order bounds")
         if observation.broker_order_id and self.broker_order_id not in (
             "",
@@ -231,10 +319,6 @@ class OrderAggregate:
             return
         if observation.cumulative_qty < self.observed_qty:
             return
-        if self.status in TERMINAL and status != self.status:
-            if status in TERMINAL:
-                raise Conflict("Conflicting terminal order observations")
-            return
         if (
             status == "FILLED"
             and self.command.order_type != "MARKET"
@@ -243,7 +327,7 @@ class OrderAggregate:
             # A LIMIT order must be covered exactly. A MARKET order is settled in
             # quote currency, so the venue may fill a different base quantity.
             raise Conflict("FILLED observation must cover order quantity")
-        self.status = status
+        advance_order_status(self, status)
         self.observed_qty = observation.cumulative_qty
         self.observed_at_ms = observation.observed_at_ms
         self.broker_order_id = observation.broker_order_id or self.broker_order_id
@@ -251,17 +335,34 @@ class OrderAggregate:
     def apply(self, execution: Execution) -> None:
         if execution.qty <= 0 or execution.price <= 0 or execution.fee < 0:
             raise TradingError("Invalid execution amounts")
-        if (
-            execution.symbol != self.command.symbol
-            or self.booked_qty + execution.qty > self.command.qty
-        ):
+        if execution.symbol != self.command.symbol:
+            raise Conflict("Execution does not match order quantity/symbol")
+        if self.is_quote_settled_market_buy():
+            # The venue may return more base than requested, but only inside the
+            # quote budget the order was admitted with.
+            if self.booked_quote + execution.qty * execution.price > self.quote_budget:
+                raise Conflict("Execution exceeds the market quote budget")
+        elif self.booked_qty + execution.qty > self.command.qty:
             raise Conflict("Execution does not match order quantity/symbol")
         if self.status == "REJECTED":
             raise Conflict("Execution received for rejected order")
         self.booked_qty += execution.qty
         self.booked_quote += execution.qty * execution.price
         if self.status not in TERMINAL:
-            self.status = "FILLED" if self.booked_qty == self.command.qty else "PARTIALLY_FILLED"
+            if self.is_quote_settled_market_buy():
+                # The venue was asked to spend a quote budget, so covering the
+                # requested base quantity is not proof of completion. Only an
+                # exhausted quote budget (an explicit economic fact: the venue
+                # can spend no more) or a terminal venue observation completes
+                # this order.
+                advance_order_status(
+                    self,
+                    "FILLED" if self.booked_quote >= self.quote_budget else "PARTIALLY_FILLED",
+                )
+            else:
+                advance_order_status(
+                    self, "FILLED" if self.booked_qty == self.command.qty else "PARTIALLY_FILLED"
+                )
 
 
 @dataclass
@@ -273,12 +374,30 @@ class CommandRecord:
     status: str = "QUEUED"
     error: str = ""
     actor: str = ""
+    # Durable request payload for commands that have no order aggregate (for
+    # example an explicit book allocation). Empty for PLACE/CANCEL.
+    request: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class Hold:
     asset: str
     amount: Decimal
+
+
+@dataclass
+class BookLedger:
+    """One stable strategy sub-ledger inside the single account.
+
+    ``balances`` are owned by this book; ``holds`` are the book layer of the
+    two-layer order reservation. Positions stay per book so strategy equity and
+    budget can be queried without borrowing another book's assets.
+    """
+
+    book_id: str
+    balances: dict[str, Decimal] = field(default_factory=dict)
+    positions: dict[str, Decimal] = field(default_factory=dict)
+    holds: dict[str, Hold] = field(default_factory=dict)
 
 
 @dataclass
@@ -292,6 +411,7 @@ class AccountState:
     orders: dict[str, OrderAggregate] = field(default_factory=dict)
     commands: dict[str, CommandRecord] = field(default_factory=dict)
     holds: dict[str, Hold] = field(default_factory=dict)
+    books: dict[str, BookLedger] = field(default_factory=dict)
     executions: dict[str, dict[str, Any]] = field(default_factory=dict)
     ledger: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)

@@ -27,14 +27,19 @@ from trader.core.application.strategy_protocol import (
     describe_plugin_warmup,
 )
 from trader.core.domain.models.signal import Signal
+from trader.trading import books as book_ledger
 from trader.trading.models import (
     AccountRiskView,
     CommandReceipt,
     Conflict,
     NotReady,
-    PlaceOrderCommand,
     TradingError,
     json_value,
+)
+from trader.trading.order_spec import (
+    PRICE_SOURCE_MARKET_CLOSED_BAR,
+    PRICE_SOURCE_MARKET_TICKER,
+    build_order_spec,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +69,7 @@ class UnifiedStrategyRunner:
         plugin,
         instruments: dict[str, tuple[str, str]],
         strategy_id: str = "",
+        book_id: str = "",
         warmup_events: int = 0,
         warmup_source=None,
         on_block=None,
@@ -75,6 +81,12 @@ class UnifiedStrategyRunner:
         self.runtime = runtime
         self.deployment_id = deployment_id
         self.strategy_id = strategy_id
+        # ``book_id`` is the stable asset-isolation key, never the deployment.
+        # It defaults to the frozen ``book:{strategy_id}`` convention.
+        self.book_id = book_id or (book_ledger.book_id_for(strategy_id) if strategy_id else "")
+        if not self.book_id:
+            raise ValueError("STRATEGY_BOOK_ID_REQUIRED")
+        book_ledger.validate_strategy_book_id(self.book_id)
         self.plugin = plugin
         self.instruments = dict(instruments)
         self.plugin_warmup = describe_plugin_warmup(plugin)
@@ -320,12 +332,36 @@ class UnifiedStrategyRunner:
                 return None
             if signal.symbol != data.symbol:
                 raise TradingError("STRATEGY_SIGNAL_INSTRUMENT_MISMATCH")
+            data_at_ms = int(data.timestamp.timestamp() * 1000)
+            if data.data_type == MarketDataType.KLINE:
+                # The signal was produced by a closed bar (enforced above), so
+                # the reference price is the bar close at its close time.
+                reference_source = PRICE_SOURCE_MARKET_CLOSED_BAR
+                reference_at_ms = int(data.metadata.get("close_time_ms") or data_at_ms)
+            else:
+                # Phase 2 production input is still the REST ticker. The source
+                # is recorded as such instead of pretending it is a closed bar.
+                reference_source = PRICE_SOURCE_MARKET_TICKER
+                reference_at_ms = data_at_ms
             return await self._submit_signal(
-                signal, decision_id=decision_id, reference_price=data.price, trace=trace
+                signal,
+                decision_id=decision_id,
+                reference_price=data.price,
+                reference_price_source=reference_source,
+                reference_at_ms=reference_at_ms,
+                decision_at_ms=data_at_ms,
+                trace=trace,
             )
 
     async def submit_signal(
-        self, signal: Signal, *, decision_id: str, reference_price: Decimal
+        self,
+        signal: Signal,
+        *,
+        decision_id: str,
+        reference_price: Decimal,
+        reference_price_source: str,
+        reference_at_ms: int,
+        decision_at_ms: int,
     ) -> CommandReceipt | None:
         """Retry with the same decision ID; changed economic parameters conflict."""
         if self._state is WarmupState.BLOCKED:
@@ -333,11 +369,25 @@ class UnifiedStrategyRunner:
         if not self.warm:
             raise NotReady("STRATEGY_WARMUP_NOT_COMPLETE")
         return await self._submit_signal(
-            signal, decision_id=decision_id, reference_price=reference_price, trace=decision_id
+            signal,
+            decision_id=decision_id,
+            reference_price=reference_price,
+            reference_price_source=reference_price_source,
+            reference_at_ms=reference_at_ms,
+            decision_at_ms=decision_at_ms,
+            trace=decision_id,
         )
 
     async def _submit_signal(
-        self, signal: Signal, *, decision_id: str, reference_price: Decimal, trace: str
+        self,
+        signal: Signal,
+        *,
+        decision_id: str,
+        reference_price: Decimal,
+        reference_price_source: str,
+        reference_at_ms: int,
+        decision_at_ms: int,
+        trace: str,
     ) -> CommandReceipt | None:
         side = getattr(signal.signal_type, "value", signal.signal_type)
         if side == "NONE":
@@ -349,20 +399,27 @@ class UnifiedStrategyRunner:
         if signal.symbol not in self.instruments:
             raise TradingError("UNKNOWN_STRATEGY_INSTRUMENT")
         base, quote = self.instruments[signal.symbol]
-        order_type = signal.metadata.get("order_type", "MARKET")
-        price = signal.price if order_type == "LIMIT" else reference_price
-        command = PlaceOrderCommand(
+        # The strategy declares the order type explicitly on the Signal; the
+        # metadata dict is context, never an order-spec source.
+        spec = build_order_spec(
+            symbol=signal.symbol,
+            side=side,
+            order_type=signal.order_type,
+            qty=signal.quantity,
+            limit_price=signal.price,
+            reference_price=reference_price,
+            reference_price_source=reference_price_source,
+            reference_at_ms=reference_at_ms,
+            decision_at_ms=decision_at_ms,
+            time_in_force=signal.time_in_force,
+            book_id=self.book_id,
+        )
+        command = spec.to_command(
             command_id=self.command_id_for(decision_id),
             account_id=self.runtime.account_id,
-            symbol=signal.symbol,
             base_asset=base,
             quote_asset=quote,
-            side=side,
-            qty=Decimal(str(signal.quantity)),
-            price=Decimal(str(price)),
             deployment_id=self.deployment_id,
-            order_type=order_type,
-            time_in_force=signal.metadata.get("time_in_force", "GTC"),
             decision_id=trace,
         )
         return await self.runtime.place(command, actor=f"strategy:{self.deployment_id}")

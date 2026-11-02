@@ -13,6 +13,7 @@ from pathlib import Path as _Path
 
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
 
+from trader.trading import books as book_ledger
 from trader.trading.models import (
     Conflict,
     ExchangeOrderResult,
@@ -22,6 +23,7 @@ from trader.trading.models import (
     PlaceOrderCommand,
     ReconcileSnapshot,
 )
+from trader.trading.order_spec import build_order_spec
 from trader.trading.risk import RiskPolicy
 from trader.trading.service import TradingService
 from trader.trading.store import MemoryTradingStore
@@ -54,9 +56,34 @@ def command(command_id="cmd-1", **overrides):
         side="BUY",
         qty=Decimal("1"),
         price=Decimal("100"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     values.update(overrides)
-    return PlaceOrderCommand(**values)
+    spec = build_order_spec(
+        symbol=values["symbol"],
+        side=values["side"],
+        order_type=values["order_type"],
+        qty=values["qty"],
+        limit_price=values["price"],
+        reference_price=values["price"],
+        reference_price_source=values["price_source"],
+        reference_at_ms=values["price_at_ms"],
+        decision_at_ms=values["price_at_ms"],
+        time_in_force="GTC",
+        book_id=values["book_id"],
+        price_source=values["price_source"],
+    )
+    return spec.to_command(
+        command_id=values["command_id"],
+        account_id=values["account_id"],
+        base_asset=values["base_asset"],
+        quote_asset=values["quote_asset"],
+        deployment_id="rehearsal",
+        decision_id=values["command_id"],
+    )
 
 
 def snapshot(**overrides):
@@ -79,11 +106,23 @@ async def scenario(name, body):
         return {"name": name, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+async def bootstrap(service):
+    """Finish recovery and explicitly fund the rehearsal strategy book."""
+    await service.recover(snapshot())
+    async with service.store.transaction("acct") as state:
+        book_ledger.migrate_book_ledger(state)
+        if "book:test" not in state.books:
+            unallocated = state.books[book_ledger.UNALLOCATED]
+            amount = unallocated.balances.get("USDT", Decimal(0))
+            if amount > 0:
+                book_ledger.allocate(state, "book:test", "USDT", amount)
+
+
 async def unknown_timeout_is_not_resent():
     exchange = RehearsalExchange()
     exchange.place_result = ExchangeOrderResult(ExchangeOutcome.UNKNOWN, reason="timeout")
     service = TradingService(MemoryTradingStore(), exchange, RiskPolicy(), clock=lambda: 1_000_000)
-    await service.recover(snapshot())
+    await bootstrap(service)
     receipt = await service.place(command())
     await service.recover(snapshot(checked_at_ms=1_000_100, generation=2))
     state = await service.store.read("acct")
@@ -100,7 +139,7 @@ async def accepted_but_unpersisted_response_is_adopted_without_resend():
     exchange = RehearsalExchange()
     store = MemoryTradingStore()
     service = TradingService(store, exchange, RiskPolicy(), clock=lambda: 1_000_000)
-    await service.recover(snapshot())
+    await bootstrap(service)
     receipt = await service.place(command())
     # Simulate the process dying after the venue accepted but before the result
     # was persisted: force the command back to SENDING in storage.
@@ -128,7 +167,7 @@ async def accepted_but_unpersisted_response_is_adopted_without_resend():
 async def ledger_failure_rolls_back_atomically():
     store = MemoryTradingStore()
     service = TradingService(store, RehearsalExchange(), RiskPolicy(), clock=lambda: 1_000_000)
-    await service.recover(snapshot())
+    await bootstrap(service)
     receipt = await service.place(command())
 
     original = service._post_execution
@@ -158,7 +197,7 @@ async def ledger_failure_rolls_back_atomically():
         "executions": len(state.executions),
         "ledger_entries": len(state.ledger),
         "balance_unchanged": state.balances["USDT"] == Decimal("1000"),
-        "passed": not state.executions and not state.ledger,
+        "passed": not state.executions and len(state.ledger) == 1,
     }
 
 
@@ -169,7 +208,7 @@ async def late_fill_after_cancel_is_booked_without_reactivation():
         RiskPolicy(),
         clock=lambda: 1_000_000,
     )
-    await service.recover(snapshot())
+    await bootstrap(service)
     receipt = await service.place(command(qty=Decimal("2")))
     await service.cancel("cancel-1", "acct", receipt.cl_ord_id)
     await service.observe(
@@ -205,7 +244,7 @@ async def duplicate_fill_conflict_blocks_new_risk():
         RiskPolicy(),
         clock=lambda: 1_000_000,
     )
-    await service.recover(snapshot())
+    await bootstrap(service)
     receipt = await service.place(command(qty=Decimal("2")))
     await service.record_execution(
         Execution(

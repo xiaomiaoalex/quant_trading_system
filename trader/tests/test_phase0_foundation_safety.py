@@ -21,6 +21,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.trading import books as book_ledger
 from trader.trading.models import (
     ExchangeOrderResult,
     ExchangeOutcome,
@@ -33,6 +34,7 @@ from trader.trading.service import TradingService
 from trader.trading.store import MemoryTradingStore
 
 ACCOUNT_ID = "acct"
+TEST_BOOK = "book:test"
 
 
 class ScriptedExchange:
@@ -85,8 +87,16 @@ def command(command_id: str = "cmd-1", **overrides) -> PlaceOrderCommand:
         price=Decimal("100"),
         deployment_id="dep-1",
         decision_id="dec-1",
+        order_type="LIMIT",
+        book_id=TEST_BOOK,
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     values.update(overrides)
+    if "price_source" not in overrides:
+        values["price_source"] = (
+            "SIGNAL_LIMIT" if values.get("order_type") == "LIMIT" else "MARKET_REFERENCE_TICKER"
+        )
     return PlaceOrderCommand(**values)
 
 
@@ -113,7 +123,17 @@ async def bootstrap(service, *, balances, checked_at_ms, generation, clock_now=N
         complete=True,
         stream_healthy=True,
     )
-    return await service.recover(snapshot)
+    view = await service.recover(snapshot)
+    state = await service.store.read(ACCOUNT_ID)
+    book = state.books.get(TEST_BOOK)
+    if book is None or not any(amount > 0 for amount in book.balances.values()):
+        async with service.store.transaction(ACCOUNT_ID) as current:
+            book_ledger.migrate_book_ledger(current)
+            for asset, amount in balances.items():
+                if amount <= 0:
+                    continue
+                book_ledger.allocate(current, TEST_BOOK, asset, amount)
+    return view
 
 
 def ledger_total(state, asset: str) -> Decimal:

@@ -11,14 +11,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from trader.api.auth import AuthSettings, csrf_for, verify_password
-from trader.trading.models import (
-    AccountRiskView,
-    Conflict,
-    NotReady,
-    PlaceOrderCommand,
-    TradingError,
-    json_value,
-)
+from trader.trading.models import AccountRiskView, Conflict, NotReady, TradingError, json_value
+from trader.trading.order_spec import build_order_spec
 from trader.trading.risk import RiskRejected
 
 router = APIRouter(tags=["Trading"])
@@ -39,10 +33,25 @@ class PlaceOrderRequest(BaseModel):
     qty: Decimal
     price: Decimal
     deployment_id: str = "manual"
-    order_type: Literal["MARKET", "LIMIT"] = "LIMIT"
+    order_type: Literal["MARKET", "LIMIT"]
+    book_id: str = Field(min_length=1)
+    # Where the economic price came from and when it was observed. The manual
+    # path must state this explicitly; the service and adapter validate it.
+    price_source: str = Field(min_length=1)
+    price_at_ms: int = Field(ge=0)
     time_in_force: str = "GTC"
     decision_id: str = ""
     actor: str | None = None  # legacy input; ignored, identity comes from the session
+
+
+class AllocateRequest(BaseModel):
+    command_id: str = Field(min_length=1, max_length=128)
+    account_id: str = Field(min_length=1)
+    book_id: str = Field(min_length=1)
+    asset: str = Field(min_length=1)
+    amount: Decimal
+    reason: str = Field(min_length=1, max_length=500)
+    actor: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -145,22 +154,49 @@ async def me(request: Request, response: Response):
 
 @router.post("/v1/trading/orders", status_code=202)
 async def place_order(payload: PlaceOrderRequest, request: Request):
-    command = PlaceOrderCommand(
-        command_id=payload.command_id,
-        account_id=payload.account_id,
-        symbol=payload.symbol,
-        base_asset=payload.base_asset,
-        quote_asset=payload.quote_asset,
-        side=payload.side,
-        qty=payload.qty,
-        price=payload.price,
-        deployment_id=payload.deployment_id,
-        order_type=payload.order_type,
-        time_in_force=payload.time_in_force,
-        decision_id=payload.decision_id,
-    )
     try:
+        # The transport DTO is not the order contract: the command is built by
+        # the shared order-spec factory, exactly like the strategy path.
+        spec = build_order_spec(
+            symbol=payload.symbol,
+            side=payload.side,
+            order_type=payload.order_type,
+            qty=payload.qty,
+            limit_price=payload.price if payload.order_type == "LIMIT" else None,
+            reference_price=payload.price if payload.order_type == "MARKET" else None,
+            reference_price_source=payload.price_source,
+            reference_at_ms=payload.price_at_ms,
+            decision_at_ms=payload.price_at_ms,
+            time_in_force=payload.time_in_force,
+            book_id=payload.book_id,
+            price_source=payload.price_source,
+        )
+        command = spec.to_command(
+            command_id=payload.command_id,
+            account_id=payload.account_id,
+            base_asset=payload.base_asset,
+            quote_asset=payload.quote_asset,
+            deployment_id=payload.deployment_id,
+            decision_id=payload.decision_id,
+        )
         receipt = await _executor(request).place(command, actor=request.state.actor)
+    except Exception as exc:
+        raise _handle(exc) from exc
+    return _receipt(receipt)
+
+
+@router.post("/v1/trading/allocations", status_code=202)
+async def allocate(payload: AllocateRequest, request: Request):
+    try:
+        receipt = await _executor(request).allocate(
+            payload.command_id,
+            payload.account_id,
+            payload.book_id,
+            payload.asset,
+            payload.amount,
+            actor=request.state.actor,
+            reason=payload.reason,
+        )
     except Exception as exc:
         raise _handle(exc) from exc
     return _receipt(receipt)
@@ -238,6 +274,14 @@ async def risk_view(account_id: str, request: Request):
     except Exception as exc:
         raise _handle(exc) from exc
     return json_value(view)
+
+
+@router.get("/v1/trading/books")
+async def books(request: Request, account_id: str = Query(...)):
+    try:
+        return await _service(request).books(account_id)
+    except Exception as exc:
+        raise _handle(exc) from exc
 
 
 @router.get("/v1/trading/metrics")

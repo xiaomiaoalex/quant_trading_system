@@ -23,8 +23,10 @@ from trader.trading.models import (
     OrderObservation,
     PlaceOrderCommand,
     ReconcileSnapshot,
+    TradingError,
     VenueOrder,
 )
+from trader.trading.order_spec import validate_order_command
 
 _STATUS_MAP = {
     OrderStatus.PENDING: "OPEN",
@@ -116,6 +118,12 @@ class BinanceSpotExchangePort:
         return rules
 
     async def place_order(self, command: PlaceOrderCommand, cl_ord_id: str) -> ExchangeOrderResult:
+        # The adapter never infers an order type or price semantics: an
+        # unsupported specification is refused before any venue IO.
+        try:
+            validate_order_command(command)
+        except TradingError as exc:
+            return ExchangeOrderResult(ExchangeOutcome.REJECTED, reason=str(exc))
         try:
             rules = await self.symbol_rules(command.symbol)
         except Exception as exc:
