@@ -16,6 +16,27 @@ import time
 from dataclasses import dataclass
 from threading import RLock
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
+import aiohttp
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+def is_proxy_failure(exc: BaseException, proxy: Optional[str]) -> bool:
+    """True when the failure is attributable to the proxy itself.
+
+    A proxy that cannot be reached must be quarantined; a venue that cannot be
+    reached through a working proxy must not condemn that proxy.
+    """
+    if not proxy:
+        return False
+    if isinstance(exc, aiohttp.ClientProxyConnectionError):
+        return True
+    if isinstance(exc, ConnectionRefusedError):
+        host = (urlparse(proxy).hostname or "").lower()
+        return host in _LOOPBACK_HOSTS
+    return False
 
 
 @dataclass(slots=True)
@@ -24,6 +45,7 @@ class ProxyFailoverConfig:
 
     failure_threshold: int = 2
     cooldown_seconds: float = 30.0
+    quarantine_seconds: float = 300.0
 
 
 @dataclass(slots=True)
@@ -35,6 +57,7 @@ class ProxyRuntimeState:
     total_successes: int = 0
     last_failure_ts: float = 0.0
     cooldown_until_ts: float = 0.0
+    unusable_until_ts: float = 0.0
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -80,6 +103,10 @@ class ProxyFailoverController:
             cooldown_seconds=_parse_float_env(
                 "BINANCE_PROXY_FAILOVER_COOLDOWN_SECONDS",
                 cfg.cooldown_seconds,
+            ),
+            quarantine_seconds=_parse_float_env(
+                "BINANCE_PROXY_QUARANTINE_SECONDS",
+                cfg.quarantine_seconds,
             ),
         )
         self._states: Dict[str, ProxyRuntimeState] = {}
@@ -130,14 +157,21 @@ class ProxyFailoverController:
             for proxy in candidates:
                 self._ensure_state(proxy)
 
-            for proxy in candidates:
-                st = self._states[proxy]
-                if st.cooldown_until_ts <= now:
-                    self._last_selected_proxy = proxy
-                    return proxy
+            usable = [proxy for proxy in candidates if self._states[proxy].unusable_until_ts <= now]
+            if usable:
+                for proxy in usable:
+                    st = self._states[proxy]
+                    if st.cooldown_until_ts <= now:
+                        self._last_selected_proxy = proxy
+                        return proxy
 
-            # 全部处于冷却期时，选择最早恢复的那个。
-            best = min(candidates, key=lambda p: self._states[p].cooldown_until_ts)
+                # 全部处于冷却期时，选择最早恢复的那个。
+                best = min(usable, key=lambda p: self._states[p].cooldown_until_ts)
+                self._last_selected_proxy = best
+                return best
+
+            # 所有代理都在隔离期：仍然返回一个代理，绝不静默改成直连。
+            best = min(candidates, key=lambda p: self._states[p].unusable_until_ts)
             self._last_selected_proxy = best
             return best
 
@@ -151,9 +185,15 @@ class ProxyFailoverController:
             st.total_successes += 1
             st.consecutive_failures = 0
             st.cooldown_until_ts = 0.0
+            st.unusable_until_ts = 0.0
 
-    def report_failure(self, proxy: Optional[str]) -> None:
-        """上报失败，达到阈值后进入冷却并触发切换。"""
+    def report_failure(self, proxy: Optional[str], hard: bool = False) -> None:
+        """上报失败，达到阈值后进入冷却并触发切换。
+
+        ``hard=True`` 表示代理本身不可达（连接被拒等）。在冷却期内再次发生
+        硬失败说明该代理确实已死，进入更长的隔离期，避免每个冷却周期都
+        重新选中一个连不上的代理。
+        """
         target = self._normalize(proxy)
         if target is None:
             return
@@ -164,6 +204,14 @@ class ProxyFailoverController:
             st.total_failures += 1
             st.consecutive_failures += 1
             st.last_failure_ts = now
+
+            if hard and st.cooldown_until_ts > now:
+                st.unusable_until_ts = max(
+                    st.unusable_until_ts,
+                    now + self._config.quarantine_seconds,
+                )
+                st.consecutive_failures = 0
+                return
 
             if st.consecutive_failures >= self._config.failure_threshold:
                 st.cooldown_until_ts = max(
@@ -190,11 +238,16 @@ class ProxyFailoverController:
                         st.cooldown_until_ts if st.cooldown_until_ts > now else None
                     ),
                     "in_cooldown": st.cooldown_until_ts > now,
+                    "unusable_until_ts": (
+                        st.unusable_until_ts if st.unusable_until_ts > now else None
+                    ),
+                    "quarantined": st.unusable_until_ts > now,
                 }
 
             return {
                 "failure_threshold": self._config.failure_threshold,
                 "cooldown_seconds": self._config.cooldown_seconds,
+                "quarantine_seconds": self._config.quarantine_seconds,
                 "candidates": candidates,
                 "active_proxy": (
                     self._last_selected_proxy if self._last_selected_proxy in candidates else None

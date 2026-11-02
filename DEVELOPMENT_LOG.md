@@ -1485,3 +1485,31 @@
     无账务异常；观察进程改为 25h 时长以保证采样跨度越过 24h。
 - 风险/遗留: 24h 最终门禁尚未到期；共享 demo 账户上的外部活动仍可能带来真实阻断
   （外部成交按设计阻断），需要在窗口结束时以 24h 门禁复核。
+### 2026-11-02 - 24h 观察窗口通过 + 代理故障转移隔离
+
+- 窗口结果: `artifacts/observation_window10.jsonl`（2026-11-01 02:01 → 11-02 03:11，25.18h，1510 个采样）
+  通过 `summarize_observation.py --min-hours 24` 门禁：`ok=true`、`blockers=[]`、`parse_errors=0`、
+  `unresolved_counts={}`、未知命令/未补齐成交/账务异常均为 0、最大采样间隔 60.6s、`final_ready=true`，
+  `active_reconnect` 与 `runtime_restart_start/end` 标记齐全。
+- 发现的问题: 窗口内有 3 段外部中断（03:26~03:43、10:52~11:04、14:04~14:11，最长 18 分钟），
+  `RECONCILIATION_UNAVAILABLE` + `PRIVATE_STREAM_COVERAGE_UNPROVEN` 使账户 fail-closed 并自动恢复。
+  日志显示中断期间 REST 侧 303 次连接被拒到 `127.0.0.1:10808`（`.env` 配置的备用代理，进程未运行），
+  另有 250 次直连 `demo-api.binance.com:443`（本网络直连必然失败）；主代理 7890 进程全程健康。
+- 根因: 故障转移控制器只按 30s 冷却切换，冷却结束后必然重新选中同一个连不上的备用代理；
+  且任何请求异常（含目标侧失败）都记为该代理失败。
+- 改动:
+  - `trader/adapters/binance/proxy_failover.py`: 新增 `hard` 失败语义与隔离期
+    （`BINANCE_PROXY_QUARANTINE_SECONDS`，默认 300s）。代理本身不可达时再次失败即进入隔离，
+    `select_proxy` 跳过隔离中的代理；全部代理都被隔离时仍返回代理，绝不静默改为直连。
+    `get_state` 暴露隔离状态。
+  - 新增 `is_proxy_failure(exc, proxy)`：区分“代理不可达”（`ClientProxyConnectionError`、
+      本地代理连接被拒）与“目标不可达”（目标侧 `ClientConnectorError`），后者不再连累健康代理。
+  - `binance_spot_demo_broker.py` 与 `private_stream.py` 按该分类上报硬失败。
+  - `.env.example`: 补充备用代理与隔离期配置说明。
+- 验证:
+  - 新增先红后绿测试：备用代理反复拒绝连接后被隔离且不再被选中；全部隔离时仍返回代理；
+    软失败不隔离；代理级与目标级失败分类。
+  - Binance 适配相关 11 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过；
+    `mypy` 对改动模块无错误。
+- 风险/遗留: 就绪率约 0.62，周期性完整对齐按契约仍会短暂收回就绪；外部中断时长取决于本地代理稳定性。
+  `.env` 中的 `BINANCE_BACKUP_PROXY_URL=127.0.0.1:10808` 当前无进程监听，建议运维侧停用该备用项。

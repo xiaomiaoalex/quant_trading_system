@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 import websockets
 import websockets.client as ws_client
 
-from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller, is_proxy_failure
 from trader.adapters.binance.rest_alignment import RestAlignmentSnapshot
 from trader.adapters.binance.stream_base import (
     BaseStreamFSM,
@@ -413,7 +413,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     self._proxy_failover.report_success(proxy)
                     return
             except Exception as e:
-                self._proxy_failover.report_failure(proxy)
+                self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(e, proxy))
                 if attempt >= max_attempts:
                     logger.warning(
                         f"[{self._name}] Time sync failed after {max_attempts} attempts: "
@@ -555,7 +555,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     raise Exception(f"Failed to create listenKey: {resp.status}")
 
         except Exception as e:
-            self._proxy_failover.report_failure(proxy)
+            self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(e, proxy))
             logger.error(f"[{self._name}] ListenKey creation error: {e}")
             raise
 
@@ -617,7 +617,7 @@ class PrivateStreamManager(BaseStreamFSM):
                     await self.reconnect()
 
         except Exception as e:
-            self._proxy_failover.report_failure(proxy)
+            self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(e, proxy))
             logger.warning(f"[{self._name}] ListenKey refresh error: {e}, triggering reconnect")
             await self.reconnect()
 
@@ -642,7 +642,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 logger.info(f"[{self._name}] ListenKey deleted: {resp.status}")
 
         except Exception as e:
-            self._proxy_failover.report_failure(proxy)
+            self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(e, proxy))
             logger.warning(f"[{self._name}] ListenKey deletion error: {e}")
 
     async def _listen_key_keepalive_loop(self) -> None:
@@ -694,7 +694,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 self._start_receive_loop()
 
         except Exception as e:
-            self._proxy_failover.report_failure(proxy)
+            self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(e, proxy))
             logger.error(
                 f"[{self._name}] Connection failed: type={type(e).__name__}, repr={e!r}, "
                 f"url={url}, proxy={proxy}"
