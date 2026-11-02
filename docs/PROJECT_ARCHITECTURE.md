@@ -916,7 +916,7 @@ flowchart TB
 
 | 进程 | 入口 | 监听 | 交易所写凭据 | 账户经济状态写入 | 命令 | 事实入口 | 查询 |
 |---|---|---|---|---|---|---|---|
-| Control API | `trader/runtime/control_main.py` | `QTS_TRADING_API_PORT`，默认 `8090`，默认绑 `127.0.0.1` | **无**（`NoExchangeIO`，`control_main.py:27-32`） | **无**（只落 `QUEUED` 命令与账户内预约，`defer_send=True`，`control_main.py:110-112`） | 受理 PLACE / CANCEL / CONTROL | **不得暴露**（阶段 1 移除公开事实入口） | 命令状态、订单、风险视图、指标、SSE |
+| Control API | `trader/runtime/control_main.py` | `QTS_TRADING_API_PORT`，默认 `8090`，默认绑 `127.0.0.1` | **无**（`NoExchangeIO`，`control_main.py:27-32`） | **无**（只落 `QUEUED` 命令与账户内预约，`defer_send=True`，`control_main.py:110-112`） | 受理 PLACE / CANCEL / CONTROL（含 `RESOLVE`） | **无**（阶段 1 已移除公开事实入口） | 命令状态、订单、风险视图、指标、SSE |
 | Execution | `trader/runtime/trading_worker_main.py` | 无 HTTP | **有**（缺任一即 `BINANCE_CREDENTIALS_MISSING` 拒绝启动，`trading_worker_main.py:176-181`） | **唯一**（账本 / 持仓 / 预约 / 成交 / 余额） | 消费 `QUEUED` 并发送；持有 `trading_runtime_leases` | **唯一**（REST 对账、WS 成交、订单观测） | 就绪状态、内部指标 |
 | Research Worker | `trader/runtime/research_worker_main.py` | 无 | 无 | 无 | 无 | 无 | 发布冻结回测结果（fencing token） |
 | History Worker | `trader/runtime/history_worker_main.py` | 无 | 无（只读公开归档） | 无 | 无 | 无 | 导入历史数据集 |
@@ -937,10 +937,16 @@ flowchart TB
 - 因此后续阶段**不引入事件溯源框架、不重写持久化形态**；新增的是账户快照内的字段与投影，
   不是新的真相源。
 
-**阶段 0 记录的两处已知安全缺陷（阶段 1 修，本节不改行为）**：
+**阶段 1 已关闭的安全缺陷与旁路（2026-11-02，实现与契约见 `docs/INTERFACE_CONTRACTS.md` 13.11）**：
 
-- 余额差异被交易所值覆盖后，仅按原因码 `resolve` 即可恢复 `READY`，未解释的账实差异被静默吸收。
-- 存在 `UNKNOWN` 命令时 `resume_queued` 仍继续发送新增风险，且另一条命令成功会账户级清除
-  `UNKNOWN_COMMAND` 阻断。
-- 两处缺陷的复现证据固定在 `trader/tests/test_phase0_foundation_safety.py`（严格 xfail），
-  阶段 1 修完后移除标记。
+- 余额差异未解释时**不再覆盖**权威内部余额；交易所余额作为 `reconciliation.venue_balances`
+  观测保留，差异经 `AccountRiskView.balance_differences` 与 metrics 可查询。`resolve` 必须携带
+  可核对证据，证据一致后以显式 `external_adjustment` 账目结算。
+- 存在未决 `UNKNOWN` PLACE 命令时不再发送任何新的 PLACE；新 PLACE 返回
+  `UNKNOWN_COMMAND_PENDING`。`UNKNOWN_COMMAND` 按 `command_id` 定向解除，其他命令结果不影响它。
+- Control API 不再暴露成交/观测/对账/resolve 事实写入口；操作员差异处理改为 `RESOLVE`
+  控制命令，由 Execution 进程校验证据后应用。Control 进程无论环境是否出现凭据都只持久排队。
+- 历史存储不可用时研究提交 fail-closed（`HISTORY_STORE_UNAVAILABLE`），不再回退到
+  无 eligibility checker 的应用。
+- 两处安全基线的 `xfail` 标记已移除，断言转为普通通过；真实验收证据见
+  `trader/tests/test_phase0_foundation_safety.py` 与 `trader/tests/test_phase1_foundation_safety.py`。

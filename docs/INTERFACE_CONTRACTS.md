@@ -2699,7 +2699,9 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 - 同 `command_id` 同经济参数返回原 `CommandReceipt`；同 ID 不同参数返回 `Conflict`。
 - 命令传输状态：`QUEUED`、`SENDING`、`UNKNOWN`、`CONFIRMED`、`FAILED`；与订单业务状态分离。
 - 只有从 `QUEUED` 赢得 `SENDING` CAS 的调用可以发起一次网络下单。
-- 网络超时 / 结果未知进入 `UNKNOWN` 并保留预约；恢复只查询，不自动重发。
+- 网络超时 / 结果未知（`UNKNOWN` / `UNAVAILABLE` / 下单场景的 `NOT_FOUND`）进入 `UNKNOWN` 并保留预约；恢复只查询，不自动重发。
+- 存在未决 `UNKNOWN` PLACE 命令时，`resume_queued` 不发送任何新的 PLACE；新 PLACE 返回 `NotReady("UNKNOWN_COMMAND_PENDING")`。撤单等降低风险的动作仍可发送。
+- `UNKNOWN_COMMAND` 按 `command_id` 定向解除（未决项带 `scope=command_id`）：只有该命令自身的订单被完整快照证明可见、或该命令自身的结果为 `ACCEPTED`/`REJECTED` 时才清除它的阻断；其他命令的成功/失败都不影响它。`UNKNOWN_COMMAND` 不接受操作员命令清除，只能由交易所证据解除。
 - `QUEUED` 表示 `SENDING` 未提交、网络调用确定未发生；恢复可发送一次。中断的 `CONTROL` 命令标为 `UNKNOWN` + `CONTROL_INTERRUPTED`，不自动继续。
 - 撤单 API 返回 `202 + CommandReceipt`；`CONFIRMED` 只表示交易所受理撤单请求，订单只有收到 `CANCELLED` observation 后才显示已撤销。
 
@@ -2740,6 +2742,9 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 
 - 首份完整快照初始化余额；后续快照先应用新成交事实，再用 `旧余额 + 新成交` 与交易所余额比较。
 - 余额差异、未知外部成交、未知订单、未映射成交进入持久 `unresolved` 并阻断新增风险；人工 `resolve` 才能清除不可自动解释的差异。
+- **余额差异未解释时，交易所余额只是观测**：保存在 `reconciliation.venue_balances`，不得覆盖权威内部余额。差异通过 `AccountRiskView.venue_balances` / `AccountRiskView.balance_differences` 与 `GET /v1/trading/metrics` 的 `venue_balances` / `balance_differences` 查询。
+- `resolve(account_id, code, actor, evidence)` 必须携带解释证据：`kind`、`reference`、`reason` 均为非空字符串；`BALANCE_MISMATCH` 还必须逐资产给出与观测完全一致的 `internal` / `venue` / `difference`。证据一致时记入显式 `external_adjustment` 账目（含证据引用与操作员），再解除阻断；证据缺失、金额不符或账目已变化时保持阻断（`RESOLVE_REQUIRES_EVIDENCE` / `RESOLVE_EVIDENCE_INCOMPLETE` / `RESOLVE_EVIDENCE_AMOUNT_MISMATCH` / `RESOLVE_EVIDENCE_STALE`）。不得伪造无证据的调整分录。
+- 可人工解除的差异码限于 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER`；派生码（`UNKNOWN_COMMAND`、`ORDER_STATE_UNKNOWN`、快照新鲜度）只能由交易所证据解除，操作员命令返回 `RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE`。
 - 不完整分页、旧代际、旧时间戳、私有流不健康、未知 `SENDING/UNKNOWN` 命令都不得把账户恢复为 `READY`。
 - `FILLED` 观测早于逐笔成交时产生 `FILL_OBSERVATION_MISMATCH`；逐笔成交补齐后自动解除。其余关键差异需要人工核对。
 
@@ -2752,16 +2757,20 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 | `GET` | `/v1/auth/me` | 返回会话身份 |
 | `POST` | `/v1/trading/orders` | 下单/策略重试；`202 + CommandReceipt` |
 | `POST` | `/v1/trading/orders/{cl_ord_id}/cancel` | 撤单；`202 + CommandReceipt` |
-| `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` |
+| `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` / `RECONNECT` / `RESOLVE` |
 | `GET` | `/v1/commands/{command_id}?account_id=` | 查询命令持久状态 |
 | `GET` | `/v1/trading/orders/{cl_ord_id}?account_id=` | 查询订单与剩余数量 |
-| `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView` |
-| `GET` | `/v1/trading/metrics?account_id=` | UNKNOWN 命令、未补齐成交、余额异常、预约、对账年龄、outbox 积压 |
-| `POST` | `/v1/trading/executions` | 成交事实入口（WS/REST ingress） |
-| `POST` | `/v1/trading/observations` | 订单观测入口 |
-| `POST` | `/v1/trading/reconcile` | 提交完整对账快照 |
-| `POST` | `/v1/trading/resolve/{code}?account_id=` | 人工清除已核实的差异 |
+| `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView`，含 `venue_balances` 与 `balance_differences` |
+| `GET` | `/v1/trading/metrics?account_id=` | UNKNOWN 命令、未补齐成交、余额异常、预约、对账年龄、outbox 积压、`venue_balances`、`balance_differences` |
 
+- **控制面不暴露事实写入口**：`POST /v1/trading/executions`、`POST /v1/trading/observations`、
+  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}` 已从 Control API 移除。
+  事实只能由 Execution 进程内部的 service / 端口调用写入；Control 进程不装配交易所 IO，也不写账户经济状态。
+- `RESOLVE` 是操作员命令而不是事实入口：请求体 `{action:"RESOLVE", code, evidence}` 只在账户事务内落
+  `QUEUED` 控制命令（`code` 与 `evidence` 参与命令幂等哈希），由 Execution 进程在 `resume_queued` 中
+  按 13.4 的证据规则校验并应用；成功 `CONFIRMED`，证据失败 `FAILED` 且账户保持阻断。
+  控制进程只做静态检查（`RESOLVE_REQUIRES_CODE` / `RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE` /
+  `RESOLVE_REQUIRES_EVIDENCE`），不判定任何账户事实。
 - 写操作必须携带会话 Cookie 与 `x-csrf-token`。
 - 审计身份只来自会话；请求体 `actor` / `requested_by` 不改变身份。
 - 未登录返回 `401`；CSRF/Origin 失败返回 `403`；登录限流返回 `429`。
@@ -2943,8 +2952,8 @@ warmup_source=None, on_block=None)`
 
 - Control API 进程**不装配任何交易所 IO 端口**，也不持有交易所写凭据；
   其事实写入口（`POST /v1/trading/executions`、`POST /v1/trading/observations`、
-  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}`）在阶段 1 迁出 Control API，
-  改为 Execution 进程内部通道。**本节只冻结目标责任，阶段 1 之前现有路由仍然存在。**
+  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}`）已按阶段 1 迁出 Control API
+  （见 13.11），事实写入只保留 Execution 进程内部 service/端口调用。
 - Execution 进程是账户经济状态的**唯一**写入者（账本、持仓、预约、成交、余额）。
 - 进程间只通过 PostgreSQL 协调；不引入消息中间件。
 - 覆盖范围与既有 13.6 运行拓扑一致；本节只把"谁持有凭据、谁能写事实"写成可判定条目。
@@ -2994,6 +3003,27 @@ warmup_source=None, on_block=None)`
 修复方向（阶段 1）：`resolve` 解除余额差异必须携带解释证据；`UNKNOWN` 的解除按 `command_id` 定向。
 阶段 1 完成后删除两个 `xfail` 标记，安全断言转为普通通过断言。
 
+### 13.11 阶段 1 安全修复（2026-11-02，已实现）
+
+阶段 1 关闭了 13.10 记录的两处偏差，并移除了公开事实入口与数据资格回退旁路。实现与证据：
+
+| # | 行为 | 稳定拒绝码 / 证据 | 测试 |
+|---|---|---|---|
+| D1 | 未解释余额差异不覆盖权威内部余额；交易所值作为 `reconciliation.venue_balances` 观测保留 | `BALANCE_MISMATCH` 保持阻断；`risk_view.venue_balances` / `balance_differences`、`metrics.balance_differences` 可查询 | `test_phase0_foundation_safety.py::test_balance_mismatch_keeps_blocking_until_the_difference_is_explained`；`test_trading_service.py::test_balance_mismatch_is_evidence_and_blocks_new_risk`；`test_phase1_foundation_safety.py::test_balance_difference_is_queryable_until_it_is_explained` |
+| D1 | `resolve` 必须带证据；证据一致后记入显式 `external_adjustment` 账目 | `RESOLVE_REQUIRES_EVIDENCE`、`RESOLVE_EVIDENCE_INCOMPLETE`、`RESOLVE_EVIDENCE_AMOUNT_MISMATCH`、`RESOLVE_EVIDENCE_STALE`、`RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE`、`RESOLVE_CODE_NOT_PENDING` | `test_phase1_foundation_safety.py::test_resolve_is_an_evidenced_command_applied_by_the_execution_process` |
+| D1 | 操作员解除走 `RESOLVE` 控制命令：Control 只落 `QUEUED`，Execution 校验并应用 | 成功 `CONFIRMED`；失败 `FAILED` 且保持阻断 | 同上（含 control→execution 闭环） |
+| D2 | 未决 `UNKNOWN` PLACE 阻断后续新风险；新 PLACE 明确拒绝 | `UNKNOWN_COMMAND_PENDING` | `test_phase0_foundation_safety.py::test_unknown_command_blocks_further_sends_and_keeps_its_own_block`；`test_phase1_foundation_safety.py::test_resume_queued_sends_no_new_risk_while_a_command_is_unknown` |
+| D2 | `UNKNOWN_COMMAND` 按 `command_id` 定向解除，其他命令结果不影响 | 未决项带 `scope=<command_id>` | `test_phase1_foundation_safety.py::test_unknown_release_is_scoped_to_its_own_command`、`test_another_commands_result_cannot_clear_a_pending_unknown` |
+| L5 | Control API 无事实写入口；Execution 保留唯一事实写入路径 | 路由表与 OpenAPI 断言 | `test_phase1_foundation_safety.py::test_control_api_exposes_no_fact_write_routes` |
+| L5 | Control 进程无交易所写凭据，环境出现凭据也只排队 | `CONTROL_PROCESS_CANNOT_EXECUTE` | `test_phase1_foundation_safety.py::test_control_process_never_sends_even_with_credentials_in_the_environment` |
+| L8 | 历史存储不可用时研究提交 fail-closed，无 `eligibility=None` 回退 | `HISTORY_STORE_UNAVAILABLE`（422） | `test_phase1_foundation_safety.py::test_history_store_failure_makes_research_submission_fail_closed`、`test_provenance_check_failure_is_a_stable_rejection`、`test_research_api_maps_the_fail_closed_rejection_to_422` |
+| 1.9 | 重复 `exec_id` 幂等、乱序回报不二次记账、并发 place 只发送一次 | — | `test_phase1_foundation_safety.py::test_duplicate_execution_is_booked_once`、`test_out_of_order_execution_reports_are_booked_once`、`test_concurrent_place_with_the_same_command_sends_once` |
+| 1.10 | 四种交易所结果的状态、预约与阻断语义 | `UNKNOWN`/`UNAVAILABLE`/下单 `NOT_FOUND` → 命令 `UNKNOWN`、保留预约、阻断；`REJECTED` → `FAILED`、释放预约、不阻断 | `test_phase1_foundation_safety.py::test_uncertain_place_outcomes_keep_the_hold_and_block`、`test_rejected_place_releases_the_hold_and_does_not_block`、`test_cancel_not_found_does_not_report_the_order_cancelled` |
+| 1.11 | 真实 PG 同账户并发事务的快照与追加表一致，重启 `read()` 语义不变 | — | `test_trading_postgres.py::test_postgres_snapshot_and_append_tables_stay_consistent_across_restart`（需 `POSTGRES_CONNECTION_STRING`） |
+
+约束：以上调整不引入新表、不改订单规格、不改部署拓扑；`UNKNOWN` 命令仍不自动重发；
+操作员命令不能指定任何金额，调整额只能由 Execution 依据自身观测到的差异计算。
+
 ---
 ## 15. 测试隔离与本地 Postgres
 
@@ -3029,14 +3059,12 @@ warmup_source=None, on_block=None)`
   只使用 `MemoryTradingStore` 与确定性 fake 交易所，不访问网络、不访问 PostgreSQL、
   不接触真实账户，因此**不属于**需要显式 DSN 的集成测试，可直接运行：
   `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --tb=short`。
-- 该文件中的两个用例用 `@pytest.mark.xfail(strict=True)` 固定"当前必须失败"的缺陷。
-  约定：
-  - **XPASS 视为失败**——说明缺陷已被意外修掉或断言写错，基线失去意义；
-  - 不得把当前错误行为改写成通过断言；
-  - 阶段 1 修复后删除 `xfail` 标记，让安全断言正常通过。
-- 阶段 0 基线的预期结果是 **2 xfailed**（不是 2 passed，也不是 0 passed）。
-- 诊断缺陷根因时可用 `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --runxfail --tb=short`
-  查看真实失败断言，用于确认失败点是目标断言而非 setup 错误。
+- 阶段 0 期间该文件的两个用例用 `@pytest.mark.xfail(strict=True)` 固定"当前必须失败"的缺陷；
+  约定是 **XPASS 视为失败**、不得把错误行为改写成通过断言、阶段 1 修复后删除标记。
+- **阶段 1 已删除两个 `xfail` 标记**，安全断言转为普通通过断言；预期结果改为 **2 passed**。
+  阶段 0 的 `2 xfailed` 结果只作为历史基线保留，不再适用于当前分支。
+- 诊断历史失败点时曾用 `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --runxfail --tb=short`
+  确认失败点是目标断言而非 setup 错误；阶段 1 起不再需要该诊断命令。
 
 ---
 

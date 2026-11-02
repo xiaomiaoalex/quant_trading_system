@@ -1,11 +1,8 @@
-"""Phase 0 foundation safety baseline.
+"""Phase 0 foundation safety baseline, now enforced by phase 1.
 
-These tests pin the *correct* safety behaviour of the unified spot trading
-core. Two defects are known today, so both tests are marked
-``xfail(strict=True)``: the test must fail, and an unexpected pass is itself a
-baseline failure (the defect was fixed without removing the marker).
-
-Phase 1 removes the markers once the behaviour is implemented:
+Phase 0 pinned the *correct* safety behaviour with ``xfail(strict=True)`` while
+two defects were still present. Phase 1 implemented the behaviour and removed
+the markers; these are ordinary passing assertions now:
 
 - ``test_balance_mismatch_keeps_blocking_until_the_difference_is_explained``
   A venue balance difference that the local ledger cannot explain must keep the
@@ -29,6 +26,7 @@ from trader.trading.models import (
     ExchangeOutcome,
     PlaceOrderCommand,
     ReconcileSnapshot,
+    TradingError,
 )
 from trader.trading.risk import RiskPolicy
 from trader.trading.service import TradingService
@@ -126,14 +124,6 @@ def ledger_total(state, asset: str) -> Decimal:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Phase 0 baseline: the venue balance difference is overwritten into the local "
-        "balances and clearing the reason code restores READY, so an unexplained "
-        "difference between the local ledger and the venue is silently absorbed."
-    ),
-)
 async def test_balance_mismatch_keeps_blocking_until_the_difference_is_explained():
     clock = Clock(1_000_000)
     service = make_service(clock=clock)
@@ -159,30 +149,67 @@ async def test_balance_mismatch_keeps_blocking_until_the_difference_is_explained
     ledger_usdt = ledger_total(state, "USDT")
     venue_usdt = Decimal("990")
     unexplained = ledger_usdt != venue_usdt
+    assert unexplained
 
-    resolved = await service.resolve(ACCOUNT_ID, "BALANCE_MISMATCH")
+    # The venue value is an observation, not the authoritative balance, and
+    # the difference stays queryable while it is unexplained.
+    assert state.balances["USDT"] == Decimal("1000")
+    assert view.venue_balances["USDT"] == "990"
+    assert view.balance_differences["USDT"]["difference"] == "-10"
 
+    # Clearing the reason code alone is not an explanation.
+    with pytest.raises(TradingError) as refused:
+        await service.resolve(ACCOUNT_ID, "BALANCE_MISMATCH")
+    assert "RESOLVE_REQUIRES_EVIDENCE" in str(refused.value)
+
+    # Evidence that does not match the observed difference is refused too.
+    with pytest.raises(TradingError) as wrong:
+        await service.resolve(
+            ACCOUNT_ID,
+            "BALANCE_MISMATCH",
+            evidence={
+                "kind": "external_withdrawal",
+                "reference": "statement-1",
+                "reason": "checked the statement",
+                "assets": {"USDT": {"internal": "1000", "venue": "980", "difference": "-20"}},
+            },
+        )
+    assert "RESOLVE_EVIDENCE_AMOUNT_MISMATCH" in str(wrong.value)
+
+    resolved = await service.risk_view(ACCOUNT_ID)
     # Safe contract: while no fact explains the difference between the local
     # ledger and the venue, removing the reason code alone must not restore
     # READY. The account stays blocked until the difference is explained.
-    if unexplained:
-        assert resolved.ready is False, (
-            "an unexplained balance difference must keep the account blocked; "
-            f"ledger={ledger_usdt} venue={venue_usdt} reasons={resolved.reasons}"
-        )
-        assert resolved.status != "READY"
-        assert resolved.reasons
+    assert resolved.ready is False, (
+        "an unexplained balance difference must keep the account blocked; "
+        f"ledger={ledger_usdt} venue={venue_usdt} reasons={resolved.reasons}"
+    )
+    assert resolved.status != "READY"
+    assert resolved.reasons
+
+    # Matching evidence settles the difference through an explicit adjustment
+    # entry that carries the evidence; the ledger keeps explaining the balance.
+    settled = await service.resolve(
+        ACCOUNT_ID,
+        "BALANCE_MISMATCH",
+        actor="owner",
+        evidence={
+            "kind": "external_withdrawal",
+            "reference": "statement-1",
+            "reason": "operator verified the venue statement shows a withdrawal",
+            "assets": {"USDT": {"internal": "1000", "venue": "990", "difference": "-10"}},
+        },
+    )
+    assert settled.ready is True
+    state = await service.store.read(ACCOUNT_ID)
+    assert state.balances["USDT"] == Decimal("990")
+    assert ledger_total(state, "USDT") == Decimal("990")
+    adjustments = [entry for entry in state.ledger if entry["kind"] == "external_adjustment"]
+    assert len(adjustments) == 1
+    assert adjustments[0]["evidence"]["reference"] == "statement-1"
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Phase 0 baseline: resume_queued keeps sending queued commands after one "
-        "command became UNKNOWN, and the later accepted command clears the "
-        "UNKNOWN_COMMAND block account-wide."
-    ),
-)
 async def test_unknown_command_blocks_further_sends_and_keeps_its_own_block():
     clock = Clock(1_000_000)
     store = MemoryTradingStore()

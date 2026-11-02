@@ -193,6 +193,10 @@ class AccountRiskView:
     assets: dict[str, dict[str, Decimal]]
     positions: dict[str, Decimal]
     valuation_complete: bool
+    # Venue balances are observations, not the authoritative balance. An
+    # unexplained difference stays visible here instead of being absorbed.
+    venue_balances: dict[str, str] = field(default_factory=dict)
+    balance_differences: dict[str, Any] = field(default_factory=dict)
 
     @property
     def ready(self) -> bool:

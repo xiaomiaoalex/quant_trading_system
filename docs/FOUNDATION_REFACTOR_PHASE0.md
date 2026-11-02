@@ -34,7 +34,7 @@
 | 基准 commit | `317b8d92ef49babb7a009a87276e989570e1312e`（`317b8d9 docs: record the observation-window order-blocking fixes`） |
 | 阶段 0 开始前的工作区状态 | 仅一个未跟踪文件 `.workbuddy/memory/2026-11-01.md`；该文件**未被读取、未被修改、不属于本任务**，也不得纳入任何提交 |
 | 阶段 0 产生的改动 | 本文件、`docs/PROJECT_ARCHITECTURE.md`、`docs/INTERFACE_CONTRACTS.md`（增量）、`trader/tests/test_phase0_foundation_safety.py`（新增） |
-| 提交 | **无**。本阶段不 commit / 不 push / 不部署 |
+| 提交 | `9b01f3a docs(foundation): freeze phase 0 refactor baseline`；独立审核通过后由父 Agent 于 2026-11-02 提交，未 push / 部署 |
 
 阶段 0 之前的历史提交（`317b8d9`、`eff2601`、`01ae777`、`cf84cce`、`4dc7402`）属于观察窗口的
 订单阻断修复，与本阶段无关，本阶段不重写、不回退这些历史。
@@ -48,7 +48,7 @@
   随后仅在本文件更新实施分支、审核状态并追加本记录。
 - 原分支仍指向 `723664a`；其后续历史提交 `1168270`（代理连接修复）和
   `723664a`（观察窗口验收记录）随新分支继承，但不计入本次基础重构改动。
-- 未使用 stash、复制或删除文件，未提交、推送或改写历史；既有 `.workbuddy/` 不属于本任务，
+- 迁移时未使用 stash、复制或删除文件，未提交、推送或改写历史；既有 `.workbuddy/` 不属于本任务，
   未读取、未修改、未暂存。
 - 后续开发与审核均使用新分支。原架构师、工程师和审核员代理均已关闭；后续交接须明确
   新分支及当前产物。
@@ -345,9 +345,14 @@ UNKNOWN 的解除必须按 `command_id` 定向。
 5. **审核通过 → 父 Agent**：审核员用 `send_agent_prompt` 将逐条通过报告、证据与限制交回
    工作单指定的父 Agent。`create_agent` 用于新建接收代理；返回既有父 Agent 时必须发送给
    指定 agent ID，不能用新建同名代理代替。
-6. **父 Agent → 下一阶段**：父 Agent 核对报告与真实工作区，更新阶段记录后，使用
-   `/paseo-handoff` 分派下一阶段。没有通过报告或证据不成立时，不进入下一阶段。
-7. **三轮暂停**：同一阶段连续三轮独立审核均未全部通过，工程师必须停止开发并向父 Agent
+6. **父 Agent 提交本阶段产物**：父 Agent 收到通过报告后，要求工程师与审核员冻结文件，
+   核对真实工作区与报告，确认差异仅含本阶段文件、相关验证仍有效并更新阶段记录。
+   随后只暂存这些文件，使用 Conventional Commits 创建本地提交，验证提交内容与已审核对象一致。
+   提交失败、出现未解释的额外差异或验证不成立时，停止推进并报告，不得先派下一阶段。
+7. **父 Agent → 下一阶段**：本阶段提交成功后，父 Agent 记录 commit hash，将审核报告、
+   实际验证、提交结果和剩余限制作为下一阶段交接上下文，再使用 `/paseo-handoff` 分派
+   新的工程师任务。没有通过报告、提交或证据不成立时，不进入下一阶段。
+8. **三轮暂停**：同一阶段连续三轮独立审核均未全部通过，工程师必须停止开发并向父 Agent
    报告失败条目、三轮证据、尝试过的修复、残余风险和建议的恢复条件。父 Agent 暂停后续阶段，
    向用户给出问题报告；没有用户的新决定不得自动继续。
 
@@ -357,8 +362,9 @@ UNKNOWN 的解除必须按 `command_id` 定向。
   同一时间只允许一个工程师写入该工作区，审核期间工程师不得并发修改。
 - 按技能要求，每次新建接收代理前读取 profile notes；保留父子代理关系与
   `notifyOnFinish`，不轮询替代完成通知，也不代替用户执行 detach。
-- 阶段通过不等于生产、真实资金或持续沙箱验收通过；不擅自 commit、push、merge、部署、
-  清库或触碰 `.workbuddy/`。
+- 工程师和审核员均不得自行 commit、push、merge 或改写历史。只有父 Agent 在独立审核通过后
+  创建本阶段本地提交；不 amend 既有提交，不 push、merge、部署、清库或触碰 `.workbuddy/`。
+- 阶段通过不等于生产、真实资金或持续沙箱验收通过。
 - 工具错误、权限阻塞或无法执行的验收必须显式报告，不能以跳过检查获得阶段通过。
 
 ### 阶段 1 — 账务与 UNKNOWN、事实入口与数据资格安全修复
@@ -582,3 +588,72 @@ python scripts/observe_trading_runtime.py --help
 | 24h 持续沙箱 | 需要外部沙箱长跑 | 阶段 6 |
 
 阶段 0 实际运行的检查见第 2.2 节；其结果以第 2.2 节记录的输出为准。
+
+---
+
+## 9. 阶段 1 审核与提交前复验记录（2026-11-02）
+
+本节是父 Agent 在独立审核通过后追加的交付记录，不改写阶段 0 的历史基线，
+不修改已审核实现，也不表示审核员再次审查过本节元数据。
+
+### 9.1 审核对象与结论
+
+- 分支：`feat/foundation-refactor`；阶段 1 base：
+  `9b01f3af43bfdcd7c44a571c312d76a547e6f37a`。
+- 父 Agent：`18e99d90-33f5-41f9-8a2f-672d109886bb`；工程师：
+  `1b9469de-4468-4819-b1e7-6c5f80698eea`；独立审核员：
+  `64d99943-8e6e-4185-ad69-cbb6fc7cbede`。
+- 审核报告：Paseo message `91a2ee26-ddfb-4ac9-8bcc-680fe7021eb2`，
+  **第 1 轮 overall=pass，1.1–1.11 全部通过**。工程师确认冻结文件的报告为
+  `3533495e-5455-4b5e-a432-2f23e0dfaa1e`。
+- 关闭 D1 余额覆盖与 D2 UNKNOWN 门禁缺陷；余额调整通过携带证据的 `RESOLVE`
+  命令完成；公开事实写入口已移除；Control 的历史存储装配及资格检查异常均拒绝研究提交。
+- 本次交付共 14 个文件：6 个实现、4 个测试、4 个文档，包含新增
+  `trader/tests/test_phase1_foundation_safety.py` 和父 Agent 的本文件工作流增量。
+  工程师与审核员均未提交；父 Agent 按 7.1 节只创建本地新提交，不 push。
+  `.workbuddy/` 未读取、未修改、未纳入提交范围。
+
+### 9.2 验证来源与实际结果
+
+| 执行者 | 检查 | 结果 |
+|---|---|---|
+| 独立审核员 | 阶段 0/1 安全测试 | 23 passed |
+| 独立审核员 | service / API / runtime entrypoint / worker assembly | 58 passed |
+| 独立审核员 | P0 五套件 | 99 passed |
+| 独立审核员 | split control / research safety / trading runtime | 42 passed |
+| 独立审核员 | 其余 CI trading-core 17 套件 | 144 passed |
+| 独立审核员 | PG / 投影重建 / execution recovery 三套件 | 20 passed，0 skipped，包含真实 PostgreSQL 16 验证 |
+| 独立审核员 | Core 无 IO、全 `trader/` isort / Black、`git diff --check` | 通过 |
+| 父 Agent | 阶段 0/1 安全测试复跑 | 23 passed；两个原 xfail 已转普通断言 |
+| 父 Agent | PG / 投影重建 / execution recovery 三套件复跑 | 20 passed，0 skipped，真实本地 PG 可用 |
+| 父 Agent | Core 无 IO、10 个变更 Python 文件 isort / Black、`git diff --check` | 通过 |
+
+父 Agent 的复跑命令：
+
+```powershell
+python -m pytest -o addopts='' -q trader/tests/test_phase0_foundation_safety.py trader/tests/test_phase1_foundation_safety.py --tb=short
+$env:POSTGRES_CONNECTION_STRING = 'postgresql://trader:trader_pwd@127.0.0.1:5432/trading'
+python -m pytest -o addopts='' -p no:cacheprovider -q trader/tests/test_trading_postgres.py trader/tests/test_trading_projection_rebuild.py trader/tests/test_execution_recovery.py --tb=short -ra
+python scripts/check_core_no_io.py
+git diff --check
+```
+
+isort / Black 只检查本次变更的 10 个 Python 文件；父 Agent 没有重新运行上表中的
+58 / 99 / 42 / 144 项套件，采用独立审核时已冻结代码的验证证据。
+父 Agent 的安全测试有两条既有 Pydantic 弃用警告及一条 pytest 缓存目录写入权限警告，
+退出码仍为 0；PG 复跑禁用缓存插件，20 项执行完成，无 skip。
+
+### 9.3 留给后续阶段的限制
+
+- 组合开发入口 `trader/runtime/trading_main.py` 的无 checker 构造，以及
+  `trader/api/routes/research.py` 的 retry 资格复核，仍属阶段 3 / 6；
+  不能把阶段 1 的 Control 修复解释为全仓资格路径均已收敛。
+- 独立审核记录的覆盖缺口：`RESOLVE_EVIDENCE_STALE` 专项、UNKNOWN 下撤单可用、
+  CANCEL 的 UNKNOWN / UNAVAILABLE 参数化、带凭据 Control lifespan 的 HTTP 负向链路。
+  这些不是已通过的测试；后续涉及相关逻辑时补足。
+- 旧快照中不带 `scope` 的 `UNKNOWN_COMMAND` 需在后续迁移中处理；
+  不得猜测命令归属或直接清除阻断。
+- Compose、前端构建、完整 CI、Binance 网络、私有流及 24h 沙箱没有在本阶段运行，
+  也不因本阶段通过而视为验收通过。
+- 下一阶段仅在本阶段本地提交成功后启动，执行 2.1–2.12；
+  保留“审核通过后父 Agent 提交，再交接下一阶段；三轮未通过即暂停”的门禁。

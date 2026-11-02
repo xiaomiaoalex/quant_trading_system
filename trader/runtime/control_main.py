@@ -17,7 +17,12 @@ from trader.api.auth import AuthSettings, PostgresSessionStore
 from trader.api.routes.sse import get_sse_manager
 from trader.api.trading_app import create_trading_app
 from trader.services.history_data_ingestion import HistoryIngestionService
-from trader.trading.jobs import BacktestApplication, PostgresResearchStore
+from trader.trading.jobs import (
+    HISTORY_STORE_UNAVAILABLE,
+    BacktestApplication,
+    PostgresResearchStore,
+    UnavailableBacktestApplication,
+)
 from trader.trading.models import NotReady
 from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
@@ -87,10 +92,56 @@ class QueuedTradingControl:
             raise NotReady("EXECUTION_ACCOUNT_MISMATCH")
         return await self.service.cancel(command_id, account_id, cl_ord_id, actor=actor)
 
-    async def control(self, command_id, account_id, action, actor="system"):
+    async def control(
+        self, command_id, account_id, action, actor="system", *, code="", evidence=None
+    ):
         if account_id != self.readiness.account_id:
             raise NotReady("EXECUTION_ACCOUNT_MISMATCH")
-        return await self.service.control(command_id, account_id, action, actor=actor)
+        return await self.service.control(
+            command_id, account_id, action, actor=actor, code=code, evidence=evidence
+        )
+
+
+async def build_history_plane(research):
+    """Build the research plane with a fail-closed eligibility gate.
+
+    Dataset eligibility needs the trusted, published provenance link that only
+    the history store can verify. If that store cannot be assembled, research
+    submission is refused with a stable reason: an application without an
+    eligibility checker must never be the fallback.
+    """
+    try:
+        history_store = HistoryDatasetStore()
+        await history_store.connect()
+        bridge = ResearchHistoryBridgeStore(storage=history_store.storage)
+        service = HistoryIngestionService(store=history_store, bridge_store=bridge)
+
+        async def dataset_eligible(dataset_id: str) -> bool:
+            """官方资格来自可信关联 + 已发布的历史数据集，绝不只看 source 字符串。"""
+            try:
+                link = await bridge.find_link_by_research_dataset(dataset_id)
+                if not link or not link.get("official_eligible"):
+                    return False
+                history_dataset_id = link.get("history_dataset_id")
+                if not history_dataset_id:
+                    return False
+                row = await history_store.get_dataset(history_dataset_id)
+                if row is None:
+                    return False
+                return (
+                    row.get("status") == "PUBLISHED"
+                    and bool(row.get("persistence_ok"))
+                    and bool(row.get("backtest_eligible"))
+                )
+            except Exception as exc:
+                # The store failed while checking provenance: refuse the
+                # submission instead of letting the gate disappear.
+                raise ValueError(HISTORY_STORE_UNAVAILABLE) from exc
+
+        application = BacktestApplication(research, eligibility=dataset_eligible)
+        return history_store, service, application
+    except Exception:
+        return None, None, UnavailableBacktestApplication(research)
 
 
 @asynccontextmanager
@@ -125,38 +176,9 @@ async def lifespan(app):
         app.state.research_store = research
 
         # 历史归档：Control API 只提供接口与资格校验，导入由独立 worker 进程执行。
-        try:
-            history_store = HistoryDatasetStore()
-            await history_store.connect()
-            bridge = ResearchHistoryBridgeStore(storage=history_store.storage)
-            app.state.history_service = HistoryIngestionService(
-                store=history_store,
-                bridge_store=bridge,
-            )
-
-            async def dataset_eligible(dataset_id: str) -> bool:
-                """官方资格来自可信关联 + 已发布的历史数据集，绝不只看 source 字符串。"""
-                link = await bridge.find_link_by_research_dataset(dataset_id)
-                if not link or not link.get("official_eligible"):
-                    return False
-                history_dataset_id = link.get("history_dataset_id")
-                if not history_dataset_id:
-                    return False
-                row = await history_store.get_dataset(history_dataset_id)
-                if row is None:
-                    return False
-                return (
-                    row.get("status") == "PUBLISHED"
-                    and bool(row.get("persistence_ok"))
-                    and bool(row.get("backtest_eligible"))
-                )
-
-            app.state.research_application = BacktestApplication(
-                research, eligibility=dataset_eligible
-            )
-        except Exception:
-            app.state.history_service = None
-            app.state.research_application = BacktestApplication(research)
+        history_store, history_service, research_application = await build_history_plane(research)
+        app.state.history_service = history_service
+        app.state.research_application = research_application
 
         async def notify(event):
             channel = (

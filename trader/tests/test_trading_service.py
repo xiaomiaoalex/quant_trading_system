@@ -612,7 +612,19 @@ async def test_balance_mismatch_is_evidence_and_blocks_new_risk():
     assert view.status != "READY"
     assert "BALANCE_MISMATCH" in view.reasons
     state = await service.store.read("acct")
-    assert state.balances["USDT"] == Decimal("990")  # exchange remains the balance truth
+    # The venue value is an observation; the authoritative balance stays the
+    # one the ledger explains, and the difference remains visible.
+    assert state.balances["USDT"] == Decimal("1000")
+    assert view.venue_balances["USDT"] == "990"
+    assert view.balance_differences["USDT"] == {
+        "internal": "1000",
+        "venue": "990",
+        "difference": "-10",
+    }
+    entry = next(
+        item for item in state.reconciliation["unresolved"] if item["code"] == "BALANCE_MISMATCH"
+    )
+    assert entry["detail"]["USDT"]["difference"] == "-10"
 
 
 @pytest.mark.asyncio

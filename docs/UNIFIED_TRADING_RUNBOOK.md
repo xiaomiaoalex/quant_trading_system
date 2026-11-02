@@ -223,7 +223,26 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 .venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl --min-hours 24 --json-out artifacts\observation_summary.json
 ```
 
-窗口内必须完成一次主动重连和一次执行进程重启；`summarize_observation.py` 会输出 `ready_ratio`、读数切换、最大对账年龄、outbox 积压、未补齐成交、未知命令、账务异常、未解决差异和 markers。出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断，人工核对后再 `POST /v1/trading/resolve/{code}`。
+窗口内必须完成一次主动重连和一次执行进程重启；`summarize_observation.py` 会输出 `ready_ratio`、读数切换、最大对账年龄、outbox 积压、未补齐成交、未知命令、账务异常、未解决差异和 markers。出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断；人工核对后通过 `POST /v1/trading/control` 提交 `RESOLVE` 命令（`code` + 证据 `evidence`），由 Execution 进程校验并应用，Control 进程不直接写账户事实。余额差异的证据必须逐资产给出与观测一致的 `internal` / `venue` / `difference`，例如：
+
+```json
+{
+  "command_id": "resolve-2026-11-02-1",
+  "account_id": "binance_spot",
+  "action": "RESOLVE",
+  "code": "BALANCE_MISMATCH",
+  "evidence": {
+    "kind": "external_withdrawal",
+    "reference": "venue-statement-2026-11-01",
+    "reason": "operator verified the venue statement",
+    "assets": {"USDT": {"internal": "1000", "venue": "990", "difference": "-10"}}
+  }
+}
+```
+
+命令 `CONFIRMED` 表示证据已被 Execution 校验并记账；`FAILED` 时查看 `error`
+（如 `RESOLVE_EVIDENCE_AMOUNT_MISMATCH`）并保持阻断。`UNKNOWN_COMMAND`
+只能由交易所证据（完整快照）解除，不接受操作员命令清除。
 
 最终汇总门禁要求 `runtime_restart` 和 `active_reconnect` 两个 marker 的时间戳均在首末采样之间；
 marker 的 `detail` 应指向可复查的动作/恢复证据，不能仅凭标记声称动作已完成。

@@ -22,6 +22,11 @@ from trader.trading.datasets import (
 from trader.trading.research_schema import research_schema_sql
 from trader.trading.version import SPOT_RUNTIME_VERSION
 
+# Stable rejection reason when the history store (and therefore trusted
+# provenance) is unavailable. Research submission must fail closed, never skip
+# the eligibility gate.
+HISTORY_STORE_UNAVAILABLE = "HISTORY_STORE_UNAVAILABLE"
+
 
 def freeze_strategy(spec: dict) -> dict:
     if set(spec) - {"module_path", "params", "version", "code_hash"}:
@@ -656,3 +661,18 @@ class BacktestApplication:
     async def retry(self, run_id):
         """Re-queue a FAILED run with its frozen inputs untouched."""
         return await self.store.retry(run_id)
+
+
+class UnavailableBacktestApplication(BacktestApplication):
+    """Fail-closed research submission while the history store is unavailable.
+
+    Dataset eligibility needs the trusted, published provenance link that only
+    the history store can verify. Without that store there is no trustworthy
+    provenance, so submissions are refused with a stable reason instead of
+    running with the eligibility gate skipped.
+    """
+
+    reason = HISTORY_STORE_UNAVAILABLE
+
+    async def submit(self, manifest: dict):
+        raise ValueError(self.reason)

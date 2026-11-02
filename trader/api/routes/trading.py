@@ -14,11 +14,8 @@ from trader.api.auth import AuthSettings, csrf_for, verify_password
 from trader.trading.models import (
     AccountRiskView,
     Conflict,
-    Execution,
     NotReady,
-    OrderObservation,
     PlaceOrderCommand,
-    ReconcileSnapshot,
     TradingError,
     json_value,
 )
@@ -57,44 +54,12 @@ class CancelRequest(BaseModel):
 class ControlRequest(BaseModel):
     command_id: str = Field(min_length=1, max_length=128)
     account_id: str = Field(min_length=1)
-    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT"]
+    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT", "RESOLVE"]
+    # RESOLVE settles one pending difference. The control process only records
+    # the command; the execution process checks the evidence and applies it.
+    code: str = ""
+    evidence: dict | None = None
     actor: str | None = None
-
-
-class ObservationRequest(BaseModel):
-    account_id: str
-    cl_ord_id: str
-    status: str
-    cumulative_qty: Decimal
-    broker_order_id: str = ""
-    observed_at_ms: int = 0
-    source: str = "REST"
-
-
-class ExecutionRequest(BaseModel):
-    account_id: str
-    cl_ord_id: str
-    symbol: str
-    exec_id: str
-    qty: Decimal
-    price: Decimal
-    fee: Decimal = Decimal("0")
-    fee_asset: str = ""
-    occurred_at_ms: int = 0
-    venue: str = "binance_spot"
-
-
-class ReconcileRequest(BaseModel):
-    account_id: str
-    checked_at_ms: int
-    generation: int
-    balances: dict[str, Decimal]
-    external_locked: dict[str, Decimal] = Field(default_factory=dict)
-    open_orders: list[ObservationRequest] = Field(default_factory=list)
-    executions: list[ExecutionRequest] = Field(default_factory=list)
-    marks: dict[str, dict] = Field(default_factory=dict)
-    stream_healthy: bool = True
-    complete: bool = True
 
 
 def _service(request: Request):
@@ -223,6 +188,8 @@ async def control_action(payload: ControlRequest, request: Request):
             payload.account_id,
             payload.action,
             actor=request.state.actor,
+            code=payload.code,
+            evidence=payload.evidence,
         )
     except Exception as exc:
         raise _handle(exc) from exc
@@ -281,95 +248,7 @@ async def metrics(request: Request, account_id: str = Query(...)):
         raise _handle(exc) from exc
 
 
-@router.post("/v1/trading/observations", status_code=202)
-async def observe(payload: ObservationRequest, request: Request):
-    observation = OrderObservation(
-        account_id=payload.account_id,
-        cl_ord_id=payload.cl_ord_id,
-        status=payload.status,
-        cumulative_qty=payload.cumulative_qty,
-        broker_order_id=payload.broker_order_id,
-        observed_at_ms=payload.observed_at_ms,
-        source=payload.source,
-    )
-    try:
-        await _service(request).observe(observation)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return {"ok": True}
-
-
-@router.post("/v1/trading/executions", status_code=202)
-async def record_execution(payload: ExecutionRequest, request: Request):
-    execution = Execution(
-        account_id=payload.account_id,
-        cl_ord_id=payload.cl_ord_id,
-        symbol=payload.symbol,
-        exec_id=payload.exec_id,
-        qty=payload.qty,
-        price=payload.price,
-        fee=payload.fee,
-        fee_asset=payload.fee_asset,
-        occurred_at_ms=payload.occurred_at_ms,
-        venue=payload.venue,
-    )
-    try:
-        applied = await _service(request).record_execution(execution)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return {"applied": applied}
-
-
-@router.post("/v1/trading/reconcile", status_code=202)
-async def reconcile(payload: ReconcileRequest, request: Request):
-    snapshot = ReconcileSnapshot(
-        account_id=payload.account_id,
-        checked_at_ms=payload.checked_at_ms,
-        generation=payload.generation,
-        balances=payload.balances,
-        external_locked=payload.external_locked,
-        open_orders=[
-            OrderObservation(
-                account_id=item.account_id,
-                cl_ord_id=item.cl_ord_id,
-                status=item.status,
-                cumulative_qty=item.cumulative_qty,
-                broker_order_id=item.broker_order_id,
-                observed_at_ms=item.observed_at_ms,
-                source=item.source,
-            )
-            for item in payload.open_orders
-        ],
-        executions=[
-            Execution(
-                account_id=item.account_id,
-                cl_ord_id=item.cl_ord_id,
-                symbol=item.symbol,
-                exec_id=item.exec_id,
-                qty=item.qty,
-                price=item.price,
-                fee=item.fee,
-                fee_asset=item.fee_asset,
-                occurred_at_ms=item.occurred_at_ms,
-                venue=item.venue,
-            )
-            for item in payload.executions
-        ],
-        marks=payload.marks,
-        stream_healthy=payload.stream_healthy,
-        complete=payload.complete,
-    )
-    try:
-        view = await _service(request).recover(snapshot)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return json_value(view)
-
-
-@router.post("/v1/trading/resolve/{code}", status_code=202)
-async def resolve(code: str, request: Request, account_id: str = Query(...)):
-    try:
-        view = await _service(request).resolve(account_id, code, actor=request.state.actor)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return json_value(view)
+# Fact write endpoints (executions / observations / reconcile / resolve) are
+# deliberately absent from the control plane. Only the execution process writes
+# account facts; an operator session settles a difference through the durable
+# RESOLVE control command above, which the execution process checks and applies.

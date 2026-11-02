@@ -360,10 +360,19 @@ class TradingRuntime:
         return await self.service.cancel(command_id, account_id, cl_ord_id, actor=actor)
 
     async def control(
-        self, command_id: str, account_id: str, action: str, actor: str = "system"
+        self,
+        command_id: str,
+        account_id: str,
+        action: str,
+        actor: str = "system",
+        *,
+        code: str = "",
+        evidence: dict[str, Any] | None = None,
     ) -> CommandReceipt:
         await self.require_ownership(account_id)
-        return await self.service.control(command_id, account_id, action, actor=actor)
+        return await self.service.control(
+            command_id, account_id, action, actor=actor, code=code, evidence=evidence
+        )
 
     async def drain_outbox(self) -> int:
         if self.service is None or self.notifier is None:
