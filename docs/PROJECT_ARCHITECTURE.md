@@ -905,3 +905,42 @@ flowchart TB
 - 完整快照必须包含本系统尚未终结的挂单、本系统已关闭订单的终态和最近逐笔成交；仅依赖 `openOrders` 会把已撤/已成交订单误判为未知状态。
 - 交易所规则归一化位于 Adapter；MARKET BUY 以 quote 金额结算，成交 base 数量与请求数量不要求相等。
 - 主动重连入口只重建 venue 会话；重连后由周期对账恢复 `READY`，不触碰本地账本。
+
+### 8.1 阶段 0 冻结的目标拓扑与责任矩阵（2026-11-02）
+
+本节是阶段 0 对第 8 节的**增量冻结**，不改变第 8 节既有事实。完整依据、验收项与阶段划分见
+`docs/FOUNDATION_REFACTOR_PHASE0.md`；接口与数据契约见 `docs/INTERFACE_CONTRACTS.md`
+第 13.8（进程责任矩阵）、13.9（`book_id` 数据契约）、13.10（已知契约偏差）与 15.4（基线测试约定）节。
+
+**目标进程 / 端口 / 凭据 / 责任矩阵**：
+
+| 进程 | 入口 | 监听 | 交易所写凭据 | 账户经济状态写入 | 命令 | 事实入口 | 查询 |
+|---|---|---|---|---|---|---|---|
+| Control API | `trader/runtime/control_main.py` | `QTS_TRADING_API_PORT`，默认 `8090`，默认绑 `127.0.0.1` | **无**（`NoExchangeIO`，`control_main.py:27-32`） | **无**（只落 `QUEUED` 命令与账户内预约，`defer_send=True`，`control_main.py:110-112`） | 受理 PLACE / CANCEL / CONTROL | **不得暴露**（阶段 1 移除公开事实入口） | 命令状态、订单、风险视图、指标、SSE |
+| Execution | `trader/runtime/trading_worker_main.py` | 无 HTTP | **有**（缺任一即 `BINANCE_CREDENTIALS_MISSING` 拒绝启动，`trading_worker_main.py:176-181`） | **唯一**（账本 / 持仓 / 预约 / 成交 / 余额） | 消费 `QUEUED` 并发送；持有 `trading_runtime_leases` | **唯一**（REST 对账、WS 成交、订单观测） | 就绪状态、内部指标 |
+| Research Worker | `trader/runtime/research_worker_main.py` | 无 | 无 | 无 | 无 | 无 | 发布冻结回测结果（fencing token） |
+| History Worker | `trader/runtime/history_worker_main.py` | 无 | 无（只读公开归档） | 无 | 无 | 无 | 导入历史数据集 |
+| PostgreSQL | `compose.yml` → `postgres:16` | `5432` | — | 存储 | 协调 | 协调 | 协调 |
+
+- 进程间只通过 PostgreSQL 协调，不引入消息中间件、集群或自动主备。
+- Control 进程**永远不持有交易所写凭据**，也不装配任何交易所 IO 端口。
+- 账户经济状态的唯一写入者是 Execution 进程；Control 只产生**意图**。
+- 旧 `trader/api/main.py`（端口 `8080`）保留只读查询，不保留第二个发送者（阶段 6 删除进程）。
+
+**持久化模型边界（不是完整事件溯源）**：
+
+- 账户快照 `trading_accounts.state`（jsonb）是权威状态，每事务整体覆写；
+  `read()` 只读这一列（`trader/trading/postgres.py:203-212`）。
+- `trading_executions` / `trading_ledger` / `trading_events` 是**追加事实**，用于审计与重放证据，
+  但**无法单独重建**余额、持仓与预约。
+- `trading_commands` / `trading_order_projection` 是**可重建查询投影**。
+- 因此后续阶段**不引入事件溯源框架、不重写持久化形态**；新增的是账户快照内的字段与投影，
+  不是新的真相源。
+
+**阶段 0 记录的两处已知安全缺陷（阶段 1 修，本节不改行为）**：
+
+- 余额差异被交易所值覆盖后，仅按原因码 `resolve` 即可恢复 `READY`，未解释的账实差异被静默吸收。
+- 存在 `UNKNOWN` 命令时 `resume_queued` 仍继续发送新增风险，且另一条命令成功会账户级清除
+  `UNKNOWN_COMMAND` 阻断。
+- 两处缺陷的复现证据固定在 `trader/tests/test_phase0_foundation_safety.py`（严格 xfail），
+  阶段 1 修完后移除标记。

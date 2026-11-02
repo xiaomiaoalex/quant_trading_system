@@ -2927,6 +2927,73 @@ warmup_source=None, on_block=None)`
   中断或结果未知不得自动重复重连，命令状态保持可见。
 - 沙箱验证脚本：`scripts/testnet_e2e.py`（下单/撤单/成交/重连，产出 `artifacts/e2e_evidence_final.json`）、`scripts/observe_trading_runtime.py` + `scripts/mark_observation.py` + `scripts/summarize_observation.py`（24h 观察窗口证据）。
 
+### 13.8 阶段 0 冻结的进程责任矩阵（2026-11-02）
+
+本节是阶段 0 对第 13 节的**增量冻结**，不改变第 13.1–13.7 节的既有契约语义。
+阶段划分与验收项见 `docs/FOUNDATION_REFACTOR_PHASE0.md`。
+
+**进程 / 凭据 / 命令 / 事实 / 查询责任矩阵**：
+
+| 进程 | 交易所写凭据 | 命令（写） | 事实（写） | 查询（读） |
+|---|---|---|---|---|
+| Control API | 无 | PLACE / CANCEL / CONTROL 受理，落库为 `QUEUED` | **不得**暴露 | 命令状态、订单、风险视图、指标 |
+| Execution | 有（唯一） | 消费 `QUEUED` 并发送 | **唯一**（REST 对账快照、WS 成交、订单观测） | 就绪状态、内部指标 |
+| Research Worker | 无 | 无 | 无 | 发布冻结回测结果 |
+| History Worker | 无 | 无 | 无 | 导入历史数据集 |
+
+- Control API 进程**不装配任何交易所 IO 端口**，也不持有交易所写凭据；
+  其事实写入口（`POST /v1/trading/executions`、`POST /v1/trading/observations`、
+  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}`）在阶段 1 迁出 Control API，
+  改为 Execution 进程内部通道。**本节只冻结目标责任，阶段 1 之前现有路由仍然存在。**
+- Execution 进程是账户经济状态的**唯一**写入者（账本、持仓、预约、成交、余额）。
+- 进程间只通过 PostgreSQL 协调；不引入消息中间件。
+- 覆盖范围与既有 13.6 运行拓扑一致；本节只把"谁持有凭据、谁能写事实"写成可判定条目。
+
+### 13.9 `book_id` 策略子账本数据契约（阶段 2 落地；阶段 0 只冻结）
+
+本节只冻结契约，**本阶段不建表、不实现多策略、不写迁移脚本**。
+
+**标识**
+
+- `book_id` 形如 `book:{strategy_id}`，稳定于部署、重启与回测批次；实盘与回测共用同一 `book_id`。
+- 未分配账簿使用保留标识 `UNALLOCATED`。
+- `deployment_id` 保持"命令归属 / 幂等字段"语义，**不承担资产隔离职责**。
+  现状核实：余额 / 持仓 / 预约当前是账户级（`trader/trading/models.py` 的 `AccountState`），
+  策略间资金隔离当前不存在，由本契约补齐。
+
+**守恒与结构**
+
+- 对每个资产 `A`：`account_total[A] == UNALLOCATED[A] + Σ book[A]`，在同一事务内恒等。
+- 只有**显式划拨**命令能把资产从未分配账簿移入某个 `book_id`；禁止按策略隐式归集。
+- 一笔新订单在**同一账户事务**内完成账户层预约与 book 层预约；任一层失败整体回滚。
+- 某 `book_id` 的可用资产只由该 book 自身的余额与持仓决定，**不得借用**其他 book 或账户总余额。
+- 同一 `book_id` 上已有未终结的反向在途订单时，新的反向命令**先拒绝**（明确拒绝码），
+  不排队、不自动净额。
+
+**归属不明的事实**
+
+- 无法明确归属到某个 `book_id` 的成交 / 余额差异：记入未决原因码并**阻断**新增风险。
+  **不得猜测历史归属**，不得按 symbol、比例、时间顺序等启发式规则分摊。
+
+**迁移**
+
+- 迁移**不猜测历史归属**：存量资产一律留在 `UNALLOCATED`，直到人工显式划拨。
+- 迁移**不清库、不改写历史**：既有 `trading_accounts` 快照、`trading_ledger`、`trading_events`
+  原样保留；`book_id` 以新增字段 / 新增投影方式落地。
+
+### 13.10 阶段 0 记录的已知契约偏差（阶段 1 修）
+
+阶段 0 用确定性 fake 复现了两处与本节既有契约语义不一致的行为。**本阶段不修改实现**，
+仅登记偏差，修复与解除基线属阶段 1：
+
+| # | 既有契约要求 | 当前实现 | 复现测试 |
+|---|---|---|---|
+| D1 | 13.4：余额差异进入持久 `unresolved` 并阻断新增风险；人工 `resolve` 才能清除**不可自动解释**的差异 | `_apply_reconcile_snapshot` 把交易所余额覆盖进权威余额，未解释的账实差异被吸收；`resolve` 只按原因码删除条目，之后账户回到 `READY` | `trader/tests/test_phase0_foundation_safety.py::test_balance_mismatch_keeps_blocking_until_the_difference_is_explained`（严格 xfail） |
+| D2 | 13.1：`UNKNOWN` 命令保留预约、恢复只查询不自动重发；新增风险受阻断 | `resume_queued` 在存在 `UNKNOWN` 命令时仍继续发送后续命令；另一条命令 `ACCEPTED` / `REJECTED` 时账户级 `_resolve_unresolved(state, "UNKNOWN_COMMAND")` 清除该阻断 | `trader/tests/test_phase0_foundation_safety.py::test_unknown_command_blocks_further_sends_and_keeps_its_own_block`（严格 xfail） |
+
+修复方向（阶段 1）：`resolve` 解除余额差异必须携带解释证据；`UNKNOWN` 的解除按 `command_id` 定向。
+阶段 1 完成后删除两个 `xfail` 标记，安全断言转为普通通过断言。
+
 ---
 ## 15. 测试隔离与本地 Postgres
 
@@ -2955,6 +3022,21 @@ warmup_source=None, on_block=None)`
 - 回归用例：`trader/tests/test_execution_projection_cursor.py::test_projection_cursor_never_touches_postgres_when_pinned_to_memory`
   ——把 PG 探测伪造成「可用」，并把 `PostgreSQLStorage` 替换为「一旦构造就失败」的桩，
   以此证明内存仓库在任何环境下都不会触碰真实库。
+
+### 15.4 阶段 0 基线测试的隔离与 xfail 约定（2026-11-02）
+
+- `trader/tests/test_phase0_foundation_safety.py` 是阶段 0 新增的**基线**测试：
+  只使用 `MemoryTradingStore` 与确定性 fake 交易所，不访问网络、不访问 PostgreSQL、
+  不接触真实账户，因此**不属于**需要显式 DSN 的集成测试，可直接运行：
+  `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --tb=short`。
+- 该文件中的两个用例用 `@pytest.mark.xfail(strict=True)` 固定"当前必须失败"的缺陷。
+  约定：
+  - **XPASS 视为失败**——说明缺陷已被意外修掉或断言写错，基线失去意义；
+  - 不得把当前错误行为改写成通过断言；
+  - 阶段 1 修复后删除 `xfail` 标记，让安全断言正常通过。
+- 阶段 0 基线的预期结果是 **2 xfailed**（不是 2 passed，也不是 0 passed）。
+- 诊断缺陷根因时可用 `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --runxfail --tb=short`
+  查看真实失败断言，用于确认失败点是目标断言而非 setup 错误。
 
 ---
 
