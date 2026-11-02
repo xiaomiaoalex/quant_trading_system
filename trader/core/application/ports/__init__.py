@@ -63,6 +63,10 @@ class BrokerOrder:
     average_price: Decimal
     status: Any  # OrderStatus
     created_at: datetime
+    # The venue's own limit price, independent of fills. Recovery needs it to
+    # rebuild the reservation of an open order whose average fill price is
+    # still zero; a market order reports the sentinel 0 here.
+    limit_price: Decimal = Decimal("0")
 
 
 @dataclass

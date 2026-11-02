@@ -165,6 +165,7 @@ class FakeBroker(BrokerPort):
                 qty=Decimal(str(existing["qty"])),
                 filled_qty=Decimal(str(existing["filled_qty"])),
                 average_price=Decimal(str(existing["average_price"])),
+                limit_price=Decimal(str(existing.get("price") or 0)),
                 status=OrderStatus(existing["status"]),
                 created_at=existing["created_at"],
             )
@@ -221,6 +222,7 @@ class FakeBroker(BrokerPort):
             qty=qty,
             filled_qty=Decimal("0"),
             average_price=Decimal("0"),
+            limit_price=Decimal(str(price or 0)),
             status=OrderStatus.SUBMITTED,
             created_at=created_at,
         )
@@ -321,6 +323,7 @@ class FakeBroker(BrokerPort):
             qty=Decimal(str(order["qty"])),
             filled_qty=Decimal(str(order["filled_qty"])),
             average_price=Decimal(str(order["average_price"])),
+            limit_price=Decimal(str(order.get("price") or 0)),
             status=OrderStatus(order["status"]),
             created_at=order["created_at"],
         )
@@ -343,6 +346,7 @@ class FakeBroker(BrokerPort):
                             qty=Decimal(str(order["qty"])),
                             filled_qty=Decimal(str(order["filled_qty"])),
                             average_price=Decimal(str(order["average_price"])),
+                            limit_price=Decimal(str(order.get("price") or 0)),
                             status=OrderStatus(order["status"]),
                             created_at=order["created_at"],
                         )

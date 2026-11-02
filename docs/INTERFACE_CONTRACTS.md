@@ -41,6 +41,9 @@ PrivateStreamManager 在关闭 socket 前通知 DISCONNECTED，在自动重连�
 - `ResearchExecutor.execute` 在创建插件前重新校验冻结策略 `code_hash`；源码变化拒绝执行。BAR 模拟 SELL 预约仅扣除相同 symbol 的未成交 SELL。
 - `BinanceSpotSnapshotProvider.build` 在订单/成交分页采集前后重复读取余额与活动订单；任一资产 free/locked、订单身份/状态/累计量变化均返回 `complete=False`。该稳定性检查不替代 WS 代际缓冲与覆盖水位证明。
 - 估值完整性与新增风险共同检查所有非零资产的 USDT 换算价，不依赖是否配置组合限额；缺失、过期、非有限或非正价格均阻断。
+- 领养订单必须同时重建它仍占用的资金：`available_balance` 只扣本地 hold，而余额口径是交易所总量，缺 hold 会把已锁资金当成可用，并让该笔名义额脱离敞口限额。重建按本地未入账剩余量计算，买单记 quote（剩余量 × 参考价 × (1+fee_rate)），卖单记 base 剩余量；每笔真实成交仍按 `release_hold` 递减。重建后 `mirror_account_holds` 把同一预约同步到 `UNALLOCATED` 分账本，account 层与 book 层不得给出两个可用余额。
+- 参考价取自 `BrokerOrder.limit_price`（交易所自身限价，市价单为 0），成交均价只在无可靠限价时兜底：未成交订单的 `average_price` 为 0，直接使用会把冻结额算成 0。
+- 无法重建 hold 时写 `ORDER_HOLD_UNRECONSTRUCTED` 阻断新增风险，不做 fail-open；订单进入非敞口终态或剩余量归零后自动消除。
 - Research Worker 执行期间每 `lease_seconds / 3` 续租；取消停止本地执行并以有效 token 完成取消。失租或心跳失败停止本地执行并向调用方传播，不尝试旧 token 发布。异步 BAR 回放每 256 根让出调度。
 
 > 本文档是多人协作和 AI 修改代码时的接口单一真相源。

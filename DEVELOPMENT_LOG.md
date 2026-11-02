@@ -1514,6 +1514,30 @@
 - 风险/遗留: 就绪率约 0.62，周期性完整对齐按契约仍会短暂收回就绪；外部中断时长取决于本地代理稳定性。
   `.env` 中的 `BINANCE_BACKUP_PROXY_URL=127.0.0.1:10808` 当前无进程监听，建议运维侧停用该备用项。
 
+### 2026-11-02 - 领养订单重建资金预约（Codex review P1）
+
+- 发现的问题: PR #121 上的 Codex 自动审查指出，`_adopt_venue_order` 只重建订单聚合、不重建 `state.holds`。
+  `available_balance` 只扣本地 hold，而快照余额是交易所总量（含 locked），于是被挂单占住的资金在本地回到可用；
+  `SpotRiskEngine._check_exposure` 也跳过无 hold 的开放买单，敞口限额同时漏算。REST 返回本系统命名空间内、
+  本地已丢失的开放订单时触发，可导致超买。
+- 根因: 当初为避免重复冻结而没有建 hold，但余额口径本就是总量，本地 hold 是唯一占用凭证；另 `adoptable()`
+  取 `average_price` 作参考价，未成交订单该值为 0，即使建 hold 也会算成 0。
+- 改动:
+  - `trader/trading/service.py`: 新增 `_restore_order_holds`，在快照应用后为每个缺 hold 的活动订单按剩余量重建：
+    买单 quote `remaining × price × (1 + fee_rate)`，卖单 base `remaining`；每笔真实成交仍由 `release_hold` 递减。
+    重建后调用 `book_ledger.mirror_account_holds` 同步 `UNALLOCATED`，使 account 层与分账本层报告同一占用。
+    参考价不可用时写 `ORDER_HOLD_UNRECONSTRUCTED` 阻断新增风险（不 fail-open），订单终态或剩余归零后自动消除。
+  - `trader/core/application/ports/__init__.py`: `BrokerOrder` 新增 `limit_price`（默认 0，向后兼容），
+    区分交易所限价与成交均价。
+  - `binance_spot_demo_broker.py` 解析响应 `price`；`spot_execution_adapter.py` 优先用限价、
+    无可靠限价时回退成交均价；`testing/fake_broker.py` 同步。
+  - 契约补 `docs/INTERFACE_CONTRACTS.md` 三条（预约重建口径、参考价来源、阻断与消除条件）。
+- 验证: 先禁用修复运行，4 个新增测试按预期失败；恢复后 `test_venue_order_adoption.py` 13 项通过。
+  已重放到 `feat/foundation-refactor`（Phase 6 完成态 `b4f37a1`）：分账本、服务与阶段 2 安全测试
+  79 项通过，P0 五件套加适配器 8 个文件 138 项通过。未运行 Postgres 集成测试（本机无 PG 实例）。
+- 风险/遗留: adopt 订单没有 book 归属，Phase 2 的 `BOOK_ATTRIBUTION_UNKNOWN` 会先整户阻断，
+  直到运维显式归属；两层保护叠加，本修复保证归属完成后预约仍然存在。
+
 ## 2026-11-04 阶段 6：单栈收敛与持续沙箱（进行中）
 
 - 删除旧 HTTP 进程与旧执行栈：`trader/api/main.py`、旧 OMS/ExecutionBudget/OrderService、

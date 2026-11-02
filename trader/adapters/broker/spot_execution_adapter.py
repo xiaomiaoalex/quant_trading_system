@@ -345,6 +345,13 @@ class BinanceSpotSnapshotProvider:
 
         def adoptable(order, symbol: str) -> VenueOrder:
             base_asset, quote_asset = assets[symbol]
+            # Recovery rebuilds the reservation from this price, so the venue's
+            # limit price wins: an order that has not filled yet reports its
+            # average fill price as zero while its funds are already locked.
+            limit_price = Decimal(str(getattr(order, "limit_price", 0) or 0))
+            reference_price = (
+                limit_price if limit_price > 0 else Decimal(str(order.average_price or 0))
+            )
             return VenueOrder(
                 cl_ord_id=order.cl_ord_id,
                 broker_order_id=order.broker_order_id,
@@ -352,7 +359,7 @@ class BinanceSpotSnapshotProvider:
                 side=str(getattr(order.side, "value", order.side)).upper(),
                 order_type=str(getattr(order.order_type, "value", order.order_type)).upper(),
                 qty=Decimal(str(order.qty)),
-                price=Decimal(str(order.average_price or 0)),
+                price=reference_price,
                 filled_qty=Decimal(str(order.filled_qty)),
                 status=_status(order.status),
                 created_at_ms=int(order.created_at.timestamp() * 1000),
