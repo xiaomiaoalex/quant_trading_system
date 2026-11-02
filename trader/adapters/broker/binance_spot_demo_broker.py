@@ -32,7 +32,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from trader.adapters.binance.proxy_failover import get_proxy_failover_controller
+from trader.adapters.binance.proxy_failover import get_proxy_failover_controller, is_proxy_failure
 from trader.core.application.ports import (
     BrokerAccount,
     BrokerBusinessError,
@@ -406,7 +406,7 @@ class BinanceSpotDemoBroker(BrokerPort):
             except BrokerBusinessError:
                 raise
             except Exception as exc:
-                self._proxy_failover.report_failure(proxy)
+                self._proxy_failover.report_failure(proxy, hard=is_proxy_failure(exc, proxy))
                 last_error = exc
                 if attempt >= self._config.max_retries:
                     break

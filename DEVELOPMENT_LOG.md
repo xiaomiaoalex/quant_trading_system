@@ -1444,3 +1444,72 @@
     `POST /v1/trading/resolve/{code}`。
 - 关联文档: `docs/INTERFACE_CONTRACTS.md`、`docs/UNIFIED_TRADING_RUNBOOK.md`、
   `docs/UNIFIED_TRADING_ACCEPTANCE.md`
+### 2026-11-01 - 私有流周期对齐耗时优化（只读并发，不改契约）
+
+- 背景: 24h 窗口重跑时就绪率只有约 37%。`_reconcile_loop` 每个周期调用
+  `PrivateTradingSession.align()`，对齐包含两次完整快照与两遍完整覆盖回填；所有
+  symbol 串行抓取，单次对齐约 25s，而快照 60s 即过期，可用性被结构性压缩。
+- 决策: 只做只读 HTTP 调用的并发化，不改 `pause_alignment`、两遍回填、无证明不就绪等契约语义。
+- 改动:
+  - `BinanceSpotSnapshotProvider.build`: 账户/挂单、最终一致性复核、按 symbol 的
+    订单与成交抓取、symbol 资产元数据均改为并发；装配仍按 symbol 排序。
+  - `BinanceSpotCoverageProver`: 两遍回填内部按 symbol 并发，symbol 内订单与成交并发；
+    结果仍排序后比较，保持两遍一致性判定不变。
+- 验证:
+  - 新增并发行为红测：`test_backfill_fetches_symbols_concurrently`、
+    `test_snapshot_fetches_symbols_concurrently`（先红后绿，用 inflight 计数断言）。
+  - 相关 9 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过。
+  - 本地实测两次快照 12.8s → 5.9s（首个快照含 exchangeInfo 缓存预热）。
+  - `mypy` 对该两个 adapter 仍为既有 1 处基线错误，未新增。
+- 风险/遗留: 就绪率理论上限仍受 60s 快照过期约束；若窗口仍不达标，再单独讨论
+  过期阈值或后台证明方案，不在本次夹带。
+- 关联文档: `docs/UNIFIED_TRADING_ACCEPTANCE.md`（24h 窗口仍未关闭）
+### 2026-11-01 - 观察窗口的订单在途/外部订单阻断修正
+
+- 背景: 第 7~9 次窗口重跑中，每次下单后仍会出现一次 `UNKNOWN_ORDER`。抓取真实证据后确认两个独立来源：
+  1. 私有流在本地订单事务提交前送达本系统命名空间的订单观测；
+  2. 共享 demo 账户上的外部订单（实测 `Mz6l1bM0SVLuatn07FsAAG`，状态 `CANCELLED`）实时上报。
+- 改动:
+  - `TradingService` 增加 `order_prefix`（默认 `qts-`）：`observe()` 对本前缀的未知订单不再写持久阻断，
+    由 REST 证据领养后恢复；外部订单的 `CANCELLED/EXPIRED/REJECTED` 终态不构成实时风险，不写阻断；
+    `OPEN/PARTIALLY_FILLED/FILLED` 外部订单与外部成交仍分别经 `UNKNOWN_ORDER`/`UNKNOWN_EXECUTION` 阻断。
+  - `UNKNOWN_ORDER` 证据补充 `status` 与 `observed_at_ms`，便于区分实时风险与历史回放。
+  - `BinanceSpotSnapshotProvider`: 领养证据同时来自 `get_open_orders()`（历史接口可能尚未返回刚下的挂单）
+    与订单历史，并按 `cl_ord_id` 去重；本系统在途挂单因此可被领养。
+  - `scripts/testnet_e2e.py`: 下单后轮询命令回执等待 `CONFIRMED`，并在开始时等待就绪采样。
+- 验证:
+  - 新增先红后绿测试：在途本系统订单不阻断、外部终态订单不阻断、外部未终态订单仍阻断、
+    未知订单证据含状态/时间、开放挂单在历史缺失时仍可领养。
+  - 交易相关 12 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过。
+  - 第 10 次窗口早期门禁（`--min-hours 0.1`）首次 `blockers=[]`：无未解决差异、无未知命令、
+    无账务异常；观察进程改为 25h 时长以保证采样跨度越过 24h。
+- 风险/遗留: 24h 最终门禁尚未到期；共享 demo 账户上的外部活动仍可能带来真实阻断
+  （外部成交按设计阻断），需要在窗口结束时以 24h 门禁复核。
+### 2026-11-02 - 24h 观察窗口通过 + 代理故障转移隔离
+
+- 窗口结果: `artifacts/observation_window10.jsonl`（2026-11-01 02:01 → 11-02 03:11，25.18h，1510 个采样）
+  通过 `summarize_observation.py --min-hours 24` 门禁：`ok=true`、`blockers=[]`、`parse_errors=0`、
+  `unresolved_counts={}`、未知命令/未补齐成交/账务异常均为 0、最大采样间隔 60.6s、`final_ready=true`，
+  `active_reconnect` 与 `runtime_restart_start/end` 标记齐全。
+- 发现的问题: 窗口内有 3 段外部中断（03:26~03:43、10:52~11:04、14:04~14:11，最长 18 分钟），
+  `RECONCILIATION_UNAVAILABLE` + `PRIVATE_STREAM_COVERAGE_UNPROVEN` 使账户 fail-closed 并自动恢复。
+  日志显示中断期间 REST 侧 303 次连接被拒到 `127.0.0.1:10808`（`.env` 配置的备用代理，进程未运行），
+  另有 250 次直连 `demo-api.binance.com:443`（本网络直连必然失败）；主代理 7890 进程全程健康。
+- 根因: 故障转移控制器只按 30s 冷却切换，冷却结束后必然重新选中同一个连不上的备用代理；
+  且任何请求异常（含目标侧失败）都记为该代理失败。
+- 改动:
+  - `trader/adapters/binance/proxy_failover.py`: 新增 `hard` 失败语义与隔离期
+    （`BINANCE_PROXY_QUARANTINE_SECONDS`，默认 300s）。代理本身不可达时再次失败即进入隔离，
+    `select_proxy` 跳过隔离中的代理；全部代理都被隔离时仍返回代理，绝不静默改为直连。
+    `get_state` 暴露隔离状态。
+  - 新增 `is_proxy_failure(exc, proxy)`：区分“代理不可达”（`ClientProxyConnectionError`、
+      本地代理连接被拒）与“目标不可达”（目标侧 `ClientConnectorError`），后者不再连累健康代理。
+  - `binance_spot_demo_broker.py` 与 `private_stream.py` 按该分类上报硬失败。
+  - `.env.example`: 补充备用代理与隔离期配置说明。
+- 验证:
+  - 新增先红后绿测试：备用代理反复拒绝连接后被隔离且不再被选中；全部隔离时仍返回代理；
+    软失败不隔离；代理级与目标级失败分类。
+  - Binance 适配相关 11 个测试文件 + P0 五件套通过；`black` / `isort` 对 `trader/` 通过；
+    `mypy` 对改动模块无错误。
+- 风险/遗留: 就绪率约 0.62，周期性完整对齐按契约仍会短暂收回就绪；外部中断时长取决于本地代理稳定性。
+  `.env` 中的 `BINANCE_BACKUP_PROXY_URL=127.0.0.1:10808` 当前无进程监听，建议运维侧停用该备用项。

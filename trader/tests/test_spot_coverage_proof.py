@@ -1,5 +1,6 @@
 """REST coverage proof: any uncertainty must fail closed, never guess."""
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -147,6 +148,51 @@ async def prove(rest, *, clock=COVERED_THROUGH, lookback_ms=1_000, settle_ms=0, 
         connected_from_ms=CONNECTED_FROM,
         buffered_through_ms=snapshots.pop("buffered_through_ms", CONNECTED_FROM),
     )
+
+
+class TrackingRest(Rest):
+    """Records how many symbol fetches are in flight at the same time."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.inflight = 0
+        self.max_inflight = 0
+
+    async def _tracked(self, coroutine):
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        try:
+            await asyncio.sleep(0.01)
+            return await coroutine
+        finally:
+            self.inflight -= 1
+
+    async def fetch_orders(self, symbol: str, start_time_ms: int):
+        return await self._tracked(super().fetch_orders(symbol, start_time_ms))
+
+    async def fetch_trades(self, symbol: str, start_time_ms: int):
+        return await self._tracked(super().fetch_trades(symbol, start_time_ms))
+
+
+@pytest.mark.asyncio
+async def test_backfill_fetches_symbols_concurrently():
+    symbols = ["BTCUSDT", "ETHUSDT", "USDCUSDT"]
+    rest = TrackingRest(
+        orders={symbol: [order(cl_ord_id="qts-1", symbol=symbol)] for symbol in symbols},
+        trades={symbol: [trade(symbol=symbol)] for symbol in symbols},
+    )
+    prover = BinanceSpotCoverageProver(
+        rest=rest,
+        symbols=symbols,
+        exchange_clock=lambda: COVERED_THROUGH,
+        lookback_ms=1_000,
+        settle_ms=0,
+    )
+
+    proof = await prover(1, snapshot(), snapshot(), CONNECTED_FROM, CONNECTED_FROM)
+
+    assert proof is not None
+    assert rest.max_inflight > 1
 
 
 @pytest.mark.asyncio

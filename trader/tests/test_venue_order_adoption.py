@@ -110,6 +110,22 @@ async def test_our_own_lost_order_is_adopted_instead_of_blocking():
 
 
 @pytest.mark.asyncio
+async def test_in_flight_open_order_is_adopted_instead_of_reported_foreign():
+    engine = service()
+    view = await engine.recover(
+        snapshot(
+            observations=[
+                OrderObservation("acct", "qts-abc123", "OPEN", Decimal("0"), "42", 1_000_000)
+            ],
+            venue_orders=[venue_order(status="OPEN", filled_qty=Decimal("0"))],
+        )
+    )
+    assert "UNKNOWN_ORDER" not in view.reasons
+    state = await engine.store.read("acct")
+    assert "qts-abc123" in state.orders
+
+
+@pytest.mark.asyncio
 async def test_foreign_client_order_id_still_blocks_new_risk():
     engine = service()
     view = await engine.recover(

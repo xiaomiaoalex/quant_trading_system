@@ -1,5 +1,60 @@
 # 统一现货闭环实施与验收记录
 
+## 第五轮补充：24h 观察窗口通过与恢复路径修正（2026-11-02）
+
+本轮关闭第四轮遗留的"24h 观察与主动重连/重启记录"缺口。真实 testnet 覆盖证明仍未关闭，
+见下文"仍未关闭"。窗口运行在 Binance Demo 沙箱账户，未进行真实资金交易。
+
+### 24h 观察窗口结果
+
+- 窗口文件 `artifacts/observation_window10.jsonl`：2026-11-01 02:01 → 11-02 03:11，跨度 25.18h，
+  1510 个采样（60s 间隔），`parse_errors=0`，最大采样间隔 60.6s。
+- 门禁命令 `scripts/summarize_observation.py --input artifacts/observation_window10.jsonl
+  --min-hours 24 --json-out artifacts/observation_summary_final.json`：
+  **`ok=true`、`blockers=[]`**；`unresolved_counts={}`、未知命令/未补齐成交/账务异常均为 0、
+  `final_ready=true`、`ready_ratio=0.6252`。
+- 演练标记齐全：`active_reconnect`（`POST /v1/trading/reconnect` 确认后恢复 READY，命令
+  `e2e-reconnect-1793468165584`）、`runtime_restart_start`/`runtime_restart_end`（杀掉执行进程后
+  重新取得租约并 READY）。
+- 链路证据：`artifacts/e2e_evidence_window10.json`（含主动重连的完整沙箱 E2E）、
+  `artifacts/e2e_evidence_window10_restart.json`（重启后同一链路复验）。两者均为
+  LIMIT 挂单→撤单→MARKET 成交→账务结算→`unresolved` 为空。
+- `artifacts/` 不入库，以上证据需单独归档才能复查。
+
+### 窗口暴露并已修复的缺陷
+
+- **成交重放假冲突**：未入账成交把本地标记 `applied` 写进成交内容，重放时被判
+  `EXECUTION_KEY_CONFLICT` 并永久阻断。修复后成交身份只由交易所事实构成，订单被领养后
+  自动补记，已被期初余额吸收的补记追加冲抵分录。见 `docs/INTERFACE_CONTRACTS.md`。
+- **周期对齐耗时过长**：单次完整对齐约 25s，而快照 60s 过期，无中断时的就绪率只有 37%。
+  改为只读并发抓取后两次快照 12.8s→5.9s，无中断时约 73%（含三次外部中断的整窗 `ready_ratio=0.6252`）。
+  契约语义（周期 `align`、`pause_alignment`、两遍完整回填、无证明不就绪）未变。
+- **在途订单被误判为外部订单**：本系统订单在本地事务提交前被行情/私有流观测到即阻断；
+  快照现在把开放挂单也作为可领养证据，`observe()` 对本命名空间的未知订单不写持久阻断。
+- **外部终态订单持续阻断**：共享 Demo 账户上的外部 `CANCELLED` 订单曾永久阻断新风险。
+  外部订单的 `CANCELLED/EXPIRED/REJECTED` 终态不再构成实时风险；外部 `OPEN`/`FILLED`
+  订单与外部成交仍分别按 `UNKNOWN_ORDER`/`UNKNOWN_EXECUTION` 阻断。
+- **代理故障转移反复选中死代理**：窗口期间 `.env` 配置的备用代理无进程监听（现已置空），
+  产生 303 次连接被拒与 250 次注定失败的直连。现在"代理本身不可达"进入隔离期（默认 300s）
+  并被跳过，目标侧失败不再连累健康代理；全部代理被隔离时仍返回代理，不静默直连。
+
+### 自动化证据
+
+- 新增 `trader/tests/test_execution_recovery.py`（9 项）、`test_bootstrap_dev_schema.py`（3 项）、
+  `test_spot_coverage_proof.py` 与 `test_spot_snapshot_consistency.py` 的并发行为用例、
+  `test_binance_proxy_failover.py` 的隔离与失败分类用例；全部先红后绿。
+- 交易相关 17 个测试文件 + P0 五件套 + Postgres 集成门禁（8 文件）本地通过；
+  `black --check` / `isort --check-only` 对 `trader/` 通过。
+
+### 仍未关闭
+
+- **blocked：真实 testnet 覆盖证明与 E2E。** 证明器尚未对真实 Binance 账户运行；
+  真实环境的分页上限、权重、符号范围与交易所迟到写入仍需实测。`QTS_SYMBOLS` 必须覆盖
+  策略实际交易的每个 symbol，否则证明范围不完整。
+- 预热默认长度0只表示“不额外加长”；有状态插件必须声明 `warmup_events`（或配置
+  `QTS_STRATEGY_WARMUP_EVENTS`），否则以 `STRATEGY_WARMUP_NOT_CONFIGURED` 阻断。
+  预热窗口的重新采集仅在真实 testnet 上跑过一次回放路径，尚未做长周期实盘式验证。
+
 ## 第四轮补充：可信覆盖证明与重启预热（2026-10-31）
 
 本轮关闭第三轮遗留的两个本地实现缺口；外部验收状态不变。未部署、未提交或push，未运行 `scripts/testnet_e2e.py`，未进行真实资金交易。
@@ -87,15 +142,11 @@
 
 ### 仍未关闭
 
+> 第五轮已关闭本轮的"24h 观察与主动重连/重启记录"一项（见上文"第五轮补充"），其余两项仍成立。
+
 - **blocked：真实 testnet 覆盖证明与 E2E。** 证明器尚未对真实 Binance 账户运行；
   真实环境的分页上限、权重、符号范围与交易所迟到写入仍需实测。`QTS_SYMBOLS` 必须覆盖
   策略实际交易的每个 symbol，否则证明范围不完整。
-- **blocked：24h 观察与主动重连/重启记录。** 2026-10-30 22:17 至 10-31 13:48 的窗口只覆盖
-  15.5h 即在账户阻塞后随观察进程一起中断，未达到24h；`active_reconnect` marker 从未写入
-  （重连确实发生过，但没有留下可复查标记），最终门禁为
-  `MISSING_MARKER:active_reconnect`、`NOT_READY_AT_END`、`WINDOW_SHORTER_THAN_MIN`，不能标通过。
-  该窗口暴露的成交重放假冲突已修复（见 `docs/INTERFACE_CONTRACTS.md` 成交重放约定），
-  修复本身不能替代重跑窗口。
 - 预热默认长度0只表示“不额外加长”；有状态插件必须声明 `warmup_events`（或配置
   `QTS_STRATEGY_WARMUP_EVENTS`），否则以 `STRATEGY_WARMUP_NOT_CONFIGURED` 阻断。
   预热窗口的重新采集仅在真实 testnet 上跑过一次回放路径，尚未做长周期实盘式验证。
@@ -128,7 +179,7 @@
 - **第三轮当时**：真实Binance入口仍为 `coverage_provider=None`，保持 `PRIVATE_STREAM_COVERAGE_UNPROVEN`/503；第四轮已装配 REST 回填证明，见上节，但真实 testnet 证明仍 blocked。
 - **第三轮当时**：策略已受理行情通过命令持久状态去重；插件指标状态重启预热尚未实现；第四轮已实现 `QTS_STRATEGY_WARMUP_EVENTS` 门禁，见上节。默认不运行未配置策略；实际使用需显式配置策略模块、deployment、标的与参数。
 - BAR仍保留既定撮合模型边界；本轮未改第二轮经济版本。
-- **blocked：真实testnet E2E、实际主动重连/执行进程重启记录、24h观察。** 需要隔离测试环境、可用沙箱配置、明确沙箱操作授权及实际观察时间；本轮禁止联网和外部账户操作，未执行这些验证。
+- **第三轮当时blocked：真实testnet E2E、实际主动重连/执行进程重启记录、24h观察。** 需要隔离测试环境、可用沙箱配置、明确沙箱操作授权及实际观察时间；本轮禁止联网和外部账户操作，未执行这些验证。第五轮已关闭其中的 24h 观察与主动重连/重启记录一项，见上文“第五轮补充”。
 
 ### 本轮门禁
 
@@ -158,9 +209,9 @@
 | 不可变数据与历史时钟、指标口径 | research safety/runtime测试 | 执行前hash重验已实现 |
 | 持久研究任务、续租/fencing/取消 | research worker lifecycle与真实PG测试 | 自动重启进程策略仍需部署配置 |
 | 登录、会话、CSRF与审计 | trading API与前端auth测试 | 已有自动化；新控制入口门禁已验 |
-| 启动装配、可观测、CI及切换证据 | runtime、observation、CI、runbook | 真实测试环境E2E/24h记录 blocked |
+| 启动装配、可观测、CI及切换证据 | runtime、observation、CI、runbook | 真实测试环境E2E blocked；24h 记录第五轮已关闭 |
 
-外部验收状态：**blocked**。本轮仅获本地实现和测试授权，禁止部署、真实交易；未运行真实测试环境E2E，也未生成包含实际主动重连与重启的24h观察记录。完成这些项目需要可用的隔离测试环境、明确的沙箱操作授权和实际观察时间；已有模拟测试不能替代。
+外部验收状态：**blocked**（第三轮口径）。本轮仅获本地实现和测试授权，禁止部署、真实交易；未运行真实测试环境E2E，也未生成包含实际主动重连与重启的24h观察记录。完成这些项目需要可用的隔离测试环境、明确的沙箱操作授权和实际观察时间；已有模拟测试不能替代。第五轮已产出包含实际主动重连与重启的 24h 观察记录（`artifacts/observation_window10.jsonl`，门禁 `ok=true`），真实测试环境 E2E 仍 blocked。
 
 ## 第一轮历史记录
 
@@ -181,7 +232,7 @@
 | C 账户与组合 | 非 GTC 拒绝；所有非零资产都要求可靠 USDT 估值；REST 采集前后稳定性检查 | WS 缓冲代际、水位与稳定快照组合恢复尚未接线 |
 | D 研究与数据 | 修复跨标的 SELL 预约、执行前冻结输入重验、完整 manifest hash、证据资格、持续心跳与取消 | BAR 仍自建账务/准入，未共用 TradingService/SpotRiskEngine；risk_config 尚未真正执行；DB 层不可变约束未实现 |
 | E 装配与产品 | 修复 API 绕过租约、出站复验、CSRF 刷新恢复、显式 Vite 新 API 目标 | API/交易 Runtime 仍同进程；策略 Runner、private WS 未在新入口完整装配；旧控制 API 仍存在 |
-| F 集成与切换 | PG 集成、前端测试、CI 新回归门禁、观察证据完整性检查 | 未执行新环境切换；未完成本轮测试环境 E2E 或重新校验完整 24h 观察窗口；旧执行器尚未统一退出 |
+| F 集成与切换 | PG 集成、前端测试、CI 新回归门禁、观察证据完整性检查 | 第三轮未执行新环境切换、未完成测试环境 E2E 或重新校验完整 24h 观察窗口；第五轮已重新校验 24h 窗口并通过，测试环境 E2E 仍未完成 |
 
 不得据本轮测试通过将全方案或阶段 F 标为完成。禁止同时启动新旧发送器。
 
@@ -249,7 +300,7 @@
 1. BAR 通过同一订单/账本/风险应用服务，真正执行 `risk_config`，在等价性验收前不能将当前模型称为统一 live/paper/backtest 核心。
 2. 三进程分离与 PG 命令协调、实际策略 Runner 和 private WS 接线；恢复需代际缓冲与覆盖证明，REST 稳定性检查仅补其中一项。
 3. 主动重连前立即阻断、恢复核对完成后再就绪；旧 API/执行器退出、开发 schema 版本化切换与投影重建演练。
-4. 提供原 13 项审查编号，建立真实对应证据；最终 24h 观察必须通过已加强的汇总门禁，并保存主动重连/重启实际记录。
+4. 提供原 13 项审查编号，建立真实对应证据。24h 观察已通过加强后的汇总门禁并保存主动重连/重启实际记录（第五轮，见上文“第五轮补充”），此项仅剩编号对应关系待补。
 
 ## 第二轮实现与验证（2026-10-31）
 
@@ -276,4 +327,4 @@
 
 1. **未完成（本地实现缺口）**：新交易入口尚未装配策略Runner与Binance private WS；RecoveryCoordinator尚未获实际Adapter连续覆盖证明。REST-only入口明确保持BLOCKED，这不是可运行完整交易闭环已验收。订单分页/已成交分页/WS覆盖完整性仍需实际Adapter接线验证。
 2. **保留模型差异**：BAR撮合仍采用后续BAR开盘/触价规则，不模拟排队或冲击；闭合交易统计是报告逻辑。live保留持久事务、证据冲突/outbox编排；BAR使用内存账户，经济函数相同。SELL预估手续费币种契约尚缺，真实费用造成库存负数仍入账并阻断，不能隐藏事实。
-3. **blocked（外部验收）**：真实隔离测试环境E2E、主动重连/进程重启实际记录和24h观察窗口；需要外部环境、沙箱操作授权和实际时间。本轮未申请或执行真实账户操作，不得标通过。
+3. **blocked（外部验收）**：真实隔离测试环境E2E；需要外部环境与沙箱操作授权。主动重连/进程重启实际记录与24h观察窗口已于第五轮完成（门禁 `ok=true`），不得据此把真实测试环境E2E 标为通过。

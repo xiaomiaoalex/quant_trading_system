@@ -344,6 +344,66 @@ async def test_execution_dedup_survives_restart_and_ordering():
 
 
 @pytest.mark.asyncio
+async def test_our_in_flight_order_observation_does_not_block_before_the_order_exists():
+    service = make_service()
+    await bootstrap(service)
+
+    handled = await service.observe(
+        OrderObservation(
+            "acct", "qts-not-local-yet", "OPEN", Decimal("0"), "b-1", 1_000_100, source="WS"
+        )
+    )
+
+    assert handled is True
+    assert "UNKNOWN_ORDER" not in (await service.risk_view("acct")).reasons
+
+
+@pytest.mark.asyncio
+async def test_foreign_order_observation_still_blocks_before_the_order_exists():
+    service = make_service()
+    await bootstrap(service)
+
+    handled = await service.observe(
+        OrderObservation("acct", "manual-order", "OPEN", Decimal("1"), "99", 1_000_100, source="WS")
+    )
+
+    assert handled is False
+    assert "UNKNOWN_ORDER" in (await service.risk_view("acct")).reasons
+
+
+@pytest.mark.asyncio
+async def test_terminal_foreign_order_observation_does_not_block_live_risk():
+    service = make_service()
+    await bootstrap(service)
+
+    handled = await service.observe(
+        OrderObservation(
+            "acct", "manual-order", "CANCELLED", Decimal("1"), "99", 1_000_100, source="WS"
+        )
+    )
+
+    assert handled is True
+    assert "UNKNOWN_ORDER" not in (await service.risk_view("acct")).reasons
+
+
+@pytest.mark.asyncio
+async def test_foreign_order_observation_records_status_and_time_as_evidence():
+    service = make_service()
+    await bootstrap(service)
+
+    await service.observe(
+        OrderObservation("acct", "manual-order", "OPEN", Decimal("0"), "99", 1_000_100, source="WS")
+    )
+
+    state = await service.store.read("acct")
+    entry = next(
+        item for item in state.reconciliation["unresolved"] if item["code"] == "UNKNOWN_ORDER"
+    )
+    assert entry["detail"]["status"] == "OPEN"
+    assert entry["detail"]["observed_at_ms"] == 1_000_100
+
+
+@pytest.mark.asyncio
 async def test_conflicting_duplicate_execution_blocks_new_risk():
     service = make_service()
     await bootstrap(service)

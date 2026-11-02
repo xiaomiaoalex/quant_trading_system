@@ -273,7 +273,9 @@ class BinanceSpotSnapshotProvider:
         self._last_checked_ms = now
         complete = True
 
-        account = await self.broker._fetch_account()
+        account, open_orders = await asyncio.gather(
+            self.broker._fetch_account(), self.broker.get_open_orders()
+        )
         initial_balances = self._balance_fingerprint(account)
         balances: dict[str, Decimal] = {}
         for item in account.get("balances", []):
@@ -286,7 +288,6 @@ class BinanceSpotSnapshotProvider:
             if total != 0:
                 balances[asset] = total
 
-        open_orders = await self.broker.get_open_orders()
         initial_orders = self._order_fingerprint(open_orders)
         observations: list[OrderObservation] = []
         for order in open_orders:
@@ -313,38 +314,64 @@ class BinanceSpotSnapshotProvider:
                 if price is not None and Decimal(price) > 0:
                     marks[symbol] = {"price": Decimal(price), "at_ms": now}
 
+        async def _fetch_symbol(symbol: str):
+            (orders, orders_complete), (trades, trades_complete) = await asyncio.gather(
+                self._orders(symbol, now), self._trades(symbol, now)
+            )
+            return symbol, orders, orders_complete, trades, trades_complete
+
+        ordered_symbols = sorted(symbols)
+        # Symbols are independent reads; fetching them concurrently only
+        # shortens one snapshot. Assembly below stays in sorted symbol order.
+        fetched = await asyncio.gather(*(_fetch_symbol(symbol) for symbol in ordered_symbols))
+        assets = dict(
+            zip(
+                ordered_symbols,
+                await asyncio.gather(*(self._symbol_assets(symbol) for symbol in ordered_symbols)),
+            )
+        )
+
         executions: list[Execution] = []
         venue_orders: list[VenueOrder] = []
-        for symbol in sorted(symbols):
-            orders, orders_complete = await self._orders(symbol, now)
+        seen_venue: set[str] = set()
+
+        def adoptable(order, symbol: str) -> VenueOrder:
+            base_asset, quote_asset = assets[symbol]
+            return VenueOrder(
+                cl_ord_id=order.cl_ord_id,
+                broker_order_id=order.broker_order_id,
+                symbol=symbol,
+                side=str(getattr(order.side, "value", order.side)).upper(),
+                order_type=str(getattr(order.order_type, "value", order.order_type)).upper(),
+                qty=Decimal(str(order.qty)),
+                price=Decimal(str(order.average_price or 0)),
+                filled_qty=Decimal(str(order.filled_qty)),
+                status=_status(order.status),
+                created_at_ms=int(order.created_at.timestamp() * 1000),
+                base_asset=base_asset,
+                quote_asset=quote_asset,
+            )
+
+        # The open-order list is authoritative for a placement that the order
+        # history has not surfaced yet. It must be adoptable, not foreign.
+        for order in open_orders:
+            if order.cl_ord_id.startswith(self.order_prefix):
+                venue_orders.append(adoptable(order, order.symbol))
+                seen_venue.add(order.cl_ord_id)
+
+        for symbol, orders, orders_complete, trades, trades_complete in fetched:
             complete = complete and orders_complete
             mapping = {order.broker_order_id: order.cl_ord_id for order in orders}
-            # Closed orders disappear from openOrders; report our own terminal
-            # orders so cancellations and fills are observed instead of guessed.
+            # Our own orders are adoptable evidence even while open. Closed
+            # orders disappear from openOrders, so they are also reported as
+            # observations for cancellations and fills.
             for order in orders:
-                if (
-                    order.cl_ord_id.startswith(self.order_prefix)
-                    and order.cl_ord_id not in open_cl_ord_ids
-                ):
-                    base_asset, quote_asset = await self._symbol_assets(symbol)
-                    venue_orders.append(
-                        VenueOrder(
-                            cl_ord_id=order.cl_ord_id,
-                            broker_order_id=order.broker_order_id,
-                            symbol=symbol,
-                            side=str(getattr(order.side, "value", order.side)).upper(),
-                            order_type=str(
-                                getattr(order.order_type, "value", order.order_type)
-                            ).upper(),
-                            qty=Decimal(str(order.qty)),
-                            price=Decimal(str(order.average_price or 0)),
-                            filled_qty=Decimal(str(order.filled_qty)),
-                            status=_status(order.status),
-                            created_at_ms=int(order.created_at.timestamp() * 1000),
-                            base_asset=base_asset,
-                            quote_asset=quote_asset,
-                        )
-                    )
+                if not order.cl_ord_id.startswith(self.order_prefix):
+                    continue
+                if order.cl_ord_id not in seen_venue:
+                    venue_orders.append(adoptable(order, symbol))
+                    seen_venue.add(order.cl_ord_id)
+                if order.cl_ord_id not in open_cl_ord_ids:
                     observations.append(
                         OrderObservation(
                             account_id=account_id,
@@ -356,7 +383,6 @@ class BinanceSpotSnapshotProvider:
                             source="REST",
                         )
                     )
-            trades, trades_complete = await self._trades(symbol, now)
             complete = complete and trades_complete
             for trade in trades:
                 order_id = str(trade.get("orderId", ""))
@@ -382,8 +408,9 @@ class BinanceSpotSnapshotProvider:
         # REST calls are not an atomic exchange snapshot. A change during the
         # collection invalidates this generation instead of enabling risk with
         # balances from before a fill and executions from after it.
-        final_account = await self.broker._fetch_account()
-        final_orders = await self.broker.get_open_orders()
+        final_account, final_orders = await asyncio.gather(
+            self.broker._fetch_account(), self.broker.get_open_orders()
+        )
         complete = (
             complete
             and initial_balances == self._balance_fingerprint(final_account)

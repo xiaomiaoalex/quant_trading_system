@@ -35,6 +35,9 @@ from trader.trading.models import (
 from trader.trading.risk import RiskPolicy, SpotRiskEngine, available_balance, valuation_complete
 
 TERMINAL_COMMAND = {"CONFIRMED", "FAILED"}
+# Terminal foreign orders carry no live exposure. FILLED is deliberately absent:
+# a fill without execution evidence must keep blocking.
+NON_EXPOSURE_TERMINAL = {"CANCELLED", "EXPIRED", "REJECTED"}
 PERSISTENT_DIFFERENCES = {
     "EXECUTION_KEY_CONFLICT",
     "BALANCE_MISMATCH",
@@ -95,6 +98,7 @@ class TradingService:
         policy: RiskPolicy | None = None,
         clock: Callable[[], int] | None = None,
         defer_send: bool = False,
+        order_prefix: str = "qts-",
     ):
         self.store = store
         self.exchange = exchange
@@ -102,6 +106,7 @@ class TradingService:
         self.policy = self.risk.policy
         self.clock = clock or (lambda: 0)
         self.defer_send = defer_send
+        self.order_prefix = order_prefix
 
     # ------------------------------------------------------------------ commands
     async def place(self, command: PlaceOrderCommand, actor: str = "system") -> CommandReceipt:
@@ -412,10 +417,28 @@ class TradingService:
         async with self.store.transaction(observation.account_id) as state:
             order = state.orders.get(observation.cl_ord_id)
             if order is None:
+                if observation.cl_ord_id.startswith(self.order_prefix):
+                    # Our own placement can be visible on the private stream
+                    # before the local transaction commits. Recovery adopts it
+                    # from REST evidence; a transient WS observation must not
+                    # block the account.
+                    self._refresh_status(state)
+                    return True
+                if observation.status in NON_EXPOSURE_TERMINAL:
+                    # A cancelled/expired/rejected foreign order is history, not
+                    # live exposure. A real fill still arrives as an execution
+                    # and blocks through UNKNOWN_EXECUTION.
+                    self._refresh_status(state)
+                    return True
                 self._add_unresolved(
                     state,
                     "UNKNOWN_ORDER",
-                    {"cl_ord_id": observation.cl_ord_id, "source": observation.source},
+                    {
+                        "cl_ord_id": observation.cl_ord_id,
+                        "source": observation.source,
+                        "status": observation.status,
+                        "observed_at_ms": observation.observed_at_ms,
+                    },
                 )
                 self._refresh_status(state)
                 return False
