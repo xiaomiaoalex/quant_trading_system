@@ -288,7 +288,7 @@ async def test_market_reference_price_source_and_time_are_recorded():
         sent = rt.exchange.placed[0][0]
         assert sent.order_type == "MARKET"
         assert sent.price == Decimal("100")
-        assert sent.price_source == PRICE_SOURCE_MARKET_TICKER
+        assert sent.price_source == "MARKET_REFERENCE_CLOSED_BAR"
         assert sent.price_at_ms == 1_000_000
     finally:
         await rt.stop()
@@ -296,7 +296,9 @@ async def test_market_reference_price_source_and_time_are_recorded():
 
 @pytest.mark.asyncio
 async def test_closed_bar_reference_is_labelled_as_a_closed_bar_not_a_ticker():
-    rt = runtime(snap=snapshot())
+    # The bar closes at 1_060_000 ms; the fake clock must be at or after that
+    # moment for the bar to be visible.
+    rt = runtime(clock=Clock(1_060_000), snap=snapshot(checked=1_060_000))
     await start_runtime(rt)
 
     class BarPlugin:
@@ -324,7 +326,15 @@ async def test_closed_bar_reference_is_labelled_as_a_closed_bar_not_a_ticker():
             kline_low=Decimal("98"),
             kline_close=Decimal("100"),
             kline_interval="1m",
-            metadata={"complete": True, "is_closed": True, "close_time_ms": 1_060_000},
+            metadata={
+                "bar_id": "phase2-closed-bar",
+                "open_time_ms": 1_000_000,
+                "close_time_ms": 1_060_000,
+                "available_at_ms": 1_060_000,
+                "interval": "1m",
+                "complete": True,
+                "is_closed": True,
+            },
         )
         await strategy.on_market_data(bar, event_id="bar-1")
         sent = rt.exchange.placed[0][0]
@@ -1322,14 +1332,38 @@ async def test_allocation_command_and_book_query_are_control_plane_endpoints():
 
 
 # ---------------------------------------------------------------- helpers
+_BAR_SEQUENCE = 0
+
+
 def market_data(price="100"):
     from datetime import datetime, timezone
 
+    # The new-stack runner admits fully specified closed KLINE only.
+    global _BAR_SEQUENCE
+    _BAR_SEQUENCE += 1
+    open_ms = 940_000
+    close_ms = 1_000_000
     return MarketData(
         symbol="BTCUSDT",
-        data_type=MarketDataType.TICKER,
+        data_type=MarketDataType.KLINE,
         price=Decimal(price),
-        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+        volume=Decimal("1"),
+        timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+        available_at_ms=close_ms,
+        kline_open=Decimal(price),
+        kline_high=Decimal(price),
+        kline_low=Decimal(price),
+        kline_close=Decimal(price),
+        kline_interval="1m",
+        metadata={
+            "bar_id": f"phase2-bar:{_BAR_SEQUENCE}",
+            "open_time_ms": open_ms,
+            "close_time_ms": close_ms,
+            "available_at_ms": close_ms,
+            "interval": "1m",
+            "complete": True,
+            "is_closed": True,
+        },
     )
 
 

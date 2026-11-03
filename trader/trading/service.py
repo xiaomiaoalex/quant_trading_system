@@ -205,6 +205,7 @@ class TradingService:
                     "book_id": command.book_id,
                     "price_source": command.price_source,
                     "price_at_ms": command.price_at_ms,
+                    "price_reference_id": command.price_reference_id,
                 },
                 now,
             )
@@ -1089,6 +1090,7 @@ class TradingService:
             "book_id": order.command.book_id,
             "price_source": order.command.price_source,
             "price_at_ms": order.command.price_at_ms,
+            "price_reference_id": order.command.price_reference_id,
             "booked_qty": str(order.booked_qty),
             "observed_qty": str(order.observed_qty),
             "remaining_qty": str(order.remaining_qty),

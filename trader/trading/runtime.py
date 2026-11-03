@@ -314,6 +314,9 @@ class TradingRuntime:
             ),
             "strategy_warmup_state": warmup_state,
             "strategy_warmup_reason": warmup_reason,
+            "strategy_warmup_instruments": (
+                self.strategy_runner.instrument_warmup if self.strategy_runner is not None else None
+            ),
             "strategy_ready": (
                 self.strategy_runner.strategy_ready if self.strategy_runner is not None else None
             ),

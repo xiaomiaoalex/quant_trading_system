@@ -43,12 +43,35 @@ class Plugin:
         )
 
 
+_BAR_SEQUENCE = 0
+
+
 def market(symbol="BTCUSDT", price="100"):
+    global _BAR_SEQUENCE
+    _BAR_SEQUENCE += 1
+    open_ms = 940_000
+    close_ms = 1_000_000
     return MarketData(
         symbol=symbol,
         data_type=MarketDataType.KLINE,
         price=Decimal(price),
-        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+        volume=Decimal("1"),
+        timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+        available_at_ms=close_ms,
+        kline_open=Decimal(price),
+        kline_high=Decimal(price),
+        kline_low=Decimal(price),
+        kline_close=Decimal(price),
+        kline_interval="1m",
+        metadata={
+            "bar_id": f"warmup-bar:{_BAR_SEQUENCE}",
+            "open_time_ms": open_ms,
+            "close_time_ms": close_ms,
+            "available_at_ms": close_ms,
+            "interval": "1m",
+            "complete": True,
+            "is_closed": True,
+        },
     )
 
 

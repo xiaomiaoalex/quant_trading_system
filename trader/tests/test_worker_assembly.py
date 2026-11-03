@@ -4,10 +4,11 @@ from dataclasses import replace
 
 import pytest
 
+from trader.core.application.strategy_protocol import MarketDataType
 from trader.runtime.trading_worker_main import build_runtime
 from trader.tests.test_trading_runtime import snapshot, start_runtime
 from trader.tests.test_trading_service import Clock, FakeExchange, command
-from trader.trading.models import NotReady
+from trader.trading.models import NotReady, TradingError
 from trader.trading.store import MemoryTradingStore
 
 
@@ -156,8 +157,17 @@ async def test_worker_strategy_to_ws_fill_uses_one_ledger_and_disconnect_blocks_
     )
 
     class Market:
+        calls = 0
+
+        async def get_klines(self, symbol, interval="1m", limit=200):
+            Market.calls += 1
+            # One closed 1m bar: open 940_000 + 60_000 = close 1_000_000 ms,
+            # matching the fake runtime clock. Binance reports the inclusive
+            # last millisecond as closeTime.
+            return [[940_000, "100", "100", "100", "100", "1", 999_999]]
+
         async def get_ticker_prices(self, symbols):
-            return {"BTCUSDT": Decimal("100")}
+            raise AssertionError("the closed-bar feed must not read tickers")
 
     try:
         assert await start_runtime(rt)
@@ -188,6 +198,54 @@ async def test_worker_strategy_to_ws_fill_uses_one_ledger_and_disconnect_blocks_
         assert not rt.strategy_start_allowed
         await feed_market_once(rt, Market(), {"BTCUSDT": ("BTC", "USDT")})
         assert plugin.calls == 1
+    finally:
+        await rt.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data_type", [item for item in MarketDataType if item is not MarketDataType.KLINE]
+)
+async def test_runner_rejects_every_non_kline_before_side_effects(data_type):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from trader.core.application.strategy_protocol import MarketData
+    from trader.tests.test_unified_strategy_runner import Plugin
+    from trader.trading.strategy import UnifiedStrategyRunner
+
+    rt = build(
+        private_session_factory=session_factory(covered=True),
+        strategy_plugin=Plugin(),
+        instruments={"BTCUSDT": ("BTC", "USDT")},
+        deployment_id="worker-non-bar-gate",
+    )
+    assert await start_runtime(rt)
+    observation = MarketData(
+        symbol="BTCUSDT",
+        data_type=data_type,
+        price=Decimal("100"),
+        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+    )
+    try:
+        # Both the production assembly and the default constructor are strict.
+        for candidate in (
+            rt.strategy_runner,
+            UnifiedStrategyRunner(
+                rt,
+                deployment_id="default-non-bar-gate",
+                plugin=Plugin(),
+                instruments={"BTCUSDT": ("BTC", "USDT")},
+                book_id="book:test",
+            ),
+        ):
+            with pytest.raises(TradingError, match="NON_BAR_MARKET_DATA"):
+                await candidate.on_market_data(observation, event_id=f"non-bar-{data_type.value}")
+        assert rt.exchange.placed == []
+        state = await rt.store.read("acct")
+        assert not state.orders
+        assert not state.commands
+        assert not state.holds
     finally:
         await rt.stop()
 
@@ -249,15 +307,28 @@ async def test_worker_warms_a_declared_plugin_from_the_recollected_window():
 
         from trader.core.application.strategy_protocol import MarketData, MarketDataType
 
-        history.extend(
-            MarketData(
+        def closed_bar(index):
+            open_ms = (880 + index * 60) * 1000
+            close_ms = open_ms + 60_000
+            return MarketData(
                 symbol="BTCUSDT",
                 data_type=MarketDataType.KLINE,
-                price=Decimal("100"),
-                timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+                price=Decimal(str(100 + index)),
+                timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+                available_at_ms=close_ms,
+                kline_close=Decimal(str(100 + index)),
+                kline_interval="1m",
+                metadata={
+                    "bar_id": f"bar:BTCUSDT:1m:{open_ms}",
+                    "open_time_ms": open_ms,
+                    "close_time_ms": close_ms,
+                    "interval": "1m",
+                    "complete": True,
+                    "is_closed": True,
+                },
             )
-            for _ in range(2)
-        )
+
+        history.extend([closed_bar(0), closed_bar(1)])
         assert await enforce_strategy_warmup(rt) is True
         assert rt.strategy_runner.warmup_state is WarmupState.WARM
         assert rt.strategy_runner.warmup_remaining == 0

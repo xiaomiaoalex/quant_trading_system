@@ -60,6 +60,10 @@ class PlaceOrderCommand:
     book_id: str = ""
     price_source: str = ""
     price_at_ms: int = -1
+    # Identity of the completed bar or signal that supplied a market reference
+    # price. Empty for paths that have no bar identity (for example recovery
+    # adoption); it is trace metadata and never an economic parameter.
+    price_reference_id: str = ""
     # How the venue settles this order:
     #   QUOTE - a market buy spends ``qty * price`` of quote and the venue
     #           chooses the base quantity it buys with that quote;

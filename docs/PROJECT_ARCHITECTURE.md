@@ -882,7 +882,8 @@ flowchart TB
   当前可验证闭环使用受控 fake，外部沙箱和 24h 最终切换尚未完成。
 - 执行器将 `PrivateTradingSession` 的世代缓冲、双快照和覆盖门禁装配到 Runtime
   启动、周期对账及主动重连；失联先持久关闭 stream/ready。可选新 `UnifiedStrategyRunner`
-  从 ticker 输入生成稳定命令，读取统一账户库存；不会进入旧 Runner 的预算/OMS 路径。
+  从**已收盘 K 线**生成稳定命令（阶段 3 起不再消费 REST ticker），读取统一账户库存；
+  不会进入旧 Runner 的预算/OMS 路径。
 - 覆盖证明由 Adapter 侧端口提供（`BinanceSpotCoverageProver`）：以交易所服务器时间
   界定窗口，完整分页回填订单与成交并逐笔映射本系统订单，连续两遍回填一致才返回
   证明；任何不确定性返回 `None` 并保持 `PRIVATE_STREAM_COVERAGE_UNPROVEN`。核心层
@@ -1004,3 +1005,38 @@ flowchart TB
   预算不足被该 book 拒绝；`BacktestResult.books` 复用 `books.book_snapshot` 输出逐 book
   余额/持仓/预约/可用预算/权益，阶段 4 可直接读取。初始资金分配必须显式，剩余留在
   `UNALLOCATED`，不按策略隐式归集，也不做任何内部撮合或净额。
+
+### 8.3 阶段 3 已实现：closed-bar 决策输入与资格链（2026-11-03）
+
+本节是阶段 3 对第 8 / 8.2 节的增量事实；接口细节见 `docs/INTERFACE_CONTRACTS.md` 13.15。
+
+**执行进程的行情路径**
+
+- `trader/runtime/trading_worker_main.py::feed_market_once` 只调用公开 K 线端点，过滤
+  `available_at_ms > 决策时钟` 的未完成 bar；不再装配或调用 `get_ticker_prices`。缺少 K 线
+  端口时以 `CLOSED_BAR_SOURCE_REQUIRED` 阻断，不回退 REST 快照。
+- 执行进程用 `VenueClock` 把决策时钟锚定到 venue server time，并以独立可注入的单调经过时间
+  推进；每次 feed 前重新采样，时间源/单调源失败直接阻断。策略可见性、warmup、对账与 feed
+  使用同一 venue 时间域，本地 wall clock 前跳/后跳不会让未收盘 bar 进入策略。
+- Binance 含尾 `closeTime` 在 `_kline_observation` 归一化为 BAR_V1 半开区间；真实时钟下
+  `timestamp`/`available_at_ms` 均为 bar 收盘时刻，`bar_id` 与 `open_time_ms` 进入观测和命令审计。
+- 新栈 `UnifiedStrategyRunner` 只接受完全指定的已收盘 KLINE；TICKER/TRADE/DEPTH/FUNDING/
+  INDEX_PRICE/MARK_PRICE 在插件与账户副作用前抛 `NON_BAR_MARKET_DATA`。KLINE 必须具备显式
+  open/interval/close/available 字段与 `kline_close`，缺失或矛盾时 fail-closed；不得用
+  timestamp/price 伪造 BAR_V1。没有 ticker 默认旁路或生产 opt-out；legacy orchestrator
+  不属于新栈，阶段 6 删除。
+- `UnifiedStrategyRunner` 在插件调用前检查可见性；预热窗口先整体验证再修改插件状态，
+  非 KLINE history 以 `STRATEGY_WARMUP_NON_BAR_DATA`、非法 bar 以
+  `STRATEGY_WARMUP_INVALID_BAR:<code>` 阻断。重复/乱序/重放 bar 不增加预热计数、
+  不产生第二个决策；预热窗口每次进程启动重新采集，不持久化插件指标状态。
+
+**研究资格链**
+
+- `trader/runtime/history_plane.py` 是 Control 与组合开发入口共享的 fail-closed 装配：
+  history store / bridge 装配失败时返回 `UnavailableBacktestApplication`，不存在
+  `eligibility=None` 的 `BacktestApplication` 构造。
+- `trader/trading/eligibility.py` 只认可信关联 + `PUBLISHED`/`persistence_ok`/
+  `backtest_eligible` 的历史数据集；存储异常统一 `HISTORY_STORE_UNAVAILABLE`。
+- 提交与 retry 都重新核验资格和冻结 provenance；数据集集合在入队前共享完整已收盘 bar
+  日历与 quote asset。真实 PG 覆盖见 `test_phase3_postgres.py` 与
+  `test_research_history_bridge_pg.py`（已登记 CI）。

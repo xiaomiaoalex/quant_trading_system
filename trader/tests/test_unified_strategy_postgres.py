@@ -17,8 +17,9 @@ async def test_strategy_accepted_event_survives_runtime_restart_without_resendin
         clock = Clock(1_000_200)
         first = runtime(store, clock=clock, snap=snapshot())
         assert await start_runtime(first)
+        same_bar = market()
         try:
-            receipt = await runner(first).on_market_data(market(), event_id="durable-event")
+            receipt = await runner(first).on_market_data(same_bar, event_id="durable-event")
             assert len(first.exchange.placed) == 1
         finally:
             await first.stop()
@@ -41,7 +42,7 @@ async def test_strategy_accepted_event_survives_runtime_restart_without_resendin
         try:
             plugin = Plugin()
             duplicate = await runner(recovered, plugin).on_market_data(
-                market(), event_id="durable-event"
+                same_bar, event_id="durable-event"
             )
             assert duplicate.command_id == receipt.command_id
             assert duplicate.cl_ord_id == receipt.cl_ord_id

@@ -180,6 +180,9 @@ jobs:
           python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
           python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short
           python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short
+          python -m pytest -q trader/tests/test_research_history_bridge_pg.py --tb=short
+          python -m pytest -q trader/tests/test_phase3_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase3_independent_postgres.py --tb=short
           python -m pytest -q trader/tests/test_trading_postgres.py --tb=short
           python -m pytest -q trader/tests/test_trading_projection_rebuild.py --tb=short
           python -m pytest -q trader/tests/test_phase2_postgres.py --tb=short
@@ -214,6 +217,8 @@ jobs:
           python -m pytest -q trader/tests/test_private_execution_identity.py trader/tests/test_spot_recovery_pagination.py trader/tests/test_spot_coverage_proof.py --tb=short
           python -m pytest -q trader/tests/test_unified_strategy_runner.py trader/tests/test_private_trading_session.py trader/tests/test_worker_assembly.py --tb=short
           python -m pytest -q trader/tests/test_strategy_warmup.py --tb=short
+          python -m pytest -q trader/tests/test_phase3_closed_bar_warmup.py trader/tests/test_phase3_eligibility.py --tb=short
+          python -m pytest -q trader/tests/test_phase3_independent_closed_bars.py trader/tests/test_phase3_independent_eligibility.py trader/tests/test_phase3_independent_input_gate.py trader/tests/test_phase3_independent_ingress.py trader/tests/test_phase3_independent_venue_clock.py --tb=short
           python -m pytest -q trader/tests/test_trading_evidence.py trader/tests/test_spot_snapshot_consistency.py --tb=short
           python -m pytest -q trader/tests/test_trading_runtime.py --tb=short
           python -m pytest -q trader/tests/test_trading_api.py --tb=short

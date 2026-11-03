@@ -19,13 +19,15 @@ from trader.trading.datasets import (
     digest,
     freeze_dataset,
 )
+from trader.trading.eligibility import (
+    DATASET_ELIGIBILITY_GATE_UNAVAILABLE,
+    DATASET_PROVENANCE_MISMATCH,
+    DATASET_PROVENANCE_UNTRUSTED,
+    HISTORY_STORE_UNAVAILABLE,
+    link_is_trusted,
+)
 from trader.trading.research_schema import research_schema_sql
 from trader.trading.version import SPOT_RUNTIME_VERSION
-
-# Stable rejection reason when the history store (and therefore trusted
-# provenance) is unavailable. Research submission must fail closed, never skip
-# the eligibility gate.
-HISTORY_STORE_UNAVAILABLE = "HISTORY_STORE_UNAVAILABLE"
 
 
 def freeze_strategy(spec: dict) -> dict:
@@ -87,6 +89,7 @@ class MemoryResearchStore:
 
     def __init__(self, clock=None):
         self.datasets: dict[str, dict] = {}
+        self.links: dict[str, dict] = {}
         self.jobs: dict[str, dict] = {}
         self.clock = clock or time.monotonic
 
@@ -102,23 +105,28 @@ class MemoryResearchStore:
         data = self.datasets.get(dataset_id)
         return copy.deepcopy(data) if data is not None else None
 
+    def register_dataset_link(self, dataset_id: str, link: dict) -> None:
+        """Attach trusted provenance to an in-memory dataset (test fixture)."""
+        self.links[dataset_id] = copy.deepcopy(link)
+
     async def get_dataset_link(self, dataset_id: str):
-        """In-memory stores never carry a trusted archive provenance link."""
-        return None
+        link = self.links.get(dataset_id)
+        return copy.deepcopy(link) if link is not None else None
 
     async def list_datasets(self, **filters: Any) -> list[dict]:
         """Catalog listing: metadata only, never the bar payload."""
         records = []
         for dataset_id, data in self.datasets.items():
+            link = self.links.get(dataset_id) or {}
             records.append(
                 {
                     "dataset_id": dataset_id,
                     "metadata": dataset_metadata(data),
-                    "month": None,
-                    "history_dataset_id": None,
-                    "official_eligible": False,
-                    "provenance_hash": None,
-                    "published_at": None,
+                    "month": link.get("month"),
+                    "history_dataset_id": link.get("history_dataset_id"),
+                    "official_eligible": bool(link.get("official_eligible")),
+                    "provenance_hash": link.get("provenance_hash"),
+                    "published_at": link.get("published_at"),
                     "created_at": None,
                 }
             )
@@ -550,10 +558,12 @@ class PostgresResearchStore:
 class BacktestApplication:
     def __init__(self, store, eligibility=None):
         self.store = store
-        # Optional async callable ``(dataset_id) -> bool``. When present, a
-        # dataset that is not backed by a trusted, published provenance link is
-        # refused. The eligibility decision never trusts a caller supplied
+        # A mandatory async callable ``(dataset_id) -> bool``. There is no
+        # ``eligibility=None`` mode: an application without a gate must never be
+        # able to submit a backtest. The decision never trusts a caller supplied
         # source string.
+        if eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
         self._eligibility = eligibility
 
     async def _dataset_links(self, dataset_ids: list[str]) -> dict[str, dict]:
@@ -566,6 +576,31 @@ class BacktestApplication:
             if link:
                 links[dataset_id] = link
         return links
+
+    async def _trusted_provenance(self, dataset_ids: list[str]) -> dict[str, str]:
+        """Every dataset must have a trusted published provenance link."""
+        links = await self._dataset_links(dataset_ids)
+        trusted: dict[str, str] = {}
+        for dataset_id in dataset_ids:
+            link = links.get(dataset_id)
+            if not link_is_trusted(link):
+                raise ValueError(f"{DATASET_PROVENANCE_UNTRUSTED}: {dataset_id}")
+            trusted[dataset_id] = str(link["provenance_hash"])
+        return trusted
+
+    @staticmethod
+    def _match_manifest_provenance(provenance, trusted: dict[str, str]) -> dict[str, str]:
+        """A caller may repeat the trusted hashes, never invent different ones."""
+        if provenance is None:
+            return trusted
+        if not isinstance(provenance, dict):
+            raise ValueError("provenance must be an object")
+        if set(provenance) != set(trusted):
+            raise ValueError(f"{DATASET_PROVENANCE_MISMATCH}: dataset set")
+        for dataset_id, expected in trusted.items():
+            if str(provenance.get(dataset_id) or "") != expected:
+                raise ValueError(f"{DATASET_PROVENANCE_MISMATCH}: {dataset_id}")
+        return trusted
 
     async def submit(self, manifest: dict):
         if set(manifest) - {
@@ -592,37 +627,27 @@ class BacktestApplication:
             if data is None:
                 raise ValueError("Dataset not found: " + dataset_id)
             datasets.append(data)
-        # BAR_V1 requires a common completed-bar calendar and quote asset.
-        first = datasets[0]
-        calendar = [(x["open_time_ms"], x["close_time_ms"]) for x in first["bars"]]
-        if len({x["identity"]["symbol"] for x in datasets}) != len(datasets):
-            raise ValueError("Duplicate instrument in run")
-        for data in datasets:
-            if (
-                data["identity"]["quote_asset"] != first["identity"]["quote_asset"]
-                or [(x["open_time_ms"], x["close_time_ms"]) for x in data["bars"]] != calendar
-            ):
-                raise ValueError("Datasets must share quote asset and bar calendar")
+        # BAR_V1 requires a shared venue, interval, quote asset, instrument set
+        # and completed-bar calendar. Refuse before any work is queued.
+        from trader.trading.backtest import validate_dataset_set
+
+        validate_dataset_set(datasets)
         engine = manifest.get("engine", "event_runtime")
         purpose = manifest.get("purpose", "research_screening")
         if engine != "event_runtime":
             raise ValueError("Only the event runtime may execute frozen backtests")
         if purpose not in {"research_screening", "admission_evidence"}:
             raise ValueError("Unsupported purpose")
-        if self._eligibility is not None:
-            for dataset_id in ids:
-                if not await self._eligibility(dataset_id):
-                    raise ValueError("Dataset has no trusted published provenance: " + dataset_id)
-        links = await self._dataset_links(ids)
-        provenance = manifest.get("provenance")
-        if provenance is None:
-            provenance = {
-                dataset_id: link.get("provenance_hash")
-                for dataset_id, link in links.items()
-                if link.get("provenance_hash")
-            }
-        if not isinstance(provenance, dict):
-            raise ValueError("provenance must be an object")
+        if self._eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
+        for dataset_id in ids:
+            if not await self._eligibility(dataset_id):
+                raise ValueError(
+                    f"Dataset has no trusted published provenance ({DATASET_PROVENANCE_UNTRUSTED}): "
+                    + dataset_id
+                )
+        trusted = await self._trusted_provenance(ids)
+        provenance = self._match_manifest_provenance(manifest.get("provenance"), trusted)
         frozen = {
             "dataset_ids": sorted(ids),
             "strategy": freeze_strategy(manifest.get("strategy", {})),
@@ -659,7 +684,27 @@ class BacktestApplication:
         return await self.store.cancel(run_id)
 
     async def retry(self, run_id):
-        """Re-queue a FAILED run with its frozen inputs untouched."""
+        """Re-queue a FAILED run only after re-verifying dataset eligibility."""
+        record = await self.store.get(run_id)
+        if record is None:
+            return None
+        if record.get("status") != "FAILED":
+            # Preserve the store's canonical conflict error and CAS semantics.
+            return await self.store.retry(run_id)
+        manifest = record.get("manifest") or {}
+        dataset_ids = list(manifest.get("dataset_ids") or [])
+        if not dataset_ids:
+            raise ValueError(f"{DATASET_PROVENANCE_UNTRUSTED}: missing dataset_ids")
+        if self._eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
+        for dataset_id in dataset_ids:
+            if not await self._eligibility(dataset_id):
+                raise ValueError(
+                    f"Dataset has no trusted published provenance ({DATASET_PROVENANCE_UNTRUSTED}): "
+                    + dataset_id
+                )
+        trusted = await self._trusted_provenance(dataset_ids)
+        self._match_manifest_provenance(manifest.get("provenance"), trusted)
         return await self.store.retry(run_id)
 
 
@@ -668,11 +713,20 @@ class UnavailableBacktestApplication(BacktestApplication):
 
     Dataset eligibility needs the trusted, published provenance link that only
     the history store can verify. Without that store there is no trustworthy
-    provenance, so submissions are refused with a stable reason instead of
-    running with the eligibility gate skipped.
+    provenance, so submissions and retries are refused with a stable reason
+    instead of running with the eligibility gate skipped.
     """
 
     reason = HISTORY_STORE_UNAVAILABLE
 
+    def __init__(self, store, eligibility=None):
+        # This application never checks eligibility because it never accepts
+        # work. It must not inherit the mandatory gate construction.
+        self.store = store
+        self._eligibility = None
+
     async def submit(self, manifest: dict):
+        raise ValueError(self.reason)
+
+    async def retry(self, run_id):
         raise ValueError(self.reason)

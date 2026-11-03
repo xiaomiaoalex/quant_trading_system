@@ -83,6 +83,7 @@ class OrderSpec:
     price_at_ms: int
     time_in_force: str
     book_id: str
+    price_reference_id: str = ""
     settlement: str = SETTLEMENT_QUOTE
 
     def to_command(
@@ -111,6 +112,7 @@ class OrderSpec:
             book_id=self.book_id,
             price_source=self.price_source,
             price_at_ms=self.price_at_ms,
+            price_reference_id=self.price_reference_id,
             settlement=self.settlement,
         )
 
@@ -129,6 +131,7 @@ def build_order_spec(
     time_in_force: str,
     book_id: str,
     price_source: str = "",
+    price_reference_id: str = "",
     settlement: str = "",
 ) -> OrderSpec:
     """The single constructor for an order specification.
@@ -170,6 +173,7 @@ def build_order_spec(
         price_at_ms=at_ms,
         time_in_force=time_in_force,
         book_id=book_id,
+        price_reference_id=str(price_reference_id or ""),
         settlement=settlement_mode,
     )
 

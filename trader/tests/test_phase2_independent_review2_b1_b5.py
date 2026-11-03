@@ -49,6 +49,7 @@ from trader.trading.models import (
 )
 from trader.trading.order_spec import (
     PRICE_SOURCE_BACKTEST_CLOSED_BAR,
+    PRICE_SOURCE_MARKET_CLOSED_BAR,
     PRICE_SOURCE_MARKET_TICKER,
     PRICE_SOURCE_SIGNAL_LIMIT,
     build_order_spec,
@@ -500,8 +501,10 @@ async def test_b1_the_strategy_runner_goes_through_the_spec_factory():
     """A runner signal produces a fully explicit command, not adapter parameters.
 
     The runner is executed for real; only the runtime port is a recording
-    stand-in, so the production path ``signal -> build_order_spec ->
-    to_command -> runtime.place`` is exercised end to end.
+    stand-in, so the production path ``closed KLINE -> plugin signal ->
+    build_order_spec -> to_command -> runtime.place`` is exercised end to end.
+    A ticker snapshot is no longer a decision input (contract 13.15): only a
+    completed bar may produce a command, and its close prices a MARKET order.
     """
     store = MemoryTradingStore()
     exchange = RecordingExchange()
@@ -517,6 +520,9 @@ async def test_b1_the_strategy_runner_goes_through_the_spec_factory():
         reason="runner setup",
     )
     runtime = RecordingRuntime(service, store, exchange)
+    # The decision clock is explicit: visibility must not fall back to the
+    # observation timestamp by accident.
+    runtime.clock = FixedClock()
     runner = UnifiedStrategyRunner(
         runtime,
         deployment_id="dep-r2",
@@ -525,13 +531,31 @@ async def test_b1_the_strategy_runner_goes_through_the_spec_factory():
         strategy_id="alpha",
         book_id=BOOK_ALPHA,
     )
+    bar_id = f"bar:{SYMBOL_BTC}:1m:{T0 - 60_000}"
     data = MarketData(
         symbol=SYMBOL_BTC,
-        data_type=MarketDataType.TICKER,
+        data_type=MarketDataType.KLINE,
         price=Decimal("100"),
+        volume=Decimal("2"),
         timestamp=datetime.fromtimestamp(T0 / 1000, tz=timezone.utc),
+        available_at_ms=T0,
+        kline_open=Decimal("99"),
+        kline_high=Decimal("101"),
+        kline_low=Decimal("98"),
+        kline_close=Decimal("100"),
+        kline_interval="1m",
+        metadata={
+            "event_id": bar_id,
+            "bar_id": bar_id,
+            "open_time_ms": T0 - 60_000,
+            "close_time_ms": T0,
+            "available_at_ms": T0,
+            "interval": "1m",
+            "complete": True,
+            "is_closed": True,
+        },
     )
-    receipt = await runner.on_market_data(data, event_id="tick-r2-1")
+    receipt = await runner.on_market_data(data, event_id=bar_id)
     assert receipt is not None
     assert receipt.status == "CONFIRMED"
     assert runtime.placed, "the runner did not submit any command"
@@ -541,12 +565,35 @@ async def test_b1_the_strategy_runner_goes_through_the_spec_factory():
     assert actor == "strategy:dep-r2"
     assert command.order_type == "MARKET"
     assert command.settlement == SETTLEMENT_QUOTE
-    assert command.price_source == PRICE_SOURCE_MARKET_TICKER
+    assert command.price_source == PRICE_SOURCE_MARKET_CLOSED_BAR
+    assert command.price_reference_id == bar_id
+    assert command.price_at_ms == T0
     assert command.book_id == BOOK_ALPHA
     assert command.qty == Decimal("1")
     assert command.price == Decimal("100")
     assert command.decision_id
     assert validate_order_command(command) is None
+
+    # The same closed bar replayed must return the accepted command instead of
+    # trading twice, and the phase-2 reservation must stay exactly one hold.
+    again = await runner.on_market_data(data, event_id=bar_id)
+    assert again is not None
+    assert again.cl_ord_id == receipt.cl_ord_id
+    assert len(runtime.placed) == 1
+    assert len(exchange.place_calls) == 1
+    state = await store.read(ACCOUNT)
+    assert len(state.orders) == 1
+    # The setup produced one ALLOCATE command; the runner adds exactly one
+    # PLACE, and the replay above must not add a second one.
+    kinds = [row.kind for row in state.commands.values()]
+    assert kinds.count("PLACE") == 1
+    assert kinds.count("ALLOCATE") == 1
+    assert len(state.commands) == 2
+    assert len(state.holds) == 1
+    # qty * price * (1 + fee) = 1 * 100 * 1.001 on both reservation layers.
+    assert state.holds[receipt.cl_ord_id].amount == Decimal("100.1")
+    assert state.books[BOOK_ALPHA].holds[receipt.cl_ord_id].amount == Decimal("100.1")
+    assert book_ledger.conservation_mismatch(state) == {}
 
 
 # ========================================================= B2 quote settlement

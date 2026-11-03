@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from trader.tests.fakes.research_eligibility import always_eligible, trust_memory_dataset
 from trader.tests.test_research_runtime import bars, dataset, identity
 from trader.trading.backtest import EventBacktestRuntime, StrategySignal
 from trader.trading.jobs import BacktestApplication, MemoryResearchStore
@@ -14,7 +15,8 @@ from trader.trading.research import ResearchExecutor
 
 async def frozen_job(store, *, purpose="research_screening", strategy_version="1", bar_list=None):
     data = await store.register_dataset(identity(), bar_list or bars())
-    record = await BacktestApplication(store).submit(
+    trust_memory_dataset(store, data["dataset_id"])
+    record = await BacktestApplication(store, eligibility=always_eligible).submit(
         {
             "dataset_ids": [data["dataset_id"]],
             "strategy": {
@@ -50,7 +52,8 @@ def test_sell_holds_are_partitioned_by_instrument():
 async def test_changed_strategy_source_is_rejected_before_plugin_load(monkeypatch):
     store = MemoryResearchStore()
     data = await store.register_dataset(identity(), bars())
-    record = await BacktestApplication(store).submit(
+    trust_memory_dataset(store, data["dataset_id"])
+    record = await BacktestApplication(store, eligibility=always_eligible).submit(
         {
             "dataset_ids": [data["dataset_id"]],
             "strategy": {"module_path": "trader.strategies.ema_cross_btc"},
@@ -73,7 +76,8 @@ async def test_changed_strategy_source_is_rejected_before_plugin_load(monkeypatc
 async def test_unfrozen_strategy_is_rejected_before_plugin_load():
     store = MemoryResearchStore()
     data = await store.register_dataset(identity(), bars())
-    record = await BacktestApplication(store).submit(
+    trust_memory_dataset(store, data["dataset_id"])
+    record = await BacktestApplication(store, eligibility=always_eligible).submit(
         {
             "dataset_ids": [data["dataset_id"]],
             "strategy": {"module_path": "trader.strategies.ema_cross_btc"},

@@ -37,12 +37,36 @@ class Plugin:
         )
 
 
+_BAR_SEQUENCE = 0
+
+
 def market(price="100"):
+    # The new-stack runner admits fully specified closed KLINE only.
+    global _BAR_SEQUENCE
+    _BAR_SEQUENCE += 1
+    open_ms = 600_000
+    close_ms = 660_000
     return MarketData(
         symbol="BTCUSDT",
-        data_type=MarketDataType.TICKER,
+        data_type=MarketDataType.KLINE,
         price=Decimal(price),
-        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+        volume=Decimal("1"),
+        timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+        available_at_ms=close_ms,
+        kline_open=Decimal(price),
+        kline_high=Decimal(price),
+        kline_low=Decimal(price),
+        kline_close=Decimal(price),
+        kline_interval="1m",
+        metadata={
+            "bar_id": f"runner-bar:{_BAR_SEQUENCE}",
+            "open_time_ms": open_ms,
+            "close_time_ms": close_ms,
+            "available_at_ms": close_ms,
+            "interval": "1m",
+            "complete": True,
+            "is_closed": True,
+        },
     )
 
 
@@ -112,12 +136,13 @@ async def test_runner_retry_and_restart_reuse_event_command_without_rerunning_pl
     plugin = Plugin(qty="0.123")
     strategy = runner(rt, plugin)
     try:
+        same_bar = market()
         receipts = await asyncio.gather(
-            *[strategy.on_market_data(market(), event_id="same-event") for _ in range(100)]
+            *[strategy.on_market_data(same_bar, event_id="same-event") for _ in range(100)]
         )
         replacement_plugin = Plugin(qty="0.123")
         after_restart = await runner(rt, replacement_plugin).on_market_data(
-            market(), event_id="same-event"
+            same_bar, event_id="same-event"
         )
         assert {receipt.command_id for receipt in receipts} == {after_restart.command_id}
         assert plugin.calls == 1

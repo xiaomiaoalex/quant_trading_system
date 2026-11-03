@@ -88,18 +88,18 @@ class ResearchExecutor:
     async def _verify_provenance(self, manifest: dict, datasets: list[dict]) -> None:
         """核验冻结的 provenance 与当前可信关联一致。
 
-        只要 manifest 冻结了某个数据集的 provenance，执行前就必须重新核对；
-        对不上说明数据来源在排队期间发生了变化，直接失败。
+        每个数据集在执行前都必须有冻结的 provenance，并与当前可信关联一致；
+        缺失或对不上说明数据来源在排队期间发生了变化或从未可信，直接失败。
         """
-        frozen = manifest.get("provenance") or {}
-        if not frozen:
-            return
+        frozen = manifest.get("provenance")
+        if not isinstance(frozen, dict) or not frozen:
+            raise ValueError("Frozen provenance is required")
         getter = getattr(self.store, "get_dataset_link", None)
         for dataset in datasets:
             dataset_id = dataset["dataset_id"]
             expected = frozen.get(dataset_id)
             if not expected:
-                continue
+                raise ValueError(f"Frozen provenance is required: {dataset_id}")
             link = await getter(dataset_id) if getter is not None else None
             if not link or link.get("provenance_hash") != expected:
                 raise ValueError(f"Frozen provenance mismatch: {dataset_id}")
@@ -125,6 +125,9 @@ class ResearchExecutor:
             if not dataset_id == data.get("dataset_id") == normalized["dataset_id"] == content_id:
                 raise ValueError(f"Dataset content hash mismatch: {dataset_id}")
             datasets.append(data)
+        from trader.trading.backtest import validate_dataset_set
+
+        validate_dataset_set(datasets)
 
         strategy_spec = manifest["strategy"]
         # Revalidate immediately before loading installed code. A queued job or

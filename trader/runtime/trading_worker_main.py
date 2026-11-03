@@ -29,29 +29,107 @@ from trader.trading.runtime import TradingRuntime
 logger = logging.getLogger(__name__)
 
 
+class VenueClock:
+    """Decision clock anchored to a venue sample and monotonic elapsed time.
+
+    A venue bar is visible only after the *venue* has closed it. A fixed offset
+    from local wall time is not sufficient: a subsequent wall-clock step would
+    advance the decision clock even though the venue did not. This clock stores
+    the sampled venue timestamp and advances only by a separately injectable
+    monotonic elapsed-time source.
+
+    ``local_clock`` is accepted only for backward-compatible construction; it is
+    never used to advance the decision clock. ``sync`` samples the venue clock
+    and anchors elapsed time after the response, so the decision clock starts at
+    (or behind) the sampled venue time and cannot be moved by a local wall-clock
+    jump.
+    """
+
+    def __init__(self, server_time, local_clock=None, elapsed_clock=None):
+        self._server_time = server_time
+        # Kept for call compatibility; wall time must never drive visibility.
+        self._local_clock = local_clock
+        self._elapsed_clock = elapsed_clock or (lambda: time.monotonic_ns() // 1_000_000)
+        self._venue_anchor_ms = None
+        self._elapsed_anchor_ms = None
+
+    @property
+    def synced(self) -> bool:
+        return self._venue_anchor_ms is not None
+
+    async def sync(self) -> int:
+        elapsed_before = self._elapsed_clock()
+        venue_now = int(await self._server_time())
+        elapsed_after = self._elapsed_clock()
+        if elapsed_after < elapsed_before:
+            # A monotonic source stepping backwards is not a safe domain.
+            raise NotReady("VENUE_CLOCK_UNSTABLE")
+        self._venue_anchor_ms = venue_now
+        self._elapsed_anchor_ms = elapsed_after
+        return self()
+
+    def __call__(self) -> int:
+        if self._venue_anchor_ms is None:
+            raise NotReady("VENUE_CLOCK_NOT_SYNCED")
+        elapsed = self._elapsed_clock()
+        if elapsed < self._elapsed_anchor_ms:
+            raise NotReady("VENUE_CLOCK_UNSTABLE")
+        return self._venue_anchor_ms + (elapsed - self._elapsed_anchor_ms)
+
+
+def interval_ms(interval: str) -> int:
+    """Fixed duration of a supported strategy interval."""
+    from trader.trading.datasets import INTERVAL_MS
+
+    value = INTERVAL_MS.get(str(interval or "").strip())
+    if value is None:
+        raise ValueError("UNSUPPORTED_MARKET_INTERVAL:" + str(interval))
+    return int(value)
+
+
 def _kline_observation(symbol: str, row, interval: str):
-    """Convert one Binance kline row into a closed-bar observation."""
+    """Convert one Binance kline row into a BAR_V1 closed-bar observation.
+
+    Binance reports ``closeTime`` as the inclusive last millisecond of the bar
+    (``openTime + interval - 1``); BAR_V1 defines the half-open interval and
+    ``close_time_ms = open_time_ms + interval_ms``. Normalisation happens here,
+    at the adapter boundary, without changing the frozen bar contract.
+    """
     from trader.core.application.strategy_protocol import MarketData, MarketDataType
 
+    duration = interval_ms(interval)
     open_time = int(row[0])
-    close_time = int(row[6])
+    venue_close_time = int(row[6])
+    close_time = open_time + duration
+    if venue_close_time not in (close_time - 1, close_time):
+        raise ValueError(
+            "KLINE_TIMESTAMP_CONTRACT_MISMATCH:"
+            f"{symbol}:open={open_time}:venue_close={venue_close_time}:expected={close_time}"
+        )
     close_price = Decimal(str(row[4]))
+    bar_id = f"bar:{symbol}:{interval}:{open_time}"
     return MarketData(
         symbol=symbol,
         data_type=MarketDataType.KLINE,
         price=close_price,
         volume=Decimal(str(row[5])),
-        timestamp=datetime.fromtimestamp(open_time / 1000, tz=timezone.utc),
+        timestamp=datetime.fromtimestamp(close_time / 1000, tz=timezone.utc),
+        available_at_ms=close_time,
         kline_open=Decimal(str(row[1])),
         kline_high=Decimal(str(row[2])),
         kline_low=Decimal(str(row[3])),
         kline_close=close_price,
         kline_interval=interval,
         metadata={
-            "event_id": f"warmup:{symbol}:{open_time}",
+            "event_id": bar_id,
+            "bar_id": bar_id,
+            "open_time_ms": open_time,
+            "close_time_ms": close_time,
+            "available_at_ms": close_time,
+            "interval": interval,
             "complete": True,
             "is_closed": True,
-            "close_time_ms": close_time,
+            "source": "binance_kline",
         },
     )
 
@@ -137,39 +215,56 @@ async def enforce_strategy_warmup(runtime) -> bool:
     return True
 
 
-async def feed_market_once(runtime, broker, instruments):
+async def feed_market_once(runtime, broker, instruments, *, interval="1m", limit=2):
+    """Feed completed bars only; a ticker snapshot is never a decision input.
+
+    The venue kline endpoint is the sole market-data source of the new-stack
+    execution path. A row whose availability moment is still in the future is
+    skipped before it can reach the strategy runner.
+    """
     if not runtime.strategy_start_allowed or runtime.strategy_runner is None:
         return
     state = getattr(runtime.strategy_runner.warmup_state, "value", "")
     if state == "BLOCKED":
         # A blocked warm-up must not keep poking the plugin.
         return
-    from trader.core.application.strategy_protocol import MarketData, MarketDataType
-
-    prices = await broker.get_ticker_prices(sorted(instruments))
+    get_klines = getattr(broker, "get_klines", None)
+    if get_klines is None:
+        # Refuse to fall back to a REST ticker snapshot: there is no bar
+        # identity or availability moment to audit.
+        raise RuntimeError("CLOSED_BAR_SOURCE_REQUIRED")
     now = runtime.clock()
-    for symbol, price in prices.items():
-        if symbol not in instruments:
-            continue
-        event_id = f"ticker:{symbol}:{now}"
-        data = MarketData(
-            symbol=symbol,
-            data_type=MarketDataType.TICKER,
-            price=Decimal(str(price)),
-            timestamp=datetime.fromtimestamp(now / 1000, tz=timezone.utc),
-            metadata={"event_id": event_id, "source": "rest_ticker"},
-        )
-        await runtime.on_market_data(data, event_id=event_id)
+    for symbol in sorted(instruments):
+        rows = await get_klines(symbol, interval=interval, limit=max(int(limit), 2))
+        for row in sorted(rows or [], key=lambda item: int(item[0])):
+            observation = _kline_observation(symbol, row, interval)
+            if observation.available_at_ms > now:
+                # The bar is still forming; unfinished data is invisible.
+                continue
+            await runtime.on_market_data(observation, event_id=observation.metadata["event_id"])
 
 
-async def _market_loop(runtime, broker, instruments, interval):
+async def _market_loop(runtime, broker, instruments, interval, poll_seconds):
     while True:
         try:
-            await feed_market_once(runtime, broker, instruments)
+            clock = runtime.clock
+            sync = getattr(clock, "sync", None)
+            if callable(sync):
+                # Recalibrate before every feed; a failed venue time source
+                # blocks new risk instead of falling back to local wall time.
+                await sync()
+            runner = runtime.strategy_runner
+            if runner is not None and not runner.warm:
+                state = getattr(runner.warmup_state, "value", "")
+                if state != "BLOCKED":
+                    # A delayed start (lease/recovery) must still replay the
+                    # recollected window before live bars may trade.
+                    await enforce_strategy_warmup(runtime)
+            await feed_market_once(runtime, broker, instruments, interval=interval)
         except Exception:
             logger.exception("Strategy or market input failed; blocking new risk")
             await runtime.block("STRATEGY_OR_MARKET_DATA_FAILED")
-        await asyncio.sleep(interval)
+        await asyncio.sleep(poll_seconds)
 
 
 async def run():
@@ -193,7 +288,11 @@ async def run():
     try:
         await broker.connect()
         account_id = os.getenv("QTS_ACCOUNT_ID", "binance_spot")
-        clock = lambda: int(time.time() * 1000)
+        # Every venue-time comparison (bar visibility, marks, reconciliation)
+        # uses the venue-calibrated clock. A local clock ahead of the venue
+        # must never make a forming bar visible.
+        clock = VenueClock(broker.get_server_time)
+        await clock.sync()
         provider = BinanceSpotSnapshotProvider(
             broker,
             account_id=account_id,
@@ -267,14 +366,14 @@ async def run():
             required = max(1, runner.warmup_events)
             observations = []
             for symbol in instruments:
-                rows = await broker.get_klines(symbol, interval=warmup_interval, limit=required + 1)
+                rows = await broker.get_klines(symbol, interval=warmup_interval, limit=required + 2)
                 now_ms = await broker.get_server_time()
-                for row in rows:
-                    close_time = int(row[6])
-                    if close_time > now_ms:
+                for row in sorted(rows or [], key=lambda item: int(item[0])):
+                    observation = _kline_observation(symbol, row, warmup_interval)
+                    if observation.available_at_ms > now_ms:
                         # The bar is still forming; unfinished data is invisible.
                         continue
-                    observations.append(_kline_observation(symbol, row, warmup_interval))
+                    observations.append(observation)
             return observations
 
         plugin = None
@@ -320,11 +419,13 @@ async def run():
             # Rebuild indicator state before the strategy may produce output.
             await enforce_strategy_warmup(runtime)
         if plugin is not None:
+            market_interval = os.getenv("QTS_STRATEGY_MARKET_INTERVAL", warmup_interval)
             market_task = asyncio.create_task(
                 _market_loop(
                     runtime,
                     broker,
                     instruments,
+                    market_interval,
                     float(os.getenv("QTS_MARKET_POLL_SECONDS", "1")),
                 )
             )

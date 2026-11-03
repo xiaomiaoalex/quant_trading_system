@@ -2697,6 +2697,7 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 | `book_id` | str | 稳定策略子账簿 `book:{strategy_id}`；参与经济幂等身份 |
 | `price_source` | str | 显式价格来源；参与经济幂等身份 |
 | `price_at_ms` | int | 价格观测/决策时点（毫秒，>=0）；审计字段，不参与幂等 |
+| `price_reference_id` | str | 市价参考价对应的已收盘 bar / 决策身份（阶段 3）；审计字段，不参与幂等 |
 | `settlement` | str | 结算口径：`QUOTE`（市价买入按 `qty * price` 报价额度结算，交易所决定买到的 base 数量）/ `BASE`（按请求的 base 数量成交）；参与经济幂等身份 |
 
 - `cl_ord_id` 由 `(account_id, command_id)` 确定性派生，首次受理后固定。
@@ -2881,17 +2882,52 @@ warmup_source=None, on_block=None)`
   `describe_plugin_warmup(plugin)` 读取。未声明的插件按“有状态”处理：沉默不等于
   “可以冷启动交易”。声明 `stateful_indicators=False` 的插件无需预热。
 - 预热长度取 `max(部署配置 warmup_events, 插件声明 warmup_events)`；插件声明是下界。
-- 预热状态为 `PENDING / WARMING_UP / WARM / BLOCKED`，按标的分别计数；所有标的都达到
-  预热长度才进入 `WARM`。预热期间观察仍传给插件，但产生的信号一律丢弃，不提交订单。
+- 预热状态为 `PENDING / WARMING_UP / WARM / BLOCKED`，逐标的记录
+  `{state, observations, required}`；所有标的都达到预热长度才进入 `WARM`。预热期间观察仍传给
+  插件，但产生的信号一律丢弃，不提交订单。
+- 同一 bar 身份（`bar_id` / `open_time_ms`）的重复或重放观测不得增加预热计数，也不得再次调用
+  插件产生第二个决策；同一标的更旧的乱序 bar 直接丢弃。生产 bar 在 `available_at_ms` 之前不可见，
+  预热窗口回放同样拒绝未完成 bar（`STRATEGY_WARMUP_UNFINISHED_BAR` /
+  `STRATEGY_WARMUP_BAR_NOT_AVAILABLE`）。
+- 预热与 live 共用同一 closed-KLINE 校验：**整个窗口先验证，再修改插件状态**。任一历史成员为
+  非 KLINE 时以 `STRATEGY_WARMUP_NON_BAR_DATA` 阻断；缺少/矛盾/非法 bar 字段时以
+  `STRATEGY_WARMUP_INVALID_BAR:<code>` 阻断；验证失败前不得调用插件、增加计数或进入 `WARM`。
 - 预热窗口**重新采集**而非持久化：插件内部指标状态不可安全序列化，代码或参数变更后
   持久快照即失效。`warmup_source` 返回重新采集的历史观测（生产实现为 Binance 已收盘
   K 线），在恢复完成后回放；未完成 K 线不可见。
 - 阻断原因：`STRATEGY_WARMUP_NOT_CONFIGURED`（有状态插件无预热长度）、
   `STRATEGY_WARMUP_HISTORY_EMPTY`、`STRATEGY_WARMUP_HISTORY_INCOMPLETE`、
-  `STRATEGY_WARMUP_HISTORY_FAILED`、`STRATEGY_WARMUP_FAILED`、`STRATEGY_PLUGIN_ERROR`。
+  `STRATEGY_WARMUP_HISTORY_FAILED`、`STRATEGY_WARMUP_FAILED`、`STRATEGY_PLUGIN_ERROR`、
+  `STRATEGY_WARMUP_NON_BAR_DATA`、`STRATEGY_WARMUP_INVALID_BAR:<code>`。
   阻断时 `on_block` 关闭账户新增风险，健康接口不得假装就绪。
 - 就绪响应增加 `strategy_warmup_remaining`、`strategy_warmup_state`、
-  `strategy_warmup_reason`、`strategy_ready`（未装配策略时为 `null`）。
+  `strategy_warmup_reason`、`strategy_warmup_instruments`、`strategy_ready`
+  （未装配策略时为 `null`）。
+
+执行入口的行情契约（阶段 3）：
+
+- `MarketData` 增加 `available_at_ms`（整数毫秒）与 BAR_V1 元数据
+  `bar_id` / `open_time_ms` / `close_time_ms` / `interval`。新栈 KLINE 必须携带显式
+  `open_time_ms`、受支持的 `interval`、等于 `open_time_ms + interval_ms` 的 close/available
+  字段以及 `kline_close`；缺失/矛盾字段分别抛 `BAR_OPEN_TIME_REQUIRED` /
+  `BAR_INTERVAL_REQUIRED` / `BAR_CLOSE_TIME_REQUIRED` / `BAR_TIMESTAMP_INCONSISTENT` /
+  `BAR_CLOSE_PRICE_REQUIRED` / `INVALID_BAR_CLOSE`，不得用 `timestamp` 或 `price` 伪造
+  BAR_V1。K 线在 `available_at_ms > 决策时钟` 时抛 `BAR_NOT_AVAILABLE_YET`，插件与账本均不可见。
+  `available_at_ms` 的 timestamp 回退仅保留给非新栈 legacy 消费者。
+- Binance `closeTime` 是含尾毫秒（`open_time + interval - 1`），在适配边界归一化为
+  BAR_V1 的 `close_time_ms = open_time_ms + interval_ms`；`available_at_ms = close_time_ms`。
+  `_market_loop` / `warmup_source` 只从已收盘 K 线构造观测，REST ticker 不再作为新栈决策输入；
+  缺少 K 线端口时抛 `CLOSED_BAR_SOURCE_REQUIRED`，不回退 ticker。
+- 执行进程的决策时钟使用 `VenueClock`：每次采样保存 venue 时间锚点，并以独立可注入的
+  **单调经过时间**推进；本地 wall clock（包括前跳/后跳）不得推进 bar 可见性。每次 feed 前
+  重新采样，时间源失败/单调源回退直接阻断。策略可见性、feed、warmup 与对账使用同一 venue
+  时间域。`local_clock` 参数仅为构造兼容保留，不参与决策。
+- 新栈 `UnifiedStrategyRunner` 只接受已收盘 `MarketDataType.KLINE`；所有其它市场数据类型
+  （TICKER / TRADE / DEPTH / FUNDING / INDEX_PRICE / MARK_PRICE）在插件与账户副作用之前
+  抛 `NON_BAR_MARKET_DATA`。没有 ticker 默认旁路或生产 opt-out；legacy orchestrator 不属于
+  新栈，阶段 6 删除。
+- MARKET 参考价取触发 bar 的 close，`price_source = MARKET_REFERENCE_CLOSED_BAR`，
+  `price_at_ms = close_time_ms`，`price_reference_id = bar_id`；LIMIT 仍取信号声明价。
 
 ## 14. Research Dataset / Event Runtime 契约
 
@@ -2955,6 +2991,17 @@ warmup_source=None, on_block=None)`
 - 「官方可用」只来自**可信关联**（`research.dataset_links` + 已 `PUBLISHED` 的历史数据集），
   绝不依据调用方声明的 `source` 字符串。提交时校验发布状态与 provenance，
   执行前由 `ResearchExecutor` 复核冻结的 provenance 哈希与内容哈希。
+- 阶段 3 起 `BacktestApplication` **必须**注入 eligibility 检查器；没有
+  `eligibility=None` 构造或提交路径（`DATASET_ELIGIBILITY_GATE_UNAVAILABLE`）。每个数据集
+  必须有 `official_eligible=true` 且带 `provenance_hash` 的可信关联
+  （`DATASET_PROVENANCE_UNTRUSTED`）；调用方提供的 `provenance` 只能重复可信哈希，
+  不能替换或遗漏（`DATASET_PROVENANCE_MISMATCH`）。Control 与组合开发入口
+  （`runtime/trading_main.py`）共用 `runtime/history_plane.py` 的 fail-closed 装配。
+- `retry` 在重新排队前重新核验资格与冻结 provenance；资格失败保持 `FAILED`，不改变
+  `attempt` 或 manifest。历史存储不可用统一返回 `HISTORY_STORE_UNAVAILABLE`
+  （API retry 映射 503）。
+- 数据集集合在入队前校验 venue、market、interval、quote asset、唯一标的与**完整已收盘 bar
+  日历**（`available_at_ms == close_time_ms`）；不满足直接拒绝，不产生排队任务。
 
 ### 14.4 回测报告模型标记
 
@@ -3189,6 +3236,26 @@ warmup_source=None, on_block=None)`
 独立测试的旧 hold 常量需由测试员按本契约重算（例如 1@90 零费部分成交后两层应保留真实剩余，
 而不是清空；部分成交的 50.05 旧值应按实际成交价重算）。工程师未修改任何独立测试资产。
 
+### 13.15 阶段 3 实现：closed-bar 决策输入与数据资格链（2026-11-03）
+
+本节记录阶段 3 已落地的接口事实，不改变 BAR_V1 的冻结时序语义（半开区间、
+`close_time_ms = open_time_ms + interval_ms`、`available_at_ms = close_time_ms`）。
+
+| 验收 | 实现位置 | 可观察行为 |
+|---|---|---|
+| 3.1 | `trader/trading/strategy.py`、`trader/runtime/trading_worker_main.py` | K 线在决策时钟早于 `available_at_ms` 时抛 `BAR_NOT_AVAILABLE_YET`；Feed 只使用已收盘行；`_kline_observation` 归一化 Binance 含尾 `closeTime`；执行进程使用 venue 锚点 + 单调经过时间的 `VenueClock`，本地 wall 跳变不推进可见性，时间源/单调源失败即 fail-closed |
+| 3.2 | `strategy.on_market_data`、`order_spec.build_order_spec` | MARKET 参考价 = 触发 bar close；`price_source=MARKET_REFERENCE_CLOSED_BAR`、`price_at_ms=close_time_ms`、`price_reference_id=bar_id`；LIMIT 仍用信号价 |
+| 3.3 | `trading_worker_main.feed_market_once`、`strategy.on_market_data` | 不再调用 `get_ticker_prices`；缺少 kline 端口时 `CLOSED_BAR_SOURCE_REQUIRED`；新栈 runner 只接受已收盘 KLINE，所有非 KLINE 类型抛 `NON_BAR_MARKET_DATA`，无 ticker 默认旁路 |
+| 3.4 | `strategy.UnifiedStrategyRunner` | `warmup_events = max(部署值, 插件声明)`；无状态插件显式零预热 |
+| 3.5 | `strategy.instrument_warmup`、`runtime.readiness` | 逐标的 `{state, observations, required}`；全部 `WARM` 才放行 |
+| 3.6 | `strategy.prepare_warmup` / `_feed` | 每次重启重新采集并回放；重复/乱序 bar 不重复计数；失败原因码阻断新增风险；预热信号不下单 |
+| 3.7 / 3.8 / 3.11 | `trader/trading/jobs.py`、`trader/trading/eligibility.py`、`trader/runtime/history_plane.py` | 提交/重试强制资格门禁；无可信关联 `DATASET_PROVENANCE_UNTRUSTED`；存储故障 `HISTORY_STORE_UNAVAILABLE`；无 `eligibility=None` 入口 |
+| 3.9 | `jobs.BacktestApplication.submit`、`backtest.validate_dataset_set` | 入队前校验 venue/market/interval/quote/标的唯一性/完整 bar 日历 |
+| 3.10 | `trader/tests/test_phase3_postgres.py`、`.github/workflows/ci-gate.yml` | 真实 PG 上验证不可用存储与未发布 provenance 的拒绝；bridge PG 套件进入 `postgres-integration` |
+
+阶段 3 的工程师测试：`trader/tests/test_phase3_closed_bar_warmup.py`、
+`trader/tests/test_phase3_eligibility.py`、`trader/tests/test_phase3_postgres.py`。
+独立测试员与逐轮只读审核证据在 `artifacts/foundation/phase3/` 与独立测试报告中单独记录。
 
 ---
 ## 15. 测试隔离与本地 Postgres
