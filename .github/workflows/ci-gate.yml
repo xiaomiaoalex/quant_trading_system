@@ -190,6 +190,8 @@ jobs:
           python -m pytest -q trader/tests/test_split_control_postgres.py --tb=short
           python -m pytest -q trader/tests/test_unified_strategy_postgres.py --tb=short
           python -m pytest -q trader/tests/test_research_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase4_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase4_independent_postgres.py --tb=short
 
   trading-core-gate:
     name: Trading Core and Research Tests
@@ -234,6 +236,8 @@ jobs:
           python -m pytest -q trader/tests/test_runtime_entrypoint.py --tb=short
           python -m pytest -q trader/tests/test_research_runtime.py --tb=short
           python -m pytest -q trader/tests/test_research_safety.py trader/tests/test_research_worker_lifecycle.py trader/tests/test_observation_summary.py --tb=short
+          python -m pytest -q trader/tests/test_phase4_joint_backtest.py --tb=short
+          python -m pytest -q trader/tests/test_phase4_independent_offline.py --tb=short
           python -m pytest -q trader/tests/test_trading_performance.py --tb=short
 
   frontend-gate:

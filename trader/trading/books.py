@@ -82,6 +82,27 @@ def book_available(book: BookLedger, asset: str) -> Decimal:
     return total - holds
 
 
+def book_available_including(
+    state: AccountState, book_id: str, asset: str, cl_ord_id: str = ""
+) -> Decimal:
+    """The budget one book may still spend, including that order's reservation.
+
+    A book's spendable assets come from the book itself only; another book and
+    the account total are never a source of funds. For one order its own
+    reservation is added back, because that reservation is exactly the money
+    this order may spend. A fill that costs more than this budget belongs to
+    no book and must be refused instead of overrunning the book.
+    """
+    book = state.books.get(book_id)
+    if book is None:
+        raise TradingError("BOOK_NOT_FOUND")
+    total = book_available(book, asset)
+    hold = book.holds.get(cl_ord_id)
+    if hold is not None and hold.asset == asset:
+        total += hold.amount
+    return total
+
+
 def reserve_book_hold(state: AccountState, book_id: str, cl_ord_id: str, hold: Hold) -> None:
     """Book layer of the two-layer reservation, in the account transaction."""
     book = state.books.get(book_id)

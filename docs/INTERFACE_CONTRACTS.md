@@ -3020,6 +3020,58 @@ warmup_source=None, on_block=None)`
 - `risk_config` 仅允许 `RiskPolicy` 字段；金额/费率转为 `Decimal`，新鲜度字段为整数毫秒，未知字段必须拒绝。BAR 使用历史开盘/收盘时点及对应估值更新账户视图，然后调用与实盘相同的 `SpotRiskEngine`；委托和剩余预约计入相同组合限额。
 - 策略持仓按实际基础资产净额计算：BUY 增加 qty、SELL 减少 qty；手续费资产为 base 时再扣 fee。手续费资产账本仍单列原币种费用，不能再重复扣余额。
 
+### 14.6 联合回测冻结 manifest 与逐 book 结果（阶段 4）
+
+提交 manifest 有两种互斥形态，二者不能同时出现：
+
+- **单策略** `strategy`：既有行为与结果字段保持不变。
+- **联合** `strategies`（至少 2 个）+ `book_allocations`。每个 `strategies[i]` 必须声明稳定的
+  `strategy_id`，并可带 `module_path`、`params`、`version`、`code_hash`；冻结时补
+  `book_id = book:{strategy_id}`。重复 `strategy_id` 或重复 book 在入队前拒绝。
+
+联合冻结规则：
+
+- `book_allocations` 的键必须**恰好**是全部策略 book；金额为正且总和必须等于 `initial_cash`。
+  未声明策略的 book 或遗留 `UNALLOCATED` 余额不属于联合 manifest 的冻结输入。
+- 冻结 manifest 包含排序后的 `dataset_ids`、`strategies`、`book_allocations`、`initial_cash`、
+  `fee_bps`、`slippage_bps`、`engine`、`purpose`、`runtime_version`（`spot_bar_v2_shared`）、
+  `risk_config` 与 `provenance`（dataset_id → 可信 provenance hash）。
+- 提交、重试和执行共用 `normalize_backtest_manifest`。提交后调用方修改自己的嵌套 `params` /
+  `book_allocations` 不会改变已存 manifest；重试或执行发现存储文档被改写（哈希不符）时拒绝，
+  不静默改写、不沿用旧哈希执行。
+- `manifest_hash = sha256(canonical(frozen manifest))`，`dataset_ids` 与策略按稳定键排序，
+  因此相同输入不依赖调用方顺序。同一冻结 manifest 重复提交或在全新进程重跑必须得到相同
+  `manifest_hash` 与确定性结果；`runtime_manifest_hash` 仍只代表 BAR 模拟参数，不能替代前者。
+- 联合运行共享同一个账户现金，但每个信号按 `strategy_id` 路由到自己的 book；book 之间不得
+  借用余额或预算。超出自身 book 预算的意图以 `BOOK_INSUFFICIENT_AVAILABLE_BALANCE` 明确拒绝，
+  其他 book 的余额、预约、预算与交易能力不受影响。
+- 逐 book 结果位于 `result.books[]`：`book_id`、`allocation`、`equity`、`valuation_complete`、
+  `balances`、`positions`、`held`、`available`、`fees`、`valuations`；`result.book_fees` 是逐 book
+  实际成交手续费，必须满足 `Σ book_fees == total_fees`，且各 book 权益之和等于账户权益。
+  `result.fills[]` 逐笔携带 `book_id`、`strategy_id` 与 `cl_ord_id`；`result.rejected_intents[]`
+  记录**准入与成交两个阶段**被拒意图的 `strategy_id`、`book_id`、方向、数量与原因码，
+  供逐策略审计；成交阶段拒绝同时计入 `execution_rejections` 与 `errors`。
+  回测侧逐 book 数值使用规范十进制文本（与研究结果其余字段一致）；实盘
+  `GET /v1/trading/books` 仍沿用阶段 2 的快照序列化形式（数值相等，文本不保证归一）。
+- **成交必须由所属 book 自有预算承担**：准入按参考价预留，成交按实际成交价结算；当不利
+  滑点使实际成本超出该 book 的预留预算时，成交被明确拒绝
+  （`BOOK_INSUFFICIENT_AVAILABLE_BALANCE`）并释放两层预约，book 余额不得为负。
+  该规则由共享纯函数 `core.book_budget_available`（`books.book_available_including`）表达，
+  回测与实盘共用同一 book 事实，不另建经济实现。
+- `ResearchExecutor` 在执行前复核冻结 provenance **以及关联当前的可信状态**
+  （`official_eligible`、历史数据集标识与 provenance hash）：排队期间关联失去官方资格时
+  按 `Frozen provenance mismatch` 拒绝执行；数据集内容哈希先于结构校验比较，
+  内容被改动时报 `Dataset content hash mismatch`。
+- 订单由 `trader.trading.order_spec.build_order_spec`、`core.reserve_order` 与
+  `core.book_execution` 产生，symbol/side/qty/price 与实盘命令语义一致：LIMIT 使用信号限价，
+  MARKET 使用已收盘 bar 的 close 作为参考价；不新增第二套经济实现。
+- `ResearchExecutor` 在加载插件前复核全部策略的冻结 `code_hash`、manifest 哈希、dataset
+  内容哈希与 provenance；任一不符直接拒绝。结果继续携带 `dataset_ids`、`dataset_provenance`、
+  `runtime_version`、`manifest_hash` 与 `runtime_manifest_hash`，供全链路追溯。
+- Research Worker 只连接 Research 存储，不读取实盘账户/订单状态，也不写交易所。真实 PostgreSQL
+  进程验收要求：仅存在 `research` schema 的隔离数据库也能完成 Control 提交、独立 Worker 执行
+  与结果发布。
+
 ### 13.7 运行期对账、交易所规则与沙箱验证
 
 - Trading Runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整 `ReconcileSnapshot`；撤单/成交终态必须来自快照中的订单观测或逐笔成交，不得由本地请求推断。

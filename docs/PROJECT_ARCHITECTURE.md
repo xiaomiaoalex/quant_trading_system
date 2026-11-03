@@ -441,6 +441,11 @@ provenance 关联"]
   `/v1/research/strategies` 列出允许提交的已安装策略。
 - `FAILED` 的回测任务是终态：claim 只取 `QUEUED` 或租约过期的 `RUNNING`，
   重试必须显式调用 `POST /v1/research/backtests/{run_id}/retry`（保留 run id、冻结 manifest 与哈希）。
+- 阶段 4 起同一入口支持**联合回测**：manifest 可用 `strategies` + `book_allocations` 描述多个策略，
+  共享一个账户现金、按 `book:{strategy_id}` 隔离资金与持仓。`ResearchExecutor` 在独立 Worker 进程中
+  为每个策略/标的创建独立插件，复用 `EventBacktestRuntime` 与共享 `core` 经济函数；结果逐 book
+  导出权益、预算占用与手续费，并保留 dataset/provenance/runtime 版本链。Research Worker 只连接
+  Research 存储，不读取实盘账户状态，也不具备交易所发送能力。
 - 补录命令 `scripts/backfill_research_dataset_links.py` 默认 dry-run，
   为桥接之前就已发布的历史数据集补登 Research 数据集与 provenance（官方修订报冲突，不覆盖既有 ID）。
 

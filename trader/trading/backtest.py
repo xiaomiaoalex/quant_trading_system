@@ -52,6 +52,7 @@ class StrategySignal:
     limit_price: Decimal | None = None
     reason: str = ""
     strategy_id: str = ""
+    time_in_force: str = "GTC"
 
 
 @dataclass
@@ -77,6 +78,12 @@ class BacktestResult:
     """带明确估值时间的权益点（at_ms 为该根 K 线的收盘时间）。"""
     books: list[dict[str, Any]] = field(default_factory=list)
     """逐 book 的余额、持仓、预约、可用预算与权益（阶段 4 联合回测读取）。"""
+    book_fees: dict[str, Decimal] = field(default_factory=dict)
+    """逐 book 的实际成交手续费，与 ``fees`` 汇总守恒。"""
+    book_allocations: dict[str, Decimal] = field(default_factory=dict)
+    """本次模拟的初始 book 资金划分。"""
+    rejected_intents: list[dict[str, Any]] = field(default_factory=list)
+    """被拒绝的意图及其策略/book 归属，便于逐策略审计。"""
 
     @property
     def total_fees(self) -> Decimal:
@@ -225,6 +232,7 @@ class EventBacktestRuntime:
         book_ledger.migrate_book_ledger(self.account)
         for book_id, amount in sorted(allocations.items()):
             book_ledger.allocate(self.account, book_id, self.quote_asset, amount)
+        self.book_fees = {book_id: Decimal(0) for book_id in self.account.books}
         self._intent_seq = 0
         self._event_ms = 0
         self.average_cost: dict[tuple[str, str], Decimal] = {
@@ -234,6 +242,7 @@ class EventBacktestRuntime:
         self.fills: list[dict[str, Any]] = []
         self.closed_trades: list[Decimal] = []
         self.rejections: dict[str, int] = {}
+        self.rejected_intents: list[dict[str, Any]] = []
         self.execution_rejections: dict[str, int] = {}
         self.risk = {"approved": 0, "rejected": 0}
         self.equity_curve: list[Decimal] = []
@@ -367,6 +376,9 @@ class EventBacktestRuntime:
                 and not self.execution_rejections
             ),
             books=self._book_snapshots(),
+            book_fees=dict(self.book_fees),
+            book_allocations=dict(self.initial_allocations),
+            rejected_intents=list(self.rejected_intents),
         )
 
     def _book_snapshots(self) -> list[dict[str, Any]]:
@@ -375,18 +387,34 @@ class EventBacktestRuntime:
         The simulator never invents its own valuation: it reuses
         ``books.book_snapshot`` on the same account state the live runtime
         owns, so a joint backtest and a live session report the same numbers.
+        The initial allocation and the actual fees are per-book facts of this
+        historical run and are added next to the shared snapshot.
         """
         marks = self.account.reconciliation.get("marks", {}) or {}
-        return [
-            book_ledger.book_snapshot(
+        snapshots = []
+        for book_id in sorted(self.account.books):
+            snapshot = book_ledger.book_snapshot(
                 self.account,
                 self.account.books[book_id],
                 marks=marks,
                 now_ms=self._event_ms,
                 max_mark_age_ms=self.policy.max_mark_age_ms,
             )
-            for book_id in sorted(self.account.books)
-        ]
+            # The research export is a canonical decimal-text document, like
+            # every other number in the backtest result.
+            for field in ("balances", "held", "available"):
+                snapshot[field] = {
+                    asset: decimal_text(value) for asset, value in snapshot[field].items()
+                }
+            snapshot["positions"] = {
+                symbol: decimal_text(qty) for symbol, qty in snapshot["positions"].items()
+            }
+            if snapshot["equity"] is not None:
+                snapshot["equity"] = decimal_text(snapshot["equity"])
+            snapshot["allocation"] = decimal_text(self.initial_allocations.get(book_id, Decimal(0)))
+            snapshot["fees"] = decimal_text(self.book_fees.get(book_id, Decimal(0)))
+            snapshots.append(snapshot)
+        return snapshots
 
     def _drawdowns(self) -> dict[str, Decimal]:
         peak: Decimal | None = None
@@ -469,9 +497,20 @@ class EventBacktestRuntime:
     def _admit(
         self, index: int, symbol: str, candidate: StrategySignal, bar: dict[str, Any]
     ) -> None:
-        def reject(code: str) -> None:
+        def reject(code: str, resolved_book: str = "") -> None:
             self.rejections[code] = self.rejections.get(code, 0) + 1
             self.risk["rejected"] += 1
+            self.rejected_intents.append(
+                {
+                    "strategy_id": candidate.strategy_id,
+                    "book_id": resolved_book,
+                    "symbol": candidate.symbol,
+                    "side": candidate.side,
+                    "qty": candidate.qty,
+                    "order_type": candidate.order_type,
+                    "code": code,
+                }
+            )
 
         if candidate.symbol != symbol:
             reject("UNKNOWN_SYMBOL")
@@ -499,7 +538,7 @@ class EventBacktestRuntime:
                 reference_price_source=PRICE_SOURCE_BACKTEST_CLOSED_BAR,
                 reference_at_ms=reference_at_ms,
                 decision_at_ms=decision_at_ms,
-                time_in_force="GTC",
+                time_in_force=candidate.time_in_force,
                 book_id=book_id,
                 price_source=(
                     PRICE_SOURCE_SIGNAL_LIMIT if is_limit else PRICE_SOURCE_BACKTEST_CLOSED_BAR
@@ -519,7 +558,7 @@ class EventBacktestRuntime:
         except TradingError as exc:
             # An unsupported specification is refused, exactly like a refused
             # admission: the run records the reason and keeps going.
-            reject(str(exc))
+            reject(str(exc), book_id)
             return
         try:
             trading_core.reserve_order(
@@ -531,7 +570,7 @@ class EventBacktestRuntime:
             # by the live risk engine and never implemented separately here.
             if code == "INSUFFICIENT_AVAILABLE_BALANCE":
                 code = "INSUFFICIENT_CASH" if candidate.side == "BUY" else "INSUFFICIENT_POSITION"
-            reject(code)
+            reject(code, book_id)
             return
 
         self.risk["approved"] += 1
@@ -596,18 +635,45 @@ class EventBacktestRuntime:
         def reject(code: str) -> None:
             self.execution_rejections[code] = self.execution_rejections.get(code, 0) + 1
             self.errors.append(f"{code}:{symbol}")
+            # An execution-stage refusal is still an attributed intent: the
+            # strategy, book and requested size travel with the reason code so
+            # no refused fill disappears into a bare counter.
+            self.rejected_intents.append(
+                {
+                    "strategy_id": order["signal"].strategy_id,
+                    "book_id": order["book_id"],
+                    "symbol": symbol,
+                    "side": order["side"],
+                    "qty": qty,
+                    "order_type": order["order_type"],
+                    "code": code,
+                }
+            )
             advance_order_status(aggregate, "REJECTED")
             trading_core.release_order_hold(self.account, aggregate)
 
         hold = self.account.holds[order["cl_ord_id"]]
         available = available_balance(self.account, hold.asset) + hold.amount
+        # The owning book must fund the fill with its own budget. The shared
+        # book rule never lets a book borrow from the account total or from a
+        # neighbouring book, so an adverse fill price that no longer fits the
+        # reserved budget is refused instead of overrunning the book.
+        book_budget = trading_core.book_budget_available(
+            self.account, order["book_id"], hold.asset, order["cl_ord_id"]
+        )
         if order["side"] == "BUY":
             if available < notional + fee:
                 reject("INSUFFICIENT_CASH")
                 return
+            if book_budget < notional + fee:
+                reject("BOOK_INSUFFICIENT_AVAILABLE_BALANCE")
+                return
         else:
             if available < qty:
                 reject("INSUFFICIENT_POSITION")
+                return
+            if book_budget < qty:
+                reject("BOOK_INSUFFICIENT_AVAILABLE_BALANCE")
                 return
 
         previous = self.positions.get(symbol, Decimal(0))
@@ -641,6 +707,7 @@ class EventBacktestRuntime:
             if book.positions[symbol] == 0:
                 self.average_cost[cost_key] = Decimal(0)
         self.fees += fee
+        self.book_fees[order["book_id"]] = self.book_fees.get(order["book_id"], Decimal(0)) + fee
         self.fills.append(
             {
                 "symbol": symbol,
@@ -649,6 +716,9 @@ class EventBacktestRuntime:
                 "price": price,
                 "fee": fee,
                 "bar_index": index,
+                "book_id": order["book_id"],
+                "strategy_id": order["signal"].strategy_id,
+                "cl_ord_id": order["cl_ord_id"],
             }
         )
 

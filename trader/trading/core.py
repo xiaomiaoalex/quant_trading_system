@@ -76,6 +76,19 @@ def allocate_to_book(state: AccountState, book_id: str, asset: str, amount: Deci
     book_ledger.allocate(state, book_id, asset, amount)
 
 
+def book_budget_available(
+    state: AccountState, book_id: str, asset: str, cl_ord_id: str = ""
+) -> Decimal:
+    """Per-book spendable budget for one order, including its own reservation.
+
+    Shared pure rule: a book funds itself only, never the account total and
+    never a neighbouring book. Live admission and the historical simulator use
+    the same book facts, so a fill that no longer fits its book is refused
+    instead of overrunning the book budget.
+    """
+    return book_ledger.book_available_including(state, book_id, asset, cl_ord_id)
+
+
 def ledger_entry(
     state: AccountState,
     execution: Execution,
