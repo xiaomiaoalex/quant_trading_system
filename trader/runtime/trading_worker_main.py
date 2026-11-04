@@ -21,6 +21,9 @@ from trader.adapters.broker.spot_execution_adapter import (
     BinanceSpotExchangePort,
     BinanceSpotSnapshotProvider,
 )
+from trader.ops.dr_evidence import dr_gate_from_env
+from trader.runtime.credentials import CredentialBoundaryError, require_execution_credentials
+from trader.services.alerting import alert_monitor_from_env
 from trader.trading.models import NotReady
 from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
@@ -268,23 +271,23 @@ async def _market_loop(runtime, broker, instruments, interval, poll_seconds):
 
 
 async def run():
-    if os.getenv("BINANCE_ENV", "demo") not in {"demo", "testnet", "test"}:
-        raise RuntimeError("Only Binance sandbox environments are supported")
-    api_key = os.getenv("BINANCE_API_KEY", "")
-    secret = os.getenv("BINANCE_SECRET_KEY", "")
-    if not api_key or not secret:
-        raise RuntimeError("BINANCE_CREDENTIALS_MISSING")
+    credentials = require_execution_credentials()
+    api_key = credentials.api_key
+    secret = credentials.secret_key
     pool = await create_pool()
     broker = BinanceSpotDemoBroker(
         BinanceSpotDemoBrokerConfig.for_env(
             api_key,
             secret,
-            env=os.getenv("BINANCE_ENV", "demo"),
+            env=credentials.environment,
             proxy_url=os.getenv("BINANCE_PROXY_URL") or None,
         )
     )
     runtime = None
     market_task = None
+    alert_monitor = None
+    alert_task = None
+    health_task = None
     try:
         await broker.connect()
         account_id = os.getenv("QTS_ACCOUNT_ID", "binance_spot")
@@ -405,8 +408,27 @@ async def run():
             strategy_id=module,
             strategy_warmup_events=int(os.getenv("QTS_STRATEGY_WARMUP_EVENTS", "0")),
             warmup_source=warmup_source if plugin is not None else None,
+            dr_gate=dr_gate_from_env(),
         )
         started = await runtime.start()
+        health_path = os.getenv("QTS_EXECUTION_HEALTH_FILE", "")
+        if health_path:
+            from trader.runtime.healthcheck import execution_health_loop
+
+            health_task = asyncio.create_task(
+                execution_health_loop(
+                    runtime,
+                    health_path,
+                    float(os.getenv("QTS_HEALTH_INTERVAL_SECONDS", "5")),
+                )
+            )
+        alert_monitor = alert_monitor_from_env(
+            source="execution",
+            account_id=account_id,
+            readiness=runtime.readiness,
+        )
+        if alert_monitor is not None:
+            alert_task = asyncio.create_task(alert_monitor.run_forever())
         logger.info(
             "Execution startup ready=%s stages=%s reasons=%s",
             started,
@@ -453,6 +475,23 @@ async def run():
 
             with contextlib.suppress(asyncio.CancelledError):
                 await market_task
+        if health_task:
+            health_task.cancel()
+            import contextlib
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await health_task
+        if alert_task:
+            alert_task.cancel()
+            import contextlib
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await alert_task
+        if alert_monitor is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                await alert_monitor.close()
         if runtime:
             await runtime.stop()
         await broker.disconnect()
@@ -463,6 +502,11 @@ def main():
     logging.basicConfig(level=logging.INFO)
     try:
         asyncio.run(run())
+    except CredentialBoundaryError as exc:
+        # A refusal is a startup contract, not a transient failure: exit with a
+        # stable reason code so Compose/operators can stop retrying blindly.
+        logger.error("EXECUTION_STARTUP_REFUSED reason=%s", exc.reason_code)
+        raise SystemExit(2) from None
     except KeyboardInterrupt:
         pass
 

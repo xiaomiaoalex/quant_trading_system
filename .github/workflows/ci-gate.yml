@@ -192,6 +192,8 @@ jobs:
           python -m pytest -q trader/tests/test_research_postgres.py --tb=short
           python -m pytest -q trader/tests/test_phase4_postgres.py --tb=short
           python -m pytest -q trader/tests/test_phase4_independent_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_independent_postgres.py --tb=short
 
   trading-core-gate:
     name: Trading Core and Research Tests
@@ -239,6 +241,52 @@ jobs:
           python -m pytest -q trader/tests/test_phase4_joint_backtest.py --tb=short
           python -m pytest -q trader/tests/test_phase4_independent_offline.py --tb=short
           python -m pytest -q trader/tests/test_trading_performance.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_credentials.py trader/tests/test_phase5_health.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_alerting.py trader/tests/test_phase5_dr_evidence.py trader/tests/test_phase5_compose.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_independent_offline.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_independent_offhost.py --tb=short
+          python -m pytest -q trader/tests/test_phase5_independent_hardening.py --tb=short
+
+  compose-config-gate:
+    name: Compose Configuration and Credential Isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
+          pip install -r trader/requirements-ci.txt
+
+      - name: Validate Compose configuration
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tempfile
+
+          secrets = pathlib.Path(tempfile.mkdtemp(prefix="qts-ci-secrets-"))
+          (secrets / "api").write_text("", encoding="utf-8")
+          (secrets / "secret").write_text("", encoding="utf-8")
+          dr = secrets / "dr"
+          dr.mkdir()
+          env = dict(os.environ)
+          env.update({
+              "QTS_COMPOSE_PROJECT": "qts_ci_config",
+              "BINANCE_API_KEY_FILE_PATH": str(secrets / "api"),
+              "BINANCE_SECRET_KEY_FILE_PATH": str(secrets / "secret"),
+              "QTS_DR_EVIDENCE_DIR": str(dr),
+          })
+          os.execvpe("docker", ["docker", "compose", "-p", "qts_ci_config", "config", "--quiet"], env)
+          PY
+
+      - name: Check credential isolation
+        run: python scripts/check_credential_isolation.py --compose compose.yml
 
   frontend-gate:
     name: Frontend Typecheck and Tests

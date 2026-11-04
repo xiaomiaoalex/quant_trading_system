@@ -34,8 +34,9 @@ class _OwnedExchange:
 
     async def place_order(self, command: PlaceOrderCommand, cl_ord_id: str) -> ExchangeOrderResult:
         await self.runtime.require_ownership(command.account_id)
-        if not self.runtime.strategy_start_allowed:
-            raise NotReady("TRADING_RUNTIME_NOT_READY")
+        # New risk is gated by fresh DR evidence at the IO boundary; cancels
+        # remain available because they only reduce exposure.
+        await self.runtime.require_trading_ready()
         if not self.runtime.symbol_allowed(command.symbol):
             return ExchangeOrderResult(
                 ExchangeOutcome.REJECTED, reason="SYMBOL_NOT_IN_COVERAGE_SCOPE"
@@ -88,6 +89,7 @@ class TradingRuntime:
         private_session_factory: Callable[["TradingRuntime"], Any] | None = None,
         require_private_session: bool = False,
         allowed_symbols: set[str] | None = None,
+        dr_gate: Callable[[], Any] | None = None,
     ):
         self.store = store
         self.exchange = exchange
@@ -127,6 +129,10 @@ class TradingRuntime:
         self.allowed_symbols = (
             {symbol.upper() for symbol in allowed_symbols} if allowed_symbols else None
         )
+        # Production assemblies supply a DR-evidence gate. It is deliberately
+        # not defaulted to "ready": a runtime without externally verified
+        # backup/restore evidence simply is not the phase-5 production runtime.
+        self.dr_gate = dr_gate
 
     async def start(self) -> bool:
         self.stages.append("storage")
@@ -186,8 +192,10 @@ class TradingRuntime:
             except NotReady as exc:
                 await self.block(str(exc))
             await self._update_session_readiness()
+            self.ready, self.last_reasons = self._with_dr(self.ready, list(self.last_reasons))
             if not self.ready:
                 self.stages.append("blocked")
+                await self._publish_runtime_state()
                 return False
             self.stages.append("resume_queued")
             await self.service.resume_queued(self.account_id)
@@ -200,8 +208,7 @@ class TradingRuntime:
             self.last_reasons = [f"RECONCILIATION_UNAVAILABLE: {exc}"]
         if snapshot is not None:
             view = await self.service.recover(snapshot)
-            self.ready = view.ready
-            self.last_reasons = list(view.reasons)
+            self.ready, self.last_reasons = self._with_dr(view.ready, list(view.reasons))
         else:
             view = await self.service.risk_view(self.account_id)
             self.ready = False
@@ -216,8 +223,7 @@ class TradingRuntime:
         self.stages.append("resume_queued")
         await self.service.resume_queued(self.account_id)
         view = await self.service.risk_view(self.account_id)
-        self.ready = view.ready
-        self.last_reasons = list(view.reasons)
+        self.ready, self.last_reasons = self._with_dr(view.ready, list(view.reasons))
         await self._publish_runtime_state()
         if not self.ready:
             self.stages.append("blocked")
@@ -263,6 +269,37 @@ class TradingRuntime:
     def strategy_start_allowed(self) -> bool:
         return self.ready and self.started
 
+    def _dr_reasons(self) -> list[str]:
+        """Fail closed when the injected DR-evidence gate is not satisfied."""
+        if self.dr_gate is None:
+            return []
+        try:
+            result = self.dr_gate()
+        except Exception:
+            return ["DR_EVIDENCE_INVALID"]
+        if getattr(result, "ready", False):
+            return []
+        reasons = list(getattr(result, "reasons", ()) or ())
+        return reasons or ["DR_EVIDENCE_INVALID"]
+
+    def _with_dr(self, ready: bool, reasons: list[str]) -> tuple[bool, list[str]]:
+        dr_reasons = [reason for reason in self._dr_reasons() if reason not in reasons]
+        return (ready and not dr_reasons, reasons + dr_reasons)
+
+    async def require_trading_ready(self) -> None:
+        """Re-check DR evidence at the last boundary before new risk."""
+        dr_reasons = self._dr_reasons()
+        if dr_reasons:
+            changed = self.ready or self.last_reasons != dr_reasons
+            self.ready = False
+            self.last_reasons = dr_reasons
+            if changed and self.lease_token is not None:
+                with contextlib.suppress(Exception):
+                    await self._publish_runtime_state()
+            raise NotReady(",".join(dr_reasons))
+        if not self.strategy_start_allowed:
+            raise NotReady("TRADING_RUNTIME_NOT_READY")
+
     async def readiness(self) -> dict[str, Any]:
         db_available = True
         if hasattr(self.store, "ping"):
@@ -273,6 +310,25 @@ class TradingRuntime:
         reasons: list[str] = []
         generation = None
         checked_at_ms = None
+        # Readiness is the instance's own heartbeat: revalidate the lease even
+        # when no order is being sent, so a lost lease closes this instance's
+        # readiness immediately instead of waiting for the next IO attempt.
+        lease_check_reason = None
+        if self.lease_token is not None and hasattr(self.store, "renew_lease"):
+            try:
+                if not await self.store.renew_lease(
+                    self.lease_scope, self.owner, self.lease_token, self.lease_seconds
+                ):
+                    lease_check_reason = "EXECUTION_INSTANCE_CONFLICT"
+            except Exception:
+                lease_check_reason = "STORAGE_UNAVAILABLE"
+            if lease_check_reason is not None:
+                self.ready = False
+                self.started = False
+                self.lease_token = None
+                self.last_reasons = [lease_check_reason]
+        if lease_check_reason == "STORAGE_UNAVAILABLE":
+            reasons.append("STORAGE_UNAVAILABLE")
         if not db_available:
             reasons.append("STORAGE_UNAVAILABLE")
         elif self.service is not None:
@@ -289,6 +345,7 @@ class TradingRuntime:
             reasons.append("TRADING_RUNTIME_NOT_STARTED")
         if self.started and not self.ready:
             reasons.extend(self.last_reasons or ["TRADING_RUNTIME_NOT_READY"])
+        reasons.extend(self._dr_reasons())
         if self.lease_token is None:
             reasons.append("EXECUTION_INSTANCE_CONFLICT")
         warmup_state = None
@@ -328,7 +385,8 @@ class TradingRuntime:
 
     async def place(self, command: PlaceOrderCommand, actor: str = "system"):
         await self.require_ownership(command.account_id)
-        if not self.strategy_start_allowed or self.service is None:
+        await self.require_trading_ready()
+        if self.service is None:
             raise NotReady("TRADING_RUNTIME_NOT_READY")
         if not self.symbol_allowed(command.symbol):
             raise NotReady("SYMBOL_NOT_IN_COVERAGE_SCOPE")
@@ -486,10 +544,40 @@ class TradingRuntime:
             self.account_id, allow_places=self.ready and view.ready
         )
 
+    async def _validate_lease_for_work(self) -> bool:
+        """Revalidate ownership at a reconciliation/command boundary.
+
+        Background loops must not rely on an in-memory token: the store lease
+        can expire or be fenced between two loop iterations.
+        """
+        if self.lease_token is None:
+            return False
+        if not hasattr(self.store, "renew_lease"):
+            return True
+        try:
+            valid = await self.store.renew_lease(
+                self.lease_scope, self.owner, self.lease_token, self.lease_seconds
+            )
+        except Exception:
+            self.ready = False
+            self.started = False
+            self.lease_token = None
+            self.last_reasons = ["STORAGE_UNAVAILABLE"]
+            return False
+        if not valid:
+            self.ready = False
+            self.started = False
+            self.lease_token = None
+            self.last_reasons = ["EXECUTION_INSTANCE_CONFLICT"]
+            return False
+        return True
+
     async def _command_loop(self) -> None:
         while not self._stopping:
             await asyncio.sleep(self.command_interval_seconds)
             if not self.started or self.lease_token is None:
+                continue
+            if not await self._validate_lease_for_work():
                 continue
             try:
                 await self.drain_commands()
@@ -510,16 +598,23 @@ class TradingRuntime:
                 continue
             try:
                 async with self._alignment_lock:
+                    # Validate after acquiring the lock: waiting for a slow
+                    # alignment can itself outlive the lease.
+                    if not await self._validate_lease_for_work():
+                        continue
                     if self.private_session is not None:
                         await self.private_session.align()
                         await self._update_session_readiness()
+                        self.ready, self.last_reasons = self._with_dr(
+                            self.ready, list(self.last_reasons)
+                        )
+                        await self._publish_runtime_state()
                         continue
                     snapshot = await self.snapshot_provider(self.account_id)
                     if snapshot is None:
                         continue
                     view = await self.service.recover(snapshot)
-                    self.ready = view.ready
-                    self.last_reasons = list(view.reasons)
+                    self.ready, self.last_reasons = self._with_dr(view.ready, list(view.reasons))
                     await self._publish_runtime_state()
             except Exception as exc:
                 logger.warning("Periodic reconciliation provider failed: %s", exc)

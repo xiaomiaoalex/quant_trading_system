@@ -235,3 +235,6 @@ tmp*/
 # Claude AI IDE / Kilo CLI
 .claude/
 .kilo/
+
+# Phase-5 Compose exchange credential files
+secrets/

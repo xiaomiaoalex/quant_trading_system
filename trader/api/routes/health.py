@@ -137,15 +137,24 @@ async def readiness_check():
     PostgreSQL is optional and not checked here - use /health/dependency for full status.
     """
     checks: Dict[str, ComponentHealth] = {}
-    overall_status = "ok"
+    reasons: list[str] = []
 
     storage_health = _check_storage_health()
     checks["storage"] = storage_health
 
     if storage_health.status == "unhealthy":
-        overall_status = "degraded"
+        reasons.append("STORAGE_UNAVAILABLE")
 
-    return HealthCheckResponse(status=overall_status, time=_get_utc_time(), checks=checks)
+    overall_status = "ok" if not reasons else "degraded"
+    # Compatibility contract: the legacy readiness probe reports a degraded
+    # component with HTTP 200 and machine-readable reasons. The hard trading
+    # gate is /health/trading (503 + reasons); liveness stays /health/live.
+    return HealthCheckResponse(
+        status=overall_status,
+        time=_get_utc_time(),
+        checks=checks,
+        reasons=reasons,
+    )
 
 
 @router.get("/health/dependency", response_model=HealthCheckResponse)

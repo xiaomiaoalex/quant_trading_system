@@ -3309,6 +3309,101 @@ warmup_source=None, on_block=None)`
 `trader/tests/test_phase3_eligibility.py`、`trader/tests/test_phase3_postgres.py`。
 独立测试员与逐轮只读审核证据在 `artifacts/foundation/phase3/` 与独立测试报告中单独记录。
 
+### 13.16 阶段 5 运行契约：健康、凭据、告警、备份/恢复与 DR 证据（2026-11-03）
+
+本节记录阶段 5 已落地的运行接口；不改变 13.1–13.15 的交易语义。
+
+**健康端点**
+
+| 端点 | 语义 | 成功 | 失败 |
+|---|---|---|---|
+| `GET /health/live` | 进程存活 | 200 `{"status":"ok","time":...}` | 进程不响应 |
+| `GET /health/ready` | API 请求依赖已装配 | 200 `{"status":"ok","checks":{...}}` | 200 `status=degraded` + `reasons=["STORAGE_UNAVAILABLE",...]`（保留既有探测语义；硬门禁是 trading） |
+| `GET /health/trading` | 交易就绪（账户风险、租约、运行态、DR 证据） | 200 `{"status":"ok","ready":true,"reasons":[]}` | 503 `{"status":"blocked","ready":false,"reasons":[...]}` |
+
+`HealthCheckResponse` 新增 `reasons: string[]`；live 不携带原因。`/health/trading` 未配置 provider 时
+固定返回 503 + `TRADING_RUNTIME_NOT_CONFIGURED`。交易原因码保留既有
+`UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、`ACCOUNT_SNAPSHOT_STALE`、
+`EXECUTION_INSTANCE_CONFLICT`、`EXECUTION_INSTANCE_UNAVAILABLE`、`EXECUTION_OWNER_NOT_ALIGNED`，
+阶段 5 追加 DR 原因（见下）。任何 `503` 都不允许被调用方当作“可交易”。
+
+**进程凭据边界**
+
+- Control 禁止环境键：`BINANCE_API_KEY`、`BINANCE_SECRET_KEY`、`BINANCE_API_KEY_FILE`、
+  `BINANCE_SECRET_KEY_FILE`。发现任一非空值即抛
+  `CONTROL_EXCHANGE_CREDENTIALS_PRESENT` 并拒绝启动（非降级、非仅日志）。
+- Execution 从 `BINANCE_API_KEY`/`BINANCE_SECRET_KEY` 或对应 `*_FILE` 读取；缺失返回
+  `BINANCE_CREDENTIALS_MISSING`，文件不可读返回 `BINANCE_CREDENTIALS_UNREADABLE`，
+  `BINANCE_ENV` 非 `demo/testnet/test` 返回 `BINANCE_ENV_NOT_SANDBOX`；进程以退出码 `2` 拒绝启动。
+  拒绝日志只包含原因码，绝不包含密钥值。
+- `scripts/check_credential_isolation.py` 只输出环境键名和存在性；`compose.yml` 通过 Docker
+  secrets 文件挂载交易所密钥，`docker compose config` 不渲染文件内容。
+
+**告警 webhook 与外部心跳**
+
+- `QTS_ALERT_WEBHOOK_URL`、`QTS_ALERT_HEARTBEAT_URL` 配置接收服务；可选
+  `QTS_ALERT_SIGNING_SECRET`（或 `_FILE`）；Control、Execution 与接收端必须配置同一值。请求体为 JSON，headers 含 `X-QTS-Event-Id`；
+  签名头为 `X-QTS-Signature: sha256=<HMAC-SHA256(body)>`。
+- 告警体字段：`event_id`、`code`、`severity`、`source`、`account_id`、`occurred_at_ms`、
+  `reasons[]`、`details`。阻断映射：`UNKNOWN_COMMAND(_PENDING)`→`UNKNOWN_COMMAND`，
+  `BALANCE_MISMATCH`→`BALANCE_MISMATCH`，租约类原因→`EXECUTION_LEASE_LOST`。
+- 只有 HTTP 2xx 且响应 JSON `{"ack": true, ...}` 才记为 delivered；2xx 无 ack、非 2xx、
+  超时或连接错误均保持 pending 并重试，绝不记为已投递。接收端按 `event_id` 去重。
+- 心跳体字段：`heartbeat_id`、`source`、`account_id`、`sent_at_ms`、`ready`、`reasons[]`；
+  接收端记录 `last_heartbeat_at_ms` 并检测缺失心跳。`scripts/alert_receiver.py` 是演练接收端，
+  journal 落盘后才 ack。
+
+**备份 manifest 与 DR 证据**
+
+备份成功记录至少包含：`schema_version`、`run_id`、`status`、`started_at_ms`、
+`completed_at_ms`、`cadence_seconds`、`source_database{host,database}`、
+`backup{completed_at_ms,cadence_seconds,sha256,size_bytes,object_key,source_database,
+target{kind,endpoint_host,bucket,off_host,identity_verified,attested_by},receipt,facts}`。
+`facts` 是同一导出快照下 `trading_accounts/commands/executions/ledger/events/outbox` 的
+规范化行摘要与计数。`receipt` 必须包含 `head_object` 长度/元数据核对和重新下载后的哈希。
+
+DR gate 读取的 `dr-evidence.json` 结构：
+
+```json
+{
+  "schema_version": 1,
+  "backup": {"completed_at_ms": 0, "cadence_seconds": 300, "sha256": "<64 hex>",
+             "object_key": "...", "target": {"kind": "s3_compatible",
+             "endpoint_host": "...", "bucket": "...", "off_host": true,
+             "identity_verified": true, "attested_by": "...",
+             "transport": "direct|ssh_tunnel", "remote_host": "...",
+             "tunnel_endpoint_host": "...", "ssh_host_key_verified": true}},
+  "restore": {"completed_at_ms": 0, "rto_seconds": 0, "backup_sha256": "<same>",
+              "verified": true, "source_database": {"host": "...", "database": "..."},
+              "target_database": {"host": "...", "database": "..."},
+              "checks": {"facts_match": true, "invariants_ok": true}}
+}
+```
+
+Gate 原因码：`DR_EVIDENCE_PATH_NOT_CONFIGURED`、`DR_EVIDENCE_MISSING`、`DR_EVIDENCE_INVALID`、
+`DR_BACKUP_EVIDENCE_MISSING`、`DR_BACKUP_STALE`、`DR_BACKUP_CADENCE_EXCEEDS_RPO`、
+`DR_TARGET_NOT_VERIFIED_OFF_HOST`、`DR_RESTORE_EVIDENCE_MISSING`、`DR_RESTORE_UNVERIFIED`、
+`DR_RTO_EXCEEDED`、`DR_RESTORE_BACKUP_MISMATCH`、`DR_RESTORE_EVIDENCE_STALE`、
+`DR_RESTORE_TARGET_NOT_SEPARATE`、`DR_BACKUP_TIMESTAMP_INVALID`、`DR_RESTORE_TIMESTAMP_INVALID`、
+`DR_RESTORE_FACTS_UNVERIFIED`（`restore.checks.facts_match` 与 `invariants_ok` 必须显式为 true；缺失或非对象即非 READY）。默认 `RPO=300s`、`RTO<=3600s`、恢复证据最长 7 天；
+任一原因未消除，`/health/trading` 保持 503，Execution 拒绝新风险。
+
+SSH 隧道模式下客户端可连接 `127.0.0.1` 转发端点，但证据必须同时记录真实远端
+`remote_host`、`tunnel_endpoint_host`、`transport=ssh_tunnel` 与
+`ssh_host_key_verified=true`；DR gate 不会把 loopback 本身当作异机，也不接受缺少
+真实远端身份或严格 host-key 校验的隧道。本地 S3 emulator 的证据必须标记
+`kind=local_emulator`、`off_host=false`，
+因此必然被 `DR_TARGET_NOT_VERIFIED_OFF_HOST` 拒绝；不得作为 5.6/5.7 的通过证据。
+
+**故障演练事实口径**
+
+- 崩溃持久性比较的是同一 schema 下崩溃前后 `trading_accounts`（快照）、`trading_commands`、
+  `trading_executions`、`trading_ledger`、`trading_events`、`trading_outbox` 的计数与规范化
+  行摘要，并验证新 runtime 启动后的交易所发送次数为 0。
+- 租约失效应同时满足：旧实例 `require_ownership` 拒绝（`EXECUTION_INSTANCE_CONFLICT`）、
+  旧实例 readiness 转非 READY、旧实例发送数为 0、新实例 fencing token 递增并成功接管。
+- 上述证据带时间戳、PID/容器 ID、argv 与直接退出码；历史证据不得冒充本次主机崩溃后的复验。
+
 ---
 ## 15. 测试隔离与本地 Postgres
 

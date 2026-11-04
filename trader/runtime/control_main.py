@@ -16,7 +16,10 @@ from trader.adapters.persistence.research_history_bridge_store import ResearchHi
 from trader.api.auth import AuthSettings, PostgresSessionStore
 from trader.api.routes.sse import get_sse_manager
 from trader.api.trading_app import create_trading_app
+from trader.ops.dr_evidence import dr_gate_from_env
+from trader.runtime.credentials import assert_control_credentials_absent
 from trader.runtime.history_plane import build_history_plane as _build_history_plane
+from trader.services.alerting import alert_monitor_from_env
 from trader.services.history_data_ingestion import HistoryIngestionService
 from trader.trading.jobs import PostgresResearchStore
 from trader.trading.models import NotReady
@@ -35,10 +38,22 @@ class NoExchangeIO:
 
 
 class RemoteTradingReadiness:
-    def __init__(self, service, account_id, lease_reader):
+    def __init__(self, service, account_id, lease_reader, dr_gate=None):
         self.service = service
         self.account_id = account_id
         self.lease_reader = lease_reader
+        self.dr_gate = dr_gate
+
+    def _dr_reasons(self):
+        if self.dr_gate is None:
+            return []
+        try:
+            result = self.dr_gate()
+        except Exception:
+            return ["DR_EVIDENCE_INVALID"]
+        if getattr(result, "ready", False):
+            return []
+        return list(getattr(result, "reasons", ()) or ["DR_EVIDENCE_INVALID"])
 
     async def check(self):
         try:
@@ -53,6 +68,7 @@ class RemoteTradingReadiness:
                 reasons.append("EXECUTION_OWNER_NOT_ALIGNED")
             elif not runtime.get("ready"):
                 reasons.extend(runtime.get("reasons") or ["TRADING_RUNTIME_NOT_READY"])
+            reasons.extend(self._dr_reasons())
             return {
                 "ready": not reasons,
                 "reasons": list(dict.fromkeys(reasons)),
@@ -134,8 +150,13 @@ async def build_history_plane(research):
 
 @asynccontextmanager
 async def lifespan(app):
+    # Control must never hold exchange write credentials. Refuse to start when
+    # they are present instead of silently accepting an over-privileged process.
+    assert_control_credentials_absent()
     pool = None
     task = None
+    alert_task = None
+    alert_monitor = None
     history_store = None
     try:
         pool = await create_pool()
@@ -161,7 +182,9 @@ async def lifespan(app):
                 scope,
             )
 
-        readiness = RemoteTradingReadiness(service, account_id, lease_reader)
+        readiness = RemoteTradingReadiness(
+            service, account_id, lease_reader, dr_gate=dr_gate_from_env()
+        )
         app.state.trading_service = QueuedTradingControl(service, readiness)
         app.state.readiness_provider = readiness
         app.state.sessions = sessions
@@ -189,6 +212,18 @@ async def lifespan(app):
                 await asyncio.sleep(1)
 
         task = asyncio.create_task(outbox())
+
+        # The Control process observes the authoritative lease/runtime state,
+        # so it can alert on a missing or expired execution even when the
+        # execution process itself is dead.
+        alert_monitor = alert_monitor_from_env(
+            source="control",
+            account_id=account_id,
+            readiness=readiness.check,
+        )
+        app.state.alert_monitor = alert_monitor
+        if alert_monitor is not None:
+            alert_task = asyncio.create_task(alert_monitor.run_forever())
     except Exception:
         app.state.trading_service = None
         app.state.readiness_provider = None
@@ -199,6 +234,13 @@ async def lifespan(app):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        if alert_task:
+            alert_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await alert_task
+        if alert_monitor is not None:
+            with contextlib.suppress(Exception):
+                await alert_monitor.close()
         if history_store is not None:
             with contextlib.suppress(Exception):
                 await history_store.disconnect()

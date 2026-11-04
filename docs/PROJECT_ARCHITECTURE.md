@@ -1045,3 +1045,53 @@ flowchart TB
 - 提交与 retry 都重新核验资格和冻结 provenance；数据集集合在入队前共享完整已收盘 bar
   日历与 quote asset。真实 PG 覆盖见 `test_phase3_postgres.py` 与
   `test_research_history_bridge_pg.py`（已登记 CI）。
+
+### 8.4 阶段 5 已实现：Compose / 监控 / 备份 / 故障恢复（2026-11-03）
+
+本节是阶段 5 对第 8 / 8.3 节的部署与运维增量；接口细节见
+`docs/INTERFACE_CONTRACTS.md` 13.16，操作步骤见 `docs/PHASE5_OPERATIONS_RUNBOOK.md`。
+
+**Compose 拓扑**
+
+- `compose.yml` 覆盖 postgres、control、execution、research、history 五个核心服务，
+  并增加 backup 与 alert-sink 两个阶段 5 必需服务。顶层 `name` 与全部宿主端口、卷名
+  参数化；不存在固定 `container_name`。演练必须使用独立 `-p` 项目与独立端口/卷。
+- Control 与 Execution 不共享 `env_file`，也不共享交易所凭据：Control 的环境禁止出现
+  `BINANCE_API_KEY` / `BINANCE_SECRET_KEY` / `*_FILE`；Execution 仅通过 Docker secrets
+  文件读取密钥。文件内容不会进入 Compose 渲染输出、argv 或证据。
+- Execution 缺少密钥时以 `BINANCE_CREDENTIALS_MISSING` 拒绝启动并退出码 2；非沙箱
+  `BINANCE_ENV` 以 `BINANCE_ENV_NOT_SANDBOX` 拒绝。Control 启动时若发现交易所凭据，
+  以 `CONTROL_EXCHANGE_CREDENTIALS_PRESENT` 拒绝启动。
+- `alert-sink` 是独立的接收进程，持久化 webhook/heartbeat 并提供 ack；生产可把
+  `QTS_ALERT_WEBHOOK_URL` / `QTS_ALERT_HEARTBEAT_URL` 指向外部告警服务。
+
+**健康与就绪**
+
+- `/health/live` 恒 200；`/health/ready` 只回答 API 请求依赖，依赖不可用时 200 `degraded` +
+  `reasons`（保留既有探测语义）；`/health/trading` 由 `RemoteTradingReadiness` 聚合账户风险原因、执行租约、
+  运行态与 DR 证据，未就绪返回 503 + 稳定 `reasons`。三者语义不可互换。
+- DR 证据不足时，Control 与 Execution 都保持非 READY；Execution 在每次新风险发送前
+  重新读取证据，过期即拒绝。`QTS_DR_REQUIRED=1` 是生产 Compose 的强制配置。
+
+**备份与恢复**
+
+- `backup` 服务每 `QTS_BACKUP_INTERVAL_SECONDS`（Compose 默认 240s，硬上限 300s）用导出快照执行
+  `pg_dump`，上传到 S3 兼容目标，`head_object` 核对长度+元数据并重新下载哈希；
+  只有回读哈希一致才记 `succeeded`。事实摘要（accounts/commands/executions/ledger/
+  events/outbox）与 dump 来自同一快照，供恢复后逐表比对。
+- `scripts/restore_postgres_drill.py` 把对象恢复到独立任务数据库，比较事实摘要与
+  不可变键集合、校验 book/account 守恒，并实测 RTO；证据写入
+  `dr-evidence.json`，由 DR gate 校验备份新鲜度、目标异机声明、恢复验证与 RTO。
+- 指定异机目标当前通过严格 SSH 隧道访问 rclone S3 服务；证据记录真实远端 host、隧道端点和 host-key 校验，拒绝把 loopback 当作异机。
+本地 S3 emulator 只用于故障注入/流程演练，`target_kind=local_emulator` 且
+  `off_host=false`，DR gate 必须拒绝；它不构成 5.6/5.7 的异机证据。
+
+**崩溃与租约**
+
+- 已提交的经济事实（账户快照、命令、成交、账本、事件、outbox）在同一 PG 事务提交；
+  进程崩溃后由新进程读取同一 schema，摘要/计数必须一致，且新 runtime 不得重发已提交命令。
+- `trading_runtime_leases` 的 fencing token 只增不减；冲突实例在 lease 获取前即返回
+  `EXECUTION_INSTANCE_CONFLICT`，不进入对账。旧实例失租后在下一次 IO 边界拒绝发送，
+  readiness 立即转非 READY；Control 通过租约读取独立观察同一事实。
+- 告警监控把 `UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、执行租约失效映射为
+  稳定告警码；只有接收端 ack 才计为投递，失败保持 pending 并重试，同时发送外部心跳。
