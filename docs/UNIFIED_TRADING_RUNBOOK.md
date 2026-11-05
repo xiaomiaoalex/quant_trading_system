@@ -174,6 +174,11 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 
 ## 5. 沙箱 E2E 与测试环境观察窗口
 
+本阶段最高验收环境固定为 `BINANCE_ENV=demo`。完成 Demo E2E、主动重连/执行进程
+重启和 24h 观察门禁即为外部验收通过，不要求真实 testnet 覆盖证明或 Testnet E2E。
+下文 `testnet_e2e.py` 只是历史脚本文件名，执行目标必须由 `BINANCE_ENV=demo` 限定；
+不得据此连接生产或真实资金账户。
+
 ### 5.1 沙箱 E2E
 
 本地启动（自动加载 `.env`，未配置密码时生成临时本地密码并写入系统临时目录，不打印明文）：
@@ -188,7 +193,7 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 .venv\Scripts\python.exe scripts\cancel_sandbox_orders.py --cl-ord-id <id1> --cl-ord-id <id2>
 ```
 
-启动 runtime 后执行（只连接 `BINANCE_ENV` 指定的 sandbox；脚本不会读取或请求生产凭据）：
+启动 runtime 前确认 `BINANCE_ENV=demo`，启动后执行（脚本不会读取或请求生产凭据）：
 
 ```powershell
 .venv\Scripts\python.exe scripts\testnet_e2e.py --reconnect --out artifacts\e2e_evidence_final.json
@@ -206,8 +211,9 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 重连接口提交 `{command_id, account_id}` 并返回命令回执；轮询命令 `CONFIRMED`
 以及交易就绪均成功后才算恢复。执行进程先持久关闭 stream/ready 门禁，再断开会话，
 重新对账；API 接受重连意图不等同于会话已经恢复。
-上述外部沙箱演练与 24h 窗口因 private WS 恢复证明缺口尚不能重跑验收，
-历史产物不代表当前代码已通过最终门禁。
+当前验收记录见 `docs/UNIFIED_TRADING_ACCEPTANCE.md`：第五轮 Demo E2E 与 24h
+观察窗口已通过。该历史结果不等于每个后续 commit 都自动通过；新版本验收须将证据
+关联到对应版本。历史脚本名中的 testnet 不增加额外 Testnet 验收要求。
 
 ### 5.2 观察窗口
 
@@ -219,9 +225,20 @@ curl -c cookies.txt -X POST http://127.0.0.1:8090/v1/auth/login `
 .venv\Scripts\python.exe scripts\mark_observation.py --out artifacts\observation.jsonl --mark runtime_restart --detail "killed pid ..."
 .venv\Scripts\python.exe scripts\mark_observation.py --out artifacts\observation.jsonl --mark active_reconnect --detail "reconnect response and recovery evidence path ..."
 
-# 汇总与门禁
+# 汇总与门禁（历史兼容读取）
 .venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl --min-hours 24 --json-out artifacts\observation_summary.json
+
+# 新 digest 的发布验收：严格绑定 release evidence，并显式使用发布阈值
+.venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl `
+  --min-hours 24 --strict-release `
+  --release-evidence artifacts\demo\release-binding.json `
+  --expected-commit <40hex> --expected-digest sha256:<64hex> `
+  --json-out artifacts\observation_summary_strict.json
 ```
+
+严格模式的 ready_ratio、对账年龄、末样本 outbox/未入账成交、重复/重发/覆盖证据与
+release 绑定规则见 `docs/CI_CD_RELEASE_RUNBOOK.md` 第 7 节。历史窗口通过不等于当前
+digest 通过。
 
 窗口内必须完成一次主动重连和一次执行进程重启；`summarize_observation.py` 会输出 `ready_ratio`、读数切换、最大对账年龄、outbox 积压、未补齐成交、未知命令、账务异常、未解决差异和 markers。出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断；人工核对后通过 `POST /v1/trading/control` 提交 `RESOLVE` 命令（`code` + 证据 `evidence`），由 Execution 进程校验并应用，Control 进程不直接写账户事实。余额差异的证据必须逐资产给出与观测一致的 `internal` / `venue` / `difference`，例如：
 

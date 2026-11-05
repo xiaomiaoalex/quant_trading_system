@@ -3533,3 +3533,228 @@ SSH 隧道模式下客户端可连接 `127.0.0.1` 转发端点，但证据必须
   成本（资金/费率/滑点/总费用）、收益与回撤、成交与拒绝统计、`limitations`。
 
 `provenance` 在提交时冻结进 manifest 并参与 manifest 哈希，执行前由 worker 复核。
+
+### 13.17 CI/CD 发布接口、环境键与证据字段（2026-11-04）
+
+本节是 CI/CD 专项的增量契约，不改变 13.1–13.16 的公开 HTTP 语义、账本/预约守恒、
+`QTS_DEPLOYMENT_ID` 的策略实例语义、租约/fencing 协议或 Control→Execution 命令边界。
+操作步骤见 `docs/CI_CD_RELEASE_RUNBOOK.md`，拓扑见 `docs/PROJECT_ARCHITECTURE.md` 8.5。
+
+**公开 API**
+
+- 不新增公开路由；`/health/live`、`/health/ready`、`/v1/trading/metrics` 的响应字段不变。
+  `/health/trading` 增加非秘密的 `release` 块（`release_id`/`commit`/`image_digest`/
+  `environment`，来自进程环境），control 侧并给出 `instance_owner`/`lease_token`/
+  `generation`，供观察窗口把每个样本绑定到实际运行的 release。`QTS_RELEASE_ID` 仍只用于
+  Compose label、日志和证据关联，**不是**执行 owner、租约 token 或策略实例标识。
+- `QTS_DEPLOYMENT_ID` 仍只表示策略运行实例；不得用 release id 替代或覆盖。
+
+**Demo Compose 环境键（`deploy/demo.env.example`）**
+
+| 键 | 语义 |
+| --- | --- |
+| `QTS_COMPOSE_PROJECT` | 必填；独立 Demo project，所有容器/卷按 project 隔离 |
+| `QTS_RELEASE_IMAGE` | 必填；`repo@sha256:<64 hex>`，应用服务唯一镜像 |
+| `QTS_EXPECTED_DIGEST` | 必填；必须与 `QTS_RELEASE_IMAGE` 的 digest 一致 |
+| `QTS_RELEASE_ID` / `QTS_RELEASE_COMMIT` | 发布证据关联；commit 必须为 40 位小写 hex |
+| `QTS_PREVIOUS_IMAGE_DIGEST` | 回滚目标 digest；用于 rollback evidence 校验 |
+| `QTS_POSTGRES_IMAGE` / `QTS_ALERT_IMAGE` | 必填；postgres/python 运行镜像的 digest pin |
+| `BINANCE_ENV` | overlay 硬编码为 `demo`；env 文件不能改成 testnet/production |
+| `QTS_ACCOUNT_ID` / `QTS_SYMBOLS` / `QTS_INSTRUMENTS` | Demo 专用账户与下单 allowlist；symbol 必须全部有 instrument 映射 |
+| `QTS_AUTH_REQUIRED` / `QTS_USERNAME` | Control API 必须启用会话鉴权；`QTS_AUTH_REQUIRED` 必须为 `1`，否则预检返回 `AUTH_REQUIRED_NOT_ENABLED` |
+| `QTS_STRATEGY_MODULE` / `QTS_STRATEGY_WARMUP_EVENTS` | 策略模块与预热下界；warmup 必须 >0 |
+| `QTS_EXTERNAL_ALERT_WEBHOOK_URL` | 外部告警 ack 路径；必须 https 且不是集群内 alert-sink |
+| `QTS_DR_REQUIRED` / `QTS_DR_EVIDENCE_PATH` / `QTS_BACKUP_RPO_SECONDS` / `QTS_BACKUP_OFF_HOST_ATTESTED` | DR gate 输入；RPO ≤300s，证据由 `trader.ops.dr_evidence` 校验 |
+| `QTS_SCHEMA_VERSION` / `QTS_SCHEMA_COMPAT_EVIDENCE_PATH` / `QTS_ROLLBACK_COMPAT_EVIDENCE_PATH` | expand-only 迁移与旧 digest 回滚兼容证据；不可逆或不兼容时拒绝自动回滚 |
+| `POSTGRES_PASSWORD` / `QTS_PASSWORD_HASH` / `QTS_ALERT_SIGNING_SECRET` | 只由受控 secret 注入；默认口令、占位符、缺失值均被预检拒绝 |
+
+`deploy/compose.demo.yml` 对 control/execution/research/history/backup 使用
+`QTS_RELEASE_IMAGE` 且 `build: !reset null`；宿主端口默认 65432（PG）、18090（Control）、
+18085（alert-sink）；容器 label 记录 `com.qts.release.id`、`com.qts.release.commit` 和
+`com.qts.environment=demo`。
+
+**发布预检 reason code**
+
+`scripts/deploy_preflight.py` 输出 `{ok, environment, release_id, release_commit,
+release_digest, errors:[{code,key}], warnings, checked_keys, host_evidence_evaluated}`，
+只含键名与稳定 code，不含值。`--no-host-evidence` 只用于不接触主机的远端 dry-run：
+它把 DR/schema/rollback 主机文件检查标为 `HOST_EVIDENCE_DEFERRED`，不构成部署批准；
+受保护 Demo runner 在启动容器前必须再执行一次完整预检（`host_evidence_evaluated=true`）。
+稳定 code 包括：`BINANCE_ENV_NOT_DEMO`、`POSTGRES_PASSWORD_DEFAULT_OR_MISSING`、
+`ALERT_SIGNING_SECRET_MISSING`、`AUTH_REQUIRED_NOT_ENABLED`、`CONTROL_PASSWORD_HASH_MISSING`、
+`ACCOUNT_ID_MISSING`、`ACCOUNT_ID_NOT_DEDICATED`、`SYMBOLS_MISSING`、`INSTRUMENTS_MISSING`、
+`INSTRUMENT_SYMBOL_MISMATCH`、`STRATEGY_MODULE_MISSING`、`STRATEGY_WARMUP_MISSING`、
+`EXTERNAL_ALERT_MISSING`、`EXTERNAL_ALERT_HEARTBEAT_MISSING`、`DR_REQUIRED_NOT_ENABLED`、`DR_EVIDENCE_PATH_MISSING`、
+`BACKUP_RPO_EXCEEDED`、`OFF_HOST_BACKUP_NOT_ATTESTED`、`RELEASE_ID_MISSING`、
+`RELEASE_COMMIT_INVALID`、`RELEASE_IMAGE_DIGEST_MISSING`、`RELEASE_IMAGE_DIGEST_MISMATCH`、
+`EXPECTED_DIGEST_MISSING`、`RELEASE_MANIFEST_COMMIT_MISMATCH`、`RELEASE_MANIFEST_DIGEST_MISMATCH`、
+`RELEASE_MANIFEST_ID_MISMATCH`、`RELEASE_MANIFEST_EVIDENCE_MISSING:<key>`、
+`RELEASE_MANIFEST_STARTUP_SMOKE_FAILED`、`SCHEMA_VERSION_MISSING`、`SCHEMA_COMPAT_EVIDENCE_MISSING`、
+`SCHEMA_COMPAT_EVIDENCE_INVALID`、`PREVIOUS_DIGEST_MISSING`、`ROLLBACK_COMPAT_EVIDENCE_MISSING`、
+`ROLLBACK_COMPAT_EVIDENCE_INVALID`、`ROLLBACK_DIGEST_MISMATCH`、
+`ROLLBACK_RELEASE_DIGEST_MISMATCH`、`HOST_EVIDENCE_DEFERRED`（仅 warning，dry-run），
+以及 DR gate 的 `DR_*`。
+
+**Release manifest**
+
+`scripts/release_manifest.py` 生成 JSON：`schema_version`、`release_id`、`created_at`、
+`commit`、`tree_clean`、`ref`、`workflow`、`workflow_run`、`image`、`image_digest`、
+`schema_version_applied`、`environment`、`dependencies.{ci_constraints,runtime_constraints}`
+（路径、present、SHA-256）、`evidence.{junit,coverage,frontend,sbom,scan,startup_smoke}`（文件 SHA-256 或
+目录树摘要）、`startup_smoke_summary.{passed,image,image_digest_ok,all_health}`、
+`non_claims`。manifest 不包含秘密，也不构成部署或 Demo 验收声明。
+默认（发布路径）**必须**提供全部必需证据：CI JUnit、coverage、前端 dist、SBOM、扫描
+结果和固定 digest 的启动 smoke；缺任一项即 `RELEASE_EVIDENCE_MISSING:<key>`，
+启动 smoke 未通过或 digest 不一致即 `RELEASE_STARTUP_SMOKE_NOT_PASSED` /
+`RELEASE_STARTUP_SMOKE_DIGEST_MISMATCH`。`scripts/deploy_preflight.py` 在校验
+release manifest 时重复检查这些证据（`RELEASE_MANIFEST_EVIDENCE_MISSING:<key>`、
+`RELEASE_MANIFEST_STARTUP_SMOKE_FAILED`），不允许只声明不提供。
+
+**Observation summary**
+
+`scripts/summarize_observation.py` 保留原有字段并新增：`min_ready_ratio`、
+`max_reconciliation_age_ms`、`reconciliation_age_evidence_present`、
+`final_reconciliation_age_ms`、`final_outbox_backlog`、`final_unbooked_fills`、
+`duplicate_or_resend_samples`、`release_binding`、`strict_release`。新增字段：
+`min_hours`、`strict_min_hours`、`effective_min_hours`、`strict_metrics_checked`、
+`strict_metrics_missing`、`strict_metrics_invalid`。新增 blocker：
+`READY_RATIO_BELOW_THRESHOLD`、`RECONCILIATION_AGE_UNKNOWN`、`RECONCILIATION_AGE_EXCEEDED`、
+`OUTBOX_BACKLOG_AT_END`、`UNBOOKED_FILLS_AT_END`、`DUPLICATE_OR_RESEND_EVIDENCE`、
+`RELEASE_EVIDENCE_MISSING`、`RELEASE_EVIDENCE_INVALID`、`RELEASE_ENVIRONMENT_NOT_DEMO`、
+`RELEASE_COMMIT_MISMATCH`、`RELEASE_COMMIT_INVALID`、`RELEASE_DIGEST_MISMATCH`、
+`RELEASE_DIGEST_INVALID`、`RELEASE_ID_MISSING`、`STRICT_WINDOW_SHORTER_THAN_24H`、
+`STRICT_METRICS_MISSING:<keys>` / `STRICT_METRICS_INVALID:<keys>`（聚合行）以及逐键 `STRICT_METRICS_MISSING:<key>` / `STRICT_METRICS_INVALID:<key>`、
+`RELEASE_RUNTIME_BINDING_MISSING`、`RELEASE_RUNTIME_CHECKS_MISSING`、
+`RELEASE_RUNTIME_CHECK_FAILED:<key>`、`RELEASE_RUNTIME_CONTAINERS_MISSING`、
+`RELEASE_RUNTIME_BINDING_INVALID`。历史兼容模式不因缺少 metrics 字段而失败；
+`--strict-release` 额外强制：窗口 ≥24h（`--strict-min-hours` 不得低于 24）、每个样本必须
+带 `reconciliation_age_ms`/`outbox_backlog`/`unbooked_fills`/`unknown_commands`/
+`balance_anomalies` 显式计数器（缺失或类型非法即阻断，缺席不等于零），且 release
+evidence 必须是目标主机实际 inspect 得到的运行时绑定。
+
+### 13.18 发布 provenance、运行时绑定与部署门禁（2026-11-05）
+
+父级最终核验提出的 F-P1..F-P8 对应的可执行门禁，配置键与语义如下（均不输出秘密值）。
+
+**`scripts/verify_release_provenance.py`（发布 provenance 门禁）**
+
+- 输入：`--run-id`、`--repository`、`--manifest`、`--commit`、`--digest`、`--release-id`、
+  可选 `--run-json`（离线测试用）或 `GITHUB_TOKEN`（在线拉取）。
+- 通过条件：Release Build run 是 `workflow_run` 触发、路径为
+  `.github/workflows/release-build.yml`、分支为 `main`、`status=completed`、
+  `conclusion=success`、`head_sha` 等于请求 commit，且 manifest 的
+  release_id/commit/image_digest/environment 与请求一致。
+- 失败 code：`PROVENANCE_EVENT_MISMATCH`、`PROVENANCE_WORKFLOW_MISMATCH`、
+  `PROVENANCE_BRANCH_MISMATCH`、`PROVENANCE_RUN_NOT_COMPLETED`、
+  `PROVENANCE_RUN_NOT_SUCCESSFUL`、`PROVENANCE_HEAD_SHA_MISMATCH`、
+  `PROVENANCE_RUN_ID_MISMATCH`、`PROVENANCE_REPOSITORY_MISMATCH`、
+  `MANIFEST_COMMIT_MISMATCH`、`MANIFEST_DIGEST_MISMATCH`、
+  `MANIFEST_RELEASE_ID_MISMATCH`、`MANIFEST_ENVIRONMENT_NOT_DEMO`、
+  `EXPECTED_COMMIT_INVALID`、`EXPECTED_DIGEST_INVALID`。
+- 受保护 Demo 工作流必须先跑该门禁，再 checkout `inputs.commit` 或执行带 secrets 的脚本。
+
+**`scripts/collect_runtime_release_binding.py`（运行时绑定采集）**
+
+- 输出 JSON：`runtime_inspected=true`、`compose_project`、`environment=demo`、
+  `release_id`、`commit`、`image_digest`、`containers{<service>:{name,running,health,image,labels}}`、
+  `health.{live,ready,trading}`、`owner_evidence`（健康端点不暴露租约 owner/fencing 时
+  明确写出缺失原因）、`checks.{all_running,all_healthy,labels_match,
+  image_digest_match,trading_ready}`、`errors`。
+- 失败 code：`CONTAINER_MISSING:<service>`、`CONTAINER_NOT_RUNNING:<service>`、
+  `CONTAINER_NOT_HEALTHY:<service>:<status>`、`LABEL_RELEASE_ID_MISMATCH:<service>`、
+  `LABEL_RELEASE_COMMIT_MISMATCH:<service>`、`LABEL_ENVIRONMENT_MISMATCH:<service>`、
+  `IMAGE_DIGEST_MISMATCH:<service>`、`HEALTH_LIVE_NOT_200`、`HEALTH_READY_NOT_200`、
+  `HEALTH_TRADING_NOT_READY`。
+
+**`scripts/deploy_gate.py`（部署前后门禁）**
+
+- `--mode pre`：要求新增风险已关闭（`new_risk_blocked=true`）、命令已收敛
+  （UNKNOWN/QUEUED/SENDING 均为 0）、outbox 无积压、无未入账成交、租约有效且
+  runtime owner/fencing 与租约一致、live/ready 为 200。
+- `--mode post`：在 pre 的基础上要求全部容器 healthy、应用容器 label/digest 与发布一致、
+  `/health/trading` 200 且 `ready=true`（发布前已关闭新增风险时允许 503 且 reasons 恰为
+  `NEW_RISK_BLOCKED`）。
+- `--wait-timeout`/`--poll-interval`：post 门禁在有界超时内轮询
+  （`up -d` 返回时容器仍为 starting），超时后才判定失败；pre 门禁不等待。脚本 argparse
+  默认 0（单次），`deploy-demo.yml` 显式传 600s/15s。
+- 事实采集：PostgreSQL 布尔经 `psql -tAc` 渲染为 `t`/`f`，实现按 `t/true/1/yes/on` 与
+  `f/false/0/no/off` 解析；空值或无法解析的值是“未知”，不是零。
+- 失败 code：`NEW_RISK_NOT_BLOCKED`、`NEW_RISK_STATE_UNKNOWN`、
+  `UNKNOWN_COMMANDS_PRESENT`、`COMMANDS_NOT_CONVERGED:QUEUED`、
+  `COMMANDS_NOT_CONVERGED:SENDING`、`OUTBOX_PENDING`、`UNBOOKED_FILLS_PRESENT`、
+  `EXECUTION_LEASE_INVALID`、`EXECUTION_OWNER_NOT_ALIGNED`、
+  `EXECUTION_FENCING_NOT_ALIGNED`、`FACTS_INVALID:<key>`（缺失或不可解析的事实，
+  含 `FACTS_INVALID:lease`、`FACTS_INVALID:runtime`）（健康/容器/label/digest 失败码同上）。
+
+### 13.19 父级第 2 轮核验：采集边界、运行时身份、输入注入与 artifact 传递链（2026-11-05）
+
+父级第 2 次核验（F-P1/F-P2/F-P3/F-P5/F-P8）后的可执行契约，取代 13.18 中对应的宽松语义。
+
+**观察窗口边界（F-P1）**
+
+`scripts/observe_trading_runtime.py` 的窗口从**第一个实际记录样本**起算（在 HTTP client
+初始化之后），末样本取到“首样本时间 + 请求时长”或之后：请求 24h 必须得到 ≥24h 的跨度，
+不会因 client 初始化/请求耗时或“时长减一个采样间隔”而缩短。strict 的 24h 下限不因此放宽。
+
+**运行时身份（F-P2）**
+
+- `/health/trading` 的响应新增 `release` 块：`release_id`、`commit`、`image_digest`、
+  `environment`；control 侧同时给出 `instance_owner` 与 `lease_token`。
+- 观察器把该身份写进**每个样本**的 `runtime` 字段
+  （`release_id`、`commit`、`image_digest`、`environment`、`instance_owner`、
+  `lease_token`、`observed_at_ms`）。
+- `scripts/collect_runtime_release_binding.py` 的 binding 新增 `runtime` 块（取自同一次
+  健康响应）与 `errors`（采集错误必须为空）。
+- `summarize_observation.py` 新增 `--expected-release-id`：由已验证 manifest 提供 release id，
+  用于锚定 binding 的 release label 校验；不传时退化为 binding 自身一致性检查（自指），
+  受保护工作流始终传入。
+- `scripts/release_binding.py` 校验实际事实而不是声明的布尔位：
+  - binding 事实：`RELEASE_RUNTIME_BINDING_MISSING`、`RELEASE_RUNTIME_CHECKS_MISSING`、
+    `RELEASE_RUNTIME_CHECK_FAILED:<key>`、`RELEASE_RUNTIME_ERRORS_MISSING`（缺 `errors`
+    键不等于采集无错误）、`RELEASE_RUNTIME_ERRORS_INVALID`、`RELEASE_RUNTIME_ERROR_PRESENT:<code>`、
+    `RELEASE_RUNTIME_GENERATED_AT_INVALID`、`RELEASE_RUNTIME_CONTAINERS_MISSING`、
+    `RELEASE_RUNTIME_CONTAINER_MISSING:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_NOT_PRESENT:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_NOT_RUNNING:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_UNHEALTHY:<service>:<status>`、
+    `RELEASE_RUNTIME_CONTAINER_IMAGE_MISMATCH:<service>`、
+    `RELEASE_RUNTIME_LABEL_MISMATCH:<service>:<field>`、
+    `RELEASE_RUNTIME_HEALTH_MISSING`、`RELEASE_RUNTIME_HEALTH_NOT_READY:<live|ready|trading>`、
+    `RELEASE_RUNTIME_IDENTITY_MISSING[:<field>]`、`RELEASE_RUNTIME_IDENTITY_MISMATCH:<field>`、
+    `RELEASE_RUNTIME_OWNER_MISSING`。
+  - 样本归属：`SAMPLE_RUNTIME_IDENTITY_MISSING[:<field>]`、
+    `SAMPLE_RUNTIME_IDENTITY_MISMATCH:<field>`、
+    `SAMPLE_RUNTIME_TIMESTAMP_MISSING`、`SAMPLE_RUNTIME_TIMESTAMP_MISMATCH`、
+    `RELEASE_BINDING_WINDOW_MISMATCH`（binding 的采集时间必须落在窗口内）。
+    比较的样本身份字段是 release_id/commit/image_digest/environment；owner 记录在样本中
+    供审计，fencing token 可能因窗口内受控重启而推进，因此不作为全窗口相等条件。
+  - 兼容性读取模式（非 strict）不使用这些规则。
+
+**输入注入（F-P5）**
+
+两个受保护工作流把操作员输入放进 step `env`，用 `[[ ... =~ ... ]]` 校验格式后再以
+`"$VAR"` 引用；`run:` 脚本中不再出现 `${{ inputs.* }}` 展开。校验失败码：
+`RELEASE_BUILD_RUN_ID_INVALID`、`RELEASE_COMMIT_INVALID`、`RELEASE_IMAGE_DIGEST_INVALID`、
+`RELEASE_ID_INVALID`、`OBSERVATION_HOURS_INVALID`、`OBSERVATION_HOURS_BELOW_24`。
+Demo secrets 只注入到需要它们的步骤（E2E/观察/预检/部署），provenance 步骤没有 Demo 密钥。
+
+**artifact 传递链（F-P8）**
+
+- Release Build 只上传 `reports/` 一个根：下载后 `release-manifest.json` 位于 artifact 顶层，
+  启动 smoke 位于 `compose-smoke/compose-smoke.json`。
+- 消费工作流把证据下载到 `${{ runner.temp }}/qts-release`，第二次 checkout（默认
+  `clean=true`）不会删除它；preflight/provenance 使用同一路径。
+- `demo-evidence.yml` 在观察窗口**之后**采集运行时绑定，strict 摘要据此比对窗口与身份。
+
+**真实采集验证**
+
+`scripts/verify_deploy_gate_live.py` 在任务自有 Compose 项目（独立 project/端口/卷）中，
+通过真实 `docker compose exec -T postgres psql -tAc` 采集事实并验证门禁；它不接触既有
+`qts-postgres`/`qts_pgdata`。
+
+**外部告警接线**
+
+`deploy/compose.demo.yml` 将 control/execution 的 `QTS_ALERT_WEBHOOK_URL` 与
+`QTS_ALERT_HEARTBEAT_URL` 显式绑定到 `QTS_EXTERNAL_ALERT_WEBHOOK_URL` /
+`QTS_EXTERNAL_ALERT_HEARTBEAT_URL`（必须 https 且非集群内主机）；`alert-sink` 只保留为
+本地演练路径，Demo 发布不得把外部告警指向它。

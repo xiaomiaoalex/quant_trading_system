@@ -74,6 +74,12 @@ class RemoteTradingReadiness:
                 "reasons": list(dict.fromkeys(reasons)),
                 "account_id": self.account_id,
                 "db_available": True,
+                # The observed runtime identity: the lease owner and fencing
+                # token that answered this request.  The strict observation
+                # gate compares it with the host-side release binding.
+                "instance_owner": str(lease["owner"]) if lease else "",
+                "lease_token": str(lease["token"]) if lease else "",
+                "generation": state.reconciliation.get("generation"),
             }
         except Exception:
             return {
@@ -81,6 +87,9 @@ class RemoteTradingReadiness:
                 "reasons": ["STORAGE_UNAVAILABLE"],
                 "account_id": self.account_id,
                 "db_available": False,
+                "instance_owner": "",
+                "lease_token": "",
+                "generation": None,
             }
 
 

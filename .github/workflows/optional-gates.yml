@@ -1,0 +1,110 @@
+name: Optional Ops and External Gates
+
+# These groups are deliberately NOT part of the PR merge gate:
+#
+# * ops       - host/Docker/off-host evidence drills that need resources which
+#               are not guaranteed on hosted runners;
+# * external  - optional research dependencies (vectorbt) and explicit
+#               network-dependent experiments.
+#
+# They still run through the same manifest selection so their file lists cannot
+# drift.  A skip here is visible in the JUnit artifact and is never reported as
+# a required-check pass.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: optional-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  optional-ops-drills:
+    name: Optional Ops Drills
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QTS_TEST_GROUP: ops
+      QTS_TEST_NETWORK_POLICY: open
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: trader/requirements-ci.constraints.txt
+
+      - name: Install dependencies from locked constraints
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
+
+      - name: Run optional ops tests
+        run: |
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-ops.xml
+
+      - name: Report optional evidence
+        if: always()
+        run: |
+          python scripts/check_junit.py reports/junit-ops.xml --min-tests 0 || true
+
+      - name: Upload ops evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optional-ops-evidence
+          path: reports/junit-ops.*
+          if-no-files-found: warn
+
+  optional-external-research:
+    name: Optional External Research Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      QTS_TEST_GROUP: external
+      QTS_TEST_NETWORK_POLICY: open
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
+
+      - name: Install dependencies and optional research extras
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
+          python -m pip install "vectorbt==0.28.5"
+
+      - name: Run optional external tests
+        run: |
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-external.xml
+
+      - name: Report optional evidence
+        if: always()
+        run: |
+          python scripts/check_junit.py reports/junit-external.xml --min-tests 0 || true
+
+      - name: Upload external evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optional-external-evidence
+          path: reports/junit-external.*
+          if-no-files-found: warn

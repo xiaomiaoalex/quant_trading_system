@@ -391,7 +391,7 @@ export function Backtests() {
     setLabMessage(null)
     setIsBacktesting(true)
     try {
-      let currentCandidate = candidate
+      const currentCandidate = candidate
       if (!currentCandidate) {
         setLabError('Please save draft and debug first.')
         setIsBacktesting(false)

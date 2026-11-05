@@ -1095,3 +1095,72 @@ flowchart TB
   readiness 立即转非 READY；Control 通过租约读取独立观察同一事实。
 - 告警监控把 `UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、执行租约失效映射为
   稳定告警码；只有接收端 ack 才计为投递，失败保持 pending 并重试，同时发送外部心跳。
+
+### 8.5 CI/CD 交付与 Demo 发布拓扑（2026-11-04）
+
+本节是 CI/CD 专项对第 8 节的增量，不改变 8.1–8.4 的进程责任、账本或风控语义。
+操作细节见 `docs/CI_CD_RELEASE_RUNBOOK.md`，接口键名见
+`docs/INTERFACE_CONTRACTS.md` 13.17。
+
+**测试分层与合并门禁**
+
+- `ci/test_manifest.json` 是测试文件分类的唯一真相源：`trader/tests/test_*.py` 唯一属于
+  `p0` / `offline` / `postgres` / `ops` / `external` 之一。未分类、失效、重复或 CI 选择
+  缩小都会使 `scripts/verify_test_manifest.py` 失败；`trader/tests/conftest.py` 在收集阶段
+  拒绝未分类文件。
+- PR 必需 Job 由 `CI Required` 聚合：manifest、import、format、type、architecture、P0、
+  offline、Research/AI、Postgres、compose-config、frontend。任一 Job 失败、跳过或取消
+  都不能汇总为成功。`Research/AI` 使用 manifest 中审计过的 `research_ai` 子集，复用
+  既有回放、影子/Paper 晋级、HITL 与研究准入测试，不新增第二套分类。
+- P0/offline 以 `QTS_TEST_NETWORK_POLICY=offline` 禁止 socket；coverage Job 同时运行
+  `p0,offline` 以对齐已测基线，P0 快速 Job 仍独立提供先行反馈；Postgres Job 以
+  `loopback` 只放行本机 DSN，并设置 `REQUIRE_POSTGRES=1`，跳过即失败。
+- `ops`/`external` 只在手动/定时的 `optional-gates.yml` 运行，不属于合并必需检查，也不
+  把可选依赖的 skip 计为通过。
+
+**不可变产物与发布**
+
+- `Release Build` 在 `CI Gate` 于 `main` 成功后按触发 commit 构建一次镜像，推送
+  `ghcr.io/<owner>/<repo>:<sha>` 并记录 digest、SBOM（CycloneDX）和漏洞扫描 SARIF。
+  PR 只构建验证，不推送、不生成 release manifest。
+- `scripts/release_manifest.py` 生成 manifest：commit、clean tree、workflow run、镜像 digest、
+  CI/runtime constraints 的 SHA-256、schema 版本、JUnit/coverage/前端 dist 的摘要。部署端
+  只接受 manifest 中的 digest，禁止 `latest` 或目标机重新 checkout/build。
+- `deploy/compose.demo.yml` 强制 `QTS_COMPOSE_PROJECT`、Demo 专用端口 65432/18090/18085、
+  project 前缀卷，`BINANCE_ENV=demo` 硬编码且不可被 env 文件覆盖，`build: !reset null`
+  禁止重建。基础镜像与 postgres/python 运行镜像均按 digest pin；`pg_dump`/`pg_restore`
+  从同一 pinned PostgreSQL 镜像多阶段复制，镜像构建不依赖 apt 网络。
+- `scripts/deploy_preflight.py` 在启动前 fail-closed：非 Demo、默认/缺失凭据、缺失账户/
+  标的 allowlist/warmup/外部告警/DR、错误或不匹配 digest、缺失 schema/回滚证据都阻断，
+  只输出 reason code 与键名，不输出秘密值。远端 dry-run 用 `--no-host-evidence` 延迟
+  主机证据检查并标记 `HOST_EVIDENCE_DEFERRED`；self-hosted 部署 job 在启动前执行完整
+  预检，二者不能互相冒充。
+- `deploy-demo.yml` 默认 dry-run，不连接主机；实际部署只允许受保护 `demo` 环境的
+  self-hosted runner 手动触发，需 `dry_run=false` 且 `confirm_deploy=true`。部署与 Demo
+  证据工作流共用 `qts-demo-<QTS_COMPOSE_PROJECT>` concurrency 组，同一目标串行。
+- 受保护工作流在 checkout `inputs.commit` 或执行带 secrets 的脚本之前必须通过
+  `scripts/verify_release_provenance.py`：Release Build run 必须是 `workflow_run` 触发、
+  `main`、成功、head SHA 与请求 commit 一致，且 release manifest 绑定一致。
+- 部署前后由 `scripts/deploy_gate.py` 做可执行门禁：pre 要求新增风险已关闭、命令收敛
+  （UNKNOWN/QUEUED/SENDING 均为 0）、无未入账成交、单一 owner/有效 fencing；post 要求
+  全部容器 healthy、固定 digest/label、`/health/trading` ready、无未入账成交，并在
+  `--wait-timeout` 内轮询以避开 `up -d` 的启动竞态。事实来自真实 PostgreSQL：
+  `psql -tAc` 的布尔按 `t/f` 解析，缺失或不可解析的事实按未知失败处理。
+  `scripts/verify_deploy_gate_live.py` 在任务自有 Compose project 中用真实
+  `docker compose exec` 复现该路径。
+- `demo-evidence.yml` 的严格观察要求目标主机实际采集的运行时绑定
+  （`scripts/collect_runtime_release_binding.py`）与 ≥24h 窗口：绑定在观察窗口**之后**
+  采集，每个样本携带 `/health/trading` 的运行时身份，strict 逐样本比对身份与时间戳，
+  并要求绑定的采集时间落在窗口内（`scripts/release_binding.py`）。
+- 受保护工作流的操作员输入只经 step `env` 传入，先按格式校验再以 `"$VAR"` 引用；
+  Release Build 只上传 `reports/` 一个根，消费工作流把证据下载到 checkout 目录之外，
+  因此第二次 checkout（默认 clean）不会删除证据。
+
+**Demo 验收边界**
+
+- Demo 是最高外部验收环境，不要求 testnet。镜像构建成功、dry-run、历史 Demo 结果都不能
+  自动代表当前 digest 已通过 24h；`summarize_observation.py --strict-release` 把
+  ready_ratio、对账年龄、末样本 outbox/未入账成交、重复/重发/覆盖证据与 release
+  commit+digest+environment 绑定为显式门禁。
+- 前端 `npm run test:coverage` 与 `npm run build` 作为 CI 证据和版本化 `dist` artifact；
+  本专项不新增公开前端托管服务，运行时托管路径仍是后续独立工作。

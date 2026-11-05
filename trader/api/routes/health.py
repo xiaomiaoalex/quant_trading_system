@@ -10,6 +10,7 @@ Three-level health check:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
@@ -40,6 +41,22 @@ router = APIRouter(tags=["Health"])
 _trading_readiness_provider = None
 
 
+def _release_identity() -> Dict[str, str]:
+    """Non-secret identity of the release this process runs.
+
+    The observation window uses it to prove that every sample was served by
+    the release the release binding describes.  It carries no credential.
+    """
+    image = str(os.getenv("QTS_RELEASE_IMAGE") or "").strip()
+    digest = image.rsplit("@", 1)[-1] if "@" in image else image
+    return {
+        "release_id": str(os.getenv("QTS_RELEASE_ID") or "").strip(),
+        "commit": str(os.getenv("QTS_RELEASE_COMMIT") or "").strip().lower(),
+        "image_digest": digest,
+        "environment": str(os.getenv("BINANCE_ENV") or "").strip().lower(),
+    }
+
+
 def configure_trading_readiness(provider) -> None:
     """Control Plane injects the trading-runtime readiness probe."""
     global _trading_readiness_provider
@@ -62,6 +79,7 @@ async def trading_readiness(request: Request):
                 "status": "unavailable",
                 "ready": False,
                 "reasons": ["TRADING_RUNTIME_NOT_CONFIGURED"],
+                "release": _release_identity(),
             },
             status_code=503,
         )
@@ -69,10 +87,16 @@ async def trading_readiness(request: Request):
         result = await provider.check()
     except Exception as exc:
         return JSONResponse(
-            {"status": "unavailable", "ready": False, "reasons": [str(exc)]},
+            {
+                "status": "unavailable",
+                "ready": False,
+                "reasons": [str(exc)],
+                "release": _release_identity(),
+            },
             status_code=503,
         )
     result["status"] = "ok" if result.get("ready") else "blocked"
+    result["release"] = _release_identity()
     return JSONResponse(result, status_code=200 if result.get("ready") else 503)
 
 

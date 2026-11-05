@@ -1,0 +1,221 @@
+name: Demo Evidence (Manual, Protected)
+
+# Manual only.  This is the entry point for the current-digest Demo E2E and
+# 24h observation window.  It runs on the dedicated self-hosted Demo runner,
+# uses only Binance Spot Demo credentials from the protected `demo`
+# environment, and never requests testnet or production credentials.
+#
+# A successful run produces evidence bound to the release manifest.  It does
+# not by itself approve a release: the observation summary must pass
+# --strict-release and a human reviews the artifacts.
+#
+# Operator input never reaches a shell as text: values are passed through step
+# environment variables and validated before use.  The release evidence is
+# downloaded outside the checkout directory so that the second checkout (which
+# cleans the workspace) cannot delete it.  The runtime binding is collected
+# after the observation window, because the strict gate compares the binding
+# with the window it belongs to.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Evidence type"
+        required: true
+        default: observation
+        type: choice
+        options:
+          - observation
+          - e2e
+      release_build_run_id:
+        description: "Release Build workflow run id that produced the manifest"
+        required: true
+        type: string
+      release_id:
+        description: "Release id from the verified manifest"
+        required: true
+        type: string
+      image_digest:
+        description: "Immutable image reference repo@sha256:<64 hex>"
+        required: true
+        type: string
+      commit:
+        description: "Full 40-character commit"
+        required: true
+        type: string
+      observation_hours:
+        description: "Observation duration in hours (24 for release acceptance)"
+        required: true
+        default: "24"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: qts-demo-${{ vars.QTS_DEMO_COMPOSE_PROJECT || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect Demo Evidence
+    runs-on: [self-hosted, qts-demo]
+    timeout-minutes: 1560
+    environment: demo
+    steps:
+      - name: Checkout the trusted default branch for the verifier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate the operator inputs
+        env:
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          OBSERVATION_HOURS: ${{ inputs.observation_hours }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo "RELEASE_BUILD_RUN_ID_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "RELEASE_COMMIT_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_IMAGE_DIGEST" =~ ^([A-Za-z0-9._/-]+@)?sha256:[0-9a-f]{64}$ ]] || { echo "RELEASE_IMAGE_DIGEST_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "RELEASE_ID_INVALID" >&2; exit 1; }
+          [[ "$OBSERVATION_HOURS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "OBSERVATION_HOURS_INVALID" >&2; exit 1; }
+          echo "Operator inputs validated."
+
+      - name: Download the release manifest from the build run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.release_build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: release-evidence
+          path: ${{ runner.temp }}/qts-release
+          if-no-files-found: error
+
+      - name: Verify release build provenance and manifest binding
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/qts-release
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_provenance.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$RELEASE_BUILD_RUN_ID" \
+            --manifest "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            --commit "$RELEASE_COMMIT" \
+            --digest "$RELEASE_IMAGE_DIGEST" \
+            --release-id "$RELEASE_ID" \
+            --run-json-out "$RELEASE_EVIDENCE_DIR/release-build-run.json" \
+            --json-out "$RELEASE_EVIDENCE_DIR/provenance.json"
+
+      - name: Checkout the now-trusted release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+
+      - name: Confirm Demo-only scope
+        env:
+          BINANCE_ENV: demo
+        run: |
+          set -euo pipefail
+          test "$BINANCE_ENV" = "demo" || { echo "BINANCE_ENV_NOT_DEMO" >&2; exit 1; }
+          echo "Demo evidence only. No testnet or production credentials are requested."
+
+      - name: Enforce the 24h strict observation floor
+        if: inputs.mode == 'observation'
+        env:
+          OBSERVATION_HOURS: ${{ inputs.observation_hours }}
+        run: |
+          set -euo pipefail
+          python -c 'import os,sys; h=float(os.environ["OBSERVATION_HOURS"]); sys.exit(0 if h >= 24 else "OBSERVATION_HOURS_BELOW_24")'
+
+      - name: Run Demo E2E
+        if: inputs.mode == 'e2e'
+        env:
+          BINANCE_ENV: demo
+          QTS_DEMO_CONTROL_PORT: ${{ vars.QTS_DEMO_CONTROL_PORT }}
+          QTS_ACCOUNT_ID: ${{ vars.QTS_DEMO_ACCOUNT_ID }}
+          # Demo-only credentials, injected into the step that needs them.
+          QTS_E2E_PASSWORD: ${{ secrets.DEMO_E2E_PASSWORD }}
+          BINANCE_API_KEY: ${{ secrets.DEMO_BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.DEMO_BINANCE_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/demo
+          python scripts/testnet_e2e.py \
+            --base-url "http://127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}" \
+            --reconnect --out artifacts/demo/e2e.json
+
+      - name: Run observation window
+        if: inputs.mode == 'observation'
+        env:
+          BINANCE_ENV: demo
+          QTS_DEMO_CONTROL_PORT: ${{ vars.QTS_DEMO_CONTROL_PORT }}
+          QTS_ACCOUNT_ID: ${{ vars.QTS_DEMO_ACCOUNT_ID }}
+          OBSERVATION_HOURS: ${{ inputs.observation_hours }}
+          # The observer needs the operator password; the exchange keys stay
+          # out of this step.
+          QTS_E2E_PASSWORD: ${{ secrets.DEMO_E2E_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/demo
+          python -c 'import os; print(float(os.environ["OBSERVATION_HOURS"]) * 3600)' > "$RUNNER_TEMP/observation_seconds.txt"
+          python scripts/observe_trading_runtime.py \
+            --base-url "http://127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}" \
+            --duration "$(cat "$RUNNER_TEMP/observation_seconds.txt")" \
+            --interval 60 \
+            --out artifacts/demo/observation.jsonl
+
+      - name: Collect the runtime release binding
+        if: inputs.mode == 'observation'
+        env:
+          QTS_RELEASE_ID: ${{ inputs.release_id }}
+          QTS_RELEASE_COMMIT: ${{ inputs.commit }}
+          QTS_RELEASE_IMAGE: ${{ inputs.image_digest }}
+          QTS_COMPOSE_PROJECT: ${{ vars.QTS_DEMO_COMPOSE_PROJECT }}
+          QTS_DEMO_CONTROL_PORT: ${{ vars.QTS_DEMO_CONTROL_PORT }}
+        run: |
+          set -euo pipefail
+          # Collected after the window: the strict gate binds the samples to
+          # the release that was running while they were taken.
+          mkdir -p artifacts/demo
+          python scripts/collect_runtime_release_binding.py \
+            --project "$QTS_COMPOSE_PROJECT" \
+            --control-url "http://127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}" \
+            --expected-release-id "$QTS_RELEASE_ID" \
+            --expected-commit "$QTS_RELEASE_COMMIT" \
+            --expected-digest "${QTS_RELEASE_IMAGE#*@}" \
+            --output artifacts/demo/release-binding.json
+
+      - name: Enforce the strict release observation gate
+        if: inputs.mode == 'observation'
+        env:
+          OBSERVATION_HOURS: ${{ inputs.observation_hours }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -euo pipefail
+          python scripts/summarize_observation.py \
+            --input artifacts/demo/observation.jsonl \
+            --min-hours "$OBSERVATION_HOURS" \
+            --strict-release \
+            --release-evidence artifacts/demo/release-binding.json \
+            --expected-release-id "$RELEASE_ID" \
+            --expected-commit "$RELEASE_COMMIT" \
+            --expected-digest "$RELEASE_IMAGE_DIGEST" \
+            --json-out artifacts/demo/observation-summary.json
+
+      - name: Upload Demo evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-evidence-${{ inputs.mode }}-${{ inputs.release_id }}
+          path: artifacts/demo
+          if-no-files-found: warn

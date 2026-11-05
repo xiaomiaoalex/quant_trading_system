@@ -1,0 +1,76 @@
+# Immutable Binance Spot Demo deployment overlay.
+#
+# Usage (from the repository root, with a release env file):
+#   docker compose -f compose.yml -f deploy/compose.demo.yml \
+#     --env-file deploy/demo.env config
+#   docker compose -f compose.yml -f deploy/compose.demo.yml \
+#     --env-file deploy/demo.env up -d --no-build
+#
+# Rules enforced here:
+# * the application image is an immutable ``repo@sha256:<digest>`` reference;
+# * no service may be rebuilt on the target host (``build: !reset null``);
+# * every application service runs with ``BINANCE_ENV=demo`` (hard-coded, not
+#   overridable by the environment file);
+# * the Compose project name is mandatory and the host ports are Demo-specific,
+#   so the release cannot reuse the shared local stack or its volumes;
+# * every container carries the release id/commit labels for evidence.
+
+name: ${QTS_COMPOSE_PROJECT:?QTS_COMPOSE_PROJECT is required for the demo overlay}
+
+x-demo-app: &demo-app
+  image: ${QTS_RELEASE_IMAGE:?QTS_RELEASE_IMAGE must be repo@sha256:<64 hex>}
+  build: !reset null
+  restart: unless-stopped
+  labels:
+    com.qts.release.id: ${QTS_RELEASE_ID:?QTS_RELEASE_ID is required}
+    com.qts.release.commit: ${QTS_RELEASE_COMMIT:?QTS_RELEASE_COMMIT is required}
+    com.qts.environment: demo
+  environment:
+    QTS_RELEASE_ID: ${QTS_RELEASE_ID:?QTS_RELEASE_ID is required}
+    QTS_RELEASE_COMMIT: ${QTS_RELEASE_COMMIT:?QTS_RELEASE_COMMIT is required}
+    # The runtime reports this identity on /health/trading; the observation
+    # window uses it to bind every sample to one deployed release.
+    QTS_RELEASE_IMAGE: ${QTS_RELEASE_IMAGE:?QTS_RELEASE_IMAGE must be repo@sha256:<64 hex>}
+
+services:
+  postgres:
+    image: ${QTS_POSTGRES_IMAGE:?QTS_POSTGRES_IMAGE must be postgres:16@sha256:<64 hex>}
+    ports: !override
+      - "127.0.0.1:${QTS_DEMO_PG_PORT:-65432}:5432"
+
+  control:
+    <<: *demo-app
+    environment:
+      QTS_ALERT_WEBHOOK_URL: ${QTS_EXTERNAL_ALERT_WEBHOOK_URL:?QTS_EXTERNAL_ALERT_WEBHOOK_URL is required}
+      QTS_ALERT_HEARTBEAT_URL: ${QTS_EXTERNAL_ALERT_HEARTBEAT_URL:?QTS_EXTERNAL_ALERT_HEARTBEAT_URL is required}
+      QTS_RELEASE_ID: ${QTS_RELEASE_ID:?QTS_RELEASE_ID is required}
+      QTS_RELEASE_COMMIT: ${QTS_RELEASE_COMMIT:?QTS_RELEASE_COMMIT is required}
+      QTS_RELEASE_IMAGE: ${QTS_RELEASE_IMAGE:?QTS_RELEASE_IMAGE must be repo@sha256:<64 hex>}
+    ports: !override
+      - "127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}:8090"
+
+  execution:
+    <<: *demo-app
+    environment:
+      # Hard-coded Demo: the environment file cannot turn this into testnet or
+      # production, and preflight rejects any non-demo rendering.
+      BINANCE_ENV: demo
+      QTS_ALERT_WEBHOOK_URL: ${QTS_EXTERNAL_ALERT_WEBHOOK_URL:?QTS_EXTERNAL_ALERT_WEBHOOK_URL is required}
+      QTS_ALERT_HEARTBEAT_URL: ${QTS_EXTERNAL_ALERT_HEARTBEAT_URL:?QTS_EXTERNAL_ALERT_HEARTBEAT_URL is required}
+      QTS_RELEASE_ID: ${QTS_RELEASE_ID:?QTS_RELEASE_ID is required}
+      QTS_RELEASE_COMMIT: ${QTS_RELEASE_COMMIT:?QTS_RELEASE_COMMIT is required}
+      QTS_RELEASE_IMAGE: ${QTS_RELEASE_IMAGE:?QTS_RELEASE_IMAGE must be repo@sha256:<64 hex>}
+
+  research:
+    <<: *demo-app
+
+  history:
+    <<: *demo-app
+
+  backup:
+    <<: *demo-app
+
+  alert-sink:
+    image: ${QTS_ALERT_IMAGE:?QTS_ALERT_IMAGE must be python:3.12-slim@sha256:<64 hex>}
+    ports: !override
+      - "127.0.0.1:${QTS_DEMO_ALERT_PORT:-18085}:8085"

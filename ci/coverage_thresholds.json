@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-11-04",
+  "measured_command": "QTS_TEST_GROUP=p0,offline QTS_TEST_NETWORK_POLICY=offline python -m pytest -q trader/tests --cov=trader --cov-branch --cov-report=xml:artifacts/cicd/raw/coverage-final.xml",
+  "baseline_artifact": "artifacts/cicd/raw/coverage-final.xml (not committed; SHA-256 recorded in the delivery report)",
+  "notes": [
+    "Floors are two points below the measured 2026-11-04 baseline so ordinary refactoring noise does not fail the gate, while a real regression does.",
+    "A floor is a regression guard, not a quality claim. Modules below 60% are recorded explicitly and are not presented as covered.",
+    "Migrations are exercised by the PostgreSQL job; this offline-only baseline intentionally does not include those lines."
+  ],
+  "thresholds": [
+    {
+      "path": "",
+      "kind": "overall",
+      "baseline_percent": 79.44,
+      "min_percent": 75.0
+    },
+    {
+      "path": "trader/core/",
+      "kind": "package",
+      "baseline_percent": 84.03,
+      "min_percent": 82.0
+    },
+    {
+      "path": "trader/trading/",
+      "kind": "package",
+      "baseline_percent": 85.77,
+      "min_percent": 83.0
+    },
+    {
+      "path": "trader/trading/service.py",
+      "kind": "file",
+      "baseline_percent": 90.71,
+      "min_percent": 88.0
+    },
+    {
+      "path": "trader/trading/risk.py",
+      "kind": "file",
+      "baseline_percent": 85.21,
+      "min_percent": 83.0
+    },
+    {
+      "path": "trader/trading/core.py",
+      "kind": "file",
+      "baseline_percent": 90.91,
+      "min_percent": 88.0
+    },
+    {
+      "path": "trader/trading/models.py",
+      "kind": "file",
+      "baseline_percent": 97.31,
+      "min_percent": 95.0
+    },
+    {
+      "path": "trader/trading/recovery.py",
+      "kind": "file",
+      "baseline_percent": 93.14,
+      "min_percent": 91.0
+    },
+    {
+      "path": "trader/trading/order_spec.py",
+      "kind": "file",
+      "baseline_percent": 91.84,
+      "min_percent": 89.0
+    },
+    {
+      "path": "trader/core/application/oms.py",
+      "kind": "file",
+      "baseline_percent": 37.33,
+      "min_percent": 35.0
+    },
+    {
+      "path": "trader/services/oms_callback.py",
+      "kind": "file",
+      "baseline_percent": 70.52,
+      "min_percent": 68.0
+    },
+    {
+      "path": "trader/trading/migrations.py",
+      "kind": "file",
+      "baseline_percent": 20.0,
+      "min_percent": 18.0
+    }
+  ]
+}
