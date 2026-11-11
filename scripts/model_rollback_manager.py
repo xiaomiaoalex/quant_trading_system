@@ -12,6 +12,10 @@ Model Rollback Manager - 模型级回滚管理器
 - 本模块位于 scripts/ (研究域)，不直接操作 Core 状态
 - 回滚操作必须可审计可追溯
 - 回滚后更新 ModelRegistry
+- **本模块不是运行系统/镜像回滚器**：它不停止信号、不处理在途订单、不重估预算，
+  也不能替代 Control→Execution 接口。模型/策略回滚是独立的业务变更，必须走候选/
+  影子/人工审批/暂停接口，并固定已验证的策略 artifact 与配置版本；操作边界见
+  docs/CI_CD_RELEASE_RUNBOOK.md 第 9 节。
 """
 
 from __future__ import annotations

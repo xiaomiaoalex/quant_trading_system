@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -67,6 +68,27 @@ async def _get(client: httpx.AsyncClient, path: str, params: dict | None = None)
     return await client.get(path, params=params)
 
 
+def runtime_identity(health_body: object, observed_at_ms: int) -> dict:
+    """Release identity of the runtime that answered this sample.
+
+    It ties the observation window to one deployed release.  Missing fields
+    stay empty on purpose: the strict gate rejects them instead of treating
+    them as "unknown but fine".
+    """
+    body: dict[str, Any] = health_body if isinstance(health_body, dict) else {}
+    raw_release = body.get("release")
+    release: dict[str, Any] = raw_release if isinstance(raw_release, dict) else {}
+    return {
+        "release_id": str(release.get("release_id") or ""),
+        "commit": str(release.get("commit") or "").lower(),
+        "image_digest": str(release.get("image_digest") or ""),
+        "environment": str(release.get("environment") or ""),
+        "instance_owner": str(body.get("instance_owner") or ""),
+        "lease_token": str(body.get("lease_token") or ""),
+        "observed_at_ms": int(observed_at_ms),
+    }
+
+
 async def _sample(client, args, password: str, state: dict, seq: int) -> dict:
     line: dict = {
         "kind": "sample",
@@ -87,7 +109,9 @@ async def _sample(client, args, password: str, state: dict, seq: int) -> dict:
             if not state.get("csrf"):
                 state["csrf"] = await _login(client, args.username, password)
             health = await _get(client, "/health/trading")
-            line["health"] = {"status_code": health.status_code, "body": health.json()}
+            health_body = health.json()
+            line["health"] = {"status_code": health.status_code, "body": health_body}
+            line["runtime"] = runtime_identity(health_body, line["ts_ms"])
             metrics = await _get(
                 client, "/v1/trading/metrics", params={"account_id": args.account_id}
             )
@@ -166,7 +190,7 @@ async def _sample(client, args, password: str, state: dict, seq: int) -> dict:
     line["ready"] = ready
     previous = state.get("last_ready")
     if previous is not None and previous != ready:
-        reasons = []
+        reasons: list[Any] = []
         if isinstance(line.get("health"), dict):
             reasons = line["health"].get("body", {}).get("reasons") or []
         _append(
@@ -231,13 +255,19 @@ async def main() -> int:
     )
 
     state: dict = {"csrf": "", "last_ready": None, "last_monotonic_ms": None}
-    deadline = start_monotonic_ns / 1_000_000_000 + args.duration
+    # The CI strict gate measures the window with the recorded wall-clock
+    # timestamps.  Anchor the deadline at the first *recorded* sample, after
+    # the HTTP client has been initialized, so setup time cannot shorten a
+    # requested 24h window.  Monotonic timestamps remain in every sample for
+    # the phase-6 supervisor's independent duration check.
+    deadline: float | None = None
     seq = 0
     samples = 0
     ready_samples = 0
     async with httpx.AsyncClient(base_url=args.base_url, timeout=30.0) as client:
-        while time.monotonic() < deadline:
+        while True:
             seq += 1
+            sample_started_at = time.time()
             line = await _sample(client, args, password, state, seq)
             _append(args.out_path, line)
             samples += 1
@@ -254,7 +284,11 @@ async def main() -> int:
                     default=str,
                 )
             )
-            sleep_for = max(0.0, min(args.interval, deadline - time.monotonic()))
+            if deadline is None:
+                deadline = sample_started_at + args.duration
+            if sample_started_at >= deadline:
+                break
+            sleep_for = max(0.0, min(args.interval, deadline - sample_started_at))
             if sleep_for:
                 await asyncio.sleep(sleep_for)
 

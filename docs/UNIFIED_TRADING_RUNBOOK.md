@@ -288,6 +288,30 @@ listenKey 回退。若 ws-api 启动失败，会话按运行时对账周期重�
 
 阶段 6 的 24h 窗口不要求手动重连或执行进程重启；这类演练应在窗口之外单独执行并保留证据。窗口判定以 supervisor 的 `window.json` 判据为准（真实起止、采样覆盖与最大间隔、覆盖证明、未决清退、重复发送、DR、容器重启）；历史 `summarize_observation.py` 的 `runtime_restart`/`active_reconnect` marker 门禁仅适用于阶段 5 及更早窗口，不是阶段 6 的必跑项。出现 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER` 时保持交易阻断；人工核对后通过 `POST /v1/trading/control` 提交 `RESOLVE` 命令（`code` + 证据 `evidence`），由 Execution 进程校验并应用，Control 进程不直接写账户事实。余额差异的证据必须逐资产给出与观测一致的 `internal` / `venue` / `difference`，例如：
 
+**CI/CD 发布严格观察（历史兼容读取与新 digest 证据）**
+
+```powershell
+# 人工动作时追加标记
+.venv\Scripts\python.exe scripts\mark_observation.py --out artifacts\observation.jsonl --mark runtime_restart --detail "killed pid ..."
+.venv\Scripts\python.exe scripts\mark_observation.py --out artifacts\observation.jsonl --mark active_reconnect --detail "reconnect response and recovery evidence path ..."
+
+# 汇总与门禁（历史兼容读取）
+.venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl --min-hours 24 --json-out artifacts\observation_summary.json
+
+# 新 digest 的发布验收：严格绑定 release evidence，并显式使用发布阈值
+.venv\Scripts\python.exe scripts\summarize_observation.py --input artifacts\observation.jsonl `
+  --min-hours 24 --strict-release `
+  --release-evidence artifacts\demo\release-binding.json `
+  --expected-release-id <release-id> `
+  --expected-commit <40hex> --expected-digest sha256:<64hex> `
+  --json-out artifacts\observation_summary_strict.json
+```
+
+严格模式的 ready_ratio、对账年龄、末样本 outbox/未入账成交、重复/重发/覆盖证据与
+release 绑定规则见 `docs/CI_CD_RELEASE_RUNBOOK.md` 第 7 节。历史窗口通过不等于当前
+digest 通过。阶段 6 的窗口由 supervisor 的 window.json 判定，不要求窗口内主动重连/
+重启；marker 门禁仅适用于阶段 5 及更早窗口。
+
 ```json
 {
   "command_id": "resolve-2026-11-02-1",

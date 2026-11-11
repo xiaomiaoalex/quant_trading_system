@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
 
+# Least privilege: every job only reads the repository.  The release build
+# workflow is the only place that requests packages: write.
+permissions:
+  contents: read
+
 # Python 版本策略：只锁 minor（3.12），不锁 patch。
 # 原因：ubuntu-latest 镜像的 python-versions 清单只保留每个 minor 最近的 3~4 个补丁版本，
 # 写死补丁号（如 3.12.5）会在镜像升级后直接失败（2026-10-19 迁移到 Ubuntu 26.04 即如此）。
@@ -14,10 +19,33 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
+  manifest-gate:
+    name: Test Manifest Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify complete test classification and CI selection
+        run: |
+          python scripts/verify_test_manifest.py \
+            --json-out reports/test-manifest.json
+      - name: Upload manifest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-manifest-report
+          path: reports/test-manifest.json
+          if-no-files-found: warn
+
   import-gate:
     name: Import Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -25,21 +53,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
-      - name: Import Gate Tests
+      - name: Import every test module
         run: |
-          python -c "import trader.tests.test_binance_connector"
-          python -c "import trader.tests.test_binance_private_stream"
-          python -c "import trader.tests.test_binance_degraded_cascade"
+          QTS_TEST_NETWORK_POLICY=offline \
+            python -m pytest trader/tests --collect-only -q -p no:cacheprovider
 
   python-format-gate:
     name: Python Formatting Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -47,27 +78,79 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
+      # Scope: the existing trader/ tree plus the CI/ops modules owned by this
+      # delivery.  A repo-wide scripts/ reformat is intentionally avoided.
       - name: Run Python formatting checks
         run: |
-          python -m isort --check-only --profile black trader/
-          python -m black --check --line-length 100 trader/
+          FILES="scripts/verify_test_manifest.py scripts/check_junit.py \
+          scripts/check_coverage.py scripts/compose_smoke.py \
+          scripts/deploy_preflight.py scripts/release_manifest.py \
+          scripts/summarize_observation.py scripts/release_binding.py \
+          scripts/collect_runtime_release_binding.py scripts/deploy_gate.py \
+          scripts/observe_trading_runtime.py scripts/verify_release_provenance.py \
+          scripts/verify_deploy_gate_live.py conftest.py"
+          # isort must use the same line length as black, otherwise the two
+          # formatters disagree about where an import wraps.
+          python -m isort --check-only --profile black --line-length 100 trader/ $FILES
+          python -m black --check --line-length 100 trader/ $FILES
+
+  type-check:
+    name: Type Check (CI and Ops Modules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
+
+      - name: Install dependencies from locked constraints
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
+
+      # Scope is deliberately limited to the CI/ops modules owned by this
+      # delivery.  A repo-wide mypy cleanup is not part of this change; the
+      # limitation is recorded in docs/CI_CD_IMPROVEMENT_RFC.md.
+      - name: Type-check CI and ops modules
+        run: |
+          # follow-imports=skip keeps the check scoped to this delivery's
+          # modules; a repo-wide type cleanup is explicitly out of scope.
+          python -m mypy --follow-imports=skip \
+            scripts/verify_test_manifest.py \
+            scripts/check_junit.py \
+            scripts/check_coverage.py \
+            scripts/compose_smoke.py \
+            scripts/deploy_preflight.py \
+            scripts/release_manifest.py \
+            scripts/summarize_observation.py \
+            scripts/release_binding.py \
+            scripts/collect_runtime_release_binding.py \
+            scripts/deploy_gate.py \
+            scripts/observe_trading_runtime.py \
+            scripts/verify_release_provenance.py \
+            scripts/verify_deploy_gate_live.py
 
   architecture-gate:
     name: Architecture Compliance
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Core Plane IO Check
         run: python scripts/check_core_no_io.py
@@ -75,7 +158,11 @@ jobs:
   p0-gate:
     name: P0 Regression Tests
     runs-on: ubuntu-latest
-    needs: [import-gate, python-format-gate]
+    timeout-minutes: 25
+    needs: [manifest-gate]
+    env:
+      QTS_TEST_GROUP: p0
+      QTS_TEST_NETWORK_POLICY: offline
     steps:
       - uses: actions/checkout@v4
 
@@ -83,24 +170,44 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
       - name: Run P0 Tests
         run: |
-          python -m pytest -q trader/tests/test_binance_connector.py --tb=short
-          python -m pytest -q trader/tests/test_binance_private_stream.py --tb=short
-          python -m pytest -q trader/tests/test_binance_degraded_cascade.py --tb=short
-          python -m pytest -q trader/tests/test_deterministic_layer.py --tb=short
-          python -m pytest -q trader/tests/test_hard_properties.py --tb=short
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-p0.xml
 
-  control-gate:
-    name: Control Gate
+      - name: Enforce P0 evidence
+        run: |
+          python scripts/check_junit.py reports/junit-p0.xml \
+            --require-zero-skipped --require-zero-xfailed \
+            --json-out reports/junit-p0.json
+
+      - name: Upload P0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-evidence
+          path: reports/junit-p0.*
+          if-no-files-found: warn
+
+  offline-gate:
+    name: Offline Unit and Integration Tests
     runs-on: ubuntu-latest
-    needs: p0-gate
+    timeout-minutes: 45
+    needs: [manifest-gate]
+    env:
+      # P0 is repeated here so the coverage report matches the measured
+      # baseline; the separate p0-gate job remains the fast-feedback gate.
+      QTS_TEST_GROUP: p0,offline
+      QTS_TEST_NETWORK_POLICY: offline
     steps:
       - uses: actions/checkout@v4
 
@@ -108,25 +215,97 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
-      - name: Run Control Tests
+      - name: Run offline suite with coverage
         run: |
-          python -m pytest -q trader/tests/test_trading_api.py trader/tests/test_phase6_single_stack.py --tb=short
-          python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short
-          python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-offline.xml \
+            --cov=trader --cov-branch --cov-report=xml:reports/coverage.xml \
+            --cov-report=term-missing --cov-fail-under=0
+
+      - name: Enforce offline evidence
+        run: |
+          python scripts/check_junit.py reports/junit-offline.xml \
+            --require-zero-skipped --require-zero-xfailed \
+            --json-out reports/junit-offline.json
+
+      - name: Enforce per-module coverage floors
+        run: |
+          python scripts/check_coverage.py reports/coverage.xml \
+            --json-out reports/coverage-gate.json
+
+      - name: Upload offline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-evidence
+          path: |
+            reports/junit-offline.*
+            reports/coverage.xml
+            reports/coverage-gate.json
+          if-no-files-found: warn
+
+  research-ai-gate:
+    name: Research and AI Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [manifest-gate]
+    env:
+      QTS_TEST_SUBSET: research_ai
+      QTS_TEST_NETWORK_POLICY: offline
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
+
+      - name: Install dependencies from locked constraints
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
+
+      # Reuses the existing reliable suites for replay consistency, shadow /
+      # paper promotion, "paper never enables live" and HITL approval gates.
+      - name: Run Research and AI Tests
+        run: |
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-research-ai.xml
+
+      - name: Enforce Research/AI evidence
+        run: |
+          python scripts/check_junit.py reports/junit-research-ai.xml \
+            --require-zero-skipped --require-zero-xfailed \
+            --json-out reports/junit-research-ai.json
+
+      - name: Upload Research/AI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-ai-evidence
+          path: reports/junit-research-ai.*
+          if-no-files-found: warn
 
   postgres-integration:
     name: Postgres Integration Tests
     runs-on: ubuntu-latest
-    needs: control-gate
+    timeout-minutes: 35
+    needs: [manifest-gate]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
         env:
           POSTGRES_DB: trading
           POSTGRES_USER: trader
@@ -140,6 +319,9 @@ jobs:
           --health-retries 5
     env:
       POSTGRES_CONNECTION_STRING: postgresql://trader:trader_pwd@127.0.0.1:5432/trading
+      REQUIRE_POSTGRES: "1"
+      QTS_TEST_GROUP: postgres
+      QTS_TEST_NETWORK_POLICY: loopback
     steps:
       - uses: actions/checkout@v4
 
@@ -147,11 +329,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
       - name: Wait for Postgres
         run: |
@@ -175,84 +360,33 @@ jobs:
               raise SystemExit(f"postgres not ready: {last_error}")
           PY
 
-      - name: Run Postgres Tests
+      - name: Run Postgres and Control API Tests
         run: |
-          python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
-          python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short
-          python -m pytest -q trader/tests/test_research_history_bridge_pg.py --tb=short
-          python -m pytest -q trader/tests/test_phase3_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase3_independent_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_trading_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_trading_projection_rebuild.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_independent_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_split_control_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_unified_strategy_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_research_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase4_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase4_independent_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_independent_postgres.py --tb=short
-          python -m pytest -q trader/tests/test_phase6_independent_postgres.py --tb=short
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-postgres.xml
 
-  trading-core-gate:
-    name: Trading Core and Research Tests
-    runs-on: ubuntu-latest
-    needs: [p0-gate]
-    steps:
-      - uses: actions/checkout@v4
+      - name: Enforce Postgres evidence (zero skips)
+        run: |
+          python scripts/check_junit.py reports/junit-postgres.xml \
+            --require-zero-skipped --require-zero-xfailed \
+            --json-out reports/junit-postgres.json
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Upload Postgres evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
-
-      - name: Run Trading Core Tests
-        run: |
-          python -m pytest -q trader/tests/test_trading_service.py --tb=short
-          python -m pytest -q trader/tests/test_execution_recovery.py trader/tests/test_bootstrap_dev_schema.py --tb=short
-          python -m pytest -q trader/tests/test_shared_trading_core.py trader/tests/test_split_control_runtime.py --tb=short
-          python -m pytest -q trader/tests/test_recovery_coordinator.py --tb=short
-          python -m pytest -q trader/tests/test_private_execution_identity.py trader/tests/test_spot_recovery_pagination.py trader/tests/test_spot_coverage_proof.py --tb=short
-          python -m pytest -q trader/tests/test_unified_strategy_runner.py trader/tests/test_private_trading_session.py trader/tests/test_worker_assembly.py --tb=short
-          python -m pytest -q trader/tests/test_strategy_warmup.py --tb=short
-          python -m pytest -q trader/tests/test_phase3_closed_bar_warmup.py trader/tests/test_phase3_eligibility.py --tb=short
-          python -m pytest -q trader/tests/test_phase3_independent_closed_bars.py trader/tests/test_phase3_independent_eligibility.py trader/tests/test_phase3_independent_input_gate.py trader/tests/test_phase3_independent_ingress.py trader/tests/test_phase3_independent_venue_clock.py --tb=short
-          python -m pytest -q trader/tests/test_trading_evidence.py trader/tests/test_spot_snapshot_consistency.py --tb=short
-          python -m pytest -q trader/tests/test_trading_runtime.py --tb=short
-          python -m pytest -q trader/tests/test_trading_api.py trader/tests/test_phase6_control_views.py trader/tests/test_phase6_market_loop.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_foundation_safety.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_independent_acceptance.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_review2_reproduction.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_round2_fixes.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_independent_review2_b1_b5.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_round4_fixes.py --tb=short
-          python -m pytest -q trader/tests/test_trading_ingress.py --tb=short
-          python -m pytest -q trader/tests/test_spot_execution_adapter.py --tb=short
-          python -m pytest -q trader/tests/test_runtime_entrypoint.py --tb=short
-          python -m pytest -q trader/tests/test_research_runtime.py --tb=short
-          python -m pytest -q trader/tests/test_research_safety.py trader/tests/test_research_worker_lifecycle.py trader/tests/test_observation_summary.py --tb=short
-          python -m pytest -q trader/tests/test_phase4_joint_backtest.py --tb=short
-          python -m pytest -q trader/tests/test_phase4_independent_offline.py --tb=short
-          python -m pytest -q trader/tests/test_trading_performance.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_credentials.py trader/tests/test_phase5_health.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_alerting.py trader/tests/test_phase5_dr_evidence.py trader/tests/test_phase5_compose.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_independent_offline.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_independent_offhost.py --tb=short
-          python -m pytest -q trader/tests/test_phase5_independent_hardening.py --tb=short
-          python -m pytest -q trader/tests/test_phase6_independent_offline.py --tb=short
-          python -m pytest -q trader/tests/test_phase6_segment_aggregate.py trader/tests/test_phase6_observation_only_strategy.py --tb=short
-          python -m pytest -q trader/tests/test_phase6_observer_relogin.py trader/tests/test_phase6_window_gates.py --tb=short
+          name: postgres-evidence
+          path: reports/junit-postgres.*
+          if-no-files-found: warn
 
   phase6-guard-gate:
     name: Phase 6 Startup Guard (Windows OS lock / Docker orphan probe)
     runs-on: windows-latest
-    needs: [p0-gate]
+    timeout-minutes: 15
+    needs: [manifest-gate]
+    env:
+      QTS_TEST_SUBSET: phase6_guard
+      QTS_TEST_NETWORK_POLICY: open
     steps:
       - uses: actions/checkout@v4
 
@@ -260,18 +394,45 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.windows.constraints.txt
 
-      - name: Install dependencies
+      - name: Require a working Docker daemon for the production guard probe
+        shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install -r trader/requirements-ci.txt
+          docker version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "GUARD_DOCKER_UNAVAILABLE: the required phase-6 guard probe needs a running Docker daemon"
+            exit 1
+          }
+
+      - name: Install dependencies from Windows locked constraints
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.windows.constraints.txt
 
       - name: Run startup guard tests
-        run: python -m pytest -q trader/tests/test_phase6_startup_guard.py --tb=short
+        run: |
+          python -m pytest -q trader/tests --tb=short --junitxml=reports/junit-phase6-guard.xml
+
+      - name: Enforce zero skip/xfail guard evidence
+        run: python scripts/check_junit.py reports/junit-phase6-guard.xml --require-zero-skipped --require-zero-xfailed --json-out reports/junit-phase6-guard.json
+
+      - name: Upload guard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase6-guard-evidence
+          path: |
+            reports/junit-phase6-guard.xml
+            reports/junit-phase6-guard.json
+          if-no-files-found: error
 
   compose-config-gate:
     name: Compose Configuration and Credential Isolation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -279,11 +440,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
 
-      - name: Install dependencies
+      - name: Install dependencies from locked constraints
         run: |
-          for i in 1 2 3; do python -m pip install --upgrade pip --timeout 30 && break || sleep 5; done
-          pip install -r trader/requirements-ci.txt
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
 
       - name: Validate Compose configuration
         run: |
@@ -311,8 +475,9 @@ jobs:
         run: python scripts/check_credential_isolation.py --compose compose.yml
 
   frontend-gate:
-    name: Frontend Typecheck and Tests
+    name: Frontend Lint, Tests and Build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: Frontend
@@ -329,11 +494,62 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Tests
-        run: npm run test
+      - name: Tests with coverage
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
+
+      - name: Upload frontend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-evidence
+          path: |
+            Frontend/coverage
+            Frontend/dist
+          if-no-files-found: warn
+
+  ci-required:
+    name: CI Required
+    if: always()
+    needs:
+      - manifest-gate
+      - import-gate
+      - python-format-gate
+      - type-check
+      - architecture-gate
+      - p0-gate
+      - offline-gate
+      - research-ai-gate
+      - postgres-integration
+      - compose-config-gate
+      - phase6-guard-gate
+      - frontend-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gating job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          bad = {
+              name: payload.get("result")
+              for name, payload in needs.items()
+              if payload.get("result") != "success"
+          }
+          if bad:
+              raise SystemExit(f"CI_REQUIRED_FAILED: {json.dumps(bad, sort_keys=True)}")
+          print(f"CI Required: all {len(needs)} required jobs succeeded")
+          PY
