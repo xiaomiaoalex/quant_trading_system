@@ -476,16 +476,23 @@ class BinanceSpotSnapshotProvider:
         trades: list[dict] = []
         from_id = None
         for _ in range(self.max_pages):
-            page = await self.broker.get_my_trades(
+            raw_page = await self.broker.get_my_trades(
                 symbol,
                 start_time_ms=start_time_ms,
                 from_id=from_id,
                 limit=self.page_limit,
             )
+            # Some sandbox endpoints return the retained history even when a
+            # start time is supplied. Trades before the requested window are
+            # already represented by the opening balances and must not be
+            # replayed into a fresh local ledger.
+            page = [trade for trade in raw_page if int(trade.get("time", 0) or 0) >= start_time_ms]
             trades.extend(page)
-            if len(page) < self.page_limit:
+            if len(raw_page) < self.page_limit:
                 return trades, True
-            from_id = int(page[-1].get("id", 0)) + 1
+            if not raw_page:
+                return trades, False
+            from_id = int(raw_page[-1].get("id", 0)) + 1
         return trades, False
 
     async def _orders(self, symbol: str, now: int) -> tuple[list, bool]:

@@ -1072,3 +1072,54 @@ async def test_limit_order_still_requires_an_exact_fill_cover():
     assert order["status"] != "FILLED"
     view = await service.risk_view("acct")
     assert "ORDER_OBSERVATION_CONFLICT" in view.reasons
+
+
+@pytest.mark.asyncio
+async def test_allocation_waits_for_the_first_reconciliation_before_moving_assets():
+    """A queued ALLOCATE must not fail permanently while the account is unrecovered.
+
+    The execution process starts its command loop before the private-session
+    recovery has produced the first account snapshot. Applying an allocation at
+    that moment sees an empty UNALLOCATED book and would mark a valid operator
+    command FAILED. It must stay durable until reconciliation has run.
+    """
+    exchange = FakeExchange()
+    store = MemoryTradingStore()
+    control = TradingService(
+        store, exchange, RiskPolicy(), clock=lambda: 1_000_000, defer_send=True
+    )
+    receipt = await control.allocate(
+        "alloc-1",
+        "acct",
+        "book:test",
+        "USDT",
+        Decimal("100"),
+        actor="operator",
+        reason="sandbox budget",
+    )
+    assert receipt.status == "QUEUED"
+
+    execution = TradingService(store, exchange, RiskPolicy(), clock=lambda: 1_000_000)
+    before = await execution.resume_queued("acct")
+    state = await store.read("acct")
+    assert state.commands["alloc-1"].status == "QUEUED"
+    assert (
+        "book:test" not in state.books
+        or state.books["book:test"].balances.get("USDT", Decimal(0)) == 0
+    )
+    assert [item.status for item in before] == ["QUEUED"]
+
+    await execution.recover(
+        ReconcileSnapshot(
+            account_id="acct",
+            checked_at_ms=1_000_000,
+            generation=1,
+            balances={"USDT": Decimal("1000")},
+            marks={"USDT": {"price": Decimal("1"), "at_ms": 1_000_000}},
+        )
+    )
+    after = await execution.resume_queued("acct")
+    state = await store.read("acct")
+    assert state.commands["alloc-1"].status == "CONFIRMED"
+    assert state.books["book:test"].balances["USDT"] == Decimal("100")
+    assert [item.status for item in after] == ["CONFIRMED"]

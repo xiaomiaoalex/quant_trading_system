@@ -538,8 +538,25 @@ def load_manifest(path: str | os.PathLike[str]) -> dict[str, Any]:
     return payload
 
 
-def summarize_rpo(journal_path: str | os.PathLike[str], rpo_seconds: int) -> dict[str, Any]:
-    """Compute real completed-backup intervals from the journal."""
+def summarize_rpo(
+    journal_path: str | os.PathLike[str],
+    rpo_seconds: int,
+    *,
+    window_start_ms: int | None = None,
+    window_end_ms: int | None = None,
+) -> dict[str, Any]:
+    """Compute real completed-backup intervals from the journal.
+
+    Without a window the historical contract is kept: only the interval
+    between adjacent successful completions is judged. With a window the RPO
+    is bound to the observed window: a fresh verified backup must exist at or
+    before the start, every interval inside the window must stay inside the
+    RPO, and the last backup inside the window must still be fresh at the
+    end. Completions after the window never cover a past gap.
+
+    Every comparison is done in whole milliseconds; a 300_999 ms interval is
+    not a 300 s interval.
+    """
     path = Path(journal_path)
     completions: list[int] = []
     if path.is_file():
@@ -555,15 +572,62 @@ def summarize_rpo(journal_path: str | os.PathLike[str], rpo_seconds: int) -> dic
             if isinstance(completed, int):
                 completions.append(completed)
     completions.sort()
-    gaps = [
-        max(0, (later - earlier) // 1000) for earlier, later in zip(completions, completions[1:])
-    ]
+    rpo_ms = int(rpo_seconds) * 1000
+    if window_start_ms is None or window_end_ms is None:
+        gaps_ms = [max(0, later - earlier) for earlier, later in zip(completions, completions[1:])]
+        gaps = [gap // 1000 for gap in gaps_ms]
+        return {
+            "rpo_seconds": rpo_seconds,
+            "successful_backups": len(completions),
+            "gaps_seconds": gaps,
+            "gaps_ms": gaps_ms,
+            "max_gap_seconds": max(gaps) if gaps else None,
+            "max_gap_ms": max(gaps_ms) if gaps_ms else None,
+            "rpo_satisfied": bool(gaps_ms) and max(gaps_ms) <= rpo_ms,
+            "first_completed_at_ms": completions[0] if completions else None,
+            "last_completed_at_ms": completions[-1] if completions else None,
+            "window_start_ms": None,
+            "window_end_ms": None,
+            "head_age_ms": None,
+            "tail_age_ms": None,
+            "head_covered": None,
+            "tail_covered": None,
+        }
+
+    start = int(window_start_ms)
+    end = int(window_end_ms)
+    before_start = [completed for completed in completions if completed <= start]
+    head = before_start[-1] if before_start else None
+    head_age = None if head is None else max(0, start - head)
+    head_covered = head_age is not None and head_age <= rpo_ms
+    inside = [completed for completed in completions if start < completed <= end]
+    gaps_ms: list[int] = []
+    previous = head
+    for completed in inside:
+        if previous is not None:
+            gaps_ms.append(max(0, completed - previous))
+        previous = completed
+    last = inside[-1] if inside else head
+    tail_age = None if last is None else max(0, end - last)
+    tail_covered = tail_age is not None and tail_age <= rpo_ms
+    gaps = [gap // 1000 for gap in gaps_ms]
+    satisfied = bool(
+        completions and head_covered and tail_covered and all(gap <= rpo_ms for gap in gaps_ms)
+    )
     return {
         "rpo_seconds": rpo_seconds,
         "successful_backups": len(completions),
         "gaps_seconds": gaps,
+        "gaps_ms": gaps_ms,
         "max_gap_seconds": max(gaps) if gaps else None,
-        "rpo_satisfied": bool(gaps) and max(gaps) <= rpo_seconds,
+        "max_gap_ms": max(gaps_ms) if gaps_ms else None,
+        "rpo_satisfied": satisfied,
         "first_completed_at_ms": completions[0] if completions else None,
         "last_completed_at_ms": completions[-1] if completions else None,
+        "window_start_ms": start,
+        "window_end_ms": end,
+        "head_age_ms": head_age,
+        "tail_age_ms": tail_age,
+        "head_covered": head_covered,
+        "tail_covered": tail_covered,
     }

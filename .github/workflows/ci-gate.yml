@@ -116,7 +116,7 @@ jobs:
 
       - name: Run Control Tests
         run: |
-          python -m pytest -q trader/tests/test_api_endpoints.py -k "risk and (invalid_payload or missing_required_fields)" --tb=short
+          python -m pytest -q trader/tests/test_trading_api.py trader/tests/test_phase6_single_stack.py --tb=short
           python -m pytest -q trader/tests/test_binance_degraded_cascade.py -k "local_killswitch or no_report_storm" --tb=short
           python -m pytest -q trader/tests/test_hard_properties.py -k "fail_closed or cooldown_no_storm" --tb=short
 
@@ -178,7 +178,6 @@ jobs:
       - name: Run Postgres Tests
         run: |
           python -m pytest -q trader/tests/test_postgres_storage.py --tb=short
-          python -m pytest -q trader/tests/test_risk_idempotency_persistence.py --tb=short
           python -m pytest -q trader/tests/test_history_dataset_store_pg.py --tb=short
           python -m pytest -q trader/tests/test_research_history_bridge_pg.py --tb=short
           python -m pytest -q trader/tests/test_phase3_postgres.py --tb=short
@@ -194,6 +193,7 @@ jobs:
           python -m pytest -q trader/tests/test_phase4_independent_postgres.py --tb=short
           python -m pytest -q trader/tests/test_phase5_postgres.py --tb=short
           python -m pytest -q trader/tests/test_phase5_independent_postgres.py --tb=short
+          python -m pytest -q trader/tests/test_phase6_independent_postgres.py --tb=short
 
   trading-core-gate:
     name: Trading Core and Research Tests
@@ -225,13 +225,12 @@ jobs:
           python -m pytest -q trader/tests/test_phase3_independent_closed_bars.py trader/tests/test_phase3_independent_eligibility.py trader/tests/test_phase3_independent_input_gate.py trader/tests/test_phase3_independent_ingress.py trader/tests/test_phase3_independent_venue_clock.py --tb=short
           python -m pytest -q trader/tests/test_trading_evidence.py trader/tests/test_spot_snapshot_consistency.py --tb=short
           python -m pytest -q trader/tests/test_trading_runtime.py --tb=short
-          python -m pytest -q trader/tests/test_trading_api.py --tb=short
+          python -m pytest -q trader/tests/test_trading_api.py trader/tests/test_phase6_control_views.py trader/tests/test_phase6_market_loop.py --tb=short
           python -m pytest -q trader/tests/test_phase2_foundation_safety.py --tb=short
           python -m pytest -q trader/tests/test_phase2_independent_acceptance.py --tb=short
           python -m pytest -q trader/tests/test_phase2_review2_reproduction.py --tb=short
           python -m pytest -q trader/tests/test_phase2_round2_fixes.py --tb=short
           python -m pytest -q trader/tests/test_phase2_independent_review2_b1_b5.py --tb=short
-          python -m pytest -q trader/tests/test_phase2_independent_round4.py --tb=short
           python -m pytest -q trader/tests/test_phase2_round4_fixes.py --tb=short
           python -m pytest -q trader/tests/test_trading_ingress.py --tb=short
           python -m pytest -q trader/tests/test_spot_execution_adapter.py --tb=short
@@ -246,6 +245,29 @@ jobs:
           python -m pytest -q trader/tests/test_phase5_independent_offline.py --tb=short
           python -m pytest -q trader/tests/test_phase5_independent_offhost.py --tb=short
           python -m pytest -q trader/tests/test_phase5_independent_hardening.py --tb=short
+          python -m pytest -q trader/tests/test_phase6_independent_offline.py --tb=short
+          python -m pytest -q trader/tests/test_phase6_segment_aggregate.py trader/tests/test_phase6_observation_only_strategy.py --tb=short
+          python -m pytest -q trader/tests/test_phase6_observer_relogin.py trader/tests/test_phase6_window_gates.py --tb=short
+
+  phase6-guard-gate:
+    name: Phase 6 Startup Guard (Windows OS lock / Docker orphan probe)
+    runs-on: windows-latest
+    needs: [p0-gate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r trader/requirements-ci.txt
+
+      - name: Run startup guard tests
+        run: python -m pytest -q trader/tests/test_phase6_startup_guard.py --tb=short
 
   compose-config-gate:
     name: Compose Configuration and Credential Isolation

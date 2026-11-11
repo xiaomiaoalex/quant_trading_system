@@ -264,6 +264,12 @@ async def _market_loop(runtime, broker, instruments, interval, poll_seconds):
                     # recollected window before live bars may trade.
                     await enforce_strategy_warmup(runtime)
             await feed_market_once(runtime, broker, instruments, interval=interval)
+        except NotReady as exc:
+            # A readiness fence (recovery/alignment/lease) is a normal,
+            # bounded transition: new risk is already closed by the runtime
+            # and will reopen after the fence. Converting it into a durable
+            # account block would turn every periodic alignment into an outage.
+            logger.info("Market input paused by readiness fence: %s", exc)
         except Exception:
             logger.exception("Strategy or market input failed; blocking new risk")
             await runtime.block("STRATEGY_OR_MARKET_DATA_FAILED")
@@ -296,6 +302,12 @@ async def run():
         # must never make a forming bar visible.
         clock = VenueClock(broker.get_server_time)
         await clock.sync()
+        reconcile_lookback_ms = int(os.getenv("QTS_RECONCILE_LOOKBACK_MS", "86400000"))
+        coverage_lookback_ms = int(os.getenv("QTS_COVERAGE_LOOKBACK_MS", "86400000"))
+        if coverage_lookback_ms < reconcile_lookback_ms:
+            # The proven window must cover the snapshot lookback; a shorter
+            # coverage window cannot prove the executions the snapshot applies.
+            raise ValueError("COVERAGE_LOOKBACK_SHORTER_THAN_RECONCILE")
         provider = BinanceSpotSnapshotProvider(
             broker,
             account_id=account_id,
@@ -303,12 +315,13 @@ async def run():
             # Snapshot timestamps must live in the venue clock domain: the
             # coverage proof compares them with the stream connection time.
             clock=broker.get_server_time,
+            lookback_ms=reconcile_lookback_ms,
         )
         coverage = BinanceSpotCoverageProver(
             rest=provider,
             symbols=provider.symbols,
             exchange_clock=broker.get_server_time,
-            lookback_ms=int(os.getenv("QTS_COVERAGE_LOOKBACK_MS", "86400000")),
+            lookback_ms=coverage_lookback_ms,
             settle_ms=int(os.getenv("QTS_COVERAGE_SETTLE_MS", "250")),
         )
 
@@ -329,6 +342,9 @@ async def run():
                     base_url=endpoints["private_ws_base"],
                     rest_url=endpoints["rest_base"],
                     proxy_url=os.getenv("BINANCE_PROXY_URL") or None,
+                    # Demo/testnet legacy listenKey is 410 Gone; use the
+                    # official ws-api signature subscription explicitly.
+                    mode=os.getenv("QTS_PRIVATE_STREAM_MODE", "auto"),
                 ),
             )
 

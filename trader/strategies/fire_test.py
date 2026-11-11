@@ -58,6 +58,8 @@ class FireTestStrategy:
     min_confidence: Decimal = Decimal("0.95")
     # 最大发信号次数（0 表示不限制）
     max_signals: int = 2
+    # 观察模式：保持策略/账簿 identity，但永不发出新信号（续跑段使用）
+    observation_only: bool = False
 
     _last_emit_ts: datetime | None = None
     _last_signal_type: SignalType | None = None
@@ -82,6 +84,10 @@ class FireTestStrategy:
         return 0
 
     async def on_market_data(self, market_data: MarketData) -> Signal | None:
+        if self.observation_only:
+            # Continuation segments keep the original book/strategy identity
+            # but must not create replacement trades.
+            return None
         if self.max_signals > 0 and self._emit_count >= self.max_signals:
             return None
 
@@ -148,6 +154,7 @@ class FireTestStrategy:
             self.order_size,
             self.min_confidence,
             self.max_signals,
+            self.observation_only,
         )
         try:
             self._apply_config(config)
@@ -160,6 +167,7 @@ class FireTestStrategy:
                     self.order_size,
                     self.min_confidence,
                     self.max_signals,
+                    self.observation_only,
                 ) = snapshot
             return result
         except Exception as exc:
@@ -170,6 +178,7 @@ class FireTestStrategy:
                 self.order_size,
                 self.min_confidence,
                 self.max_signals,
+                self.observation_only,
             ) = snapshot
             return ValidationResult.invalid(
                 [
@@ -250,6 +259,8 @@ class FireTestStrategy:
             self.min_confidence = _to_decimal(config["min_confidence"])
         if "max_signals" in config:
             self.max_signals = int(config["max_signals"])
+        if "observation_only" in config:
+            self.observation_only = bool(config["observation_only"])
 
     def _next_signal_type(self) -> SignalType:
         if self.mode == "BUY":

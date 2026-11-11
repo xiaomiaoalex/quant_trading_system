@@ -2300,7 +2300,7 @@ Performance benchmark projector 属于 Control Plane API -> Service -> Persisten
 
 ### 10.1 API 路由挂载
 
-`trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，以下端点必须出现在主应用路由表中：
+`trader.api.trading_app.create_trading_app()` 必须挂载 `trader.api.routes.performance.router`，以下端点必须出现在 Control 应用路由表中：
 
 - `POST /v1/performance/benchmark/project`
 - `POST /v1/performance/benchmark/config`
@@ -2848,8 +2848,12 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 新栈准入风控只有 `SpotRiskEngine`；执行进程通过 `risk.risk_policy_from_env()` 读取
 `QTS_RISK_POLICY_JSON`（仅 `RiskPolicy` 字段，未知字段拒绝）与 `QTS_FEE_RATE`。
 旧 `RiskService` 只是遗留配置/持久化 API，不构成第二套订单准入。
-旧 `trader.api.main` 在退休生命周期期间拒绝 `/v1/killswitch` 写操作，返回
-`503 LEGACY_EXECUTION_RETIRED` 且不进入旧控制副作用或投影撤单；GET 查询保留。
+阶段 6 起 `trader.api.main` 已删除；`/v1/killswitch` 写入在 Control 上映射为持久
+`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` 命令，由 Execution 按租约应用，返回命令回执；
+不存在进程内第二套 KillSwitch。`/v1/reconciler/trigger` 返回 503
+`RECONCILIATION_IS_EXECUTION_OWNED`，`/v1/replay*`、`/v1/snapshots*` 返回 410
+`LEGACY_REPLAY_RETIRED`，旧策略生命周期写入口返回 410
+`LEGACY_STRATEGY_LIFECYCLE_RETIRED`。
 独立入口强制会话鉴权，缺密码配置 fail-closed；缺 private WS 覆盖证明时真实执行入口
 保持 `PRIVATE_STREAM_UNHEALTHY`，不能从 REST 成功推断就绪。
 
@@ -3403,6 +3407,112 @@ SSH 隧道模式下客户端可连接 `127.0.0.1` 转发端点，但证据必须
 - 租约失效应同时满足：旧实例 `require_ownership` 拒绝（`EXECUTION_INSTANCE_CONFLICT`）、
   旧实例 readiness 转非 READY、旧实例发送数为 0、新实例 fencing token 递增并成功接管。
 - 上述证据带时间戳、PID/容器 ID、argv 与直接退出码；历史证据不得冒充本次主机崩溃后的复验。
+
+### 13.17 阶段 6 单栈与观察契约（2026-11-04）
+
+- `create_trading_app()` 是唯一 HTTP 装配；`trader.api.main` 及 8080 进程不存在。
+  Control 应用不得出现 `/v1/trading/executions`、`/v1/trading/observations`、
+  `/v1/trading/reconcile`、`/v1/trading/resolve/{code}` 等事实写入口。
+- 兼容读视图由 `trader/api/routes/control_views.py` 从统一账户聚合提供；它们不得构造
+  交易所客户端、不得写订单/成交/账本，也不得写旧账户/投影表。无法诚实提供的字段
+  （lot 历史、已实现盈亏、旧 replay 快照）返回空或稳定拒绝码，不得伪造。
+- `/v1/trading/metrics` 的 `evidence` 字段包含 `executions.count/keys_sha256`、
+  `ledger.count/entry_ids_sha256`、`events.count/event_ids_sha256`、
+  `commands_by_status`、`orders_by_status`、`send_outcomes.repeated_send_commands`、
+  `last_execution_at_ms`、`last_event_at_ms`；`coverage` 是最近一次成功私有 WS 覆盖
+  证明的持久摘要，`runtime.strategy` 是当前策略/标的/预热状态。
+- 观察 JSONL 每行至少包含：`ts_ms`、`monotonic_ms`、`seq`、`sample_gap_ms`、
+  `health.status_code/body`、`metrics.evidence`、`metrics.unresolved_entries`、
+  `metrics.coverage`、`risk.status/reasons`。凭据、DSN 与口令不得出现在 argv 或输出。
+- 阶段 6 沙箱的出口按运行位置分别验证：宿主侧 preflight 可使用其显式解析的应用代理；
+  容器内的 Demo REST、行情与 authenticated private WS 必须通过容器实际配置与网络上下文验证
+  （允许直连）；离机 DR 保持其专属 LAN/strict-key SSH/S3 路径，并与 Demo/应用代理隔离。
+  所有 venue 检查绑定同一 Demo 环境与账户、按各自协议使用正确 endpoint，不得静默代理回退或
+  endpoint 替换；配置与观测证据必须标明哪项检查走了哪条路径。宿主 REST 成功不能替代容器
+  REST/WS 就绪证据。
+- 健康 reason 中的对账事实（BALANCE_MISMATCH、UNBOOKED_EXECUTIONS、UNKNOWN_EXECUTION、
+  FILL_OBSERVATION_MISMATCH、TERMINAL_EXECUTION_MISMATCH、INCOMPLETE_SNAPSHOT、
+  STALE_SNAPSHOT、UNKNOWN_ORDER、UNKNOWN_COMMAND）与未决侧一致，使用 30 分钟对账恢复界；
+  `dr_backups_fresh` 的 300s RPO 仍是独立的严格判据。
+- 观察客户端的 control 会话有界（默认 43200s）。会话到期后以 401 **响应**（不是异常）
+  返回；观察客户端据此清除令牌并在**同一样本内**重新登录重试，因此每个采样行仍带完整
+  `metrics` 证据体，不会因为会话过期在窗口后半段丢失覆盖证明与未决证据。
+- 窗口门禁对证据密度 fail-closed：带完整 `metrics` 体的采样数必须达到预期采样的 90%，
+  证据采样之间的最大间隔（含窗口末端到最后一个证据采样）不得超过采样间隔上限，覆盖证明
+  必须在窗口末端仍然新鲜：新鲜度上界由 reconcile 节奏派生 `max(300s, 2×reconcile_interval + 采样间隔上限)`（默认 780s），`coverage.recorded_at_ms` 必填、缺失按 fail-closed 判否，`window.json` 输出 `coverage_fresh_limit_ms` 与 `coverage_missing_recorded_at_ms`；缺证据的采样不得清空未决状态，也不得被视为"无未决、无重复发送"。
+- 连续沙箱窗口以 `window.json` 记录真实 `started_at_ms`/`ended_at_ms`、采样数、
+  健康转换、DR 备份/恢复周期、覆盖证明时间与不变量判定；主机崩溃或监督进程重启
+  必须写 `window_aborted`，不得用配置时长或 `exit 0` 代替实际窗口。
+- 每次窗口启动由 supervisor 在产生任何 Demo/账户/Compose/DR 副作用之前取得
+  本机级非阻塞独占 guard（身份跨 run ID/入口稳定，手动/包装/直接执行共用），并持有到
+  安全清理结束：并发启动者以 `STARTUP_GUARD_HELD` 零副作用退出；锁空闲但存在存活
+  observer/DR 隧道进程或运行中的 `qts_p6_sandbox_*` 容器时以
+  `STARTUP_ORPHAN_DETECTED` fail-closed，Docker 不可用时
+  `STARTUP_ORPHAN_CHECK_UNAVAILABLE`；supervisor 归属由 OS 锁裁决，启动中/退出中的
+  非 owner supervisor 不作为孤儿；窗口结束或中止后停止本窗口容器（只 stop、保留容器
+  与日志），崩溃路径由下一次启动的孤儿检测拦截。
+- preflight 在完整 runtime reconciliation lookback 上按实时 venue 事实复核：无 qts- 成交
+  （`SANDBOX_LOOKBACK_NOT_CLEAN`）且无挂单（`SANDBOX_ACCOUNT_HAS_OPEN_ORDERS`），
+  不得以等待时间戳或本地账本重置掩盖孤儿订单/命令/占用。
+- 窗口时长以 observer 起止 marker 的 `monotonic_ms` 差值计（双方均存在时）；仅旧 marker
+  缺该字段时回退墙钟，整除截断只会低估、不会把短窗口伪造成 24h。
+
+#### 13.17.1 分段累计与 resume（2026-11-10）
+
+- 原始连续窗口 `20261109T011441Z-efbba899` 在声明停止时存在 481449ms 的离机 DR RPO 违约，
+  已按 `not_acceptance_continuous` 归档；原始证据（`evidence_digest=6498dad2…`）与所有
+  失败/中止段保留，不重写、不拼接。原窗口的连续 24h 不再是必要验收条件。
+- 用户/父级授权采用**分段累计**：续跑段通过
+  `scripts/sandbox_supervisor.py --resume-from-run 20261109T011441Z-efbba899 --segment-index <n>`
+  启动，复用原 Compose 项目/卷/密钥/数据库身份与原端口（postgres 56430、control 56431、
+  alert 56432），不新建数据库/凭据，不重新分配账户；每段启动前 lease/fencing token 递增，
+  段内由执行进程持有。不得启动新的独立 24h 窗口，不得并行启动第二个 supervisor。
+- 续跑段必须使用 observation-only 策略（`trader.strategies.observation_only` 插件，或
+  `trader.strategies.fire_test` 的 `observation_only=true`）：保留原 book 身份，但不产生
+  新信号/新命令。段内 commands/executions 必须保持不变；唯一例外是已披露的失败段
+  `595fbb5b` 的 `resume_queued` 成交（`qts-83facbd2aaa50265fea81071` / trade `340241327`，
+  Demo 非真实资金）。任何未披露的新订单/新成交都按 blocking finding 处理。
+- 每段启动前必须同时满足：startup guard 取得本机级 OS 锁（并发 `STARTUP_GUARD_HELD`；
+  孤儿 `STARTUP_ORPHAN_DETECTED`；Docker 不可用 `STARTUP_ORPHAN_CHECK_UNAVAILABLE`）；
+  3 个连续 verified off-host DR cycle；continuation baseline 与段 preflight 的
+  counts/identity 一致；无挂单；runtime lookback 内无 qts- 成交；原 DB identity
+  （executions/ledger/events 稳定 ID 摘要）保持；原 secrets/volumes 未更换。
+- 每段 `segment.json` 至少记录：`segment_index`、`resume_from`、`observation_only`、
+  `dr_ready_cycles`、`lease_before/after`、`db_baseline`、`db_identity_hashes`、
+  `original_evidence_digest`、`qualified_rule_version=qualified-v3`。当前 supervisor 在
+  `segment.json` 写 `db_baseline` 路径；实际使用的 baseline sha256 与每段 preflight
+  identity 记录在不可覆盖的 `segment-lineage-20261110.json`（历史段 2/3 的 `segment.json`
+  无 sha 字段，属于 11:05 前的行为）；后续版本应在 `_write_segment_metadata` 增加
+  `db_baseline_sha256`，届时以 `segment.json` 字段为准。
+  失败/中止段归档到 `windows-aborted/<run_id>/`，保留 `window.json`/posthoc summary；
+  已归档证据不得改写。
+- guard 锁元数据仅作诊断：竞争失败者可能在同一窗口读到上一 owner 的 PID，但归属由
+  OS 锁裁决，退出码保持 `[0,3]` 且无副作用（tester round18 advisory）。
+- `qualified-v3` 累计口径（`scripts/phase6_segment_aggregate.py`）：每个采样必须
+  `health.body.ready=true` 且 reasons 为空、metrics 证据完整、unresolved 清空、
+  coverage/reconciliation/risk/DR 年龄在界内、sample gap ≤180s、`balance_anomalies=0`、
+  余额差异为空或已证明；重复发送/执行回归/重启/中止/ready+unresolved/覆盖证明缺失/
+  head 或 internal DR 违约等强不变量使整段失效；DR internal breach 使整段失效，
+  tail breach 仅排除受影响的尾部。`acceptance_satisfied` 需要累计 qualified
+  ≥86,400,000ms、所有段 `run_valid`、无未解释未决，并完成独立 tester + fresh reviewer
+  签核；聚合工具本身不推进 6.1/6.2。
+- 当前 final 证据（2026-11-11）：`segment-continuation-20261109/aggregate-final-20261111.json`
+  （original 19,874,125ms / validation 872,313ms / segment5 73,664,222ms /
+  cumulative 94,410,660ms / remaining 0 / `acceptance_satisfied=true`）。segment 5
+  `20261110T075417Z-cc17f251` 的 24h `window.json` passed=true（20/20 criteria、
+  2,872 samples、DR 712/0）。长段 `36448c34` 与 segment 4 `703b71af` 均零计入：前者按
+  RFC tail 规则的 1,143,515ms 未采用（保守零计入），后者为 incident
+  `P6-INC-20261110-01` 的并发 operator/engineer lease recovery + postgres stop；
+  原始窗口的 `not_acceptance` 与 481449ms RPO 违约保留。tester round20 已 pass
+  6.1–6.12；reviewer round14 的代码/门禁 findings 修复后的 fresh reviewer 签核
+  是最终 handoff 的前置条件。
+- 最终 continuation baseline `db-baseline-continuation-20261110.json`
+  （67/721/65/199/319，role=`post_acceptance_record`，sha `ac406c0c…`）是验收记录，
+  不再作为下一段锚点；`segment-lineage-20261110.json`（sha `9be523c0…`）记录各段
+  preflight identity、451/721 事件归因与 segment 4 的 incident 更正。`segment.json`
+  中段 2/3 的 `db_baseline` 路径字段按历史保留，不回写。
+- 主机 WiFi/路由/代理/防火墙不得由自动化修改。备份机不可达或 DR 证据不满足时
+  fail-closed，不启动新段；已启动段按窗口/段规则停止并保留证据。
 
 ---
 ## 15. 测试隔离与本地 Postgres

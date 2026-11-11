@@ -789,7 +789,7 @@ flowchart LR
 
 **边界约束**：
 
-- `trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，Control Plane 端点不能只存在于孤立 route module。
+- `trader.api.trading_app.create_trading_app()` 必须挂载 `trader.api.routes.performance.router`，Control Plane 端点不能只存在于孤立 route module。
 - Binance ticker 读取属于 Adapter/Service 边界 IO；Core domain models 只保存标准字段 `symbol`、`weight`、`period_return`、`metadata`。
 - `BenchmarkHolding` 写入幂等键为 `(benchmark_id, symbol, period_start_ms, period_end_ms)`；`PortfolioHoldingFact` 写入幂等键为 `(run_id, symbol, period_start_ms, period_end_ms)`。
 - 显式 config 中的 `constituents[].period_return` 必须按 symbol 传递到 persistence，用于后续 Brinson/归因计算；全局 `period_return` 只作为默认值。
@@ -877,14 +877,16 @@ flowchart TB
 - 独立运行入口为 `runtime/control_main.py`、`runtime/trading_worker_main.py`、
   `runtime/research_worker_main.py`、`runtime/history_worker_main.py`。
 - 历史归档导入进程 `runtime/history_worker_main.py` 用 PostgreSQL session advisory lock 保证同库单 owner；
-  只有 owner 执行启动恢复，恢复成功前不领取任务。旧 `trader.api.main` 的内嵌导入 worker 默认关闭。
-- 前端反代按路径拆分：`/v1/research/*` 与 `/v1/data/history/*` 指向新 Control API，其余 `/v1/*` 保持旧 API。
-  `QTS_CONTROL_API_TARGET` 未设置时两者仍指向同一目标，避免整体切端口导致旧页面失效。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
-  不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG 租约和
-  持久 runtime 元数据读取就绪。旧 `trader.api.main` 保留只读 connector/账户快照，
-  通过只读 broker 代理和生命周期退休门禁关闭旧发送器及自动恢复，旧投影撤单入口关闭。
+  只有 owner 执行启动恢复，恢复成功前不领取任务。
+- 阶段 6 起 Control API 是唯一 HTTP 进程：前端反代只指向 `QTS_CONTROL_API_TARGET`（默认
+  `http://localhost:8090`），不再按路径拆分旧 API。控制面只保存 QUEUED 命令并投递持久
+  outbox 到 SSE，不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG
+  租约和持久 runtime 元数据读取就绪。旧 `trader/api/main.py` 进程、旧 OMS/ExecutionBudget/
+  AccountState 写入路径和旧 StrategyRunner 已删除。
 - 真实执行进程缺 private WS 覆盖证明时强制保持阻断，REST 快照不能代替流恢复屏障；
-  当前可验证闭环使用受控 fake，外部沙箱和 24h 最终切换尚未完成。
+  阶段 6 的真实 Demo 24h 窗口与覆盖/DR 证据以
+  `artifacts/foundation/phase6/windows/<run_id>/{window.json,observation.jsonl,dr/}`
+  为准；窗口完成前不得宣称 READY，完成后的实际结论以该证据和最新审核为准。
 - 执行器将 `PrivateTradingSession` 的世代缓冲、双快照和覆盖门禁装配到 Runtime
   启动、周期对账及主动重连；失联先持久关闭 stream/ready。可选新 `UnifiedStrategyRunner`
   从**已收盘 K 线**生成稳定命令（阶段 3 起不再消费 REST ticker），读取统一账户库存；
@@ -931,7 +933,7 @@ flowchart TB
 - 进程间只通过 PostgreSQL 协调，不引入消息中间件、集群或自动主备。
 - Control 进程**永远不持有交易所写凭据**，也不装配任何交易所 IO 端口。
 - 账户经济状态的唯一写入者是 Execution 进程；Control 只产生**意图**。
-- 旧 `trader/api/main.py`（端口 `8080`）保留只读查询，不保留第二个发送者（阶段 6 删除进程）。
+- 旧 `trader/api/main.py`（端口 `8080`）已在阶段 6 删除；原只读查询迁移到 Control API（见 8.5）。
 
 **持久化模型边界（不是完整事件溯源）**：
 
@@ -1095,3 +1097,78 @@ flowchart TB
   readiness 立即转非 READY；Control 通过租约读取独立观察同一事实。
 - 告警监控把 `UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、执行租约失效映射为
   稳定告警码；只有接收端 ack 才计为投递，失败保持 pending 并重试，同时发送外部心跳。
+
+### 8.5 阶段 6 已实现：单栈收敛与持续沙箱（2026-11-04）
+
+本节记录阶段 6 对第 8 节的收敛结果；验收编号见 `docs/FOUNDATION_REFACTOR_PHASE0.md` 阶段 6。
+
+**唯一 HTTP 进程**
+
+- `create_trading_app()` 现在是唯一应用装配：认证、统一交易命令/查询、研究、历史归档、
+  data catalog、performance 读取、portfolio research、audit、chat 与 risk 配置/审计都在
+  Control 进程；`trader.api.main` 及其 8080 端口不再存在。
+- 旧执行栈模块（`trader.core.application.oms`、`trader.services.order`、
+  `execution_budget`、`strategy_runner`、`oms_callback`、`account_state`、
+  `account_stream_bridge`、`deployment`、`strategy_candidate`、`strategy_auto_pause`、
+  `strategy_runtime_orchestrator`、`monitor_service`、`reconciler_service`、`killswitch`、
+  `broker`、`event`、`portfolio`、`capital_allocator`、`nav_service`）已删除；
+  `trader/tests/test_phase6_single_stack.py` 以静态检查防止回归。
+- `trader/api/routes/control_views.py` 用统一账户聚合提供原只读/安全视图：
+  `/v1/monitor/*`、`/v1/orders`、`/v1/executions`、`/v1/killswitch`、`/v1/safety-gate/*`、
+  `/v1/brokers*`、`/v1/portfolio/*`、`/v1/reconciler/report`、`/v1/strategies/*` 读取、
+  `/v1/deployments/{id}/status|events*`、`/v1/events`、`/v1/allocations` 读取。
+  这些视图不构造交易所客户端、不写订单/成交/账本，也不写旧账户/投影表。
+- 新栈没有动态策略生命周期：`POST /v1/strategies/{id}/load`、`/v1/deployments/{id}/
+  {start,stop,pause,resume,unload}` 等返回 410 `LEGACY_STRATEGY_LIFECYCLE_RETIRED`。
+  策略由 `QTS_STRATEGY_MODULE` / `QTS_STRATEGY_CONFIG` 配置并随执行进程启动；只有
+  `UnifiedStrategyRunner` 产生新风险命令。
+- `/v1/reconciler/trigger` 返回 503 `RECONCILIATION_IS_EXECUTION_OWNED`：对账周期由执行
+  进程持有，Control 不能伪造一次对账。`/v1/replay*` 与 `/v1/snapshots*` 返回 410
+  `LEGACY_REPLAY_RETIRED`；研究回测使用 `/v1/research/backtests`。
+- `/v1/killswitch` POST 与 `/v1/safety-gate/enable` 映射为持久 `BLOCK_NEW_RISK` /
+  `RESUME_NEW_RISK` 控制命令，仍由执行进程按租约应用；不存在进程内第二套 KillSwitch。
+
+**观测与沙箱**
+
+- `/v1/trading/metrics` 增加 `evidence`（execution/ledger/event 计数与稳定 ID 摘要、
+  命令/订单状态计数、按命令的发送结果与 `repeated_send_commands`）、`coverage`
+  （私有 WS 覆盖证明摘要）与 `runtime.strategy`（当前策略、标的、预热状态）。
+- `scripts/observe_trading_runtime.py` 只从密码文件读取操作员口令，输出逐样本 JSONL：
+  墙钟/单调时间、健康与 reasons、unresolved/重试事实、重复记账/重发计数、覆盖证据、
+  重连/重启 marker；不输出凭据或 DSN。
+- `scripts/sandbox_supervisor.py` 提供可重复的 ≥24h Demo 沙箱窗口：任务自有 Compose 项目、
+  独立端口/卷、持续 off-host 备份+恢复 DR 证据、周期健康采样与窗口判定；窗口中断
+  （主机崩溃、监督进程重启）会写 `window_aborted`，不得追溯称为连续。
+
+**旧数据保留**
+
+- 旧账户/投影表（`account_balances`、`budget_reservations`、`position_lots`、
+  `strategy_positions_proj`、`reconciliation_log`）不再有生产写入者；`position_repository`
+  与 `execution_repository` 仅保留给 performance 读取历史事实。阶段 6 不删除既有数据。
+
+**分段累计与续跑（2026-11-10）**
+
+- 阶段 6 的连续 24h 窗口 `20261109T011441Z-efbba899` 因停止时 DR RPO 违约归档
+  not-acceptance；用户/父级授权改为在同一原始窗口/数据库身份上分段累计，不新建窗口。
+- `scripts/sandbox_supervisor.py` 增加 resume 路径：`--resume-from-run <original_run_id>`
+  与 `--segment-index <n>` 复用原 Compose 项目/卷/密钥/原端口，续跑前校验 continuation
+  DB baseline、lease/fencing token、outbox 去重与既有 queued 命令；启动前由
+  `trader/ops/startup_guard.py` 取得本机级 OS 锁并做孤儿探测。每段仍先完成 3 个连续
+  verified off-host DR cycle，DR internal breach 使整段失效、tail breach 只排除尾部。
+- `trader/strategies/observation_only.py`（及 `fire_test.observation_only`）提供无信号
+  策略：保留原 book 身份但不产生新命令，用于续跑段的观察-only 证据；镜像
+  `qts-runtime:local` 的当前 continuation 版本为 `b4cd10c9…`（原窗口历史镜像
+  `aea741d2…` 仅作历史）。
+- `scripts/phase6_segment_aggregate.py` 以 qualified-v3 计算 original/segments/cumulative：
+  per-sample 健康/证据/未决/覆盖/对账/风险/DR 年龄与 sample gap 判定，强不变量 fail-closed，
+  DR internal breach 段失效、tail breach 只排除尾部；输出 `qualified_satisfied` 与
+  `acceptance_satisfied` 分离，后者仍需独立 tester + fresh reviewer 签核。
+- 证据拓扑：`windows/<segment_run_id>/segment.json` 记录段身份/lease/baseline/identity；
+  `segment-continuation-20261109/aggregate-final-20261111.json` 是 final 累计
+  （original + validation + segment5 = 94,410,660ms，acceptance_satisfied=true）；
+  `segment-lineage-20261110.json` 是不可覆盖的 per-segment baseline lineage；
+  `compose-hashes-resume-20261110.json` 补充 resume 段实际 compose config hash。
+  segment 5 `20261110T075417Z-cc17f251` 的 24h window passed=true；segment 4
+  `703b71af` 按 incident `P6-INC-20261110-01` 零计入。
+- 原单栈/单 HTTP/单执行进程结构不变：没有新增 API 进程、没有第二套 OMS/执行栈、
+  没有新数据库/新账户；续跑只复用原项目与卷。

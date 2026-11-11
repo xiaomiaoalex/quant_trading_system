@@ -283,6 +283,9 @@ class BinanceSpotDemoBroker(BrokerPort):
             "PENDING_CANCEL": OrderStatus.CANCEL_PENDING,
             "REJECTED": OrderStatus.REJECTED,
             "EXPIRED": OrderStatus.CANCELLED,
+            # Spot STP can expire a resting order when it would self-trade.
+            # It is terminal and must be classified, not crash the recovery read.
+            "EXPIRED_IN_MATCH": OrderStatus.CANCELLED,
         }
 
         if raw in mapping:

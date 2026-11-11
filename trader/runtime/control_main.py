@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ import uvicorn
 from trader.adapters.persistence.history_dataset_store import HistoryDatasetStore
 from trader.adapters.persistence.research_history_bridge_store import ResearchHistoryBridgeStore
 from trader.api.auth import AuthSettings, PostgresSessionStore
+from trader.api.routes import data_catalog
 from trader.api.routes.sse import get_sse_manager
 from trader.api.trading_app import create_trading_app
 from trader.ops.dr_evidence import dr_gate_from_env
@@ -27,6 +29,8 @@ from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
 from trader.trading.risk import risk_policy_from_env
 from trader.trading.service import TradingService
+
+logger = logging.getLogger(__name__)
 
 
 class NoExchangeIO:
@@ -195,6 +199,13 @@ async def lifespan(app):
         app.state.history_service = history_service
         app.state.research_application = research_application
 
+        # Preserve the opt-in OHLCV ingestion worker from the retired process.
+        # It is data-plane only; it never touches orders or account state.
+        try:
+            await data_catalog.maybe_start_ohlcv_ingestion_from_env()
+        except Exception:
+            logger.exception("OHLCV ingestion worker failed to start from env")
+
         async def notify(event):
             channel = (
                 "orders"
@@ -241,6 +252,8 @@ async def lifespan(app):
         if alert_monitor is not None:
             with contextlib.suppress(Exception):
                 await alert_monitor.close()
+        with contextlib.suppress(Exception):
+            await data_catalog.shutdown_ohlcv_ingestion_worker()
         if history_store is not None:
             with contextlib.suppress(Exception):
                 await history_store.disconnect()

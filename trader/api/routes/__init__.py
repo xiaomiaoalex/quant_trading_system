@@ -1,53 +1,8 @@
-"""
-API Routes - All route modules
-================================
-Aggregates all API route modules.
-"""
+"""HTTP route modules.
 
-from trader.api.routes import (
-    allocations,
-    audit,
-    backtests,
-    brokers,
-    chat,
-    data_catalog,
-    deployments,
-    events,
-    health,
-    killswitch,
-    monitor,
-    orders,
-    performance,
-    portfolio,
-    portfolio_autopilot,
-    portfolio_research,
-    reconciler,
-    risk,
-    sse,
-    strategies,
-    strategy_candidates,
-)
-
-__all__ = [
-    "health",
-    "strategies",
-    "deployments",
-    "backtests",
-    "risk",
-    "orders",
-    "performance",
-    "portfolio",
-    "events",
-    "killswitch",
-    "brokers",
-    "reconciler",
-    "monitor",
-    "chat",
-    "portfolio_research",
-    "strategy_candidates",
-    "allocations",
-    "portfolio_autopilot",
-    "data_catalog",
-    "audit",
-    "sse",
-]
+The package intentionally does not import route modules eagerly. The legacy
+process imported every router (including the retired execution surfaces) as a
+side effect of importing any single module, which made it impossible to mount
+the Control API without also importing the old stack. Import the module you
+need explicitly instead.
+"""

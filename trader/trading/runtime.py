@@ -462,17 +462,40 @@ class TradingRuntime:
             return 0
         return await self.service.dispatch_outbox(self.account_id, self.notifier)
 
+    def _strategy_metadata(self) -> dict[str, Any] | None:
+        """Operator-visible strategy identity; never derived from an order."""
+        runner = self.strategy_runner
+        if runner is None:
+            return None
+        plugin = getattr(runner, "plugin", None)
+        return {
+            "deployment_id": str(getattr(runner, "deployment_id", "") or ""),
+            "strategy_id": str(getattr(runner, "strategy_id", "") or ""),
+            "book_id": str(getattr(runner, "book_id", "") or ""),
+            "version": str(getattr(plugin, "version", "1") or "1"),
+            "symbols": sorted(str(symbol) for symbol in getattr(runner, "instruments", {})),
+            "warmup_events": int(getattr(runner, "warmup_events", 0) or 0),
+            "warmup_state": getattr(getattr(runner, "warmup_state", None), "value", None),
+            "warmup_reason": str(getattr(runner, "warmup_reason", "") or ""),
+            "warmup_remaining": getattr(runner, "warmup_remaining", None),
+            "strategy_ready": getattr(runner, "strategy_ready", None),
+        }
+
     async def _publish_runtime_state(self) -> None:
         if self.lease_token is None:
             return
+        runtime_state = {
+            "owner": self.owner,
+            "token": self.lease_token,
+            "ready": self.ready,
+            "at_ms": self.clock(),
+            "reasons": list(self.last_reasons),
+        }
+        strategy = self._strategy_metadata()
+        if strategy is not None:
+            runtime_state["strategy"] = strategy
         async with self.store.transaction(self.account_id) as state:
-            state.control["runtime"] = {
-                "owner": self.owner,
-                "token": self.lease_token,
-                "ready": self.ready,
-                "at_ms": self.clock(),
-                "reasons": list(self.last_reasons),
-            }
+            state.control["runtime"] = runtime_state
 
     async def block(self, reason: str) -> None:
         self.ready = False

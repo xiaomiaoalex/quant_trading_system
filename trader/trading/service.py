@@ -364,6 +364,10 @@ class TradingService:
                 # owner when the command is applied.
                 raise TradingError("RESOLVE_REQUIRES_EVIDENCE")
         payload: dict[str, Any] = {"account_id": account_id, "action": action}
+        if action in {"BLOCK_NEW_RISK", "RESUME_NEW_RISK"} and isinstance(evidence, dict):
+            reason = str(evidence.get("reason") or "").strip()
+            if reason:
+                payload["reason"] = reason
         if action == "RESOLVE":
             # The evidence is part of the command identity: the same command id
             # with different evidence is a conflicting command, not a retry.
@@ -401,12 +405,20 @@ class TradingService:
                     state.control["requests"][command_id]["evidence"] = (
                         json_value(evidence) if evidence is not None else None
                     )
+                elif payload.get("reason"):
+                    state.control["requests"][command_id]["reason"] = payload["reason"]
+                requested_payload: dict[str, Any] = {
+                    "action": action,
+                    "active_orders": active,
+                }
+                if payload.get("reason"):
+                    requested_payload["reason"] = payload["reason"]
                 self._emit(
                     state,
                     "control.requested",
                     "",
                     command_id,
-                    {"action": action, "active_orders": active},
+                    requested_payload,
                     now,
                 )
             request = state.control.get("requests", {}).get(command_id, {})
@@ -1101,6 +1113,9 @@ class TradingService:
         state = await self.store.read(account_id)
         now = self.clock() if now_ms is None else now_ms
         checked = state.reconciliation.get("checked_at_ms")
+        executions = self._execution_evidence(state)
+        ledger = self._ledger_evidence(state)
+        events = self._event_evidence(state)
         return {
             "status": self._status(state, self._reasons(state, now)),
             "unknown_commands": sum(
@@ -1114,6 +1129,9 @@ class TradingService:
             "reconciliation_age_ms": None if checked is None else max(0, now - int(checked)),
             "outbox_backlog": len(await self.store.pending_outbox(account_id)),
             "unresolved": [entry["code"] for entry in state.reconciliation.get("unresolved", [])],
+            "unresolved_entries": [
+                dict(entry) for entry in state.reconciliation.get("unresolved", [])
+            ],
             "venue_balances": dict(state.reconciliation.get("venue_balances", {}) or {}),
             "balance_differences": list(self._balance_differences(state).values()),
             "book_count": len(state.books),
@@ -1126,6 +1144,92 @@ class TradingService:
                 }
                 for book_id, book in sorted(state.books.items())
             },
+            # The observation window needs facts, not only counters: monotonic
+            # execution/ledger/event counts plus digests of their stable
+            # identities make a silent re-booking or duplicate append visible.
+            "evidence": {
+                "executions": executions,
+                "ledger": ledger,
+                "events": events,
+                "commands_by_status": self._status_counts(state.commands.values()),
+                "orders_by_status": self._status_counts(state.orders.values()),
+                "send_outcomes": self._send_outcomes(state),
+                "last_execution_at_ms": self._last(
+                    int(item.get("occurred_at_ms", 0) or 0) for item in state.executions.values()
+                ),
+                "last_event_at_ms": self._last(
+                    int(item.get("occurred_at_ms", 0) or 0) for item in state.events
+                ),
+            },
+            # Persisted by PrivateTradingSession after a successful proof; this
+            # is the reviewable private-WS coverage fact, not a health guess.
+            "coverage": dict(state.reconciliation.get("coverage") or {}),
+            "runtime": dict(state.control.get("runtime") or {}),
+            "strategy": dict((state.control.get("runtime") or {}).get("strategy") or {}),
+        }
+
+    @staticmethod
+    def _status_counts(records) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in records:
+            status = str(getattr(record, "status", "") or "")
+            counts[status] = counts.get(status, 0) + 1
+        return dict(sorted(counts.items()))
+
+    @staticmethod
+    def _last(values) -> int | None:
+        found = [value for value in values if value]
+        return max(found) if found else None
+
+    @staticmethod
+    def _execution_evidence(state: AccountState) -> dict[str, Any]:
+        keys = sorted(state.executions)
+        payload = json.dumps(keys, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(keys),
+            "keys_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _ledger_evidence(state: AccountState) -> dict[str, Any]:
+        ids = sorted(str(entry.get("entry_id", "")) for entry in state.ledger)
+        payload = json.dumps(ids, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(ids),
+            "entry_ids_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _event_evidence(state: AccountState) -> dict[str, Any]:
+        ids = sorted(str(event.get("event_id", "")) for event in state.events)
+        payload = json.dumps(ids, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(ids),
+            "event_ids_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _send_outcomes(state: AccountState) -> dict[str, Any]:
+        """Count venue outcomes per command.
+
+        A command may leave SENDING only once (QUEUED -> SENDING CAS). More than
+        one outcome event for the same command is therefore an unexpected
+        resend, even if both outcomes were identical.
+        """
+        send_types = {"order.accepted", "order.rejected", "order.unknown"}
+        per_command: dict[str, int] = {}
+        for event in state.events:
+            if str(event.get("event_type", "")) not in send_types:
+                continue
+            command_id = str(event.get("trace_id", "") or "")
+            if not command_id:
+                continue
+            per_command[command_id] = per_command.get(command_id, 0) + 1
+        repeated = sorted(command_id for command_id, count in per_command.items() if count > 1)
+        return {
+            "commands_with_outcome": len(per_command),
+            "outcomes_total": sum(per_command.values()),
+            "repeated_send_commands": repeated,
         }
 
     @staticmethod
@@ -1993,6 +2097,13 @@ class TradingService:
         async with self.store.transaction(account_id) as state:
             self._migrate_books(state)
             current = state.commands.get(record.command_id)
+            if current is not None and current.status == "QUEUED":
+                # Allocation moves real assets out of UNALLOCATED. Before the
+                # first authoritative snapshot the account has no balances, so
+                # applying it would permanently fail a valid operator command.
+                # Keep it durable and QUEUED until reconciliation has run.
+                if state.reconciliation.get("checked_at_ms") is None:
+                    return self._receipt(state, current)
             if current is None or current.status != "QUEUED":
                 if current is None:
                     return CommandReceipt(

@@ -15,7 +15,6 @@ from trader.core.application.strategy_protocol import (
 )
 from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import SignalType
-from trader.services.strategy_runner import StrategyRunner, StrategyStatus
 
 
 def _market_data(price: str, ts: datetime) -> MarketData:
@@ -165,22 +164,3 @@ async def test_fire_test_alternates_and_respects_interval_and_max_signals() -> N
     assert third is not None and third.signal_type == SignalType.BUY
     assert third.order_type is OrderType.MARKET
     assert exceeded is None
-
-
-async def test_strategy_runner_loads_all_builtin_strategies() -> None:
-    runner = StrategyRunner()
-    builtins = [
-        ("ema_cross_btc", "trader.strategies.ema_cross_btc"),
-        ("rsi_grid", "trader.strategies.rsi_grid"),
-        ("dca_btc", "trader.strategies.dca_btc"),
-        ("fire_test", "trader.strategies.fire_test"),
-    ]
-    for strategy_id, module_path in builtins:
-        info = await runner.load_strategy(
-            strategy_id=strategy_id,
-            version="v1",
-            module_path=module_path,
-            config={},
-        )
-        assert info.status == StrategyStatus.LOADED
-        await runner.unload_strategy(strategy_id)

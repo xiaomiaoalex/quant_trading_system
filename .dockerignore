@@ -13,3 +13,15 @@ __pycache__
 .env
 .env.*
 secrets
+.worktrees
+.kilo
+.venv
+.mypy_cache
+.ruff_cache
+.coverage
+.mcp_bridge_test_tmp
+.claude
+.codex
+.idea
+.vscode
+node_modules
