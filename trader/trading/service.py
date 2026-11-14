@@ -12,11 +12,14 @@ import json
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
+from trader.trading import books as book_ledger
 from trader.trading import core as trading_core
+from trader.trading import order_spec
 from trader.trading.models import (
     TERMINAL,
     AccountRiskView,
     AccountState,
+    BookLedger,
     CancelOrderCommand,
     CommandReceipt,
     CommandRecord,
@@ -24,15 +27,24 @@ from trader.trading.models import (
     ExchangeOrderResult,
     ExchangeOutcome,
     Execution,
+    Hold,
     NotReady,
     OrderAggregate,
     OrderObservation,
     PlaceOrderCommand,
     ReconcileSnapshot,
     TradingError,
+    advance_order_status,
     json_value,
 )
-from trader.trading.risk import RiskPolicy, SpotRiskEngine, available_balance, valuation_complete
+from trader.trading.order_spec import validate_order_command
+from trader.trading.risk import (
+    RiskPolicy,
+    RiskRejected,
+    SpotRiskEngine,
+    available_balance,
+    valuation_complete,
+)
 
 TERMINAL_COMMAND = {"CONFIRMED", "FAILED"}
 # Terminal foreign orders carry no live exposure. FILLED is deliberately absent:
@@ -43,6 +55,27 @@ PERSISTENT_DIFFERENCES = {
     "BALANCE_MISMATCH",
     "UNKNOWN_EXECUTION",
     "UNKNOWN_ORDER",
+    "BOOK_ATTRIBUTION_UNKNOWN",
+}
+# Differences an operator may settle, and only with explicit evidence. Derived
+# codes (UNKNOWN_COMMAND, ORDER_STATE_UNKNOWN, snapshot freshness) are released
+# by venue evidence instead; an operator command can never fake those.
+RESOLVABLE_CODES = {
+    "BALANCE_MISMATCH",
+    "EXECUTION_KEY_CONFLICT",
+    "UNKNOWN_EXECUTION",
+    "UNKNOWN_ORDER",
+    "BOOK_ATTRIBUTION_UNKNOWN",
+}
+# Control actions the unified service understands. RESOLVE is an operator
+# command: the control process only records it, the execution process applies
+# the evidenced settlement.
+CONTROL_ACTIONS = {
+    "BLOCK_NEW_RISK",
+    "RESUME_NEW_RISK",
+    "CANCEL_ALL",
+    "RECONNECT",
+    "RESOLVE",
 }
 
 
@@ -67,7 +100,9 @@ def _execution_identity(value: dict[str, Any]) -> str:
 
 
 def _place_payload(command: PlaceOrderCommand) -> dict[str, Any]:
-    # decision_id is tracing metadata, not an economic order parameter.
+    # decision_id is tracing metadata, not an economic order parameter. The
+    # book and price source define where the risk and the price belong, so a
+    # retry with a changed book/source is a conflicting command, not a retry.
     return {
         "account_id": command.account_id,
         "symbol": command.symbol,
@@ -79,6 +114,21 @@ def _place_payload(command: PlaceOrderCommand) -> dict[str, Any]:
         "deployment_id": command.deployment_id,
         "order_type": command.order_type,
         "time_in_force": command.time_in_force,
+        "book_id": command.book_id,
+        "price_source": command.price_source,
+        "settlement": command.settlement,
+    }
+
+
+def _allocate_payload(
+    account_id: str, book_id: str, asset: str, amount: Decimal, reason: str
+) -> dict[str, Any]:
+    return {
+        "account_id": account_id,
+        "book_id": book_id,
+        "asset": asset,
+        "amount": amount,
+        "reason": reason,
     }
 
 
@@ -110,18 +160,26 @@ class TradingService:
 
     # ------------------------------------------------------------------ commands
     async def place(self, command: PlaceOrderCommand, actor: str = "system") -> CommandReceipt:
+        validate_order_command(command)
         payload_hash = _digest(_place_payload(command))
         cl_ord_id = self.cl_ord_id_for(command.account_id, command.command_id)
         now = self.clock()
 
         async with self.store.transaction(command.account_id) as state:
+            self._migrate_books(state)
             existing = state.commands.get(command.command_id)
             if existing is not None:
                 if existing.payload_hash != payload_hash:
                     raise Conflict("COMMAND_ID_REUSED_WITH_DIFFERENT_PARAMETERS")
                 return self._receipt(state, existing)
 
-            # Admission, reservation and the order intent commit atomically.
+            # An uncertain send blocks every further new risk: the venue may
+            # already hold an order this account cannot see or account for.
+            if self._pending_unknown_commands(state):
+                raise NotReady("UNKNOWN_COMMAND_PENDING")
+
+            # Admission, the account hold, the book hold and the order intent
+            # commit atomically; a failure in any layer rolls everything back.
             trading_core.reserve_order(state, command, cl_ord_id, self.policy, now)
             record = CommandRecord(
                 command_id=command.command_id,
@@ -144,19 +202,95 @@ class TradingService:
                     "qty": command.qty,
                     "price": command.price,
                     "order_type": command.order_type,
+                    "book_id": command.book_id,
+                    "price_source": command.price_source,
+                    "price_at_ms": command.price_at_ms,
+                    "price_reference_id": command.price_reference_id,
                 },
                 now,
             )
+            trading_core.assert_book_conservation(state)
 
         # Only the caller that wins the QUEUED -> SENDING transition may call the venue.
         if self.defer_send:
             return await self._current_receipt(command.account_id, command.command_id)
-        if not await self._mark_sending(command.account_id, command.command_id):
+        if not await self._mark_sending(
+            command.account_id, command.command_id, require_no_unknown=True
+        ):
             return await self._current_receipt(command.account_id, command.command_id)
 
         result = await self.exchange.place_order(command, cl_ord_id)
         await self._apply_place_result(command.account_id, command.command_id, result)
         return await self._current_receipt(command.account_id, command.command_id)
+
+    async def allocate(
+        self,
+        command_id: str,
+        account_id: str,
+        book_id: str,
+        asset: str,
+        amount: Decimal,
+        actor: str = "system",
+        reason: str = "",
+    ) -> CommandReceipt:
+        """Explicitly move assets from UNALLOCATED into one strategy book.
+
+        The control process only records the command; the execution owner
+        applies it. Allocation never changes the account total and is
+        idempotent by ``command_id`` + payload.
+        """
+        payload = _allocate_payload(account_id, book_id, asset, amount, reason)
+        self._validate_allocation_request(payload)
+        payload_hash = _digest(payload)
+        now = self.clock()
+        if not self.defer_send:
+            # Registering the target book is not an economic change: the account
+            # total stays the same and no asset moves. It is committed on its
+            # own so a refused transfer still leaves the (empty) book visible
+            # to the operator instead of silently vanishing.
+            await self._register_book(account_id, book_id)
+        async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
+            existing = state.commands.get(command_id)
+            if existing is not None:
+                if existing.payload_hash != payload_hash:
+                    raise Conflict("COMMAND_ID_REUSED_WITH_DIFFERENT_PARAMETERS")
+                return self._receipt(state, existing)
+            record = CommandRecord(
+                command_id=command_id,
+                cl_ord_id="",
+                kind="ALLOCATE",
+                payload_hash=payload_hash,
+                status="QUEUED",
+                actor=actor,
+                request=payload,
+            )
+            state.commands[command_id] = record
+            if self.defer_send:
+                self._emit(
+                    state,
+                    "book.allocation_queued",
+                    "",
+                    command_id,
+                    payload,
+                    now,
+                    notify=False,
+                )
+                self._refresh_status(state)
+                return self._receipt(state, record)
+            self._apply_allocation(state, record)
+            self._emit(
+                state,
+                "book.allocated",
+                "",
+                command_id,
+                {**payload, "actor": actor},
+                now,
+                notify=False,
+            )
+            self._refresh_status(state)
+            trading_core.assert_book_conservation(state)
+        return await self._current_receipt(account_id, command_id)
 
     async def cancel(
         self,
@@ -172,6 +306,7 @@ class TradingService:
         now = self.clock()
 
         async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
             existing = state.commands.get(command_id)
             if existing is not None:
                 if existing.payload_hash != payload_hash:
@@ -210,14 +345,38 @@ class TradingService:
         action: str,
         actor: str = "system",
         *,
+        code: str = "",
+        evidence: dict[str, Any] | None = None,
         _resume: bool = False,
     ) -> CommandReceipt:
         """Persist control intent; the execution owner resumes idempotent actions."""
-        if action not in {"BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT"}:
+        if action not in CONTROL_ACTIONS:
             raise TradingError("UNSUPPORTED_CONTROL_ACTION")
-        payload_hash = _digest({"account_id": account_id, "action": action})
+        if action == "RESOLVE":
+            if not code:
+                raise TradingError("RESOLVE_REQUIRES_CODE")
+            if code not in RESOLVABLE_CODES:
+                # Static policy, no facts involved: a command that can never
+                # succeed is refused instead of being queued.
+                raise TradingError("RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE")
+            if not isinstance(evidence, dict) or not evidence:
+                # Structural check only; the facts are verified by the account
+                # owner when the command is applied.
+                raise TradingError("RESOLVE_REQUIRES_EVIDENCE")
+        payload: dict[str, Any] = {"account_id": account_id, "action": action}
+        if action in {"BLOCK_NEW_RISK", "RESUME_NEW_RISK"} and isinstance(evidence, dict):
+            reason = str(evidence.get("reason") or "").strip()
+            if reason:
+                payload["reason"] = reason
+        if action == "RESOLVE":
+            # The evidence is part of the command identity: the same command id
+            # with different evidence is a conflicting command, not a retry.
+            payload["code"] = code
+            payload["evidence"] = json_value(evidence) if evidence is not None else None
+        payload_hash = _digest(payload)
         now = self.clock()
         async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
             existing = state.commands.get(command_id)
             if existing is not None:
                 if existing.payload_hash != payload_hash:
@@ -241,12 +400,25 @@ class TradingService:
                     "action": action,
                     "active_orders": active,
                 }
+                if action == "RESOLVE":
+                    state.control["requests"][command_id]["code"] = code
+                    state.control["requests"][command_id]["evidence"] = (
+                        json_value(evidence) if evidence is not None else None
+                    )
+                elif payload.get("reason"):
+                    state.control["requests"][command_id]["reason"] = payload["reason"]
+                requested_payload: dict[str, Any] = {
+                    "action": action,
+                    "active_orders": active,
+                }
+                if payload.get("reason"):
+                    requested_payload["reason"] = payload["reason"]
                 self._emit(
                     state,
                     "control.requested",
                     "",
                     command_id,
-                    {"action": action, "active_orders": active},
+                    requested_payload,
                     now,
                 )
             request = state.control.get("requests", {}).get(command_id, {})
@@ -258,11 +430,24 @@ class TradingService:
                 return self._receipt(state, state.commands[command_id])
             if action == "RESUME_NEW_RISK":
                 state.control["new_risk_blocked"] = False
-            if action != "CANCEL_ALL":
+            # RESOLVE needs its own transaction (evidence check + adjustment),
+            # so it is applied after this one commits.
+            if action not in {"CANCEL_ALL", "RESOLVE"}:
                 state.commands[command_id].status = "CONFIRMED"
                 self._emit(state, "control.applied", "", command_id, {"action": action}, now)
                 self._refresh_status(state)
                 return self._receipt(state, state.commands[command_id])
+
+        if action == "RESOLVE":
+            # Direct (non-deferred) assembly: this process owns the account, so
+            # it applies the evidenced settlement itself. The deferred path
+            # applies the same command in ``resume_queued``.
+            current = await self.store.read(account_id)
+            return await self._apply_resolve_command(
+                account_id,
+                current.commands[command_id],
+                current.control.get("requests", {}).get(command_id, {}),
+            )
 
         outcomes = []
         for cl_ord_id in active:
@@ -304,6 +489,10 @@ class TradingService:
             raise NotReady("CONTROL_PROCESS_CANNOT_EXECUTE")
         state = await self.store.read(account_id)
         receipts = []
+        # An uncertain send is tracked per command: it blocks every further
+        # new risk until the venue or an evidenced operator decision settles
+        # that very command. Cancels stay allowed; they reduce risk.
+        unknown_pending = self._pending_unknown_commands(state)
         # Execute place/cancel first, then reevaluate parent control receipts.
         records = sorted(state.commands.values(), key=lambda record: record.kind == "CONTROL")
         for record in records:
@@ -312,19 +501,36 @@ class TradingService:
             if record.kind == "CONTROL":
                 request = state.control.get("requests", {}).get(record.command_id)
                 if request and request["action"] != "RECONNECT":
-                    receipts.append(
-                        await self.control(
-                            record.command_id,
-                            account_id,
-                            request["action"],
-                            actor=record.actor,
-                            _resume=True,
+                    if request["action"] == "RESOLVE":
+                        receipts.append(
+                            await self._apply_resolve_command(account_id, record, request)
                         )
-                    )
+                    else:
+                        receipts.append(
+                            await self.control(
+                                record.command_id,
+                                account_id,
+                                request["action"],
+                                actor=record.actor,
+                                _resume=True,
+                            )
+                        )
                 continue
-            if record.kind == "PLACE" and not allow_places:
+            if record.kind == "ALLOCATE":
+                receipts.append(await self._apply_allocation_command(account_id, record))
                 continue
-            if not await self._mark_sending(account_id, record.command_id):
+            if record.kind == "PLACE":
+                if not allow_places:
+                    continue
+                if unknown_pending:
+                    continue
+                if not await self._admit_queued_place(account_id, record.command_id):
+                    continue
+            if not await self._mark_sending(
+                account_id,
+                record.command_id,
+                require_no_unknown=record.kind == "PLACE",
+            ):
                 continue
             order = state.orders.get(record.cl_ord_id)
             if order is None:
@@ -332,18 +538,95 @@ class TradingService:
             if record.kind == "PLACE":
                 result = await self.exchange.place_order(order.command, order.cl_ord_id)
                 await self._apply_place_result(account_id, record.command_id, result)
-            elif record.kind == "CANCEL":
-                result = await self.exchange.cancel_order(
-                    account_id, record.cl_ord_id, record.command_id, order.command.symbol
-                )
-                await self._apply_cancel_result(account_id, record.command_id, result)
+                receipt = await self._current_receipt(account_id, record.command_id)
+                if receipt.status == "UNKNOWN":
+                    # The send is uncertain: no further new risk may follow.
+                    unknown_pending = True
+                receipts.append(receipt)
+                continue
+            result = await self.exchange.cancel_order(
+                account_id, record.cl_ord_id, record.command_id, order.command.symbol
+            )
+            await self._apply_cancel_result(account_id, record.command_id, result)
             receipts.append(await self._current_receipt(account_id, record.command_id))
         return receipts
+
+    async def _admit_queued_place(self, account_id: str, command_id: str) -> bool:
+        """Re-check a durable PLACE against the execution owner's policy.
+
+        The Control process already reserved at acceptance, but it may use a
+        different configuration and the account can move before the command is
+        drained. The execution process therefore re-evaluates the same pure
+        rule with this order's own holds temporarily removed, so a queued order
+        can never bypass a stricter execution-side limit.
+        """
+        now = self.clock()
+        async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
+            record = state.commands.get(command_id)
+            if record is None or record.kind != "PLACE" or record.status != "QUEUED":
+                return False
+            order = state.orders.get(record.cl_ord_id)
+            if order is None:
+                record.status = "FAILED"
+                record.error = "QUEUED_ORDER_MISSING"
+                self._refresh_status(state)
+                return False
+            account_hold = state.holds.pop(order.cl_ord_id, None)
+            book = state.books.get(order.command.book_id)
+            book_hold = book.holds.pop(order.cl_ord_id, None) if book is not None else None
+
+            def restore() -> None:
+                if account_hold is not None:
+                    state.holds[order.cl_ord_id] = account_hold
+                if book is not None and book_hold is not None:
+                    book.holds[order.cl_ord_id] = book_hold
+
+            try:
+                hold = SpotRiskEngine(self.policy).evaluate(state, order.command, now)
+            except NotReady:
+                # A transient account state (freshness, recovery, unknown send)
+                # keeps the command durable for the next drain.
+                restore()
+                self._refresh_status(state)
+                return False
+            except RiskRejected as exc:
+                record.status = "FAILED"
+                record.error = str(exc)
+                try:
+                    advance_order_status(order, "REJECTED")
+                except Conflict:
+                    pass
+                # The order never reached the venue; make it terminal and
+                # release both reservation layers so it cannot linger as an
+                # unknown active order on the next reconciliation.
+                self._release_remaining_hold(state, order)
+                self._emit(
+                    state,
+                    "order.admission_failed",
+                    order.cl_ord_id,
+                    command_id,
+                    {"reason": str(exc)},
+                    now,
+                )
+                self._refresh_status(state)
+                return False
+            except TradingError:
+                # A book inconsistency must block, not silently send or drop.
+                restore()
+                self._refresh_status(state)
+                return False
+            state.holds[order.cl_ord_id] = hold
+            if book is not None:
+                book.holds[order.cl_ord_id] = Hold(hold.asset, hold.amount)
+            self._refresh_status(state)
+            return True
 
     # ------------------------------------------------------------------ facts
     async def record_execution(self, execution: Execution) -> bool:
         outcome = "applied"
         async with self.store.transaction(execution.account_id) as state:
+            self._migrate_books(state)
             key = execution.key
             existing = state.executions.get(key)
             if existing is not None:
@@ -415,6 +698,7 @@ class TradingService:
 
     async def observe(self, observation: OrderObservation) -> bool:
         async with self.store.transaction(observation.account_id) as state:
+            self._migrate_books(state)
             order = state.orders.get(observation.cl_ord_id)
             if order is None:
                 if observation.cl_ord_id.startswith(self.order_prefix):
@@ -468,7 +752,7 @@ class TradingService:
                     },
                 )
             elif order.status in TERMINAL:
-                self._release_remaining_hold(state, order.cl_ord_id)
+                self._release_remaining_hold(state, order)
 
             self._reconcile_order_evidence(state)
             self._emit(
@@ -490,6 +774,7 @@ class TradingService:
     async def recover(self, snapshot: ReconcileSnapshot) -> AccountRiskView:
         now = self.clock()
         async with self.store.transaction(snapshot.account_id) as state:
+            self._migrate_books(state)
             previous_generation = state.reconciliation.get("generation")
             previous_checked = state.reconciliation.get("checked_at_ms")
             stale = (
@@ -512,24 +797,208 @@ class TradingService:
                 )
             else:
                 self._apply_reconcile_snapshot(state, snapshot, now)
+            trading_core.assert_book_conservation(state)
             self._refresh_status(state)
 
         return await self.risk_view(snapshot.account_id)
 
-    async def resolve(self, account_id: str, code: str, actor: str = "system") -> AccountRiskView:
+    async def resolve(
+        self,
+        account_id: str,
+        code: str,
+        actor: str = "system",
+        evidence: dict[str, Any] | None = None,
+    ) -> AccountRiskView:
+        """Settle a persistent difference with explicit, checkable evidence.
+
+        Clearing a reason code is never an explanation on its own. The operator
+        states what explains the difference, the evidence is checked against the
+        facts this account observed, and the settlement is recorded.
+        """
         async with self.store.transaction(account_id) as state:
-            self._resolve_unresolved(state, code)
+            self._migrate_books(state)
+            entries = [
+                entry
+                for entry in state.reconciliation.get("unresolved", [])
+                if entry["code"] == code
+            ]
+            if code not in RESOLVABLE_CODES:
+                # Not an operator-settleable difference: only venue evidence
+                # (a complete snapshot) may release it.
+                raise TradingError("RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE")
+            if not entries:
+                raise TradingError("RESOLVE_CODE_NOT_PENDING")
+            checked = self._validate_resolution(state, code, entries, evidence)
+            now = self.clock()
+            if code == "BALANCE_MISMATCH":
+                self._apply_balance_adjustment(state, entries, checked, actor, now)
+                self._resolve_unresolved(state, "BALANCE_MISMATCH")
+            elif code == "BOOK_ATTRIBUTION_UNKNOWN":
+                book_ledger.resolve_attribution(state, checked["orders"])
+                self._resolve_unresolved(state, code)
+            else:
+                self._resolve_unresolved(state, code)
             self._emit(
                 state,
                 "reconciliation.resolved",
                 "",
                 code,
-                {"code": code, "resolved_by": actor},
-                self.clock(),
+                {"code": code, "resolved_by": actor, "evidence": json_value(checked)},
+                now,
                 source="operator",
             )
+            trading_core.assert_book_conservation(state)
             self._refresh_status(state)
         return await self.risk_view(account_id)
+
+    def _validate_resolution(
+        self,
+        state: AccountState,
+        code: str,
+        entries: list[dict[str, Any]],
+        evidence: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Check the operator's evidence against the facts this account observed."""
+        if not isinstance(evidence, dict) or not evidence:
+            raise TradingError("RESOLVE_REQUIRES_EVIDENCE")
+        kind = str(evidence.get("kind", "")).strip()
+        reference = str(evidence.get("reference", "")).strip()
+        reason = str(evidence.get("reason", "")).strip()
+        if not kind or not reference or not reason:
+            raise TradingError("RESOLVE_EVIDENCE_INCOMPLETE")
+        checked = dict(evidence)
+        checked["kind"] = kind
+        checked["reference"] = reference
+        checked["reason"] = reason
+        if code == "BALANCE_MISMATCH":
+            self._validate_balance_evidence(entries, checked)
+        elif code == "BOOK_ATTRIBUTION_UNKNOWN":
+            self._validate_book_attribution_evidence(state, entries, checked)
+        return checked
+
+    def _validate_book_attribution_evidence(
+        self,
+        state: AccountState,
+        entries: list[dict[str, Any]],
+        evidence: dict[str, Any],
+    ) -> None:
+        """Every unattributed order needs its own explicit target book.
+
+        Only fully filled orders may be attributed: a cancelled/partial order
+        can still receive a late fill, which would make the attribution stale.
+        """
+        pending = {
+            str((entry.get("detail") or {}).get("cl_ord_id") or ""): entry for entry in entries
+        }
+        pending.pop("", None)
+        orders = evidence.get("orders")
+        if not isinstance(orders, dict) or not orders:
+            raise TradingError("RESOLVE_EVIDENCE_INCOMPLETE")
+        if set(orders) != set(pending):
+            raise TradingError("RESOLVE_EVIDENCE_ORDER_MISMATCH")
+        for cl_ord_id, book_id in orders.items():
+            order = state.orders.get(cl_ord_id)
+            if order is None:
+                raise TradingError("RESOLVE_EVIDENCE_ORDER_UNKNOWN")
+            if order.status != "FILLED":
+                raise TradingError("RESOLVE_EVIDENCE_ORDER_NOT_SETTLED")
+            if cl_ord_id in state.holds or any(
+                cl_ord_id in book.holds for book in state.books.values()
+            ):
+                raise TradingError("RESOLVE_EVIDENCE_ORDER_NOT_SETTLED")
+            if book_id == book_ledger.UNALLOCATED:
+                continue
+            try:
+                book_ledger.validate_strategy_book_id(book_id)
+            except TradingError as exc:
+                raise TradingError("RESOLVE_EVIDENCE_BOOK_UNKNOWN") from exc
+            if book_id not in state.books:
+                raise TradingError("RESOLVE_EVIDENCE_BOOK_UNKNOWN")
+        evidence["orders"] = {str(key): str(value) for key, value in orders.items()}
+
+    @staticmethod
+    def _observed_balance_differences(entries: list[dict[str, Any]]) -> dict[str, Any]:
+        observed: dict[str, Any] = {}
+        for entry in entries:
+            for asset, values in (entry.get("detail") or {}).items():
+                observed[asset] = values
+        return observed
+
+    def _validate_balance_evidence(
+        self, entries: list[dict[str, Any]], evidence: dict[str, Any]
+    ) -> None:
+        """The evidence has to explain every observed difference, asset by asset."""
+        observed = self._observed_balance_differences(entries)
+        assets = evidence.get("assets")
+        if not isinstance(assets, dict) or not assets:
+            raise TradingError("RESOLVE_EVIDENCE_INCOMPLETE")
+        if set(assets) != set(observed):
+            raise TradingError("RESOLVE_EVIDENCE_AMOUNT_MISMATCH")
+        for asset, values in observed.items():
+            given = assets.get(asset)
+            if not isinstance(given, dict):
+                raise TradingError("RESOLVE_EVIDENCE_AMOUNT_MISMATCH")
+            for key in ("internal", "venue", "difference"):
+                try:
+                    claimed = Decimal(str(given.get(key)))
+                    actual = Decimal(str(values.get(key)))
+                except (ArithmeticError, TypeError, ValueError):
+                    raise TradingError("RESOLVE_EVIDENCE_AMOUNT_MISMATCH") from None
+                if claimed != actual:
+                    raise TradingError("RESOLVE_EVIDENCE_AMOUNT_MISMATCH")
+
+    def _apply_balance_adjustment(
+        self,
+        state: AccountState,
+        entries: list[dict[str, Any]],
+        evidence: dict[str, Any],
+        actor: str,
+        now: int,
+    ) -> None:
+        """Settle an observed difference with an explicit, evidenced entry.
+
+        The venue observation is never copied into the authoritative balance:
+        the difference becomes an adjustment entry that carries the operator's
+        evidence, so the ledger keeps explaining itself.
+        """
+        observed = self._observed_balance_differences(entries)
+        evidence_id = _digest(json_value(evidence))[:16]
+        existing_ids = {item.get("entry_id") for item in state.ledger}
+        for asset, values in sorted(observed.items()):
+            internal = Decimal(str(values.get("internal", "0")))
+            current = state.balances.get(asset, Decimal(0))
+            if current != internal:
+                # The account moved on since the observation; the old evidence
+                # no longer describes this difference.
+                raise TradingError("RESOLVE_EVIDENCE_STALE")
+            delta = Decimal(str(values.get("difference", "0")))
+            entry_id = f"adjustment:{evidence_id}:{asset}"
+            if entry_id in existing_ids:
+                continue
+            state.ledger.append(
+                {
+                    "entry_id": entry_id,
+                    "execution_key": "",
+                    "account_id": state.account_id,
+                    "cl_ord_id": "",
+                    "book_id": book_ledger.UNALLOCATED,
+                    "asset": asset,
+                    "delta": str(delta),
+                    "kind": "external_adjustment",
+                    "occurred_at_ms": now,
+                    "evidence": {
+                        "kind": evidence.get("kind"),
+                        "reference": evidence.get("reference"),
+                        "reason": evidence.get("reason"),
+                        "resolved_by": actor,
+                    },
+                }
+            )
+            state.balances[asset] = current + delta
+            # An account-level difference is not attributed to a strategy: it
+            # lands in the explicit unallocated bucket so conservation holds.
+            unallocated = book_ledger.ensure_unallocated(state)
+            unallocated.balances[asset] = unallocated.balances.get(asset, Decimal(0)) + delta
 
     # ------------------------------------------------------------------ queries
     async def risk_view(self, account_id: str, now_ms: int | None = None) -> AccountRiskView:
@@ -564,6 +1033,8 @@ class TradingService:
             assets=assets,
             positions=dict(state.positions),
             valuation_complete=self._valuation_complete(state, now),
+            venue_balances=dict(state.reconciliation.get("venue_balances", {}) or {}),
+            balance_differences=self._balance_differences(state),
         )
 
     async def command(self, account_id: str, command_id: str) -> dict[str, Any] | None:
@@ -593,6 +1064,28 @@ class TradingService:
         state = await self.store.read(account_id)
         return [self._order_dict(order) for order in list(state.orders.values())[-limit:]]
 
+    async def books(self, account_id: str) -> list[dict[str, Any]]:
+        """Deterministic per-book balances, budget, positions and equity."""
+        state = await self.store.read(account_id)
+        now = self.clock()
+        marks = state.reconciliation.get("marks", {})
+        return [
+            book_ledger.book_snapshot(
+                state,
+                state.books[book_id],
+                marks=marks,
+                now_ms=now,
+                max_mark_age_ms=self.policy.max_mark_age_ms,
+            )
+            for book_id in sorted(state.books)
+        ]
+
+    async def book(self, account_id: str, book_id: str) -> dict[str, Any] | None:
+        for item in await self.books(account_id):
+            if item["book_id"] == book_id:
+                return item
+        return None
+
     @staticmethod
     def _order_dict(order: OrderAggregate) -> dict[str, Any]:
         return {
@@ -606,6 +1099,10 @@ class TradingService:
             "qty": str(order.command.qty),
             "price": str(order.command.price),
             "order_type": order.command.order_type,
+            "book_id": order.command.book_id,
+            "price_source": order.command.price_source,
+            "price_at_ms": order.command.price_at_ms,
+            "price_reference_id": order.command.price_reference_id,
             "booked_qty": str(order.booked_qty),
             "observed_qty": str(order.observed_qty),
             "remaining_qty": str(order.remaining_qty),
@@ -616,6 +1113,9 @@ class TradingService:
         state = await self.store.read(account_id)
         now = self.clock() if now_ms is None else now_ms
         checked = state.reconciliation.get("checked_at_ms")
+        executions = self._execution_evidence(state)
+        ledger = self._ledger_evidence(state)
+        events = self._event_evidence(state)
         return {
             "status": self._status(state, self._reasons(state, now)),
             "unknown_commands": sum(
@@ -629,7 +1129,128 @@ class TradingService:
             "reconciliation_age_ms": None if checked is None else max(0, now - int(checked)),
             "outbox_backlog": len(await self.store.pending_outbox(account_id)),
             "unresolved": [entry["code"] for entry in state.reconciliation.get("unresolved", [])],
+            "unresolved_entries": [
+                dict(entry) for entry in state.reconciliation.get("unresolved", [])
+            ],
+            "venue_balances": dict(state.reconciliation.get("venue_balances", {}) or {}),
+            "balance_differences": list(self._balance_differences(state).values()),
+            "book_count": len(state.books),
+            "books": {
+                book_id: {
+                    "balances": {
+                        asset: str(amount) for asset, amount in sorted(book.balances.items())
+                    },
+                    "holds": len(book.holds),
+                }
+                for book_id, book in sorted(state.books.items())
+            },
+            # The observation window needs facts, not only counters: monotonic
+            # execution/ledger/event counts plus digests of their stable
+            # identities make a silent re-booking or duplicate append visible.
+            "evidence": {
+                "executions": executions,
+                "ledger": ledger,
+                "events": events,
+                "commands_by_status": self._status_counts(state.commands.values()),
+                "orders_by_status": self._status_counts(state.orders.values()),
+                "send_outcomes": self._send_outcomes(state),
+                "last_execution_at_ms": self._last(
+                    int(item.get("occurred_at_ms", 0) or 0) for item in state.executions.values()
+                ),
+                "last_event_at_ms": self._last(
+                    int(item.get("occurred_at_ms", 0) or 0) for item in state.events
+                ),
+            },
+            # Persisted by PrivateTradingSession after a successful proof; this
+            # is the reviewable private-WS coverage fact, not a health guess.
+            "coverage": dict(state.reconciliation.get("coverage") or {}),
+            "runtime": dict(state.control.get("runtime") or {}),
+            "strategy": dict((state.control.get("runtime") or {}).get("strategy") or {}),
         }
+
+    @staticmethod
+    def _status_counts(records) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for record in records:
+            status = str(getattr(record, "status", "") or "")
+            counts[status] = counts.get(status, 0) + 1
+        return dict(sorted(counts.items()))
+
+    @staticmethod
+    def _last(values) -> int | None:
+        found = [value for value in values if value]
+        return max(found) if found else None
+
+    @staticmethod
+    def _execution_evidence(state: AccountState) -> dict[str, Any]:
+        keys = sorted(state.executions)
+        payload = json.dumps(keys, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(keys),
+            "keys_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _ledger_evidence(state: AccountState) -> dict[str, Any]:
+        ids = sorted(str(entry.get("entry_id", "")) for entry in state.ledger)
+        payload = json.dumps(ids, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(ids),
+            "entry_ids_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _event_evidence(state: AccountState) -> dict[str, Any]:
+        ids = sorted(str(event.get("event_id", "")) for event in state.events)
+        payload = json.dumps(ids, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return {
+            "count": len(ids),
+            "event_ids_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @staticmethod
+    def _send_outcomes(state: AccountState) -> dict[str, Any]:
+        """Count venue outcomes per command.
+
+        A command may leave SENDING only once (QUEUED -> SENDING CAS). More than
+        one outcome event for the same command is therefore an unexpected
+        resend, even if both outcomes were identical.
+        """
+        send_types = {"order.accepted", "order.rejected", "order.unknown"}
+        per_command: dict[str, int] = {}
+        for event in state.events:
+            if str(event.get("event_type", "")) not in send_types:
+                continue
+            command_id = str(event.get("trace_id", "") or "")
+            if not command_id:
+                continue
+            per_command[command_id] = per_command.get(command_id, 0) + 1
+        repeated = sorted(command_id for command_id, count in per_command.items() if count > 1)
+        return {
+            "commands_with_outcome": len(per_command),
+            "outcomes_total": sum(per_command.values()),
+            "repeated_send_commands": repeated,
+        }
+
+    @staticmethod
+    def _balance_differences(state: AccountState) -> dict[str, Any]:
+        """Difference between the authoritative balance and the venue observation.
+
+        The venue value is an observation, never the authoritative balance: an
+        unexplained difference stays visible instead of being absorbed.
+        """
+        venue = state.reconciliation.get("venue_balances", {}) or {}
+        differences: dict[str, Any] = {}
+        for asset in sorted(set(state.balances) | set(venue)):
+            internal = state.balances.get(asset, Decimal(0))
+            observed = Decimal(str(venue.get(asset, "0")))
+            if internal != observed:
+                differences[asset] = {
+                    "internal": str(internal),
+                    "venue": str(observed),
+                    "difference": str(observed - internal),
+                }
+        return differences
 
     # ------------------------------------------------------------------ outbox
     async def dispatch_outbox(
@@ -657,10 +1278,22 @@ class TradingService:
     def cl_ord_id_for(account_id: str, command_id: str) -> str:
         return "qts-" + hashlib.sha256(f"{account_id}:{command_id}".encode()).hexdigest()[:24]
 
-    async def _mark_sending(self, account_id: str, command_id: str) -> bool:
+    async def _mark_sending(
+        self, account_id: str, command_id: str, *, require_no_unknown: bool = False
+    ) -> bool:
+        """Win the QUEUED -> SENDING CAS.
+
+        ``require_no_unknown`` re-checks the blocking state inside the same
+        transaction as the transition: a new risk is never sent while another
+        command's send is uncertain, even if that happened after the caller
+        read the account.
+        """
         async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
             record = state.commands.get(command_id)
             if record is None or record.status != "QUEUED":
+                return False
+            if require_no_unknown and self._pending_unknown_commands(state):
                 return False
             record.status = "SENDING"
             return True
@@ -686,13 +1319,16 @@ class TradingService:
     ) -> None:
         now = self.clock()
         async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
             record = state.commands.get(command_id)
             if record is None or record.status != "SENDING":
                 return
             order = state.orders[record.cl_ord_id]
             if result.outcome == ExchangeOutcome.ACCEPTED:
                 record.status = "CONFIRMED"
-                self._resolve_unresolved(state, "UNKNOWN_COMMAND")
+                # Only this command's own uncertainty is settled here; another
+                # command's unknown send keeps blocking new risk.
+                self._resolve_unresolved(state, "UNKNOWN_COMMAND", scope=command_id)
                 observation = OrderObservation(
                     account_id=account_id,
                     cl_ord_id=order.cl_ord_id,
@@ -723,9 +1359,16 @@ class TradingService:
             elif result.outcome == ExchangeOutcome.REJECTED:
                 record.status = "FAILED"
                 record.error = result.reason or "REJECTED"
-                self._resolve_unresolved(state, "UNKNOWN_COMMAND")
-                order.status = "REJECTED"
-                state.holds.pop(order.cl_ord_id, None)
+                self._resolve_unresolved(state, "UNKNOWN_COMMAND", scope=command_id)
+                try:
+                    advance_order_status(order, "REJECTED")
+                except Conflict as exc:
+                    self._add_unresolved(
+                        state,
+                        "ORDER_OBSERVATION_CONFLICT",
+                        {"cl_ord_id": order.cl_ord_id, "reason": str(exc)},
+                    )
+                self._release_remaining_hold(state, order)
                 self._emit(
                     state,
                     "order.rejected",
@@ -736,12 +1379,16 @@ class TradingService:
                     source="exchange",
                 )
             else:
+                # UNKNOWN, UNAVAILABLE and NOT_FOUND all mean the venue may or
+                # may not have accepted the order: the command stays UNKNOWN,
+                # its hold is kept and it is never sent again.
                 record.status = "UNKNOWN"
                 record.error = result.reason or result.outcome.value
                 self._add_unresolved(
                     state,
                     "UNKNOWN_COMMAND",
                     {"command_id": command_id, "cl_ord_id": order.cl_ord_id},
+                    scope=command_id,
                 )
                 self._emit(
                     state,
@@ -760,6 +1407,7 @@ class TradingService:
     ) -> None:
         now = self.clock()
         async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
             record = state.commands.get(command_id)
             if record is None or record.status != "SENDING":
                 return
@@ -801,15 +1449,59 @@ class TradingService:
                 )
             self._refresh_status(state)
 
+    async def _apply_resolve_command(
+        self, account_id: str, record: CommandRecord, request: dict[str, Any]
+    ) -> CommandReceipt:
+        """Apply an operator resolution on the execution side of the queue.
+
+        The control process only records the command; the account owner checks
+        the evidence against its own facts and settles the difference.
+        """
+        if not await self._mark_sending(account_id, record.command_id):
+            return await self._current_receipt(account_id, record.command_id)
+        code = str(request.get("code", ""))
+        evidence = request.get("evidence")
+        try:
+            await self.resolve(account_id, code, actor=record.actor, evidence=evidence)
+        except Exception as exc:
+            # Evidence rejection and infrastructure failure both end the
+            # command explicitly; it must never stay SENDING forever.
+            reason = str(exc) if isinstance(exc, TradingError) else f"RESOLVE_FAILED: {exc}"
+            await self._fail_command(account_id, record.command_id, reason)
+            if isinstance(exc, TradingError):
+                return await self._current_receipt(account_id, record.command_id)
+            raise
+        async with self.store.transaction(account_id) as state:
+            current = state.commands.get(record.command_id)
+            if current is not None:
+                current.status = "CONFIRMED"
+                current.error = ""
+        return await self._current_receipt(account_id, record.command_id)
+
+    async def _fail_command(self, account_id: str, command_id: str, reason: str) -> None:
+        async with self.store.transaction(account_id) as state:
+            current = state.commands.get(command_id)
+            if current is not None:
+                current.status = "FAILED"
+                current.error = reason
+
     def _apply_position(
-        self, state: AccountState, command: PlaceOrderCommand, execution: Execution
+        self,
+        state: AccountState,
+        command: PlaceOrderCommand,
+        execution: Execution,
+        book_id: str,
     ) -> None:
-        trading_core.apply_position(state, command, execution)
+        trading_core.apply_position(state, command, execution, book_id)
 
     def _apply_ledger(
-        self, state: AccountState, command: PlaceOrderCommand, execution: Execution
+        self,
+        state: AccountState,
+        command: PlaceOrderCommand,
+        execution: Execution,
+        book_id: str,
     ) -> None:
-        trading_core.apply_ledger(state, command, execution)
+        trading_core.apply_ledger(state, command, execution, book_id)
 
     def _ledger_entry(
         self,
@@ -819,8 +1511,9 @@ class TradingService:
         asset: str,
         delta: Decimal,
         kind: str,
+        book_id: str,
     ) -> None:
-        trading_core.ledger_entry(state, execution, leg, asset, delta, kind)
+        trading_core.ledger_entry(state, execution, leg, asset, delta, kind, book_id)
 
     def _release_hold(
         self,
@@ -828,11 +1521,12 @@ class TradingService:
         command: PlaceOrderCommand,
         execution: Execution,
         cl_ord_id: str,
+        book_id: str,
     ) -> None:
-        trading_core.release_hold(state, command, execution, cl_ord_id, self.policy)
+        trading_core.release_hold(state, command, execution, cl_ord_id, self.policy, book_id)
 
-    def _release_remaining_hold(self, state: AccountState, cl_ord_id: str) -> None:
-        state.holds.pop(cl_ord_id, None)
+    def _release_remaining_hold(self, state: AccountState, order: OrderAggregate) -> None:
+        trading_core.release_order_hold(state, order)
 
     def _reconcile_order_evidence(self, state: AccountState) -> None:
         # These are account-wide derived gates. Rebuild from every aggregate so
@@ -861,10 +1555,18 @@ class TradingService:
                 self._add_unresolved(
                     state, "FILL_OBSERVATION_MISMATCH", {"cl_ord_id": order.cl_ord_id}
                 )
-            if order.booked_qty == order.command.qty:
+            quote_settled = order.is_quote_settled_market_buy()
+            completes = (order.booked_qty == order.command.qty and not quote_settled) or (
+                quote_settled and order.booked_quote >= order.quote_budget
+            )
+            if completes:
+                # A quote-settled MARKET BUY is not complete just because the
+                # requested base quantity was covered; it completes when its
+                # quote budget is exhausted or a terminal venue observation
+                # arrives. LIMIT/BASE keep the exact-base completion rule.
                 if order.status not in TERMINAL:
-                    order.status = "FILLED"
-                self._release_remaining_hold(state, order.cl_ord_id)
+                    advance_order_status(order, "FILLED")
+                self._release_remaining_hold(state, order)
 
     def _book_execution(
         self,
@@ -875,11 +1577,32 @@ class TradingService:
         source: str,
     ) -> None:
         """Book a fill whose order aggregate already accepted it."""
+        book_id = book_ledger.execution_book_id(state, order)
+        requested = getattr(order.command, "book_id", "")
+        if book_id == book_ledger.UNALLOCATED and not (
+            book_ledger.is_strategy_book(requested) and requested in state.books
+        ):
+            # The venue fact is booked into the explicit unallocated bucket so
+            # conservation holds, while its strategy attribution stays unknown
+            # and blocks new risk until an operator supplies evidence.
+            book_ledger.record_unattributed_order(
+                state, order.cl_ord_id, requested, "EXECUTION_WITHOUT_KNOWN_BOOK"
+            )
+            self._add_unresolved(
+                state,
+                "BOOK_ATTRIBUTION_UNKNOWN",
+                {
+                    "cl_ord_id": order.cl_ord_id,
+                    "book_id": str(requested or ""),
+                    "execution_key": execution.key,
+                },
+                scope=order.cl_ord_id,
+            )
         first_entry = len(state.ledger)
-        self._apply_ledger(state, order.command, execution)
-        self._apply_position(state, order.command, execution)
-        self._release_hold(state, order.command, execution, execution.cl_ord_id)
-        self._offset_opening_balances(state, execution, state.ledger[first_entry:])
+        self._apply_ledger(state, order.command, execution, book_id)
+        self._apply_position(state, order.command, execution, book_id)
+        self._release_hold(state, order.command, execution, execution.cl_ord_id, book_id)
+        self._offset_opening_balances(state, execution, state.ledger[first_entry:], book_id)
         state.executions[execution.key] = execution.content
         self._emit(
             state,
@@ -888,6 +1611,7 @@ class TradingService:
             execution.exec_id,
             {
                 "execution_key": execution.key,
+                "book_id": book_id,
                 "qty": execution.qty,
                 "price": execution.price,
                 "fee": execution.fee,
@@ -904,6 +1628,7 @@ class TradingService:
         state: AccountState,
         execution: Execution,
         booked_entries: list[dict[str, Any]],
+        book_id: str,
     ) -> None:
         """A fill that predates the opening snapshot is already inside that snapshot.
 
@@ -929,6 +1654,7 @@ class TradingService:
                 asset,
                 -delta,
                 "opening_balance",
+                book_id,
             )
 
     def _rebook_stored_execution(
@@ -1038,6 +1764,7 @@ class TradingService:
             raise TradingError("DUPLICATE_LEDGER_ENTRY")
         if any(not amount.is_finite() for amount in state.balances.values()):
             raise TradingError("NON_FINITE_BALANCE")
+        trading_core.assert_book_conservation(state)
 
     def _apply_reconcile_snapshot(
         self, state: AccountState, snapshot: ReconcileSnapshot, now: int
@@ -1176,27 +1903,48 @@ class TradingService:
                     },
                 )
             elif order.status in TERMINAL:
-                self._release_remaining_hold(state, order.cl_ord_id)
+                self._release_remaining_hold(state, order)
 
         after = dict(state.balances)
+        venue_balances = {asset: Decimal(value) for asset, value in snapshot.balances.items()}
+        mismatch: dict[str, Any] = {}
         if had_balances:
             assets = set(expected) | set(after) | set(snapshot.balances)
             mismatch = {
                 asset: {
-                    "expected": str(after.get(asset, Decimal(0))),
-                    "exchange": str(snapshot.balances.get(asset, Decimal(0))),
+                    "internal": str(after.get(asset, Decimal(0))),
+                    "venue": str(snapshot.balances.get(asset, Decimal(0))),
+                    "difference": str(
+                        snapshot.balances.get(asset, Decimal(0)) - after.get(asset, Decimal(0))
+                    ),
                 }
                 for asset in assets
                 if after.get(asset, Decimal(0)) != snapshot.balances.get(asset, Decimal(0))
             }
             if mismatch:
+                # Replace the previous observation: the difference that the
+                # operator has to explain is the one this snapshot shows.
+                self._resolve_unresolved(state, "BALANCE_MISMATCH")
                 self._add_unresolved(state, "BALANCE_MISMATCH", mismatch)
         else:
             # The first reconciliation of an empty ledger defines the opening
             # state: whatever the venue already held is booked explicitly.
             self._record_opening_balances(state, snapshot, now, after)
 
-        state.balances = {asset: Decimal(value) for asset, value in snapshot.balances.items()}
+        if not mismatch:
+            # The snapshot agrees with the ledger, so the account total already
+            # equals the venue balance. Keep stable zero entries on both the
+            # account and the unallocated partition for deterministic queries.
+            for asset in venue_balances:
+                state.balances.setdefault(asset, Decimal(0))
+                book_ledger.ensure_unallocated(state).balances.setdefault(asset, Decimal(0))
+        # The venue balance stays an observation: an unexplained difference
+        # remains visible instead of being absorbed into the ledger.
+        state.reconciliation["venue_balances"] = {
+            asset: str(value) for asset, value in venue_balances.items()
+        }
+        state.reconciliation["venue_checked_at_ms"] = snapshot.checked_at_ms
+        state.reconciliation["venue_generation"] = snapshot.generation
         state.external_locked = {
             asset: Decimal(value) for asset, value in snapshot.external_locked.items()
         }
@@ -1218,12 +1966,13 @@ class TradingService:
                 )
                 if visible:
                     record.status = "CONFIRMED"
-                    self._resolve_unresolved(state, "UNKNOWN_COMMAND")
+                    self._resolve_unresolved(state, "UNKNOWN_COMMAND", scope=record.command_id)
                 else:
                     self._add_unresolved(
                         state,
                         "UNKNOWN_COMMAND",
                         {"command_id": record.command_id, "cl_ord_id": record.cl_ord_id},
+                        scope=record.command_id,
                     )
 
         if snapshot.complete:
@@ -1265,8 +2014,144 @@ class TradingService:
             notify=False,
         )
 
+    def _migrate_books(self, state: AccountState) -> None:
+        """Persist migration evidence inside a writable account transaction."""
+        book_ledger.migrate_book_ledger(state)
+        marker = state.reconciliation.get(book_ledger.BOOK_LEDGER_KEY, {})
+        for cl_ord_id, detail in sorted(marker.get("unattributed_orders", {}).items()):
+            self._add_unresolved(
+                state,
+                "BOOK_ATTRIBUTION_UNKNOWN",
+                {"cl_ord_id": cl_ord_id, **detail},
+                scope=cl_ord_id,
+            )
+        if marker.get("inconsistent"):
+            self._add_unresolved(state, "BOOK_LEDGER_INCONSISTENT", marker["inconsistent"])
+        if marker.get("legacy_unknown_commands"):
+            self._add_unresolved(
+                state,
+                "LEGACY_UNKNOWN_COMMAND_UNATTRIBUTED",
+                {"subjects": list(marker["legacy_unknown_commands"])},
+            )
+        # Migration records evidence only. It must not re-derive the account
+        # readiness here: doing so would turn a precise admission reason such
+        # as VALUATION_STALE_OR_MISSING into a generic ACCOUNT_NOT_RECONCILED
+        # before the risk engine can evaluate the command. The migration
+        # evidence is still enforced by the unresolved/book checks inside
+        # SpotRiskEngine, and normal write paths refresh the status themselves.
+
+    @staticmethod
+    def _validate_allocation_request(payload: dict[str, Any]) -> None:
+        book_ledger.validate_strategy_book_id(payload.get("book_id"))
+        asset = payload.get("asset")
+        if (
+            not isinstance(asset, str)
+            or not asset
+            or asset != asset.strip()
+            or any(char.isspace() for char in asset)
+        ):
+            raise TradingError("ALLOCATION_ASSET_REQUIRED")
+        try:
+            amount = Decimal(str(payload.get("amount")))
+        except (ArithmeticError, TypeError, ValueError):
+            raise TradingError("ALLOCATION_AMOUNT_INVALID") from None
+        if not amount.is_finite() or amount <= 0:
+            raise TradingError("ALLOCATION_AMOUNT_INVALID")
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise TradingError("ALLOCATION_REASON_REQUIRED")
+
+    async def _register_book(self, account_id: str, book_id: str) -> None:
+        """Create an empty strategy book without moving any asset.
+
+        Registration is idempotent and carries no economic meaning: an empty
+        book has no budget, so no order can be admitted against it.
+        """
+        book_ledger.validate_strategy_book_id(book_id)
+        async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
+            if book_id not in state.books:
+                state.books[book_id] = BookLedger(book_id=book_id)
+
+    def _apply_allocation(self, state: AccountState, record: CommandRecord) -> None:
+        request = record.request or {}
+        if not request:
+            raise TradingError("ALLOCATION_REQUEST_MISSING")
+        try:
+            amount = Decimal(str(request.get("amount")))
+        except (ArithmeticError, TypeError, ValueError):
+            raise TradingError("ALLOCATION_AMOUNT_INVALID") from None
+        trading_core.allocate_to_book(
+            state,
+            str(request.get("book_id", "")),
+            str(request.get("asset", "")),
+            amount,
+        )
+        record.status = "CONFIRMED"
+        record.error = ""
+
+    async def _apply_allocation_command(
+        self, account_id: str, record: CommandRecord
+    ) -> CommandReceipt:
+        now = self.clock()
+        async with self.store.transaction(account_id) as state:
+            self._migrate_books(state)
+            current = state.commands.get(record.command_id)
+            if current is not None and current.status == "QUEUED":
+                # Allocation moves real assets out of UNALLOCATED. Before the
+                # first authoritative snapshot the account has no balances, so
+                # applying it would permanently fail a valid operator command.
+                # Keep it durable and QUEUED until reconciliation has run.
+                if state.reconciliation.get("checked_at_ms") is None:
+                    return self._receipt(state, current)
+            if current is None or current.status != "QUEUED":
+                if current is None:
+                    return CommandReceipt(
+                        command_id=record.command_id,
+                        cl_ord_id="",
+                        kind="ALLOCATE",
+                        status="FAILED",
+                        error="ALLOCATION_COMMAND_MISSING",
+                    )
+                return self._receipt(state, current)
+            try:
+                self._apply_allocation(state, current)
+            except TradingError as exc:
+                current.status = "FAILED"
+                current.error = str(exc)
+                self._emit(
+                    state,
+                    "book.allocation_failed",
+                    "",
+                    current.command_id,
+                    {"book_id": current.request.get("book_id", ""), "error": str(exc)},
+                    now,
+                    notify=False,
+                )
+                self._refresh_status(state)
+                return self._receipt(state, current)
+            self._emit(
+                state,
+                "book.allocated",
+                "",
+                current.command_id,
+                {**current.request, "actor": current.actor},
+                now,
+                notify=False,
+            )
+            self._refresh_status(state)
+            trading_core.assert_book_conservation(state)
+        return await self._current_receipt(account_id, record.command_id)
+
     def _reasons(self, state: AccountState, now: int) -> list[str]:
         reasons = [entry["code"] for entry in state.reconciliation.get("unresolved", [])]
+        reasons.extend(book_ledger.book_reasons(state))
+        if any(
+            entry["code"] == "UNKNOWN_COMMAND"
+            for entry in state.reconciliation.get("unresolved", [])
+        ):
+            # An uncertain send blocks new risk; the code says which one.
+            reasons.append("UNKNOWN_COMMAND_PENDING")
         checked = state.reconciliation.get("checked_at_ms")
         if checked is None:
             reasons.append("ACCOUNT_NOT_RECONCILED")
@@ -1291,10 +2176,49 @@ class TradingService:
     def _valuation_complete(self, state: AccountState, now: int) -> bool:
         return valuation_complete(state, now, self.policy.max_mark_age_ms)
 
-    def _add_unresolved(self, state: AccountState, code: str, detail: Any) -> None:
+    def _add_unresolved(
+        self, state: AccountState, code: str, detail: Any, scope: str | None = None
+    ) -> None:
+        """Record a blocking difference.
+
+        ``scope`` names the subject the difference belongs to (a command id).
+        Entries with a scope are tracked per subject, so settling one command
+        never clears another command's difference.
+        """
         entries = state.reconciliation.setdefault("unresolved", [])
-        if not any(entry["code"] == code for entry in entries):
-            entries.append({"code": code, "detail": json_value(detail), "at_ms": self.clock()})
+        if any(entry["code"] == code and entry.get("scope") == scope for entry in entries):
+            return
+        entry = {"code": code, "detail": json_value(detail), "at_ms": self.clock()}
+        if scope is not None:
+            entry["scope"] = scope
+        entries.append(entry)
+
+    def _resolve_unresolved(self, state: AccountState, code: str, scope: str | None = None) -> None:
+        """Clear differences of one code.
+
+        Without a scope the code is cleared account-wide, which is only correct
+        for codes that genuinely describe the whole account. With a scope only
+        that subject's entry is cleared.
+        """
+        entries = state.reconciliation.get("unresolved", [])
+        state.reconciliation["unresolved"] = [
+            entry
+            for entry in entries
+            if not (entry["code"] == code and (scope is None or entry.get("scope") == scope))
+        ]
+
+    @staticmethod
+    def _pending_unknown_commands(state: AccountState) -> bool:
+        """True while an uncertain send still blocks new risk."""
+        if any(
+            entry["code"] == "UNKNOWN_COMMAND"
+            for entry in state.reconciliation.get("unresolved", [])
+        ):
+            return True
+        return any(
+            record.status == "UNKNOWN" and record.kind == "PLACE"
+            for record in state.commands.values()
+        )
 
     def _add_unknown_orders(self, state: AccountState, cl_ord_ids: set[str]) -> None:
         """Track venue orders that this system does not own."""
@@ -1333,7 +2257,10 @@ class TradingService:
             return None
         if cl_ord_id in state.orders:
             return state.orders[cl_ord_id]
-        command = PlaceOrderCommand(
+        # The venue proved the order exists, so the intent is rebuilt from its
+        # evidence. Book and price source stay empty on purpose: the strategy
+        # attribution is unknown and must not be guessed.
+        command = order_spec.adopted_venue_command(
             command_id=f"adopted:{cl_ord_id}",
             account_id=state.account_id,
             symbol=venue_order.symbol,
@@ -1342,10 +2269,7 @@ class TradingService:
             side=venue_order.side,
             qty=venue_order.qty,
             price=venue_order.price,
-            deployment_id="recovered",
             order_type=venue_order.order_type,
-            time_in_force="GTC",
-            decision_id=f"adopted:{cl_ord_id}",
         )
         order = OrderAggregate(
             cl_ord_id=cl_ord_id,
@@ -1353,6 +2277,17 @@ class TradingService:
             broker_order_id=venue_order.broker_order_id,
         )
         state.orders[cl_ord_id] = order
+        # A recovered venue order has no strategy book evidence. It may still
+        # fill; keep it explicit and blocking instead of guessing attribution.
+        book_ledger.record_unattributed_order(
+            state, cl_ord_id, "", "ADOPTED_VENUE_ORDER_WITHOUT_BOOK"
+        )
+        self._add_unresolved(
+            state,
+            "BOOK_ATTRIBUTION_UNKNOWN",
+            {"cl_ord_id": cl_ord_id, "book_id": "", "source": "rest_alignment"},
+            scope=cl_ord_id,
+        )
         self._emit(
             state,
             "order.adopted",
@@ -1392,10 +2327,13 @@ class TradingService:
                 # balances about to become the opening state already include it.
                 content["in_opening"] = True
         assets = set(computed) | set(snapshot.balances)
+        unallocated = book_ledger.ensure_unallocated(state)
         for asset in sorted(assets):
             venue = snapshot.balances.get(asset, Decimal(0))
             delta = venue - computed.get(asset, Decimal(0))
             if delta == 0:
+                state.balances.setdefault(asset, computed.get(asset, Decimal(0)))
+                unallocated.balances.setdefault(asset, Decimal(0))
                 continue
             state.ledger.append(
                 {
@@ -1403,16 +2341,17 @@ class TradingService:
                     "execution_key": "",
                     "account_id": state.account_id,
                     "cl_ord_id": "",
+                    "book_id": book_ledger.UNALLOCATED,
                     "asset": asset,
                     "delta": str(delta),
                     "kind": "opening_balance",
                     "occurred_at_ms": now,
                 }
             )
-
-    def _resolve_unresolved(self, state: AccountState, code: str) -> None:
-        entries = state.reconciliation.get("unresolved", [])
-        state.reconciliation["unresolved"] = [entry for entry in entries if entry["code"] != code]
+            # Opening assets are never assigned to a strategy book implicitly;
+            # they remain in the explicit unallocated partition.
+            state.balances[asset] = computed.get(asset, Decimal(0)) + delta
+            unallocated.balances[asset] = unallocated.balances.get(asset, Decimal(0)) + delta
 
     def _refresh_status(self, state: AccountState) -> None:
         checked = state.reconciliation.get("checked_at_ms")

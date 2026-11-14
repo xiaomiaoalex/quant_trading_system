@@ -62,13 +62,13 @@ python scripts/check_crypto_risk_demo_env.py --env-file .env --strict
 ## 4. 启动后端
 
 ```powershell
-python -m uvicorn trader.api.main:app --host 127.0.0.1 --port 8080
+python -m uvicorn trader.runtime.control_main:app --host 127.0.0.1 --port 8090
 ```
 
 启动后先查 runtime：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8080/v1/risk/crypto/runtime
+Invoke-RestMethod http://127.0.0.1:8090/v1/risk/crypto/runtime
 ```
 
 期望：
@@ -93,7 +93,7 @@ $body = @{
 
 Invoke-RestMethod `
   -Method Post `
-  -Uri http://127.0.0.1:8080/v1/risk/crypto/probe `
+  -Uri http://127.0.0.1:8090/v1/risk/crypto/probe `
   -ContentType "application/json" `
   -Body $body
 ```
@@ -112,7 +112,7 @@ Invoke-RestMethod `
 Probe 成功或失败后，查询事件流：
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8080/v1/events?stream_key=risk:crypto&limit=20"
+Invoke-RestMethod "http://127.0.0.1:8090/v1/risk/crypto/audit?limit=20"
 ```
 
 期望出现：
@@ -138,7 +138,7 @@ Invoke-RestMethod "http://127.0.0.1:8080/v1/events?stream_key=risk:crypto&limit=
 
 ```powershell
 python scripts/rehearse_crypto_risk_demo_fail_closed.py `
-  --base-url http://127.0.0.1:8080 `
+  --base-url http://127.0.0.1:8090 `
   --symbol QTSFAILCLOSEDUSDT `
   --requested-by ops-fail-closed-rehearsal
 ```

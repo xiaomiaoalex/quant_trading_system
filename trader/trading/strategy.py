@@ -27,15 +27,17 @@ from trader.core.application.strategy_protocol import (
     describe_plugin_warmup,
 )
 from trader.core.domain.models.signal import Signal
+from trader.trading import books as book_ledger
+from trader.trading.datasets import INTERVAL_MS
 from trader.trading.models import (
     AccountRiskView,
     CommandReceipt,
     Conflict,
     NotReady,
-    PlaceOrderCommand,
     TradingError,
     json_value,
 )
+from trader.trading.order_spec import PRICE_SOURCE_MARKET_CLOSED_BAR, build_order_spec
 
 if TYPE_CHECKING:
     from trader.trading.runtime import TradingRuntime
@@ -55,6 +57,78 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+def _observation_at_ms(data: MarketData) -> int:
+    """UTC milliseconds of the observation timestamp."""
+    return int(data.timestamp.timestamp() * 1000)
+
+
+def _runtime_clock_ms(runtime, data: MarketData | None = None) -> int:
+    """Decision clock in UTC milliseconds.
+
+    Production runtimes always expose ``clock``. Test doubles that stand in for
+    only the admission port fall back to the observation timestamp instead of
+    making the visibility contract depend on the fake's attribute set.
+    """
+    clock = getattr(runtime, "clock", None)
+    if callable(clock):
+        return int(clock())
+    if data is not None:
+        return _observation_at_ms(data)
+    raise TradingError("STRATEGY_DECISION_CLOCK_REQUIRED")
+
+
+def _validated_closed_bar(data: MarketData) -> dict[str, Any]:
+    """Validate one closed KLINE at the new-stack boundary.
+
+    Missing or contradictory bar fields are refused; the observation timestamp
+    and ``data.price`` are never used to invent a BAR_V1 close or availability.
+    The accepted representation is an explicit open time plus a supported
+    interval, with all supplied close/availability fields equal to
+    ``open_time_ms + interval_ms`` and an explicit closing price.
+    """
+    if data.data_type is not MarketDataType.KLINE:
+        raise TradingError("NON_BAR_MARKET_DATA")
+    metadata = data.metadata or {}
+    if metadata.get("complete") is False or metadata.get("is_closed") is False:
+        raise TradingError("UNFINISHED_BAR")
+    interval = data.kline_interval or metadata.get("interval")
+    interval_ms = INTERVAL_MS.get(str(interval or ""))
+    if interval_ms is None:
+        raise TradingError("BAR_INTERVAL_REQUIRED")
+    open_value = metadata.get("open_time_ms")
+    if open_value is None:
+        raise TradingError("BAR_OPEN_TIME_REQUIRED")
+    open_ms = int(open_value)
+    close_ms = open_ms + interval_ms
+    supplied_close = [
+        int(value)
+        for value in (
+            data.available_at_ms,
+            metadata.get("available_at_ms"),
+            metadata.get("close_time_ms"),
+        )
+        if value is not None
+    ]
+    if not supplied_close:
+        raise TradingError("BAR_CLOSE_TIME_REQUIRED")
+    if any(value != close_ms for value in supplied_close):
+        raise TradingError("BAR_TIMESTAMP_INCONSISTENT")
+    if data.kline_close is None:
+        raise TradingError("BAR_CLOSE_PRICE_REQUIRED")
+    if not data.kline_close.is_finite() or data.kline_close <= 0:
+        raise TradingError("INVALID_BAR_CLOSE")
+    bar_id = str(metadata.get("bar_id") or "").strip() or (
+        f"bar:{data.symbol}:{interval}:{open_ms}"
+    )
+    return {
+        "open_ms": open_ms,
+        "close_ms": close_ms,
+        "available_ms": close_ms,
+        "bar_id": bar_id,
+        "interval": interval,
+    }
+
+
 class UnifiedStrategyRunner:
     def __init__(
         self,
@@ -64,10 +138,17 @@ class UnifiedStrategyRunner:
         plugin,
         instruments: dict[str, tuple[str, str]],
         strategy_id: str = "",
+        book_id: str = "",
         warmup_events: int = 0,
         warmup_source=None,
         on_block=None,
+        allow_ticker_input: bool | None = None,
     ):
+        # Deprecated constructor compatibility for callers written against the
+        # previous phase-3 boundary. It is not stored and cannot enable ticker
+        # decisions: all non-KLINE observations are refused unconditionally.
+        if allow_ticker_input not in (None, False):
+            raise TradingError("TICKER_INPUT_IS_NOT_CONFIGURABLE")
         if not deployment_id or not instruments:
             raise ValueError("Strategy deployment and instruments are required")
         if warmup_events < 0:
@@ -75,6 +156,12 @@ class UnifiedStrategyRunner:
         self.runtime = runtime
         self.deployment_id = deployment_id
         self.strategy_id = strategy_id
+        # ``book_id`` is the stable asset-isolation key, never the deployment.
+        # It defaults to the frozen ``book:{strategy_id}`` convention.
+        self.book_id = book_id or (book_ledger.book_id_for(strategy_id) if strategy_id else "")
+        if not self.book_id:
+            raise ValueError("STRATEGY_BOOK_ID_REQUIRED")
+        book_ledger.validate_strategy_book_id(self.book_id)
         self.plugin = plugin
         self.instruments = dict(instruments)
         self.plugin_warmup = describe_plugin_warmup(plugin)
@@ -89,6 +176,10 @@ class UnifiedStrategyRunner:
         self._on_block = on_block
         self._observations = 0
         self._symbol_observations: dict[str, int] = {}
+        # Replayed duplicate bars must never inflate the warm-up count, and a
+        # late older bar must never be fed after a newer one for that symbol.
+        self._seen_observations: set[str] = set()
+        self._last_bar_open_ms: dict[str, int] = {}
         self._state = WarmupState.PENDING if self.stateful else WarmupState.WARM
         self._reason = ""
         if self.stateful and self.warmup_events <= 0:
@@ -119,16 +210,41 @@ class UnifiedStrategyRunner:
         self._observations += 1
         self._symbol_observations[symbol] = self._symbol_observations.get(symbol, 0) + 1
 
+    def _instrument_state(self, symbol: str) -> WarmupState:
+        """Per-instrument warm-up state used to decide the runner-wide gate."""
+        if self._state is WarmupState.BLOCKED:
+            return WarmupState.BLOCKED
+        if not self.stateful:
+            return WarmupState.WARM
+        count = self._symbol_observations.get(symbol, 0)
+        if self.warmup_events > 0 and count >= self.warmup_events:
+            return WarmupState.WARM
+        return WarmupState.WARMING_UP if count else WarmupState.PENDING
+
+    @property
+    def instrument_warmup(self) -> dict[str, dict[str, Any]]:
+        """Per-instrument count and state; every entry must be WARM."""
+        return {
+            symbol: {
+                "state": self._instrument_state(symbol).value,
+                "observations": count,
+                "required": self.warmup_events,
+            }
+            for symbol, count in self._symbol_counts().items()
+        }
+
     def _refresh_warm_state(self) -> None:
         """Warm only when every instrument rebuilt its indicator state."""
         if not self.stateful or self._state is WarmupState.BLOCKED:
             return
         counts = self._symbol_counts()
-        if counts and all(count >= self.warmup_events for count in counts.values()):
+        if counts and all(self._instrument_state(symbol) is WarmupState.WARM for symbol in counts):
             self._state = WarmupState.WARM
             self._reason = ""
-        elif self._state is WarmupState.PENDING:
+        elif any(count > 0 for count in counts.values()):
             self._state = WarmupState.WARMING_UP
+        else:
+            self._state = WarmupState.PENDING
 
     @property
     def warmup_state(self) -> WarmupState:
@@ -182,10 +298,36 @@ class UnifiedStrategyRunner:
             if not history:
                 await self._fail("STRATEGY_WARMUP_HISTORY_EMPTY")
                 return False
+            now_ms = _runtime_clock_ms(self.runtime)
+            validated: list[tuple[dict[str, Any], MarketData]] = []
+            seen: set[str] = set()
+            for item in history:
+                try:
+                    window = _validated_closed_bar(item)
+                except TradingError as exc:
+                    code = str(exc)
+                    if code == "NON_BAR_MARKET_DATA":
+                        await self._fail("STRATEGY_WARMUP_NON_BAR_DATA")
+                    elif code == "UNFINISHED_BAR":
+                        await self._fail("STRATEGY_WARMUP_UNFINISHED_BAR")
+                    else:
+                        await self._fail(f"STRATEGY_WARMUP_INVALID_BAR:{code}")
+                    return False
+                if window["available_ms"] > now_ms:
+                    # A replayed bar that has not closed yet is invisible.
+                    await self._fail("STRATEGY_WARMUP_BAR_NOT_AVAILABLE")
+                    return False
+                key = window["bar_id"]
+                if key in seen:
+                    # Duplicate/replayed history must not rebuild extra state.
+                    continue
+                seen.add(key)
+                validated.append((window, item))
+            validated.sort(key=lambda pair: (pair[1].symbol, pair[0]["open_ms"]))
             # The window must cover every instrument; a partial window would
             # leave one symbol's indicators cold.
             available: dict[str, int] = {}
-            for item in history:
+            for _, item in validated:
                 available[item.symbol] = available.get(item.symbol, 0) + 1
             short = {
                 symbol: available.get(symbol, 0)
@@ -196,9 +338,11 @@ class UnifiedStrategyRunner:
                 await self._fail(f"STRATEGY_WARMUP_HISTORY_INCOMPLETE:{short}")
                 return False
             try:
-                for item in history:
+                for window, item in validated:
                     await self._feed(item)
                     self._count(item.symbol)
+                    self._seen_observations.add(window["bar_id"])
+                    self._last_bar_open_ms[item.symbol] = window["open_ms"]
             except Exception as exc:
                 await self._fail(f"STRATEGY_WARMUP_FAILED:{exc}")
                 return False
@@ -255,10 +399,15 @@ class UnifiedStrategyRunner:
             raise TradingError("MARKET_TIMESTAMP_MUST_BE_UTC_AWARE")
         if not data.price.is_finite() or data.price <= 0:
             raise TradingError("INVALID_MARKET_PRICE")
-        if data.data_type == MarketDataType.KLINE and (
-            data.metadata.get("complete") is False or data.metadata.get("is_closed") is False
-        ):
-            raise TradingError("UNFINISHED_BAR")
+        # The new-stack runner admits fully specified closed KLINE only.
+        # Non-bar types, missing fields, contradictory timestamps and missing
+        # closes are refused before the plugin or any account effect.
+        window = _validated_closed_bar(data)
+        decision_at_ms = _runtime_clock_ms(self.runtime, data)
+        if window["available_ms"] > decision_at_ms:
+            # A bar is invisible before it closes. Refuse before the plugin or
+            # any account side effect sees it.
+            raise TradingError("BAR_NOT_AVAILABLE_YET")
         fingerprint = _hash(
             {
                 "symbol": data.symbol,
@@ -276,6 +425,8 @@ class UnifiedStrategyRunner:
         decision_id = event_id or data.metadata.get("event_id") or fingerprint
         command_id = self.command_id_for(decision_id)
         trace = f"{decision_id}:{fingerprint}"
+        observation_key = window["bar_id"]
+        open_ms = window["open_ms"]
         async with self._lock:
             # Accepted decisions survive runner/process restart. Returning the
             # existing command never re-invokes a stateful plugin or venue IO.
@@ -297,6 +448,14 @@ class UnifiedStrategyRunner:
             view = await self._ready()
             if self._state is WarmupState.BLOCKED:
                 raise NotReady(self._reason or "STRATEGY_WARMUP_BLOCKED")
+            if observation_key and observation_key in self._seen_observations:
+                # The same completed bar replayed by a polling feed rebuilds no
+                # extra state and never yields a second decision.
+                return None
+            if open_ms is not None and open_ms < self._last_bar_open_ms.get(data.symbol, -1):
+                # Out-of-order older bars are stale; never feed them after a
+                # newer observation for the same instrument.
+                return None
             # A restarted plugin starts with empty indicator state. Feed it the
             # configured number of observations before any output may trade;
             # the gate is per-runner, so a restart warms up again.
@@ -312,6 +471,10 @@ class UnifiedStrategyRunner:
                     await result
             signal = await self._feed(data)
             self._count(data.symbol)
+            if observation_key:
+                self._seen_observations.add(observation_key)
+            if open_ms is not None:
+                self._last_bar_open_ms[data.symbol] = open_ms
             self._refresh_warm_state()
             if not was_warm:
                 # Warm-up observations rebuild state only; they never trade.
@@ -320,12 +483,30 @@ class UnifiedStrategyRunner:
                 return None
             if signal.symbol != data.symbol:
                 raise TradingError("STRATEGY_SIGNAL_INSTRUMENT_MISMATCH")
+            # The signal was produced by a closed bar (enforced above), so the
+            # reference price is the bar close at its close time. The bar
+            # identity travels with the command for audit.
             return await self._submit_signal(
-                signal, decision_id=decision_id, reference_price=data.price, trace=trace
+                signal,
+                decision_id=decision_id,
+                reference_price=(data.kline_close if data.kline_close is not None else data.price),
+                reference_price_source=PRICE_SOURCE_MARKET_CLOSED_BAR,
+                reference_at_ms=window["available_ms"],
+                decision_at_ms=decision_at_ms,
+                price_reference_id=window["bar_id"],
+                trace=trace,
             )
 
     async def submit_signal(
-        self, signal: Signal, *, decision_id: str, reference_price: Decimal
+        self,
+        signal: Signal,
+        *,
+        decision_id: str,
+        reference_price: Decimal,
+        reference_price_source: str,
+        reference_at_ms: int,
+        decision_at_ms: int,
+        price_reference_id: str = "",
     ) -> CommandReceipt | None:
         """Retry with the same decision ID; changed economic parameters conflict."""
         if self._state is WarmupState.BLOCKED:
@@ -333,11 +514,27 @@ class UnifiedStrategyRunner:
         if not self.warm:
             raise NotReady("STRATEGY_WARMUP_NOT_COMPLETE")
         return await self._submit_signal(
-            signal, decision_id=decision_id, reference_price=reference_price, trace=decision_id
+            signal,
+            decision_id=decision_id,
+            reference_price=reference_price,
+            reference_price_source=reference_price_source,
+            reference_at_ms=reference_at_ms,
+            decision_at_ms=decision_at_ms,
+            price_reference_id=price_reference_id,
+            trace=decision_id,
         )
 
     async def _submit_signal(
-        self, signal: Signal, *, decision_id: str, reference_price: Decimal, trace: str
+        self,
+        signal: Signal,
+        *,
+        decision_id: str,
+        reference_price: Decimal,
+        reference_price_source: str,
+        reference_at_ms: int,
+        decision_at_ms: int,
+        trace: str,
+        price_reference_id: str = "",
     ) -> CommandReceipt | None:
         side = getattr(signal.signal_type, "value", signal.signal_type)
         if side == "NONE":
@@ -349,20 +546,28 @@ class UnifiedStrategyRunner:
         if signal.symbol not in self.instruments:
             raise TradingError("UNKNOWN_STRATEGY_INSTRUMENT")
         base, quote = self.instruments[signal.symbol]
-        order_type = signal.metadata.get("order_type", "MARKET")
-        price = signal.price if order_type == "LIMIT" else reference_price
-        command = PlaceOrderCommand(
+        # The strategy declares the order type explicitly on the Signal; the
+        # metadata dict is context, never an order-spec source.
+        spec = build_order_spec(
+            symbol=signal.symbol,
+            side=side,
+            order_type=signal.order_type,
+            qty=signal.quantity,
+            limit_price=signal.price,
+            reference_price=reference_price,
+            reference_price_source=reference_price_source,
+            reference_at_ms=reference_at_ms,
+            decision_at_ms=decision_at_ms,
+            time_in_force=signal.time_in_force,
+            book_id=self.book_id,
+            price_reference_id=price_reference_id,
+        )
+        command = spec.to_command(
             command_id=self.command_id_for(decision_id),
             account_id=self.runtime.account_id,
-            symbol=signal.symbol,
             base_asset=base,
             quote_asset=quote,
-            side=side,
-            qty=Decimal(str(signal.quantity)),
-            price=Decimal(str(price)),
             deployment_id=self.deployment_id,
-            order_type=order_type,
-            time_in_force=signal.metadata.get("time_in_force", "GTC"),
             decision_id=trace,
         )
         return await self.runtime.place(command, actor=f"strategy:{self.deployment_id}")

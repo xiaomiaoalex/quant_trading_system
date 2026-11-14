@@ -1,0 +1,381 @@
+{
+  "workflow_version": 3,
+  "task": "cicd-hardening",
+  "updated_at": "2026-11-11T23:27:45+08:00",
+  "branch": "integration/cicd-foundation",
+  "base_commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+  "workspace": "D:/Code of Python/quant_trading_system/.worktrees/cicd-foundation-integration",
+  "workspace_id": "wks_4625a73009a312e2",
+  "root_worktree": "D:/Code of Python/quant_trading_system",
+  "foundation_write_owner_agent_id": "4c592f2d-2019-4f36-877a-c3314ccc9978",
+  "parent_agent_id": "e36d6105-e0bb-4f27-bbbd-225b5a55da2e",
+  "server_id": "srv_3QDZImHo82uk",
+  "state": "READY_TO_COMMIT",
+  "implementation_commit": "ed3ac61c6f142783a8862d6c4f40e66796cbb904",
+  "implementation_commit_tree": "654019f8d5cb854d8118a0ba2ef4856f3b244d8a",
+  "integration_handoff": "artifacts/cicd/integration-20261111/handoff.json",
+  "workspace_frozen": true,
+  "write_owner": {
+    "agent_id": "e36d6105-e0bb-4f27-bbbd-225b5a55da2e",
+    "role": "parent_coordinator",
+    "scope": "Final acceptance metadata, exact-manifest staging and authorized local commits in isolated worktree; implementation/tests/reports remain frozen",
+    "source_write_lease_released": true,
+    "ownership_transfer_message_id": "8f1118e5-49c5-4beb-92a0-e2661cb22242"
+  },
+  "agents": {
+    "engineer": "c4f927bf-7b6b-4747-af1a-9f2d83fd98f1",
+    "tester": "46c13f7b-7515-49e8-aa28-2e0ae85b5173",
+    "reviewer": "70c65a21-157c-46f1-b9bd-ee733d293087"
+  },
+  "engineer_profile": {
+    "profile_id": "agent_profile_implementer_minimax",
+    "provider": "claude",
+    "model": "claude-opus-5-5",
+    "modeId": "auto",
+    "thinkingOptionId": "xhigh",
+    "verified_via_list_profiles": true
+  },
+  "notifications": {
+    "parent_to_engineer_notify_on_finish": false,
+    "routine_results_recipient": "engineer",
+    "engineer_to_parent": ["three_attempt_escalation", "phase_final_handoff"],
+    "polling": false
+  },
+  "phase": "cicd-foundation-integration",
+  "acceptance_source": "docs/CI_CD_IMPROVEMENT_RFC.md",
+  "work_order": "D:/Code of Python/quant_trading_system/artifacts/cicd/integration-20261111/parent-integration-work-order.md",
+  "artifact_directory": "artifacts/cicd/integration-20261111",
+  "required_acceptance": ["C1", "C2", "C3", "C4", "C5", "C6"],
+  "required_review_gates": ["G1", "G2", "G3", "G4", "G5", "G6"],
+  "integration": {
+    "target_branch": "feat/foundation-refactor",
+    "status": "accepted_ready_for_merge_commit_and_target_fast_forward",
+    "foundation_readiness_message_id": "f9d194bf-5fa7-40b2-9850-2a7bf64cb40c",
+    "foundation_parent": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+    "cicd_parent": "56577c78cccec7a91fca1678df7b0a27593f0f28",
+    "merge_base": "c6fe450260eeb59d46c9caee591fb1625510b443",
+    "merge_commit": null,
+    "target_fast_forwarded": false,
+    "independent_local_commit_may_proceed": true,
+    "requires_foundation_phase6_commit_and_released_write_lease": true,
+    "acknowledgement_message_id": "c7b3ba81-0d61-41f8-8ea0-5980cae551a8",
+    "foundation_parent_agent_id": "18e99d90-33f5-41f9-8a2f-672d109886bb",
+    "main_via_pr_only": true,
+    "retest_after_integration": true,
+    "merged_source_retested": true,
+    "last_observed_foundation": {
+      "observed_at": "2026-11-11T23:27:45+08:00",
+      "phase": 6,
+      "state": "PHASE_COMPLETE",
+      "workspace_frozen": true,
+      "source_write_lease_released": true,
+      "last_completed_commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2"
+    }
+  },
+  "integration_final_acceptance": {
+    "overall": "pass",
+    "handoff_message_id": "dfedc837-19b4-40cb-ae52-ab2550484182",
+    "source_digest_sha256": "28b4920f24d2441d37c09c17f1ea0f69753f73f0a014e752d88d2896fa930882",
+    "source_files": 71,
+    "snapshot": "artifacts/cicd/integration-20261111/source-snapshot.json",
+    "source_manifest": "artifacts/cicd/integration-20261111/source-files.txt",
+    "parent_report": "artifacts/cicd/integration-20261111/parent-verification/parent-final-acceptance.json",
+    "reviewer_report": "artifacts/cicd/integration-20261111/reviewer-syntax-report-final.md",
+    "tester_report": "docs/CI_CD_FOUNDATION_INTEGRATION_SYNTAX_TEST_REPORT.md",
+    "blocking_findings": [],
+    "closed_findings": [
+      "CIINT-P1-REQUIRED-GUARD-CAN-SKIP-GREEN",
+      "CIINT-P2-WINDOWS-REQUIRED-JOB-USES-INCOMPLETE-LOCK"
+    ],
+    "test_evidence": {
+      "offline_p0": {"passed": 3636, "path": "repair-tester/offline-p0.xml"},
+      "windows_guard": {"passed": 18, "path": "repair-tester/guard-real.xml"},
+      "syntax_ci_tools": {"passed": 13, "path": "reviewer-syntax/junit-ci-tools-r.xml"},
+      "research_ai": {"passed": 217, "path": "reviewer-live/F-research-ai.xml", "scope": "Earlier merged-source run; unaffected by the subsequent guard-only fixes"},
+      "postgres": {"passed": 180, "path": "reviewer-live/F-postgres.xml", "scope": "Earlier merged-source run; unaffected by the subsequent guard-only fixes"},
+      "coverage": {"percent": 80.21, "floors_passed": 10, "path": "coverage.xml", "scope": "Earlier merged-source measurement; production modules unchanged by the guard-only fixes"},
+      "required_failures_errors_skips": 0,
+      "test_groups_overlap_do_not_sum": true,
+      "manifest_test_files": 236,
+      "parent_actual_yaml_run": {"parse_errors": 0, "positive_exit": 0, "positive_tests": 18, "negative_exit": 1, "negative_skips": 6, "reports_restored": true}
+    },
+    "delivered_files": 79,
+    "excluded_generated_reports": [
+      "reports/junit-phase6-guard.xml",
+      "reports/junit-phase6-guard.json"
+    ],
+    "generated_report_archive": "artifacts/cicd/integration-20261111/parent-verification/archived-junit-phase6-guard.*",
+    "unexecuted": [
+      "Remote GitHub Actions and ruleset migration",
+      "GHCR publication and remote SBOM/Trivy",
+      "Actual released GHCR digest startup smoke",
+      "Protected Demo deployment and real-host preflight",
+      "Current merged-version Binance Demo E2E and new continuous 24h observation",
+      "Remote DR/rollback drills",
+      "Standalone local replay of the docker version preflight step"
+    ],
+    "demo_is_highest_required_environment": true,
+    "testnet_required": false
+  },
+  "final_acceptance": {
+    "overall": "pass",
+    "scope": "CI/CD implementation and local verification; remote release and Demo runtime acceptance remain unexecuted",
+    "engineer_handoff_message_id": "1c3e729f-d9fb-40c6-a4fc-5a355acec5c9",
+    "handoff": "artifacts/cicd/parentfix2-r3-final-handoff.json",
+    "parent_report": "artifacts/cicd/parent-verification-20261105/parent-final-acceptance.json",
+    "source_digest_sha256": "cd9f27706386c29441e6b9e5b01a33b119af1b6a0d1630c946e93d114aa16a6c",
+    "source_files": 69,
+    "snapshot": "artifacts/cicd/source-snapshot.json",
+    "snapshot_sha256": "7e23e72aed79dab97c5d37516f58402186ed2cd2f736b3c5abd4cae536ab343b",
+    "source_manifest": "artifacts/cicd/source-files.txt",
+    "operational_documents_outside_source_digest": [
+      "docs/CI_CD_INDEPENDENT_TEST_REPORT.md",
+      "docs/CI_CD_PARENTFIX2_INDEPENDENT_TEST_REPORT.md",
+      "docs/CI_CD_PARENTFIX_INDEPENDENT_TEST_REPORT.md",
+      "docs/CI_CD_WORKFLOW_STATE.json",
+      "docs/CI_CD_WORK_ORDER.md"
+    ],
+    "expected_delivery_files": 74,
+    "line_endings": "Source digest describes reviewed working-file bytes. Git text=auto/core.autocrlf=input may normalize CRLF to LF; staged blobs must match after only this normalization.",
+    "tester_reports": [
+      {
+        "path": "docs/CI_CD_INDEPENDENT_TEST_REPORT.md",
+        "overall": "pass",
+        "sha256": "b2b3380905aedf0d6619e7f72378f857eaa9b12000e629418dfb96b5e4123d61"
+      },
+      {
+        "path": "docs/CI_CD_PARENTFIX_INDEPENDENT_TEST_REPORT.md",
+        "overall": "pass",
+        "sha256": "37aaf33e8ba9358db548b7b21fa1f9c25faddc027b1791451b02c9ee36126130"
+      },
+      {
+        "path": "docs/CI_CD_PARENTFIX2_INDEPENDENT_TEST_REPORT.md",
+        "overall": "pass",
+        "sha256": "62df4aea08849df56645b80b7908b71b778e78493d59db68dc3c680f640f582d"
+      }
+    ],
+    "reviewer_report": {
+      "path": "artifacts/cicd/reviewer-reports/parentfix2-r3-pass.md",
+      "report_id": "R3-REVIEW-20261105-01",
+      "overall": "pass",
+      "sha256": "f4ca905722f0b117098f9ad1220c0ef2310764bb3c92f2164bb14e463ee4ea69"
+    },
+    "blocking_findings": [],
+    "closed_parent_findings": ["F-P1", "F-P2", "F-P3", "F-P4", "F-P5", "F-P6", "F-P7", "F-P8"],
+    "final_regression": {
+      "evidence_directory": "artifacts/cicd/raw/reviewer3-exec",
+      "offline": {"junit": "R3b-offline.xml", "passed": 3560},
+      "p0": {"junit": "R3b-p0.xml", "passed": 367},
+      "research_ai": {"junit": "R3b-research-ai.xml", "passed": 252},
+      "postgres": {"junit": "R3b-postgres.xml", "passed": 261},
+      "parentfix2": {"junit": "junit-parentfix2-r3.xml", "passed": 112},
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "counts_overlap_do_not_sum": true,
+      "test_manifest_files": 263,
+      "test_manifest_warnings": [],
+      "scoped_static_checks": "black/isort/mypy (13 CI scripts)/core-no-io passed"
+    },
+    "observer_parent_probe": {
+      "path": "artifacts/cicd/parent-verification-20261105/observer_initialization_probe.py",
+      "finding": "F-P1-STRICT-24H-NOT-FIXED",
+      "attempt": 3,
+      "status": "closed",
+      "exit_code": 0,
+      "samples": 1441,
+      "actual_span_seconds": 86400.0,
+      "network": false,
+      "filesystem_writes": false,
+      "real_demo_window": false
+    },
+    "coverage_evidence": {
+      "path": "artifacts/cicd/raw/reviewer2-exec/G4-coverage.xml",
+      "round": "R2; not a new R3 coverage run",
+      "line_coverage_percent": 79.74,
+      "floors_passed": 12
+    },
+    "unexecuted": [
+      "Remote GitHub Actions runs and ruleset migration",
+      "GHCR publish and remote SBOM/Trivy",
+      "Actual released GHCR digest startup smoke",
+      "Protected Demo deployment and real-host preflight",
+      "Current-digest Binance Demo E2E and real continuous 24h observation",
+      "Remote DR/rollback evidence and real Demo-host database collection",
+      "Production and real-funds operations"
+    ],
+    "testnet_required": false,
+    "local_commit_authorized": true,
+    "implementation_commit": "ed3ac61c6f142783a8862d6c4f40e66796cbb904",
+    "implementation_commit_verified": true,
+    "commit_evidence": "artifacts/cicd/parent-verification-20261105/parent-commit-evidence.json"
+  },
+  "parent_authority": "User explicitly requested a separate branch and merge after completion; final local commit/merge requires the project delivery workflow and preserved main-branch PR policy.",
+  "permissions": {
+    "local_ci_changes": true,
+    "isolated_test_resources": true,
+    "real_account_operations": false,
+    "production_deployment": false,
+    "testnet_required": false,
+    "demo_is_highest_acceptance_environment": true,
+    "remote_ruleset_changes": "Prepare a reviewable migration; actual updates remain subject to hosting permissions and verified required-check availability.",
+    "parent_local_commit_after_review": true,
+    "push": "CI/CD branch only, after verified delivery; authorized by user request to merge after completion.",
+    "merge_target": "feat/foundation-refactor after coordinating its write owner; main only through PR without bundling unaccepted foundation work.",
+    "merge_main_directly": false,
+    "foundation_phase6_files": false,
+    "child_git_mutations": false,
+    "permission_or_acl_expansion": false
+  },
+  "required_route": "engineer implementation -> independent tester -> fresh read-only reviewer -> coordinator final verification",
+  "same_finding_attempt_limit": 3,
+  "excluded_paths": [
+    ".workbuddy/",
+    ".worktrees/",
+    "workflow/",
+    "docs/FOUNDATION_WORKFLOW_STATE.json",
+    "artifacts/foundation/"
+  ],
+  "history": [
+    {
+      "event": "isolated_worktree_created",
+      "branch": "feature/ci-cd-hardening",
+      "base_commit": "c6fe450260eeb59d46c9caee591fb1625510b443",
+      "input_documents_copied_and_hash_verified": [
+        "docs/CI_CD_IMPROVEMENT_RFC.md",
+        "docs/UNIFIED_TRADING_ACCEPTANCE.md",
+        "docs/UNIFIED_TRADING_RUNBOOK.md"
+      ],
+      "root_source_files_preserved": true
+    },
+    {
+      "event": "engineer_dispatched",
+      "agent_id": "c4f927bf-7b6b-4747-af1a-9f2d83fd98f1",
+      "status": "running",
+      "workspace_id": "wks_ec1aad545fcca404",
+      "work_order_sha256": "e3c0fb841b33b4589142e11690088bce9d2ec117b4b675619e7f8ba79ec25e57",
+      "notify_on_finish": false
+    },
+    {
+      "event": "parent_final_handoff_rejected_for_repair",
+      "engineer_handoff_message_id": "ca5ba3ad-ecb5-4af6-ba0b-0beba8efc954",
+      "repair_request_message_id": "8aba67c3-3b34-4cb3-a5a7-5fb3f40070a6",
+      "reviewed_source_digest": "4793213c44bf831b337ca43fd4810aa37bb10f98dbaed7dc08cb7608040c45d5",
+      "commit_created": false,
+      "verification_report": "artifacts/cicd/parent-verification-20261104/parent-verification.json",
+      "blocking_findings": [
+        "F-P1-STRICT-24H-NOT-FIXED",
+        "F-P2-RELEASE-BINDING-SELF-DECLARED",
+        "F-P3-DEPLOY-NO-REAL-HEALTH-OR-CONCURRENCY-GUARD",
+        "F-P4-RELEASE-BUILD-MISSING-STARTUP-PROOF",
+        "F-P5-DEMO-EVIDENCE-UNSAFE-ARBITRARY-CHECKOUT",
+        "F-P6-EXTERNAL-ALERT-NOT-WIRED",
+        "F-P7-SAFETY-METRICS-CAN-SILENTLY-DISAPPEAR",
+        "F-P8-RELEASE-MANIFEST-MISSING-EVIDENCE-NOT-REJECTED"
+      ],
+      "required_route": "engineer repair -> independent retest -> fresh read-only review -> parent final verification"
+    },
+    {
+      "event": "parent_repair_handoff_rejected_for_boundary_failures",
+      "engineer_handoff_message_id": "634faf93-0677-41a4-a331-7b1af0b2bd46",
+      "reviewed_source_digest": "1f62fa710923a54e097355d7f40fe9d313ea73352dcc84e53e744e77ce9e052c",
+      "source_files_verified": 62,
+      "commit_created": false,
+      "verification_report": "artifacts/cicd/parent-verification-20261105/parent-verification.md",
+      "blocking_findings_reopened": [
+        "F-P1-STRICT-24H-NOT-FIXED",
+        "F-P2-RELEASE-BINDING-SELF-DECLARED",
+        "F-P3-DEPLOY-NO-REAL-HEALTH-OR-CONCURRENCY-GUARD",
+        "F-P5-DEMO-EVIDENCE-UNSAFE-ARBITRARY-CHECKOUT",
+        "F-P8-RELEASE-MANIFEST-MISSING-EVIDENCE-NOT-REJECTED"
+      ],
+      "attempt_accounting": "Parent verification rejects the existing first repair; preserve attempt history, do not count this review as a separate repair attempt.",
+      "required_route": "engineer repair -> independent behavioral retest -> fresh read-only review -> parent final verification"
+    },
+    {
+      "event": "parent_round3_verification_one_remaining_boundary",
+      "engineer_handoff_message_id": "5f3019ee-c07e-48b6-8b42-ccef54969109",
+      "reviewed_source_digest": "6590c1e78ed1f8413af9879b8bba5ec10eb227a33f9e751d3c83634a581b3c91",
+      "source_files_verified": 69,
+      "commit_created": false,
+      "verification_report": "artifacts/cicd/parent-verification-20261105/parent-verification-round3.md",
+      "blocking_findings": ["F-P1-STRICT-24H-NOT-FIXED"],
+      "metadata_corrections": ["independent report hash", "delivery report final digest"],
+      "attempt_accounting": "Existing F-P1 attempt 2 remains failed at parent verification; next fix/retest is attempt 3.",
+      "required_route": "scoped engineer repair -> independent retest -> fresh read-only review -> parent final verification"
+    },
+    {
+      "event": "parent_final_acceptance_pass",
+      "recorded_at": "2026-11-05T17:42:02+08:00",
+      "engineer_handoff_message_id": "1c3e729f-d9fb-40c6-a4fc-5a355acec5c9",
+      "parent_acceptance_message_id": "f36a4a9f-df59-4766-bae7-c36e1496a3fd",
+      "reviewed_source_digest": "cd9f27706386c29441e6b9e5b01a33b119af1b6a0d1630c946e93d114aa16a6c",
+      "source_files_verified": 69,
+      "verification_report": "artifacts/cicd/parent-verification-20261105/parent-final-acceptance.json",
+      "latest_reviewer": "995ec7cb-4602-4dab-96f7-9e557709bc38",
+      "overall": "pass",
+      "blocking_findings": [],
+      "f_p1_attempt3": "closed: parent probe records 1441 samples spanning exactly 86400 seconds after nonzero HTTP client initialization",
+      "implementation_frozen": true,
+      "write_owner_transferred_to_parent": true,
+      "commit_created": false,
+      "next_action": "Stage only the 69 reviewed files plus five operational documents and create the authorized independent-branch commit"
+    },
+    {
+      "event": "parent_local_commit_verified",
+      "recorded_at": "2026-11-05T17:49:42+08:00",
+      "commit": "ed3ac61c6f142783a8862d6c4f40e66796cbb904",
+      "parent_commit": "c6fe450260eeb59d46c9caee591fb1625510b443",
+      "tree": "654019f8d5cb854d8118a0ba2ef4856f3b244d8a",
+      "files": 74,
+      "normalized_crlf_files": 41,
+      "normalized_source_digest_sha256": "3e54895f42a33c2a5db4801053f15c15529058bf1b8c00394945a6408f828041",
+      "delivery_blob_manifest_sha256": "a20c0b541cb3768a7714daa16d8aa231b430022eba1af32a41ca6864d579da52",
+      "verification_report": "artifacts/cicd/parent-verification-20261105/parent-commit-evidence.json",
+      "staged_files_verified": true,
+      "worktree_clean_after_commit": true,
+      "pushed": false,
+      "merged": false,
+      "deployed": false,
+      "next_action": "Record the final branch state in a separate metadata commit and wait for the foundation integration boundary"
+    },
+    {
+      "event": "foundation_phase6_ready_and_isolated_integration_started",
+      "recorded_date": "2026-11-11",
+      "readiness_message_id": "f9d194bf-5fa7-40b2-9850-2a7bf64cb40c",
+      "foundation_commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "cicd_commit": "56577c78cccec7a91fca1678df7b0a27593f0f28",
+      "merge_base": "c6fe450260eeb59d46c9caee591fb1625510b443",
+      "root_write_lease_released": true
+    },
+    {
+      "event": "integration_parent_round1_repair_request",
+      "source_digest": "e09ea8b429191e2c5fa3208c90f4040a70fb09a974c201bcba46465d7ea1e836",
+      "handoff_message_id": "51933ce4-6959-47dc-8ecc-ccdb9b812432",
+      "repair_message_id": "2e7e0997-d879-47ac-b39f-f56da0f77fff",
+      "findings": ["CIINT-P1-REQUIRED-GUARD-CAN-SKIP-GREEN", "CIINT-P2-WINDOWS-REQUIRED-JOB-USES-INCOMPLETE-LOCK"],
+      "report": "artifacts/cicd/integration-20261111/parent-verification/parent-verification-r1.md"
+    },
+    {
+      "event": "integration_parent_round2_windows_shell_repair_request",
+      "source_digest": "88ad5b45c31994b30e065f2713fee2a50b66c0d09b5b4dffbcfb746df7645605",
+      "handoff_message_id": "9b0d1c98-dab1-45fe-bc8d-9559046b3376",
+      "repair_message_id": "25c4d70c-c089-4b52-82e5-a5e1e4363419",
+      "ciint_p1_attempt1": "Python checker passed but actual Windows workflow used invalid Bash continuation syntax",
+      "ciint_p2": "closed",
+      "report": "artifacts/cicd/integration-20261111/parent-verification/parent-verification-r2.md"
+    },
+    {
+      "event": "integration_parent_final_acceptance_pass",
+      "recorded_at": "2026-11-11T23:27:45+08:00",
+      "source_digest": "28b4920f24d2441d37c09c17f1ea0f69753f73f0a014e752d88d2896fa930882",
+      "handoff_message_id": "dfedc837-19b4-40cb-ae52-ab2550484182",
+      "acceptance_message_id": "8f1118e5-49c5-4beb-92a0-e2661cb22242",
+      "ciint_p1_attempt2": "closed: parent executed actual YAML run under PowerShell, positive 0 and six-skip negative 1",
+      "ciint_p2": "closed",
+      "blocking_findings": [],
+      "raw_generated_reports_archived_not_committed": true,
+      "next_action": "Create the verified two-parent merge commit, then fast-forward the authorized development branch with user documents preserved"
+    }
+  ]
+}

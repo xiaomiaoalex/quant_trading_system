@@ -10,11 +10,14 @@ AI Strategy Generator Tests
 """
 
 import asyncio
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from insight import code_sandbox as code_sandbox_module
 from insight.ai_audit_log import (
     AIAuditLog,
     AuditEntry,
@@ -31,12 +34,17 @@ from insight.ai_strategy_generator import (
     MockAdapter,
 )
 from insight.code_sandbox import (
+    UNIX_AVAILABLE,
     CodeSandbox,
     DangerousCodeError,
     SandboxConfig,
     SandboxResult,
     SandboxStatus,
 )
+
+# ``resource`` is a stub ``None`` on Windows; the Unix-only integration test is
+# skipped there and the cross-platform tests inject a fake module instead.
+resource = code_sandbox_module.resource
 
 from trader.core.application.strategy_protocol import (
     MarketData,
@@ -80,6 +88,99 @@ def generation_config():
         max_daily_loss=Decimal("100.0"),
         max_orders_per_minute=10,
     )
+
+
+# ==================== Unix resource-limit test doubles ====================
+
+_MIB = 1024 * 1024
+
+
+class _FakeResource:
+    """Minimal stand-in for the Unix-only ``resource`` module.
+
+    Windows has no ``resource`` module, so the sandbox's real limit arithmetic
+    can still be exercised there by injecting this double.
+    """
+
+    RLIMIT_AS = 101
+    RLIMIT_CPU = 102
+    RLIM_INFINITY = -1
+    RUSAGE_SELF = 0
+
+    def __init__(self, as_soft=-1, as_hard=-1, cpu_soft=-1, cpu_hard=-1, cpu_seconds=0.0):
+        self.limits = {
+            self.RLIMIT_AS: (as_soft, as_hard),
+            self.RLIMIT_CPU: (cpu_soft, cpu_hard),
+        }
+        self.cpu_seconds = cpu_seconds
+        self.calls: list[tuple[int, tuple[int, int]]] = []
+
+    def getrlimit(self, kind):
+        return self.limits[kind]
+
+    def setrlimit(self, kind, value):
+        self.calls.append((kind, tuple(value)))
+        self.limits[kind] = tuple(value)
+
+    def getrusage(self, who):
+        return SimpleNamespace(ru_utime=self.cpu_seconds, ru_stime=0.0)
+
+
+class _FakeSignal:
+    """Minimal stand-in for the signal subset the sandbox installs."""
+
+    SIGALRM = 14
+    SIGXCPU = 24
+    SIG_IGN = "SIG_IGN"
+    SIG_DFL = "SIG_DFL"
+    ITIMER_REAL = 0
+
+    def __init__(self, fail_on=()):
+        self.handlers: dict[int, object] = {}
+        self.fail_on = set(fail_on)
+        self.timer = (0.0, 0.0)
+        self.timers: list[tuple[float, float]] = []
+
+    def signal(self, signum, handler):
+        if signum in self.fail_on:
+            raise ValueError("signal only works in main thread of the main interpreter")
+        previous = self.handlers.get(signum, self.SIG_DFL)
+        self.handlers[signum] = handler
+        return previous
+
+    def setitimer(self, which, delay, interval=0.0):
+        previous = self.timer
+        self.timer = (float(delay), float(interval))
+        self.timers.append(self.timer)
+        return previous
+
+    def getitimer(self, which):
+        return self.timer
+
+
+@pytest.fixture
+def fake_unix(monkeypatch):
+    """Force the Unix limit path with a fake resource/signal backend.
+
+    This runs on every platform, so the real limit arithmetic and the
+    apply/restore ordering are covered on Windows too instead of returning
+    green without asserting anything.
+    """
+
+    def _install(fake_resource=None, fake_signal=None, address_space=100 * _MIB):
+        resource_double = fake_resource or _FakeResource()
+        signal_double = fake_signal or _FakeSignal()
+        monkeypatch.setattr(code_sandbox_module, "UNIX_AVAILABLE", True)
+        monkeypatch.setattr(code_sandbox_module, "resource", resource_double)
+        monkeypatch.setattr(code_sandbox_module, "signal", signal_double)
+        monkeypatch.setattr(
+            CodeSandbox,
+            "_current_address_space_bytes",
+            lambda self: address_space,
+        )
+        return resource_double, signal_double
+
+    return _install
 
 
 # ==================== CodeSandbox Tests ====================
@@ -247,6 +348,133 @@ result = Decimal('100.5')
 """
         result = sandbox.execute(code)
         assert result.status == SandboxStatus.SUCCESS
+
+    def test_execution_applies_and_restores_soft_limits(self, sandbox, fake_unix):
+        """Limits are installed for the execution and the originals restored."""
+        fake_resource, _ = fake_unix()
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.SUCCESS, result.error
+
+        # Hard limits are never touched and the original pair is restored.
+        assert fake_resource.limits[fake_resource.RLIMIT_AS] == (-1, -1)
+        assert fake_resource.limits[fake_resource.RLIMIT_CPU] == (-1, -1)
+        assert [kind for kind, _ in fake_resource.calls] == [
+            fake_resource.RLIMIT_AS,
+            fake_resource.RLIMIT_CPU,
+            fake_resource.RLIMIT_CPU,
+            fake_resource.RLIMIT_AS,
+        ]
+        memory_soft, memory_hard = fake_resource.calls[0][1]
+        assert memory_soft == 100 * _MIB + 256 * _MIB
+        assert memory_hard == -1
+
+    def test_execution_restores_limits_after_sandboxed_failure(self, sandbox, fake_unix):
+        """A failing sandbox body must still restore the process limits."""
+        fake_resource, _ = fake_unix()
+        result = sandbox.execute("raise ValueError('boom')")
+        assert result.status == SandboxStatus.RUNTIME_ERROR
+        assert fake_resource.limits[fake_resource.RLIMIT_AS] == (-1, -1)
+        assert fake_resource.limits[fake_resource.RLIMIT_CPU] == (-1, -1)
+
+    def test_partial_guard_initialization_still_restores_limits(self, sandbox, fake_unix):
+        """A failure while installing signal handlers must not leak the limits."""
+        fake_resource, _ = fake_unix(fake_signal=_FakeSignal(fail_on={_FakeSignal.SIGALRM}))
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.RESOURCE_EXCEEDED
+        assert "SANDBOX_TIMEOUT_GUARD_UNAVAILABLE" in result.error
+        assert fake_resource.limits[fake_resource.RLIMIT_AS] == (-1, -1)
+        assert fake_resource.limits[fake_resource.RLIMIT_CPU] == (-1, -1)
+
+    def test_partial_guard_initialization_keeps_the_caller_timer(self, sandbox, fake_unix):
+        """The caller's timer must survive a failed guard installation."""
+        fake_resource, fake_signal = fake_unix(
+            fake_signal=_FakeSignal(fail_on={_FakeSignal.SIGALRM})
+        )
+        fake_signal.timer = (30.0, 0.0)
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.RESOURCE_EXCEEDED
+        assert fake_signal.timer == (30.0, 0.0), "the caller's timer was destroyed"
+
+    def test_unmeasurable_address_space_fails_closed(self, sandbox, monkeypatch):
+        """An unreadable /proc must not silently disable the memory limit."""
+        monkeypatch.setattr(code_sandbox_module, "UNIX_AVAILABLE", True)
+        monkeypatch.setattr(code_sandbox_module, "resource", _FakeResource())
+        monkeypatch.setattr(code_sandbox_module, "signal", _FakeSignal())
+
+        def _boom(self):
+            raise OSError("no /proc")
+
+        monkeypatch.setattr(CodeSandbox, "_current_address_space_bytes", _boom)
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.RESOURCE_EXCEEDED
+        assert "PROCESS_ADDRESS_SPACE_UNKNOWN" in result.error
+
+    def test_existing_stricter_soft_limits_are_not_loosened(self, sandbox, fake_unix):
+        """The sandbox must never raise a tighter limit the caller already set.
+
+        The caller's limit is still workable (above the current address space)
+        but tighter than the sandbox's own budget, so the sandbox has to keep
+        the caller's value instead of widening it.
+        """
+        caller_soft = 100 * _MIB + 64 * _MIB
+        strict = _FakeResource(as_soft=caller_soft, cpu_soft=2)
+        fake_resource, _ = fake_unix(fake_resource=strict)
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.SUCCESS, result.error
+
+        applied = dict(fake_resource.calls[:2])
+        assert applied[fake_resource.RLIMIT_AS][0] <= caller_soft
+        assert applied[fake_resource.RLIMIT_CPU][0] <= 2
+        assert fake_resource.limits[fake_resource.RLIMIT_AS] == (caller_soft, -1)
+        assert fake_resource.limits[fake_resource.RLIMIT_CPU] == (2, -1)
+
+    def test_soft_limit_below_the_current_address_space_is_refused(self, sandbox, fake_unix):
+        """A caller limit already below the address space leaves no room."""
+        fake_resource, _ = fake_unix()
+        fake_resource.limits[fake_resource.RLIMIT_AS] = (50 * _MIB, -1)
+        result = sandbox.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.RESOURCE_EXCEEDED
+        assert "PROCESS_MEMORY_SOFT_LIMIT_BELOW_ADDRESS_SPACE" in result.error
+        assert fake_resource.calls == []
+
+    def test_subsecond_timeout_is_not_truncated(self, fake_unix):
+        """A fractional timeout must arm a timer instead of cancelling it."""
+        _, fake_signal = fake_unix()
+        fast = CodeSandbox(SandboxConfig(timeout_seconds=0.25, max_memory_mb=256))
+        result = fast.execute("result = 1 + 2")
+        assert result.status == SandboxStatus.SUCCESS, result.error
+        assert (0.25, 0.0) in fake_signal.timers
+
+    def test_worker_thread_fails_closed_without_touching_limits(self, sandbox, fake_unix):
+        """A worker thread cannot install the timeout guard: refuse, don't leak."""
+        fake_resource, _ = fake_unix()
+        outcome: dict[str, SandboxResult] = {}
+
+        def _run():
+            outcome["result"] = sandbox.execute("result = 1 + 2")
+
+        worker = threading.Thread(target=_run)
+        worker.start()
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+        assert outcome["result"].status == SandboxStatus.RESOURCE_EXCEEDED
+        assert "SANDBOX_REQUIRES_MAIN_THREAD" in outcome["result"].error
+        assert fake_resource.calls == []
+
+    @pytest.mark.skipif(not UNIX_AVAILABLE, reason="real RLIMIT requires a POSIX platform")
+    def test_execution_restores_real_process_resource_limits(self, sandbox):
+        """Unix integration: the real process limits survive one execution."""
+        before = (
+            resource.getrlimit(resource.RLIMIT_AS),
+            resource.getrlimit(resource.RLIMIT_CPU),
+        )
+        result = sandbox.execute("result = 1 + 2")
+        after = (
+            resource.getrlimit(resource.RLIMIT_AS),
+            resource.getrlimit(resource.RLIMIT_CPU),
+        )
+        assert result.status == SandboxStatus.SUCCESS, result.error
+        assert after == before
 
 
 # ==================== AIAuditLog Tests ====================

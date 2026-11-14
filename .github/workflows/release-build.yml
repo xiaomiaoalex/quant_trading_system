@@ -1,0 +1,161 @@
+name: Release Build
+
+# The image is built once per successful CI Gate run on main and pushed by
+# commit SHA.  The digest recorded in the release manifest is the only image
+# the Demo deployment overlay accepts.
+#
+# Pull requests build the image without pushing and without any release
+# credentials; they cannot publish a digest or a release manifest.
+
+on:
+  workflow_run:
+    workflows: ["CI Gate"]
+    types: [completed]
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-build-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  build-image:
+    name: Build and Publish Immutable Image
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      PUBLISH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout the triggering commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the checkout is clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "WORKTREE_DIRTY: release builds require a clean checkout" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+      - name: Compute image name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR (main releases only)
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push the main release)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.PUBLISH == 'true' }}
+          load: ${{ env.PUBLISH != 'true' }}
+          tags: ${{ env.IMAGE_NAME }}:${{ env.SOURCE_SHA }}
+          build-args: |
+            QTS_REVISION=${{ env.SOURCE_SHA }}
+            QTS_VERSION=${{ env.SOURCE_SHA }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            org.opencontainers.image.version=${{ env.SOURCE_SHA }}
+          # Attestations require a registry push; PR builds only load the image.
+          sbom: ${{ env.PUBLISH == 'true' }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
+
+      - name: Download CI evidence from the triggering run
+        if: env.PUBLISH == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+          path: artifacts/ci
+
+      - name: Scan the built image and write an SBOM
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+        with:
+          image-ref: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE_NAME, steps.build.outputs.digest) || format('{0}:{1}', env.IMAGE_NAME, env.SOURCE_SHA) }}
+          format: cyclonedx
+          output: reports/sbom.cdx.json
+
+      - name: Fail on critical or high image vulnerabilities
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
+        with:
+          image-ref: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE_NAME, steps.build.outputs.digest) || format('{0}:{1}', env.IMAGE_NAME, env.SOURCE_SHA) }}
+          format: sarif
+          output: reports/trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Run fixed-digest isolated Compose startup smoke (main releases only)
+        if: env.PUBLISH == 'true'
+        run: |
+          python scripts/compose_smoke.py \
+            --image "${IMAGE_NAME}@${{ steps.build.outputs.digest }}" \
+            --require-digest \
+            --evidence-dir reports/compose-smoke
+
+      - name: Generate the release manifest (main releases only)
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p reports
+          RELEASE_ID="${SOURCE_SHA::12}-${GITHUB_RUN_ID}"
+          python scripts/release_manifest.py \
+            --release-id "$RELEASE_ID" \
+            --commit "$SOURCE_SHA" \
+            --ref "$GITHUB_REF" \
+            --workflow release-build \
+            --workflow-run "$GITHUB_RUN_ID" \
+            --image-digest "${IMAGE_NAME}@${{ steps.build.outputs.digest }}" \
+            --tree-clean \
+            --junit artifacts/ci/junit-p0.xml \
+            --junit artifacts/ci/junit-offline.xml \
+            --junit artifacts/ci/junit-postgres.xml \
+            --coverage artifacts/ci/coverage.xml \
+            --frontend artifacts/ci/dist \
+            --sbom reports/sbom.cdx.json \
+            --scan reports/trivy.sarif \
+            --startup-smoke reports/compose-smoke/compose-smoke.json \
+            --output reports/release-manifest.json
+
+      - name: Upload release evidence (published main releases only)
+        if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          # One root (reports/) so the downloaded artifact contains
+          # release-manifest.json at its top level together with the
+          # startup smoke evidence; mixing paths would move the common
+          # root to the repository root and relocate the manifest.
+          path: reports/
+          if-no-files-found: error

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from trader.api.trading_app import create_trading_app
+from trader.tests.fakes.research_eligibility import always_eligible, trust_memory_dataset
 from trader.trading.jobs import BacktestApplication, MemoryResearchStore
 
 
@@ -42,7 +43,7 @@ def bars(count: int = 4):
 
 def build_client(store=None, application=None):
     store = store or MemoryResearchStore()
-    application = application or BacktestApplication(store)
+    application = application or BacktestApplication(store, eligibility=always_eligible)
     app = create_trading_app(
         research_store=store,
         research_application=application,
@@ -180,6 +181,7 @@ async def test_retry_conflicts_when_the_run_has_not_failed():
     client, store, application = build_client()
     async with client:
         data = await store.register_dataset(identity(), bars())
+        trust_memory_dataset(store, data["dataset_id"])
         record = await application.submit(
             {
                 "dataset_ids": [data["dataset_id"]],
@@ -207,6 +209,7 @@ async def test_retry_requeues_a_failed_run_and_keeps_the_frozen_manifest():
     client, store, application = build_client()
     async with client:
         data = await store.register_dataset(identity(), bars())
+        trust_memory_dataset(store, data["dataset_id"])
         record = await application.submit(
             {
                 "dataset_ids": [data["dataset_id"]],

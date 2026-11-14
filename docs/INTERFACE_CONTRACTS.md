@@ -2300,7 +2300,7 @@ Performance benchmark projector 属于 Control Plane API -> Service -> Persisten
 
 ### 10.1 API 路由挂载
 
-`trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，以下端点必须出现在主应用路由表中：
+`trader.api.trading_app.create_trading_app()` 必须挂载 `trader.api.routes.performance.router`，以下端点必须出现在 Control 应用路由表中：
 
 - `POST /v1/performance/benchmark/project`
 - `POST /v1/performance/benchmark/config`
@@ -2690,18 +2690,40 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 | `side` | `BUY` \| `SELL` | 现货方向；`SHORT` / `CLOSE_SHORT` 明确拒绝 |
 | `qty` | Decimal | 数量 |
 | `price` | Decimal | 限价或市价支付上界 |
-| `deployment_id` | str | 策略运行实例 |
-| `order_type` | `LIMIT` \| `MARKET` | GTC 限价 / 市价 |
-| `time_in_force` | str | 默认 `GTC` |
+| `deployment_id` | str | 策略运行实例（命令归属，不承担资产隔离） |
+| `order_type` | `LIMIT` \| `MARKET` | 必须显式；无隐式默认 |
+| `time_in_force` | str | 仅 `GTC` |
 | `decision_id` | str | 决策追踪 ID，不参与幂等参数 |
+| `book_id` | str | 稳定策略子账簿 `book:{strategy_id}`；参与经济幂等身份 |
+| `price_source` | str | 显式价格来源；参与经济幂等身份 |
+| `price_at_ms` | int | 价格观测/决策时点（毫秒，>=0）；审计字段，不参与幂等 |
+| `price_reference_id` | str | 市价参考价对应的已收盘 bar / 决策身份（阶段 3）；审计字段，不参与幂等 |
+| `settlement` | str | 结算口径：`QUOTE`（市价买入按 `qty * price` 报价额度结算，交易所决定买到的 base 数量）/ `BASE`（按请求的 base 数量成交）；参与经济幂等身份 |
 
 - `cl_ord_id` 由 `(account_id, command_id)` 确定性派生，首次受理后固定。
 - 同 `command_id` 同经济参数返回原 `CommandReceipt`；同 ID 不同参数返回 `Conflict`。
 - 命令传输状态：`QUEUED`、`SENDING`、`UNKNOWN`、`CONFIRMED`、`FAILED`；与订单业务状态分离。
 - 只有从 `QUEUED` 赢得 `SENDING` CAS 的调用可以发起一次网络下单。
-- 网络超时 / 结果未知进入 `UNKNOWN` 并保留预约；恢复只查询，不自动重发。
+- 网络超时 / 结果未知（`UNKNOWN` / `UNAVAILABLE` / 下单场景的 `NOT_FOUND`）进入 `UNKNOWN` 并保留预约；恢复只查询，不自动重发。
+- 存在未决 `UNKNOWN` PLACE 命令时，`resume_queued` 不发送任何新的 PLACE；新 PLACE 返回 `NotReady("UNKNOWN_COMMAND_PENDING")`。撤单等降低风险的动作仍可发送。
+- `UNKNOWN_COMMAND` 按 `command_id` 定向解除（未决项带 `scope=command_id`）：只有该命令自身的订单被完整快照证明可见、或该命令自身的结果为 `ACCEPTED`/`REJECTED` 时才清除它的阻断；其他命令的成功/失败都不影响它。`UNKNOWN_COMMAND` 不接受操作员命令清除，只能由交易所证据解除。
 - `QUEUED` 表示 `SENDING` 未提交、网络调用确定未发生；恢复可发送一次。中断的 `CONTROL` 命令标为 `UNKNOWN` + `CONTROL_INTERRUPTED`，不自动继续。
 - 撤单 API 返回 `202 + CommandReceipt`；`CONFIRMED` 只表示交易所受理撤单请求，订单只有收到 `CANCELLED` observation 后才显示已撤销。
+- 新订单必须带显式 `book_id`、`order_type`、`price_source`、`price_at_ms`。`trader/trading/order_spec.py`
+  是策略侧唯一规格构造入口；API、回测和适配器复用同一 `PlaceOrderCommand` 校验（`validate_order_command`）。
+  `signal.metadata` 不再决定订单类型或价格来源。
+- 划拨命令 `ALLOCATE`：`command_id + (account_id, book_id, asset, amount, reason)` 幂等；Control 只落
+  `QUEUED`，Execution 在同一账户事务内应用；重复投递不会重复划拨，同 ID 不同金额返回 `Conflict`。
+- 经济幂等身份包含 `book_id`、`price_source` 与 `settlement`；`price_at_ms` 只作审计，重试允许相同价格的不同观测时点。
+- **唯一构造入口**：所有业务下单命令都由 `trader/trading/order_spec.py` 的 `build_order_spec()` /
+  `OrderSpec.to_command()` 构造。策略、Control API、回测共用同一工厂；生产代码里除
+  `store.decode_state()` 的持久化解码外，不得直接构造 `PlaceOrderCommand`。
+  交易所证据重建订单意图走 `order_spec.adopted_venue_command()`：book 与价格来源保持为空，
+  归属仍然未知，不得猜测。
+- **市价买入的结算口径**：报价结算（`QUOTE`）时交易所用 `qty * price` 的报价额度成交，
+  更好的成交价可以换回比 `qty` 更多的 base，因此 base 数量不再以 `qty` 为上界，
+  但报价支出（累计 `execution.qty * execution.price`）不得超过 `qty * price`。
+  `BASE` 口径（历史 bar 模拟器）仍以请求的 base 数量为上界。LIMIT 订单的边界完全不变。
 
 ### 13.2 事实与账务
 
@@ -2719,6 +2741,33 @@ FeatureStore 严格模式（`FeatureStore(strict=True)`）：
 - 同键同内容重复成交是 no-op；同键不同内容是 `EXECUTION_KEY_CONFLICT`，成交数量越界是 `EXECUTION_QUANTITY_CONFLICT`；两者都保存证据并阻断新增风险。
 - 卖出可预约资产 = 已核对资产 − 外部锁定 − 本系统全部 hold；交易所 `locked` 不得再次扣减。
 - 费用以 `fee_asset` 原币种记账；缺少 `fee_asset` 的非零费用必须拒绝。
+- `AccountState.books` 是账户内的稳定分区：`UNALLOCATED` + `book:{strategy_id}`。对每个资产，
+  `account_total == UNALLOCATED + Σ books` 必须在每次提交时成立；`core.assert_book_conservation`
+  在事务内校验，失败即整体回滚。
+- 同一订单的账户层 `state.holds[cl_ord_id]` 与 book 层 `books[book_id].holds[cl_ord_id]` 在同一事务内创建、
+  按成交比例释放、在撤单/拒绝/终态时一起释放；任一层失败都回滚整个账户事务。
+- 归属不明的成交/订单不猜测策略：事实按 `UNALLOCATED` 记账以保持守恒，同时持久化
+  `BOOK_ATTRIBUTION_UNKNOWN` 未决项并阻断新增风险；只有带逐单证据的 `RESOLVE` 才能解除。
+- 报价结算的市价买入按累计报价支出记账：超出 `qty * price` 的成交被拒
+  （`Execution exceeds the market quote budget`），不会静默多记账。
+- **成交释放两层预约的真实口径**：BUY 每笔释放
+  `execution.qty * execution.price`，仅当 `execution.fee_asset == command.quote_asset` 时再加
+  `execution.fee`。admission 的 `fee_rate` 只是预约缓冲，不是实际成交费；BASE/第三币种手续费
+  已在各自币种入账，不释放 quote hold。零费部分成交不得凭空消耗缓冲；账户层与 book 层完全同步。
+- **终态清理覆盖两层**：终态观察、拒绝与剩余释放都按预约归属解析 book 层；迁移订单与
+  仍无归属的订单，其镜像预约在 `UNALLOCATED` 上，必须与账户层一起释放，否则资金会被永久
+  搁浅（`UNALLOCATED` 可用额度被幽灵预约占用）。
+- **quote-settled MARKET BUY 的完成判据**：`booked_qty == command.qty` 不构成 FILLED，
+  也不触发提前清理剩余预约；该订单在**报价预算耗尽**（`booked_quote >= qty * price`，交易所已无预算可花）
+  或交易所终态观察（`FILLED` / `CANCELLED` / `REJECTED` 等）之前保持 PARTIALLY_FILLED，
+  并保留真实剩余 quote 预算与配置缓冲。终态清理只释放真实剩余，不以请求 base 数量为完成目标。
+  LIMIT 与 BASE-settled 的完全成交语义不变。
+- 同一 book 同 symbol 存在**任何未终结订单**时，新的反向命令先拒绝
+  `BOOK_OPPOSITE_ORDER_IN_FLIGHT`；报价结算的市价买入即使 base 已被超额覆盖，
+  在交易所报告终态前仍属于未终结订单。终态订单只有在仍有预约时才继续阻断。
+- 旧快照迁移时，归属仍属 `UNALLOCATED` 的账户层预约在 `UNALLOCATED` 账簿上**镜像**同一经济预约：
+  这是同一笔预留的两层视图，不是第二次资产占用；`book_available` 因此反映真实可用额度。
+  已有策略 book 的预约若缺失，属于缺陷，不会被迁移静默修复。
 
 ### 13.3 交易所端口
 
@@ -2740,6 +2789,9 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 
 - 首份完整快照初始化余额；后续快照先应用新成交事实，再用 `旧余额 + 新成交` 与交易所余额比较。
 - 余额差异、未知外部成交、未知订单、未映射成交进入持久 `unresolved` 并阻断新增风险；人工 `resolve` 才能清除不可自动解释的差异。
+- **余额差异未解释时，交易所余额只是观测**：保存在 `reconciliation.venue_balances`，不得覆盖权威内部余额。差异通过 `AccountRiskView.venue_balances` / `AccountRiskView.balance_differences` 与 `GET /v1/trading/metrics` 的 `venue_balances` / `balance_differences` 查询。
+- `resolve(account_id, code, actor, evidence)` 必须携带解释证据：`kind`、`reference`、`reason` 均为非空字符串；`BALANCE_MISMATCH` 还必须逐资产给出与观测完全一致的 `internal` / `venue` / `difference`。证据一致时记入显式 `external_adjustment` 账目（含证据引用与操作员），再解除阻断；证据缺失、金额不符或账目已变化时保持阻断（`RESOLVE_REQUIRES_EVIDENCE` / `RESOLVE_EVIDENCE_INCOMPLETE` / `RESOLVE_EVIDENCE_AMOUNT_MISMATCH` / `RESOLVE_EVIDENCE_STALE`）。不得伪造无证据的调整分录。
+- 可人工解除的差异码限于 `BALANCE_MISMATCH`、`EXECUTION_KEY_CONFLICT`、`UNKNOWN_EXECUTION`、`UNKNOWN_ORDER`；派生码（`UNKNOWN_COMMAND`、`ORDER_STATE_UNKNOWN`、快照新鲜度）只能由交易所证据解除，操作员命令返回 `RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE`。
 - 不完整分页、旧代际、旧时间戳、私有流不健康、未知 `SENDING/UNKNOWN` 命令都不得把账户恢复为 `READY`。
 - `FILLED` 观测早于逐笔成交时产生 `FILL_OBSERVATION_MISMATCH`；逐笔成交补齐后自动解除。其余关键差异需要人工核对。
 
@@ -2752,16 +2804,22 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 | `GET` | `/v1/auth/me` | 返回会话身份 |
 | `POST` | `/v1/trading/orders` | 下单/策略重试；`202 + CommandReceipt` |
 | `POST` | `/v1/trading/orders/{cl_ord_id}/cancel` | 撤单；`202 + CommandReceipt` |
-| `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` |
+| `POST` | `/v1/trading/control` | 控制命令：`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` / `CANCEL_ALL` / `RECONNECT` / `RESOLVE` |
+| `POST` | `/v1/trading/allocations` | 显式 book 划拨命令（`ALLOCATE`）；`202 + CommandReceipt` |
+| `GET` | `/v1/trading/books?account_id=` | 逐 book 余额、持仓、预约、可用预算、权益与估值完整性 |
 | `GET` | `/v1/commands/{command_id}?account_id=` | 查询命令持久状态 |
 | `GET` | `/v1/trading/orders/{cl_ord_id}?account_id=` | 查询订单与剩余数量 |
-| `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView` |
-| `GET` | `/v1/trading/metrics?account_id=` | UNKNOWN 命令、未补齐成交、余额异常、预约、对账年龄、outbox 积压 |
-| `POST` | `/v1/trading/executions` | 成交事实入口（WS/REST ingress） |
-| `POST` | `/v1/trading/observations` | 订单观测入口 |
-| `POST` | `/v1/trading/reconcile` | 提交完整对账快照 |
-| `POST` | `/v1/trading/resolve/{code}?account_id=` | 人工清除已核实的差异 |
+| `GET` | `/v1/trading/accounts/{account_id}/risk` | `AccountRiskView`，含 `venue_balances` 与 `balance_differences` |
+| `GET` | `/v1/trading/metrics?account_id=` | UNKNOWN 命令、未补齐成交、余额异常、预约、对账年龄、outbox 积压、`venue_balances`、`balance_differences` |
 
+- **控制面不暴露事实写入口**：`POST /v1/trading/executions`、`POST /v1/trading/observations`、
+  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}` 已从 Control API 移除。
+  事实只能由 Execution 进程内部的 service / 端口调用写入；Control 进程不装配交易所 IO，也不写账户经济状态。
+- `RESOLVE` 是操作员命令而不是事实入口：请求体 `{action:"RESOLVE", code, evidence}` 只在账户事务内落
+  `QUEUED` 控制命令（`code` 与 `evidence` 参与命令幂等哈希），由 Execution 进程在 `resume_queued` 中
+  按 13.4 的证据规则校验并应用；成功 `CONFIRMED`，证据失败 `FAILED` 且账户保持阻断。
+  控制进程只做静态检查（`RESOLVE_REQUIRES_CODE` / `RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE` /
+  `RESOLVE_REQUIRES_EVIDENCE`），不判定任何账户事实。
 - 写操作必须携带会话 Cookie 与 `x-csrf-token`。
 - 审计身份只来自会话；请求体 `actor` / `requested_by` 不改变身份。
 - 未登录返回 `401`；CSRF/Origin 失败返回 `403`；登录限流返回 `429`。
@@ -2770,6 +2828,8 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 - `/health/live`、`/health/ready`、`/health/trading` 分别表示进程存活、API 可服务、交易就绪；交易未就绪返回 `503 + reasons`。
 - `CANCEL_ALL` 必须为每个活动订单调用同一 `cancel()` 执行入口，子命令 ID 为 `{control_command_id}:{cl_ord_id}`；任一子撤单 `UNKNOWN` 时控制命令保持 `UNKNOWN`，不得显示全部已撤销。
 - `BLOCK_NEW_RISK` 只阻断新增风险，查询和撤单仍可用；`RESUME_NEW_RISK` 解除人工阻断，但不能覆盖对账、余额或未知订单差异。
+- `ALLOCATE` 与 `RESOLVE` 都是持久命令：控制面只做结构检查并落 `QUEUED`，执行面在账户事务中校验余额/证据后应用。
+  划拨不改变账户总额，未划拨资产始终保留在 `UNALLOCATED`。
 
 ### 13.6 运行拓扑
 
@@ -2785,8 +2845,15 @@ Binance 字段 `clientOrderId`、`orderId`、`executedQty` 只能在 `trader/ada
 明确前不得确认父命令；恢复不会把 `QUEUED` 控制动作当作未知发送。
 控制面使用 PG 有效租约 owner/token 与账户 `control.runtime` 元数据交叉验证就绪，
 恢复未完成、所有者未对齐或租约无效时新增风险返回 503。
-旧 `trader.api.main` 在退休生命周期期间拒绝 `/v1/killswitch` 写操作，返回
-`503 LEGACY_EXECUTION_RETIRED` 且不进入旧控制副作用或投影撤单；GET 查询保留。
+新栈准入风控只有 `SpotRiskEngine`；执行进程通过 `risk.risk_policy_from_env()` 读取
+`QTS_RISK_POLICY_JSON`（仅 `RiskPolicy` 字段，未知字段拒绝）与 `QTS_FEE_RATE`。
+旧 `RiskService` 只是遗留配置/持久化 API，不构成第二套订单准入。
+阶段 6 起 `trader.api.main` 已删除；`/v1/killswitch` 写入在 Control 上映射为持久
+`BLOCK_NEW_RISK` / `RESUME_NEW_RISK` 命令，由 Execution 按租约应用，返回命令回执；
+不存在进程内第二套 KillSwitch。`/v1/reconciler/trigger` 返回 503
+`RECONCILIATION_IS_EXECUTION_OWNED`，`/v1/replay*`、`/v1/snapshots*` 返回 410
+`LEGACY_REPLAY_RETIRED`，旧策略生命周期写入口返回 410
+`LEGACY_STRATEGY_LIFECYCLE_RETIRED`。
 独立入口强制会话鉴权，缺密码配置 fail-closed；缺 private WS 覆盖证明时真实执行入口
 保持 `PRIVATE_STREAM_UNHEALTHY`，不能从 REST 成功推断就绪。
 
@@ -2819,17 +2886,52 @@ warmup_source=None, on_block=None)`
   `describe_plugin_warmup(plugin)` 读取。未声明的插件按“有状态”处理：沉默不等于
   “可以冷启动交易”。声明 `stateful_indicators=False` 的插件无需预热。
 - 预热长度取 `max(部署配置 warmup_events, 插件声明 warmup_events)`；插件声明是下界。
-- 预热状态为 `PENDING / WARMING_UP / WARM / BLOCKED`，按标的分别计数；所有标的都达到
-  预热长度才进入 `WARM`。预热期间观察仍传给插件，但产生的信号一律丢弃，不提交订单。
+- 预热状态为 `PENDING / WARMING_UP / WARM / BLOCKED`，逐标的记录
+  `{state, observations, required}`；所有标的都达到预热长度才进入 `WARM`。预热期间观察仍传给
+  插件，但产生的信号一律丢弃，不提交订单。
+- 同一 bar 身份（`bar_id` / `open_time_ms`）的重复或重放观测不得增加预热计数，也不得再次调用
+  插件产生第二个决策；同一标的更旧的乱序 bar 直接丢弃。生产 bar 在 `available_at_ms` 之前不可见，
+  预热窗口回放同样拒绝未完成 bar（`STRATEGY_WARMUP_UNFINISHED_BAR` /
+  `STRATEGY_WARMUP_BAR_NOT_AVAILABLE`）。
+- 预热与 live 共用同一 closed-KLINE 校验：**整个窗口先验证，再修改插件状态**。任一历史成员为
+  非 KLINE 时以 `STRATEGY_WARMUP_NON_BAR_DATA` 阻断；缺少/矛盾/非法 bar 字段时以
+  `STRATEGY_WARMUP_INVALID_BAR:<code>` 阻断；验证失败前不得调用插件、增加计数或进入 `WARM`。
 - 预热窗口**重新采集**而非持久化：插件内部指标状态不可安全序列化，代码或参数变更后
   持久快照即失效。`warmup_source` 返回重新采集的历史观测（生产实现为 Binance 已收盘
   K 线），在恢复完成后回放；未完成 K 线不可见。
 - 阻断原因：`STRATEGY_WARMUP_NOT_CONFIGURED`（有状态插件无预热长度）、
   `STRATEGY_WARMUP_HISTORY_EMPTY`、`STRATEGY_WARMUP_HISTORY_INCOMPLETE`、
-  `STRATEGY_WARMUP_HISTORY_FAILED`、`STRATEGY_WARMUP_FAILED`、`STRATEGY_PLUGIN_ERROR`。
+  `STRATEGY_WARMUP_HISTORY_FAILED`、`STRATEGY_WARMUP_FAILED`、`STRATEGY_PLUGIN_ERROR`、
+  `STRATEGY_WARMUP_NON_BAR_DATA`、`STRATEGY_WARMUP_INVALID_BAR:<code>`。
   阻断时 `on_block` 关闭账户新增风险，健康接口不得假装就绪。
 - 就绪响应增加 `strategy_warmup_remaining`、`strategy_warmup_state`、
-  `strategy_warmup_reason`、`strategy_ready`（未装配策略时为 `null`）。
+  `strategy_warmup_reason`、`strategy_warmup_instruments`、`strategy_ready`
+  （未装配策略时为 `null`）。
+
+执行入口的行情契约（阶段 3）：
+
+- `MarketData` 增加 `available_at_ms`（整数毫秒）与 BAR_V1 元数据
+  `bar_id` / `open_time_ms` / `close_time_ms` / `interval`。新栈 KLINE 必须携带显式
+  `open_time_ms`、受支持的 `interval`、等于 `open_time_ms + interval_ms` 的 close/available
+  字段以及 `kline_close`；缺失/矛盾字段分别抛 `BAR_OPEN_TIME_REQUIRED` /
+  `BAR_INTERVAL_REQUIRED` / `BAR_CLOSE_TIME_REQUIRED` / `BAR_TIMESTAMP_INCONSISTENT` /
+  `BAR_CLOSE_PRICE_REQUIRED` / `INVALID_BAR_CLOSE`，不得用 `timestamp` 或 `price` 伪造
+  BAR_V1。K 线在 `available_at_ms > 决策时钟` 时抛 `BAR_NOT_AVAILABLE_YET`，插件与账本均不可见。
+  `available_at_ms` 的 timestamp 回退仅保留给非新栈 legacy 消费者。
+- Binance `closeTime` 是含尾毫秒（`open_time + interval - 1`），在适配边界归一化为
+  BAR_V1 的 `close_time_ms = open_time_ms + interval_ms`；`available_at_ms = close_time_ms`。
+  `_market_loop` / `warmup_source` 只从已收盘 K 线构造观测，REST ticker 不再作为新栈决策输入；
+  缺少 K 线端口时抛 `CLOSED_BAR_SOURCE_REQUIRED`，不回退 ticker。
+- 执行进程的决策时钟使用 `VenueClock`：每次采样保存 venue 时间锚点，并以独立可注入的
+  **单调经过时间**推进；本地 wall clock（包括前跳/后跳）不得推进 bar 可见性。每次 feed 前
+  重新采样，时间源失败/单调源回退直接阻断。策略可见性、feed、warmup 与对账使用同一 venue
+  时间域。`local_clock` 参数仅为构造兼容保留，不参与决策。
+- 新栈 `UnifiedStrategyRunner` 只接受已收盘 `MarketDataType.KLINE`；所有其它市场数据类型
+  （TICKER / TRADE / DEPTH / FUNDING / INDEX_PRICE / MARK_PRICE）在插件与账户副作用之前
+  抛 `NON_BAR_MARKET_DATA`。没有 ticker 默认旁路或生产 opt-out；legacy orchestrator 不属于
+  新栈，阶段 6 删除。
+- MARKET 参考价取触发 bar 的 close，`price_source = MARKET_REFERENCE_CLOSED_BAR`，
+  `price_at_ms = close_time_ms`，`price_reference_id = bar_id`；LIMIT 仍取信号声明价。
 
 ## 14. Research Dataset / Event Runtime 契约
 
@@ -2893,6 +2995,17 @@ warmup_source=None, on_block=None)`
 - 「官方可用」只来自**可信关联**（`research.dataset_links` + 已 `PUBLISHED` 的历史数据集），
   绝不依据调用方声明的 `source` 字符串。提交时校验发布状态与 provenance，
   执行前由 `ResearchExecutor` 复核冻结的 provenance 哈希与内容哈希。
+- 阶段 3 起 `BacktestApplication` **必须**注入 eligibility 检查器；没有
+  `eligibility=None` 构造或提交路径（`DATASET_ELIGIBILITY_GATE_UNAVAILABLE`）。每个数据集
+  必须有 `official_eligible=true` 且带 `provenance_hash` 的可信关联
+  （`DATASET_PROVENANCE_UNTRUSTED`）；调用方提供的 `provenance` 只能重复可信哈希，
+  不能替换或遗漏（`DATASET_PROVENANCE_MISMATCH`）。Control 与组合开发入口
+  （`runtime/trading_main.py`）共用 `runtime/history_plane.py` 的 fail-closed 装配。
+- `retry` 在重新排队前重新核验资格与冻结 provenance；资格失败保持 `FAILED`，不改变
+  `attempt` 或 manifest。历史存储不可用统一返回 `HISTORY_STORE_UNAVAILABLE`
+  （API retry 映射 503）。
+- 数据集集合在入队前校验 venue、market、interval、quote asset、唯一标的与**完整已收盘 bar
+  日历**（`available_at_ms == close_time_ms`）；不满足直接拒绝，不产生排队任务。
 
 ### 14.4 回测报告模型标记
 
@@ -2911,6 +3024,58 @@ warmup_source=None, on_block=None)`
 - `risk_config` 仅允许 `RiskPolicy` 字段；金额/费率转为 `Decimal`，新鲜度字段为整数毫秒，未知字段必须拒绝。BAR 使用历史开盘/收盘时点及对应估值更新账户视图，然后调用与实盘相同的 `SpotRiskEngine`；委托和剩余预约计入相同组合限额。
 - 策略持仓按实际基础资产净额计算：BUY 增加 qty、SELL 减少 qty；手续费资产为 base 时再扣 fee。手续费资产账本仍单列原币种费用，不能再重复扣余额。
 
+### 14.6 联合回测冻结 manifest 与逐 book 结果（阶段 4）
+
+提交 manifest 有两种互斥形态，二者不能同时出现：
+
+- **单策略** `strategy`：既有行为与结果字段保持不变。
+- **联合** `strategies`（至少 2 个）+ `book_allocations`。每个 `strategies[i]` 必须声明稳定的
+  `strategy_id`，并可带 `module_path`、`params`、`version`、`code_hash`；冻结时补
+  `book_id = book:{strategy_id}`。重复 `strategy_id` 或重复 book 在入队前拒绝。
+
+联合冻结规则：
+
+- `book_allocations` 的键必须**恰好**是全部策略 book；金额为正且总和必须等于 `initial_cash`。
+  未声明策略的 book 或遗留 `UNALLOCATED` 余额不属于联合 manifest 的冻结输入。
+- 冻结 manifest 包含排序后的 `dataset_ids`、`strategies`、`book_allocations`、`initial_cash`、
+  `fee_bps`、`slippage_bps`、`engine`、`purpose`、`runtime_version`（`spot_bar_v2_shared`）、
+  `risk_config` 与 `provenance`（dataset_id → 可信 provenance hash）。
+- 提交、重试和执行共用 `normalize_backtest_manifest`。提交后调用方修改自己的嵌套 `params` /
+  `book_allocations` 不会改变已存 manifest；重试或执行发现存储文档被改写（哈希不符）时拒绝，
+  不静默改写、不沿用旧哈希执行。
+- `manifest_hash = sha256(canonical(frozen manifest))`，`dataset_ids` 与策略按稳定键排序，
+  因此相同输入不依赖调用方顺序。同一冻结 manifest 重复提交或在全新进程重跑必须得到相同
+  `manifest_hash` 与确定性结果；`runtime_manifest_hash` 仍只代表 BAR 模拟参数，不能替代前者。
+- 联合运行共享同一个账户现金，但每个信号按 `strategy_id` 路由到自己的 book；book 之间不得
+  借用余额或预算。超出自身 book 预算的意图以 `BOOK_INSUFFICIENT_AVAILABLE_BALANCE` 明确拒绝，
+  其他 book 的余额、预约、预算与交易能力不受影响。
+- 逐 book 结果位于 `result.books[]`：`book_id`、`allocation`、`equity`、`valuation_complete`、
+  `balances`、`positions`、`held`、`available`、`fees`、`valuations`；`result.book_fees` 是逐 book
+  实际成交手续费，必须满足 `Σ book_fees == total_fees`，且各 book 权益之和等于账户权益。
+  `result.fills[]` 逐笔携带 `book_id`、`strategy_id` 与 `cl_ord_id`；`result.rejected_intents[]`
+  记录**准入与成交两个阶段**被拒意图的 `strategy_id`、`book_id`、方向、数量与原因码，
+  供逐策略审计；成交阶段拒绝同时计入 `execution_rejections` 与 `errors`。
+  回测侧逐 book 数值使用规范十进制文本（与研究结果其余字段一致）；实盘
+  `GET /v1/trading/books` 仍沿用阶段 2 的快照序列化形式（数值相等，文本不保证归一）。
+- **成交必须由所属 book 自有预算承担**：准入按参考价预留，成交按实际成交价结算；当不利
+  滑点使实际成本超出该 book 的预留预算时，成交被明确拒绝
+  （`BOOK_INSUFFICIENT_AVAILABLE_BALANCE`）并释放两层预约，book 余额不得为负。
+  该规则由共享纯函数 `core.book_budget_available`（`books.book_available_including`）表达，
+  回测与实盘共用同一 book 事实，不另建经济实现。
+- `ResearchExecutor` 在执行前复核冻结 provenance **以及关联当前的可信状态**
+  （`official_eligible`、历史数据集标识与 provenance hash）：排队期间关联失去官方资格时
+  按 `Frozen provenance mismatch` 拒绝执行；数据集内容哈希先于结构校验比较，
+  内容被改动时报 `Dataset content hash mismatch`。
+- 订单由 `trader.trading.order_spec.build_order_spec`、`core.reserve_order` 与
+  `core.book_execution` 产生，symbol/side/qty/price 与实盘命令语义一致：LIMIT 使用信号限价，
+  MARKET 使用已收盘 bar 的 close 作为参考价；不新增第二套经济实现。
+- `ResearchExecutor` 在加载插件前复核全部策略的冻结 `code_hash`、manifest 哈希、dataset
+  内容哈希与 provenance；任一不符直接拒绝。结果继续携带 `dataset_ids`、`dataset_provenance`、
+  `runtime_version`、`manifest_hash` 与 `runtime_manifest_hash`，供全链路追溯。
+- Research Worker 只连接 Research 存储，不读取实盘账户/订单状态，也不写交易所。真实 PostgreSQL
+  进程验收要求：仅存在 `research` schema 的隔离数据库也能完成 Control 提交、独立 Worker 执行
+  与结果发布。
+
 ### 13.7 运行期对账、交易所规则与沙箱验证
 
 - Trading Runtime 每 `QTS_RECONCILE_INTERVAL_SECONDS` 秒拉取完整 `ReconcileSnapshot`；撤单/成交终态必须来自快照中的订单观测或逐笔成交，不得由本地请求推断。
@@ -2926,6 +3091,428 @@ warmup_source=None, on_block=None)`
   无覆盖证明保持阻断；必须等待命令确认及 `/health/trading` 重新 `READY`。
   中断或结果未知不得自动重复重连，命令状态保持可见。
 - 沙箱验证脚本：`scripts/testnet_e2e.py`（下单/撤单/成交/重连，产出 `artifacts/e2e_evidence_final.json`）、`scripts/observe_trading_runtime.py` + `scripts/mark_observation.py` + `scripts/summarize_observation.py`（24h 观察窗口证据）。
+
+### 13.8 阶段 0 冻结的进程责任矩阵（2026-11-02）
+
+本节是阶段 0 对第 13 节的**增量冻结**，不改变第 13.1–13.7 节的既有契约语义。
+阶段划分与验收项见 `docs/FOUNDATION_REFACTOR_PHASE0.md`。
+
+**进程 / 凭据 / 命令 / 事实 / 查询责任矩阵**：
+
+| 进程 | 交易所写凭据 | 命令（写） | 事实（写） | 查询（读） |
+|---|---|---|---|---|
+| Control API | 无 | PLACE / CANCEL / CONTROL 受理，落库为 `QUEUED` | **不得**暴露 | 命令状态、订单、风险视图、指标 |
+| Execution | 有（唯一） | 消费 `QUEUED` 并发送 | **唯一**（REST 对账快照、WS 成交、订单观测） | 就绪状态、内部指标 |
+| Research Worker | 无 | 无 | 无 | 发布冻结回测结果 |
+| History Worker | 无 | 无 | 无 | 导入历史数据集 |
+
+- Control API 进程**不装配任何交易所 IO 端口**，也不持有交易所写凭据；
+  其事实写入口（`POST /v1/trading/executions`、`POST /v1/trading/observations`、
+  `POST /v1/trading/reconcile`、`POST /v1/trading/resolve/{code}`）已按阶段 1 迁出 Control API
+  （见 13.11），事实写入只保留 Execution 进程内部 service/端口调用。
+- Execution 进程是账户经济状态的**唯一**写入者（账本、持仓、预约、成交、余额）。
+- 进程间只通过 PostgreSQL 协调；不引入消息中间件。
+- 覆盖范围与既有 13.6 运行拓扑一致；本节只把"谁持有凭据、谁能写事实"写成可判定条目。
+
+### 13.9 `book_id` 策略子账本数据契约（阶段 2 已实现）
+
+> 2026-11-02：阶段 2 已按本节契约实现（`AccountState.books`、双层预约、`ALLOCATE` 命令、
+> `BOOK_ATTRIBUTION_UNKNOWN`、逐 book 查询）。以下冻结定义保持不变，实现细节与证据见 13.12；
+> 历史“阶段 0 只冻结”的描述仅作基线记录。
+
+**标识**
+
+- `book_id` 形如 `book:{strategy_id}`，稳定于部署、重启与回测批次；实盘与回测共用同一 `book_id`。
+- 未分配账簿使用保留标识 `UNALLOCATED`。
+- `deployment_id` 保持"命令归属 / 幂等字段"语义，**不承担资产隔离职责**。
+  现状核实：余额 / 持仓 / 预约当前是账户级（`trader/trading/models.py` 的 `AccountState`），
+  策略间资金隔离当前不存在，由本契约补齐。
+
+**守恒与结构**
+
+- 对每个资产 `A`：`account_total[A] == UNALLOCATED[A] + Σ book[A]`，在同一事务内恒等。
+- 只有**显式划拨**命令能把资产从未分配账簿移入某个 `book_id`；禁止按策略隐式归集。
+- 一笔新订单在**同一账户事务**内完成账户层预约与 book 层预约；任一层失败整体回滚。
+- 某 `book_id` 的可用资产只由该 book 自身的余额与持仓决定，**不得借用**其他 book 或账户总余额。
+- 同一 `book_id` 上已有未终结的反向在途订单时，新的反向命令**先拒绝**（明确拒绝码），
+  不排队、不自动净额。
+
+**归属不明的事实**
+
+- 无法明确归属到某个 `book_id` 的成交 / 余额差异：记入未决原因码并**阻断**新增风险。
+  **不得猜测历史归属**，不得按 symbol、比例、时间顺序等启发式规则分摊。
+
+**划拨**
+
+- 显式划拨在余额不足时被拒绝（`ALLOCATION_INSUFFICIENT_UNALLOCATED`），账户总额与任何
+  book 余额都不变。目标 book 的可见性按路径区分：直接（非 deferred）划拨在转账前登记目标 book，
+  失败后空 book 可观察；Control 排队阶段不登记 book；Execution 处理失败时命令置 `FAILED`
+  并写 `book.allocation_failed`。
+
+**迁移**
+
+- 迁移**不猜测历史归属**：存量资产一律留在 `UNALLOCATED`，直到人工显式划拨；
+  归属仍在未分配账簿的存量预约也在该账簿上镜像，策略 book 的预约缺失不会被迁移修复。
+- 迁移**不清库、不改写历史**：既有 `trading_accounts` 快照、`trading_ledger`、`trading_events`
+  原样保留；`book_id` 以新增字段 / 新增投影方式落地。
+
+### 13.10 阶段 0 记录的已知契约偏差（阶段 1 修）
+
+阶段 0 用确定性 fake 复现了两处与本节既有契约语义不一致的行为。**本阶段不修改实现**，
+仅登记偏差，修复与解除基线属阶段 1：
+
+| # | 既有契约要求 | 当前实现 | 复现测试 |
+|---|---|---|---|
+| D1 | 13.4：余额差异进入持久 `unresolved` 并阻断新增风险；人工 `resolve` 才能清除**不可自动解释**的差异 | `_apply_reconcile_snapshot` 把交易所余额覆盖进权威余额，未解释的账实差异被吸收；`resolve` 只按原因码删除条目，之后账户回到 `READY` | `trader/tests/test_phase0_foundation_safety.py::test_balance_mismatch_keeps_blocking_until_the_difference_is_explained`（严格 xfail） |
+| D2 | 13.1：`UNKNOWN` 命令保留预约、恢复只查询不自动重发；新增风险受阻断 | `resume_queued` 在存在 `UNKNOWN` 命令时仍继续发送后续命令；另一条命令 `ACCEPTED` / `REJECTED` 时账户级 `_resolve_unresolved(state, "UNKNOWN_COMMAND")` 清除该阻断 | `trader/tests/test_phase0_foundation_safety.py::test_unknown_command_blocks_further_sends_and_keeps_its_own_block`（严格 xfail） |
+
+修复方向（阶段 1）：`resolve` 解除余额差异必须携带解释证据；`UNKNOWN` 的解除按 `command_id` 定向。
+阶段 1 完成后删除两个 `xfail` 标记，安全断言转为普通通过断言。
+
+### 13.11 阶段 1 安全修复（2026-11-02，已实现）
+
+阶段 1 关闭了 13.10 记录的两处偏差，并移除了公开事实入口与数据资格回退旁路。实现与证据：
+
+| # | 行为 | 稳定拒绝码 / 证据 | 测试 |
+|---|---|---|---|
+| D1 | 未解释余额差异不覆盖权威内部余额；交易所值作为 `reconciliation.venue_balances` 观测保留 | `BALANCE_MISMATCH` 保持阻断；`risk_view.venue_balances` / `balance_differences`、`metrics.balance_differences` 可查询 | `test_phase0_foundation_safety.py::test_balance_mismatch_keeps_blocking_until_the_difference_is_explained`；`test_trading_service.py::test_balance_mismatch_is_evidence_and_blocks_new_risk`；`test_phase1_foundation_safety.py::test_balance_difference_is_queryable_until_it_is_explained` |
+| D1 | `resolve` 必须带证据；证据一致后记入显式 `external_adjustment` 账目 | `RESOLVE_REQUIRES_EVIDENCE`、`RESOLVE_EVIDENCE_INCOMPLETE`、`RESOLVE_EVIDENCE_AMOUNT_MISMATCH`、`RESOLVE_EVIDENCE_STALE`、`RESOLVE_CODE_NOT_MANUALLY_RESOLVABLE`、`RESOLVE_CODE_NOT_PENDING` | `test_phase1_foundation_safety.py::test_resolve_is_an_evidenced_command_applied_by_the_execution_process` |
+| D1 | 操作员解除走 `RESOLVE` 控制命令：Control 只落 `QUEUED`，Execution 校验并应用 | 成功 `CONFIRMED`；失败 `FAILED` 且保持阻断 | 同上（含 control→execution 闭环） |
+| D2 | 未决 `UNKNOWN` PLACE 阻断后续新风险；新 PLACE 明确拒绝 | `UNKNOWN_COMMAND_PENDING` | `test_phase0_foundation_safety.py::test_unknown_command_blocks_further_sends_and_keeps_its_own_block`；`test_phase1_foundation_safety.py::test_resume_queued_sends_no_new_risk_while_a_command_is_unknown` |
+| D2 | `UNKNOWN_COMMAND` 按 `command_id` 定向解除，其他命令结果不影响 | 未决项带 `scope=<command_id>` | `test_phase1_foundation_safety.py::test_unknown_release_is_scoped_to_its_own_command`、`test_another_commands_result_cannot_clear_a_pending_unknown` |
+| L5 | Control API 无事实写入口；Execution 保留唯一事实写入路径 | 路由表与 OpenAPI 断言 | `test_phase1_foundation_safety.py::test_control_api_exposes_no_fact_write_routes` |
+| L5 | Control 进程无交易所写凭据，环境出现凭据也只排队 | `CONTROL_PROCESS_CANNOT_EXECUTE` | `test_phase1_foundation_safety.py::test_control_process_never_sends_even_with_credentials_in_the_environment` |
+| L8 | 历史存储不可用时研究提交 fail-closed，无 `eligibility=None` 回退 | `HISTORY_STORE_UNAVAILABLE`（422） | `test_phase1_foundation_safety.py::test_history_store_failure_makes_research_submission_fail_closed`、`test_provenance_check_failure_is_a_stable_rejection`、`test_research_api_maps_the_fail_closed_rejection_to_422` |
+| 1.9 | 重复 `exec_id` 幂等、乱序回报不二次记账、并发 place 只发送一次 | — | `test_phase1_foundation_safety.py::test_duplicate_execution_is_booked_once`、`test_out_of_order_execution_reports_are_booked_once`、`test_concurrent_place_with_the_same_command_sends_once` |
+| 1.10 | 四种交易所结果的状态、预约与阻断语义 | `UNKNOWN`/`UNAVAILABLE`/下单 `NOT_FOUND` → 命令 `UNKNOWN`、保留预约、阻断；`REJECTED` → `FAILED`、释放预约、不阻断 | `test_phase1_foundation_safety.py::test_uncertain_place_outcomes_keep_the_hold_and_block`、`test_rejected_place_releases_the_hold_and_does_not_block`、`test_cancel_not_found_does_not_report_the_order_cancelled` |
+| 1.11 | 真实 PG 同账户并发事务的快照与追加表一致，重启 `read()` 语义不变 | — | `test_trading_postgres.py::test_postgres_snapshot_and_append_tables_stay_consistent_across_restart`（需 `POSTGRES_CONNECTION_STRING`） |
+
+约束：以上调整不引入新表、不改订单规格、不改部署拓扑；`UNKNOWN` 命令仍不自动重发；
+操作员命令不能指定任何金额，调整额只能由 Execution 依据自身观测到的差异计算。
+
+### 13.12 阶段 2 实现与验收证据（2026-11-02）
+
+**统一订单规格（2.1–2.3）**
+
+- `trader/trading/order_spec.py` 是策略侧唯一规格入口：`build_order_spec()` 从
+  `Signal.order_type`、`Signal.price`、参考价、参考来源和时点构造 `OrderSpec`；
+  `OrderSpec.to_command()` 生成 `PlaceOrderCommand`。`validate_order_command()` 同时用于
+  service 准入与 Binance adapter，未知/缺失规格在本地拒绝，不静默换类型。
+- `Signal` 新增显式 `order_type` / `time_in_force`；`signal.metadata` 不再读取订单类型或价格来源。
+  内置策略显式声明 `OrderType.MARKET`。
+- 价格来源枚举：`SIGNAL_LIMIT`、`MANUAL_LIMIT`、`MARKET_REFERENCE_TICKER`、
+  `MARKET_REFERENCE_CLOSED_BAR`、`MANUAL_REFERENCE`、`BACKTEST_CLOSED_BAR`。
+  LIMIT 保留信号价；MARKET 使用参考价并把来源/时点写入命令、`order.queued` 事件和订单查询。
+  当前生产 ticker 输入如实标记为 `MARKET_REFERENCE_TICKER`，不伪称已收盘 bar；阶段 3 才替换输入。
+
+**book 子账簿（2.4–2.10）**
+
+- `trader/trading/books.py` 定义 `UNALLOCATED`、`book:{strategy_id}`、`BookLedger` 与
+  `AccountState.books`。`book_id` 稳定于部署/重启/回测，`deployment_id` 只保留命令归属语义。
+- 每次写事务校验逐资产守恒 `account_total == UNALLOCATED + Σ books`；失败关闭并回滚。
+- 新订单在同一账户事务创建账户层与 book 层预约；成交按数量比例释放两层；撤单/拒绝/终态释放剩余预约。
+- 同一 book 同 symbol 的未终结反向订单先拒绝 `BOOK_OPPOSITE_ORDER_IN_FLIGHT`；不排队、不净额。
+  book 可用资产只来自自身余额减自身预约，账户余额不足或 book 预算不足分别返回
+  `INSUFFICIENT_AVAILABLE_BALANCE` / `BOOK_INSUFFICIENT_AVAILABLE_BALANCE`。
+- `ALLOCATE` 命令通过 Control→PostgreSQL→Execution 执行，幂等且只能从 `UNALLOCATED` 划入
+  `book:{strategy_id}`；`GET /v1/trading/books` 返回每 book 的权益/预算，供阶段 4 使用。
+- 归属不明的订单/成交：事实按 `UNALLOCATED` 记账（守恒），同时持久化
+  `BOOK_ATTRIBUTION_UNKNOWN` 未决项并阻断新增风险；`RESOLVE` 要求逐单证据且只接受已完全成交、
+  无剩余预约的订单，防止迟到成交使归属失效。旧无 scope `UNKNOWN_COMMAND` 仅在能证明
+  `command_id` 归属时迁移，否则保留 `LEGACY_UNKNOWN_COMMAND_UNATTRIBUTED` 阻断。
+
+**迁移（2.12）**
+
+- `store.decode_state()` 对缺失 `books` 的旧快照把既有 `balances`/`positions` 全量放入
+  `UNALLOCATED`，并标记既有在途订单为归属不明；不猜测策略、不清库、不改写
+  `trading_ledger` / `trading_events` / 既有订单意图。完整操作步骤见
+  `docs/PHASE2_BOOK_LEDGER_MIGRATION.md`。
+- 重复解码/事务迁移幂等；真实 PG 用例验证旧行保持、重启后 book 与权益查询一致。
+
+**风险配置（L9 / 2.9）**
+
+- `risk.risk_policy_from_env()` 从 `QTS_RISK_POLICY_JSON` 读取 `RiskPolicy` 字段，
+  `QTS_FEE_RATE` 提供费率；未知字段/非法值拒绝。Control 与 Execution 都使用该显式配置；
+  Execution 在 `resume_queued` 发送 QUEUED PLACE 前用自身 policy 复检（临时移除该订单自身预约）：
+  `RiskRejected` 标记命令 FAILED、订单 REJECTED 且释放两层预约；`NotReady` 保持 QUEUED 等待重试。
+  旧 `RiskService` 不再参与新栈准入判断。
+
+**验收证据**
+
+| 验收 | 主要证据 |
+|---|---|
+| 2.1 / 2.2 | `test_phase2_foundation_safety.py::test_strategy_order_type_comes_from_the_signal_field_not_metadata`、`test_limit_and_market_specs_are_explicit_auditable_and_idempotent`、`test_adapter_refuses_an_unsupported_spec_before_any_venue_io` |
+| 2.3 | `test_market_reference_price_source_and_time_are_recorded`、`test_closed_bar_reference_is_labelled_as_a_closed_bar_not_a_ticker` |
+| 2.4 | `test_book_id_is_stable_across_service_restart_and_queried_per_book`、`test_deployment_id_never_becomes_a_book_key...`、`test_phase2_postgres.py::test_postgres_books_allocation_and_order_survive_restart` |
+| 2.5 | `test_every_commit_keeps_account_total_equal_to_book_partitions`、PG 原子回滚用例 |
+| 2.6 | `test_allocation_is_a_durable_idempotent_control_to_execution_command`、`test_allocation_rejects_invalid_or_insufficient_requests...`、`test_concurrent_allocations...`、API 用例 |
+| 2.7 | `test_account_and_book_holds_are_created_and_released_together`、`test_book_hold_failure_rolls_back...`、`test_execution_book_write_failure_rolls_back...`、PG 双层回滚用例 |
+| 2.8 | `test_same_book_opposite_in_flight_order_is_refused_without_new_risk`、`test_sell_first_then_buy_on_the_same_book_is_refused`、`test_risk_engine_treats_an_unknown_order_hold...` |
+| 2.9 | `test_account_balance_alone_cannot_fund_a_book_and_vice_versa`、`test_risk_policy_configuration_refuses_unknown_or_invalid_fields`、`test_execution_owner_rechecks_a_queued_order_against_its_own_limits` |
+| 2.10 | `test_legacy_fill_without_a_book_is_recorded_in_unallocated_and_blocks`、`test_cancelled_partial_legacy_order...`、`test_legacy_unknown_command_is_migrated_only_when_its_owner_is_provable`、PG 归属证据用例 |
+| 2.11 | `test_order_status_advances_monotonically...`、`test_stale_observation_cannot_regress_status_and_terminal_is_final`、阶段 0/1 安全回归 |
+| 2.12 | `test_legacy_snapshot_migration_preserves_facts_and_is_idempotent`、`test_postgres_legacy_state_migrates_without_rewriting_history`、PG 投影重建后 book 查询一致、迁移 runbook |
+
+### 13.13 阶段 2 第 2 轮审核修复（2026-11-02）
+
+第 2 轮独立审核（report `phase2-review-round2-ec1f5c75`）判定 overall=fail，2.1–2.12 的
+实现判据均通过，但指出了 4 项必须修复的缺陷。本节记录修复后的契约收敛与证据。
+
+| # | 缺陷 | 修复后的契约 | 证据 |
+|---|---|---|---|
+| B1 | `backtest.py` 与 `api/routes/trading.py` 仍直接构造 `PlaceOrderCommand`，策略才是唯一规格入口 | 所有业务命令经 `order_spec.build_order_spec()` / `OrderSpec.to_command()` 构造；`StrategySignal.order_type` 改为必填，`metadata` 不再提供任何默认 | `test_phase2_round2_fixes.py::test_production_code_never_builds_a_place_order_command_outside_the_factory`、`::test_api_and_backtest_build_their_command_through_the_factory`、`::test_a_simulated_signal_must_state_its_order_type` |
+| B2 | 市价买入按报价结算，交易所可换回多于 `qty` 的 base，但 `OrderAggregate.apply/observe` 仍以 `qty` 为上界 | 报价结算（`settlement=QUOTE`）时 base 数量上界改为报价预算 `qty * price`，超出即拒（`Execution exceeds the market quote budget`）；`BASE` 口径与 LIMIT 边界不变 | `test_phase2_review2_reproduction.py::test_b2_market_buy_overfill_must_be_booked_not_conflicted`、`::test_b2_market_filled_observation_may_exceed_order_qty`、`test_phase2_round2_fixes.py::test_market_buy_may_overfill_base_inside_the_quote_budget`、`::test_market_buy_may_not_spend_more_than_the_quote_budget`、`::test_limit_orders_keep_the_exact_base_boundary`、`::test_a_quote_settled_market_buy_stays_in_flight_for_opposite_orders` |
+| B4 | 旧快照迁移只复制余额/持仓，账户层预约没有进入 `UNALLOCATED`，划拨可以动用已预留资金 | 归属仍在 `UNALLOCATED` 的存量预约在 `UNALLOCATED` 账簿上镜像同一经济预约（不是第二次占用）；`book_available` 真实；策略 book 的预约缺失属缺陷、不被迁移修复 | `test_phase2_review2_reproduction.py::test_b4_migration_mirrors_legacy_hold_into_unallocated`、`::test_b4_allocation_cannot_spend_reserved_unallocated_funds`、`test_phase2_round2_fixes.py::test_a_legacy_hold_is_mirrored_into_unallocated_only`、`::test_the_migration_mirror_is_idempotent_and_never_invents_a_strategy_book` |
+| B5 | 回测固定使用 `book:backtest`，结果没有逐 book 输出 | `EventBacktestRuntime` 支持显式 `strategy_books`（`strategy_id -> book:{strategy_id}`）与显式 `initial_allocations`；每个信号按 `strategy_id` 路由到自己的 book；`BacktestResult.books` 复用 `books.book_snapshot` 输出逐 book 余额/持仓/预约/可用预算/权益；两个 `strategy_id` 映射到同一 book 时在建立账户/划拨前拒绝（`ValueError`，信息含 book id），不合并预算 | `test_phase2_round2_fixes.py::test_a_joint_backtest_reports_every_book_equity_and_budget`、`::test_a_joint_backtest_keeps_each_strategy_inside_its_own_budget`、`::test_a_joint_backtest_requires_explicit_allocations_and_explicit_strategy_books`、`::test_a_joint_backtest_refuses_a_signal_without_a_resolvable_book`、`::test_the_single_strategy_backtest_path_still_runs_and_reports_its_book` |
+
+联合回测配置校验：`strategy_books` 的每个值必须唯一；重复映射在解析阶段拒绝
+（`ValueError`，信息含 book id），此时尚未创建账户、未划拨、未产生事件。单策略无
+`strategy_id` 的兼容路径不受影响；合法的 `alpha`/`beta` 映射与既有 `manifest_hash` 语义不变。
+该补丁的工程师自测见 `test_phase2_round2_fixes.py`；独立复验由测试员/父 Agent 重新执行，
+本节不宣称整体通过。
+
+未改动的守卫：第 2 轮审核提到的 B3（终态 MARKET 成交释放两层预约）由独立测试证明无缺陷，
+本轮未修改该路径，未改变任何独立测试的断言。唯一的独立测试文件改动是
+`test_phase2_review2_reproduction.py` 的 import 顺序（isort）：该文件在本轮之前就已被
+`artifacts/foundation/phase2/repro2-isort-1.log` 记录为 isort 失败，排序修正不改变任何
+用例、断言或预期值。
+
+
+### 13.14 阶段 2 第 4 轮修复（R3-B2-HOLDRELEASE / R3-B1-FIRETEST）
+
+第 3 轮审核（`phase2-review-round3-26e58df`）指出两项生产缺陷；本轮按父 Agent 工作单修复，
+不改变阶段 2 的其它契约，也不宣称整体通过。
+
+| # | 缺陷 | 修复后的契约 | 工程师证据 |
+|---|---|---|---|
+| R4-F1 | 迁移/无归属订单终态只清账户层，UNALLOCATED 镜像预约永久滞留 | 终态释放按预约归属解析 book 层（`execution_book_id`）：无策略 book 的订单在 `UNALLOCATED` 上的镜像预约与账户层一起释放，资金不再搁浅；归属阻断语义保持不变 | `trader/tests/test_phase2_round4_fixes.py::test_a_legacy_terminal_order_releases_the_mirrored_unallocated_hold` |
+| R3-B2 | BUY 部分成交用 `command.price * (1 + fee_rate)` 估算释放，零费成交也会消耗缓冲；quote-settled MARKET BUY 在 `booked_qty == qty` 时被本地判为完成并清掉真实剩余预算 | 释放 = 实际 `qty * execution.price` + 仅 quote 币种的实际 fee；admission `fee_rate` 仅为缓冲；BASE/第三币种费不释放 quote。quote-settled MARKET BUY 在报价预算耗尽或终态观察/显式终态事实时完成，终态清理释放真实剩余；LIMIT/BASE 完全成交语义不变 | `trader/tests/test_phase2_round4_fixes.py`（真实成交释放、零费缓冲、quote/base/第三币种费、同 book 预算不被早释放侵占、多笔累计与重放、终态清理、LIMIT/BASE 边界）；工程师自有 round2 测试同步修正为合同手算值 |
+| R3-B1 | 内置 `fire_test` 未声明 `order_type`；`Signal.to_order_params` 硬编码 MARKET；旧 OMS `execute_signal` 按 `signal.price > 0` 猜 LIMIT | `fire_test` 显式 `OrderType.MARKET`（非零 price 仅参考价）；`to_order_params` 使用显式 `order_type`，缺失/非法 fail-closed，LIMIT 携带声明价、MARKET 不伪造限价；旧 OMS 在 broker/经济副作用前校验并使用显式 `order_type`，缺失 → `OMSCallbackError("ORDER_TYPE_REQUIRED")`，不支持 → `UNSUPPORTED_ORDER_TYPE`，不再按价格猜类型；不改旧 OMS 到新服务的接线与部署拓扑 | `test_phase2_round4_fixes.py`（fire_test、全部内置策略、to_order_params）；`test_builtin_strategies.py`；`test_oms_pretrade_balance.py`（MARKET 非零参考价、显式 LIMIT、缺失/非法零 broker 调用） |
+
+独立测试的旧 hold 常量需由测试员按本契约重算（例如 1@90 零费部分成交后两层应保留真实剩余，
+而不是清空；部分成交的 50.05 旧值应按实际成交价重算）。工程师未修改任何独立测试资产。
+
+### 13.15 阶段 3 实现：closed-bar 决策输入与数据资格链（2026-11-03）
+
+本节记录阶段 3 已落地的接口事实，不改变 BAR_V1 的冻结时序语义（半开区间、
+`close_time_ms = open_time_ms + interval_ms`、`available_at_ms = close_time_ms`）。
+
+| 验收 | 实现位置 | 可观察行为 |
+|---|---|---|
+| 3.1 | `trader/trading/strategy.py`、`trader/runtime/trading_worker_main.py` | K 线在决策时钟早于 `available_at_ms` 时抛 `BAR_NOT_AVAILABLE_YET`；Feed 只使用已收盘行；`_kline_observation` 归一化 Binance 含尾 `closeTime`；执行进程使用 venue 锚点 + 单调经过时间的 `VenueClock`，本地 wall 跳变不推进可见性，时间源/单调源失败即 fail-closed |
+| 3.2 | `strategy.on_market_data`、`order_spec.build_order_spec` | MARKET 参考价 = 触发 bar close；`price_source=MARKET_REFERENCE_CLOSED_BAR`、`price_at_ms=close_time_ms`、`price_reference_id=bar_id`；LIMIT 仍用信号价 |
+| 3.3 | `trading_worker_main.feed_market_once`、`strategy.on_market_data` | 不再调用 `get_ticker_prices`；缺少 kline 端口时 `CLOSED_BAR_SOURCE_REQUIRED`；新栈 runner 只接受已收盘 KLINE，所有非 KLINE 类型抛 `NON_BAR_MARKET_DATA`，无 ticker 默认旁路 |
+| 3.4 | `strategy.UnifiedStrategyRunner` | `warmup_events = max(部署值, 插件声明)`；无状态插件显式零预热 |
+| 3.5 | `strategy.instrument_warmup`、`runtime.readiness` | 逐标的 `{state, observations, required}`；全部 `WARM` 才放行 |
+| 3.6 | `strategy.prepare_warmup` / `_feed` | 每次重启重新采集并回放；重复/乱序 bar 不重复计数；失败原因码阻断新增风险；预热信号不下单 |
+| 3.7 / 3.8 / 3.11 | `trader/trading/jobs.py`、`trader/trading/eligibility.py`、`trader/runtime/history_plane.py` | 提交/重试强制资格门禁；无可信关联 `DATASET_PROVENANCE_UNTRUSTED`；存储故障 `HISTORY_STORE_UNAVAILABLE`；无 `eligibility=None` 入口 |
+| 3.9 | `jobs.BacktestApplication.submit`、`backtest.validate_dataset_set` | 入队前校验 venue/market/interval/quote/标的唯一性/完整 bar 日历 |
+| 3.10 | `trader/tests/test_phase3_postgres.py`、`.github/workflows/ci-gate.yml` | 真实 PG 上验证不可用存储与未发布 provenance 的拒绝；bridge PG 套件进入 `postgres-integration` |
+
+阶段 3 的工程师测试：`trader/tests/test_phase3_closed_bar_warmup.py`、
+`trader/tests/test_phase3_eligibility.py`、`trader/tests/test_phase3_postgres.py`。
+独立测试员与逐轮只读审核证据在 `artifacts/foundation/phase3/` 与独立测试报告中单独记录。
+
+### 13.16 阶段 5 运行契约：健康、凭据、告警、备份/恢复与 DR 证据（2026-11-03）
+
+本节记录阶段 5 已落地的运行接口；不改变 13.1–13.15 的交易语义。
+
+**健康端点**
+
+| 端点 | 语义 | 成功 | 失败 |
+|---|---|---|---|
+| `GET /health/live` | 进程存活 | 200 `{"status":"ok","time":...}` | 进程不响应 |
+| `GET /health/ready` | API 请求依赖已装配 | 200 `{"status":"ok","checks":{...}}` | 200 `status=degraded` + `reasons=["STORAGE_UNAVAILABLE",...]`（保留既有探测语义；硬门禁是 trading） |
+| `GET /health/trading` | 交易就绪（账户风险、租约、运行态、DR 证据） | 200 `{"status":"ok","ready":true,"reasons":[]}` | 503 `{"status":"blocked","ready":false,"reasons":[...]}` |
+
+`HealthCheckResponse` 新增 `reasons: string[]`；live 不携带原因。`/health/trading` 未配置 provider 时
+固定返回 503 + `TRADING_RUNTIME_NOT_CONFIGURED`。交易原因码保留既有
+`UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、`ACCOUNT_SNAPSHOT_STALE`、
+`EXECUTION_INSTANCE_CONFLICT`、`EXECUTION_INSTANCE_UNAVAILABLE`、`EXECUTION_OWNER_NOT_ALIGNED`，
+阶段 5 追加 DR 原因（见下）。任何 `503` 都不允许被调用方当作“可交易”。
+
+**进程凭据边界**
+
+- Control 禁止环境键：`BINANCE_API_KEY`、`BINANCE_SECRET_KEY`、`BINANCE_API_KEY_FILE`、
+  `BINANCE_SECRET_KEY_FILE`。发现任一非空值即抛
+  `CONTROL_EXCHANGE_CREDENTIALS_PRESENT` 并拒绝启动（非降级、非仅日志）。
+- Execution 从 `BINANCE_API_KEY`/`BINANCE_SECRET_KEY` 或对应 `*_FILE` 读取；缺失返回
+  `BINANCE_CREDENTIALS_MISSING`，文件不可读返回 `BINANCE_CREDENTIALS_UNREADABLE`，
+  `BINANCE_ENV` 非 `demo/testnet/test` 返回 `BINANCE_ENV_NOT_SANDBOX`；进程以退出码 `2` 拒绝启动。
+  拒绝日志只包含原因码，绝不包含密钥值。
+- `scripts/check_credential_isolation.py` 只输出环境键名和存在性；`compose.yml` 通过 Docker
+  secrets 文件挂载交易所密钥，`docker compose config` 不渲染文件内容。
+
+**告警 webhook 与外部心跳**
+
+- `QTS_ALERT_WEBHOOK_URL`、`QTS_ALERT_HEARTBEAT_URL` 配置接收服务；可选
+  `QTS_ALERT_SIGNING_SECRET`（或 `_FILE`）；Control、Execution 与接收端必须配置同一值。请求体为 JSON，headers 含 `X-QTS-Event-Id`；
+  签名头为 `X-QTS-Signature: sha256=<HMAC-SHA256(body)>`。
+- 告警体字段：`event_id`、`code`、`severity`、`source`、`account_id`、`occurred_at_ms`、
+  `reasons[]`、`details`。阻断映射：`UNKNOWN_COMMAND(_PENDING)`→`UNKNOWN_COMMAND`，
+  `BALANCE_MISMATCH`→`BALANCE_MISMATCH`，租约类原因→`EXECUTION_LEASE_LOST`。
+- 只有 HTTP 2xx 且响应 JSON `{"ack": true, ...}` 才记为 delivered；2xx 无 ack、非 2xx、
+  超时或连接错误均保持 pending 并重试，绝不记为已投递。接收端按 `event_id` 去重。
+- 心跳体字段：`heartbeat_id`、`source`、`account_id`、`sent_at_ms`、`ready`、`reasons[]`；
+  接收端记录 `last_heartbeat_at_ms` 并检测缺失心跳。`scripts/alert_receiver.py` 是演练接收端，
+  journal 落盘后才 ack。
+
+**备份 manifest 与 DR 证据**
+
+备份成功记录至少包含：`schema_version`、`run_id`、`status`、`started_at_ms`、
+`completed_at_ms`、`cadence_seconds`、`source_database{host,database}`、
+`backup{completed_at_ms,cadence_seconds,sha256,size_bytes,object_key,source_database,
+target{kind,endpoint_host,bucket,off_host,identity_verified,attested_by},receipt,facts}`。
+`facts` 是同一导出快照下 `trading_accounts/commands/executions/ledger/events/outbox` 的
+规范化行摘要与计数。`receipt` 必须包含 `head_object` 长度/元数据核对和重新下载后的哈希。
+
+DR gate 读取的 `dr-evidence.json` 结构：
+
+```json
+{
+  "schema_version": 1,
+  "backup": {"completed_at_ms": 0, "cadence_seconds": 300, "sha256": "<64 hex>",
+             "object_key": "...", "target": {"kind": "s3_compatible",
+             "endpoint_host": "...", "bucket": "...", "off_host": true,
+             "identity_verified": true, "attested_by": "...",
+             "transport": "direct|ssh_tunnel", "remote_host": "...",
+             "tunnel_endpoint_host": "...", "ssh_host_key_verified": true}},
+  "restore": {"completed_at_ms": 0, "rto_seconds": 0, "backup_sha256": "<same>",
+              "verified": true, "source_database": {"host": "...", "database": "..."},
+              "target_database": {"host": "...", "database": "..."},
+              "checks": {"facts_match": true, "invariants_ok": true}}
+}
+```
+
+Gate 原因码：`DR_EVIDENCE_PATH_NOT_CONFIGURED`、`DR_EVIDENCE_MISSING`、`DR_EVIDENCE_INVALID`、
+`DR_BACKUP_EVIDENCE_MISSING`、`DR_BACKUP_STALE`、`DR_BACKUP_CADENCE_EXCEEDS_RPO`、
+`DR_TARGET_NOT_VERIFIED_OFF_HOST`、`DR_RESTORE_EVIDENCE_MISSING`、`DR_RESTORE_UNVERIFIED`、
+`DR_RTO_EXCEEDED`、`DR_RESTORE_BACKUP_MISMATCH`、`DR_RESTORE_EVIDENCE_STALE`、
+`DR_RESTORE_TARGET_NOT_SEPARATE`、`DR_BACKUP_TIMESTAMP_INVALID`、`DR_RESTORE_TIMESTAMP_INVALID`、
+`DR_RESTORE_FACTS_UNVERIFIED`（`restore.checks.facts_match` 与 `invariants_ok` 必须显式为 true；缺失或非对象即非 READY）。默认 `RPO=300s`、`RTO<=3600s`、恢复证据最长 7 天；
+任一原因未消除，`/health/trading` 保持 503，Execution 拒绝新风险。
+
+SSH 隧道模式下客户端可连接 `127.0.0.1` 转发端点，但证据必须同时记录真实远端
+`remote_host`、`tunnel_endpoint_host`、`transport=ssh_tunnel` 与
+`ssh_host_key_verified=true`；DR gate 不会把 loopback 本身当作异机，也不接受缺少
+真实远端身份或严格 host-key 校验的隧道。本地 S3 emulator 的证据必须标记
+`kind=local_emulator`、`off_host=false`，
+因此必然被 `DR_TARGET_NOT_VERIFIED_OFF_HOST` 拒绝；不得作为 5.6/5.7 的通过证据。
+
+**故障演练事实口径**
+
+- 崩溃持久性比较的是同一 schema 下崩溃前后 `trading_accounts`（快照）、`trading_commands`、
+  `trading_executions`、`trading_ledger`、`trading_events`、`trading_outbox` 的计数与规范化
+  行摘要，并验证新 runtime 启动后的交易所发送次数为 0。
+- 租约失效应同时满足：旧实例 `require_ownership` 拒绝（`EXECUTION_INSTANCE_CONFLICT`）、
+  旧实例 readiness 转非 READY、旧实例发送数为 0、新实例 fencing token 递增并成功接管。
+- 上述证据带时间戳、PID/容器 ID、argv 与直接退出码；历史证据不得冒充本次主机崩溃后的复验。
+
+### 13.17 阶段 6 单栈与观察契约（2026-11-04）
+
+- `create_trading_app()` 是唯一 HTTP 装配；`trader.api.main` 及 8080 进程不存在。
+  Control 应用不得出现 `/v1/trading/executions`、`/v1/trading/observations`、
+  `/v1/trading/reconcile`、`/v1/trading/resolve/{code}` 等事实写入口。
+- 兼容读视图由 `trader/api/routes/control_views.py` 从统一账户聚合提供；它们不得构造
+  交易所客户端、不得写订单/成交/账本，也不得写旧账户/投影表。无法诚实提供的字段
+  （lot 历史、已实现盈亏、旧 replay 快照）返回空或稳定拒绝码，不得伪造。
+- `/v1/trading/metrics` 的 `evidence` 字段包含 `executions.count/keys_sha256`、
+  `ledger.count/entry_ids_sha256`、`events.count/event_ids_sha256`、
+  `commands_by_status`、`orders_by_status`、`send_outcomes.repeated_send_commands`、
+  `last_execution_at_ms`、`last_event_at_ms`；`coverage` 是最近一次成功私有 WS 覆盖
+  证明的持久摘要，`runtime.strategy` 是当前策略/标的/预热状态。
+- 观察 JSONL 每行至少包含：`ts_ms`、`monotonic_ms`、`seq`、`sample_gap_ms`、
+  `health.status_code/body`、`metrics.evidence`、`metrics.unresolved_entries`、
+  `metrics.coverage`、`risk.status/reasons`。凭据、DSN 与口令不得出现在 argv 或输出。
+- 阶段 6 沙箱的出口按运行位置分别验证：宿主侧 preflight 可使用其显式解析的应用代理；
+  容器内的 Demo REST、行情与 authenticated private WS 必须通过容器实际配置与网络上下文验证
+  （允许直连）；离机 DR 保持其专属 LAN/strict-key SSH/S3 路径，并与 Demo/应用代理隔离。
+  所有 venue 检查绑定同一 Demo 环境与账户、按各自协议使用正确 endpoint，不得静默代理回退或
+  endpoint 替换；配置与观测证据必须标明哪项检查走了哪条路径。宿主 REST 成功不能替代容器
+  REST/WS 就绪证据。
+- 健康 reason 中的对账事实（BALANCE_MISMATCH、UNBOOKED_EXECUTIONS、UNKNOWN_EXECUTION、
+  FILL_OBSERVATION_MISMATCH、TERMINAL_EXECUTION_MISMATCH、INCOMPLETE_SNAPSHOT、
+  STALE_SNAPSHOT、UNKNOWN_ORDER、UNKNOWN_COMMAND）与未决侧一致，使用 30 分钟对账恢复界；
+  `dr_backups_fresh` 的 300s RPO 仍是独立的严格判据。
+- 观察客户端的 control 会话有界（默认 43200s）。会话到期后以 401 **响应**（不是异常）
+  返回；观察客户端据此清除令牌并在**同一样本内**重新登录重试，因此每个采样行仍带完整
+  `metrics` 证据体，不会因为会话过期在窗口后半段丢失覆盖证明与未决证据。
+- 窗口门禁对证据密度 fail-closed：带完整 `metrics` 体的采样数必须达到预期采样的 90%，
+  证据采样之间的最大间隔（含窗口末端到最后一个证据采样）不得超过采样间隔上限，覆盖证明
+  必须在窗口末端仍然新鲜：新鲜度上界由 reconcile 节奏派生 `max(300s, 2×reconcile_interval + 采样间隔上限)`（默认 780s），`coverage.recorded_at_ms` 必填、缺失按 fail-closed 判否，`window.json` 输出 `coverage_fresh_limit_ms` 与 `coverage_missing_recorded_at_ms`；缺证据的采样不得清空未决状态，也不得被视为"无未决、无重复发送"。
+- 连续沙箱窗口以 `window.json` 记录真实 `started_at_ms`/`ended_at_ms`、采样数、
+  健康转换、DR 备份/恢复周期、覆盖证明时间与不变量判定；主机崩溃或监督进程重启
+  必须写 `window_aborted`，不得用配置时长或 `exit 0` 代替实际窗口。
+- 每次窗口启动由 supervisor 在产生任何 Demo/账户/Compose/DR 副作用之前取得
+  本机级非阻塞独占 guard（身份跨 run ID/入口稳定，手动/包装/直接执行共用），并持有到
+  安全清理结束：并发启动者以 `STARTUP_GUARD_HELD` 零副作用退出；锁空闲但存在存活
+  observer/DR 隧道进程或运行中的 `qts_p6_sandbox_*` 容器时以
+  `STARTUP_ORPHAN_DETECTED` fail-closed，Docker 不可用时
+  `STARTUP_ORPHAN_CHECK_UNAVAILABLE`；supervisor 归属由 OS 锁裁决，启动中/退出中的
+  非 owner supervisor 不作为孤儿；窗口结束或中止后停止本窗口容器（只 stop、保留容器
+  与日志），崩溃路径由下一次启动的孤儿检测拦截。
+- preflight 在完整 runtime reconciliation lookback 上按实时 venue 事实复核：无 qts- 成交
+  （`SANDBOX_LOOKBACK_NOT_CLEAN`）且无挂单（`SANDBOX_ACCOUNT_HAS_OPEN_ORDERS`），
+  不得以等待时间戳或本地账本重置掩盖孤儿订单/命令/占用。
+- 窗口时长以 observer 起止 marker 的 `monotonic_ms` 差值计（双方均存在时）；仅旧 marker
+  缺该字段时回退墙钟，整除截断只会低估、不会把短窗口伪造成 24h。
+
+#### 13.17.1 分段累计与 resume（2026-11-10）
+
+- 原始连续窗口 `20261109T011441Z-efbba899` 在声明停止时存在 481449ms 的离机 DR RPO 违约，
+  已按 `not_acceptance_continuous` 归档；原始证据（`evidence_digest=6498dad2…`）与所有
+  失败/中止段保留，不重写、不拼接。原窗口的连续 24h 不再是必要验收条件。
+- 用户/父级授权采用**分段累计**：续跑段通过
+  `scripts/sandbox_supervisor.py --resume-from-run 20261109T011441Z-efbba899 --segment-index <n>`
+  启动，复用原 Compose 项目/卷/密钥/数据库身份与原端口（postgres 56430、control 56431、
+  alert 56432），不新建数据库/凭据，不重新分配账户；每段启动前 lease/fencing token 递增，
+  段内由执行进程持有。不得启动新的独立 24h 窗口，不得并行启动第二个 supervisor。
+- 续跑段必须使用 observation-only 策略（`trader.strategies.observation_only` 插件，或
+  `trader.strategies.fire_test` 的 `observation_only=true`）：保留原 book 身份，但不产生
+  新信号/新命令。段内 commands/executions 必须保持不变；唯一例外是已披露的失败段
+  `595fbb5b` 的 `resume_queued` 成交（`qts-83facbd2aaa50265fea81071` / trade `340241327`，
+  Demo 非真实资金）。任何未披露的新订单/新成交都按 blocking finding 处理。
+- 每段启动前必须同时满足：startup guard 取得本机级 OS 锁（并发 `STARTUP_GUARD_HELD`；
+  孤儿 `STARTUP_ORPHAN_DETECTED`；Docker 不可用 `STARTUP_ORPHAN_CHECK_UNAVAILABLE`）；
+  3 个连续 verified off-host DR cycle；continuation baseline 与段 preflight 的
+  counts/identity 一致；无挂单；runtime lookback 内无 qts- 成交；原 DB identity
+  （executions/ledger/events 稳定 ID 摘要）保持；原 secrets/volumes 未更换。
+- 每段 `segment.json` 至少记录：`segment_index`、`resume_from`、`observation_only`、
+  `dr_ready_cycles`、`lease_before/after`、`db_baseline`、`db_identity_hashes`、
+  `original_evidence_digest`、`qualified_rule_version=qualified-v3`。当前 supervisor 在
+  `segment.json` 写 `db_baseline` 路径；实际使用的 baseline sha256 与每段 preflight
+  identity 记录在不可覆盖的 `segment-lineage-20261110.json`（历史段 2/3 的 `segment.json`
+  无 sha 字段，属于 11:05 前的行为）；后续版本应在 `_write_segment_metadata` 增加
+  `db_baseline_sha256`，届时以 `segment.json` 字段为准。
+  失败/中止段归档到 `windows-aborted/<run_id>/`，保留 `window.json`/posthoc summary；
+  已归档证据不得改写。
+- guard 锁元数据仅作诊断：竞争失败者可能在同一窗口读到上一 owner 的 PID，但归属由
+  OS 锁裁决，退出码保持 `[0,3]` 且无副作用（tester round18 advisory）。
+- `qualified-v3` 累计口径（`scripts/phase6_segment_aggregate.py`）：每个采样必须
+  `health.body.ready=true` 且 reasons 为空、metrics 证据完整、unresolved 清空、
+  coverage/reconciliation/risk/DR 年龄在界内、sample gap ≤180s、`balance_anomalies=0`、
+  余额差异为空或已证明；重复发送/执行回归/重启/中止/ready+unresolved/覆盖证明缺失/
+  head 或 internal DR 违约等强不变量使整段失效；DR internal breach 使整段失效，
+  tail breach 仅排除受影响的尾部。`acceptance_satisfied` 需要累计 qualified
+  ≥86,400,000ms、所有段 `run_valid`、无未解释未决，并完成独立 tester + fresh reviewer
+  签核；聚合工具本身不推进 6.1/6.2。
+- 当前 final 证据（2026-11-11）：`segment-continuation-20261109/aggregate-final-20261111.json`
+  （original 19,874,125ms / validation 872,313ms / segment5 73,664,222ms /
+  cumulative 94,410,660ms / remaining 0 / `acceptance_satisfied=true`）。segment 5
+  `20261110T075417Z-cc17f251` 的 24h `window.json` passed=true（20/20 criteria、
+  2,872 samples、DR 712/0）。长段 `36448c34` 与 segment 4 `703b71af` 均零计入：前者按
+  RFC tail 规则的 1,143,515ms 未采用（保守零计入），后者为 incident
+  `P6-INC-20261110-01` 的并发 operator/engineer lease recovery + postgres stop；
+  原始窗口的 `not_acceptance` 与 481449ms RPO 违约保留。tester round20 已 pass
+  6.1–6.12；reviewer round14 的代码/门禁 findings 修复后的 fresh reviewer 签核
+  是最终 handoff 的前置条件。
+- 最终 continuation baseline `db-baseline-continuation-20261110.json`
+  （67/721/65/199/319，role=`post_acceptance_record`，sha `ac406c0c…`）是验收记录，
+  不再作为下一段锚点；`segment-lineage-20261110.json`（sha `9be523c0…`）记录各段
+  preflight identity、451/721 事件归因与 segment 4 的 incident 更正。`segment.json`
+  中段 2/3 的 `db_baseline` 路径字段按历史保留，不回写。
+- 主机 WiFi/路由/代理/防火墙不得由自动化修改。备份机不可达或 DR 证据不满足时
+  fail-closed，不启动新段；已启动段按窗口/段规则停止并保留证据。
 
 ---
 ## 15. 测试隔离与本地 Postgres
@@ -2955,6 +3542,19 @@ warmup_source=None, on_block=None)`
 - 回归用例：`trader/tests/test_execution_projection_cursor.py::test_projection_cursor_never_touches_postgres_when_pinned_to_memory`
   ——把 PG 探测伪造成「可用」，并把 `PostgreSQLStorage` 替换为「一旦构造就失败」的桩，
   以此证明内存仓库在任何环境下都不会触碰真实库。
+
+### 15.4 阶段 0 基线测试的隔离与 xfail 约定（2026-11-02）
+
+- `trader/tests/test_phase0_foundation_safety.py` 是阶段 0 新增的**基线**测试：
+  只使用 `MemoryTradingStore` 与确定性 fake 交易所，不访问网络、不访问 PostgreSQL、
+  不接触真实账户，因此**不属于**需要显式 DSN 的集成测试，可直接运行：
+  `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --tb=short`。
+- 阶段 0 期间该文件的两个用例用 `@pytest.mark.xfail(strict=True)` 固定"当前必须失败"的缺陷；
+  约定是 **XPASS 视为失败**、不得把错误行为改写成通过断言、阶段 1 修复后删除标记。
+- **阶段 1 已删除两个 `xfail` 标记**，安全断言转为普通通过断言；预期结果改为 **2 passed**。
+  阶段 0 的 `2 xfailed` 结果只作为历史基线保留，不再适用于当前分支。
+- 诊断历史失败点时曾用 `python -m pytest -q trader/tests/test_phase0_foundation_safety.py --runxfail --tb=short`
+  确认失败点是目标断言而非 setup 错误；阶段 1 起不再需要该诊断命令。
 
 ---
 
@@ -3043,3 +3643,233 @@ warmup_source=None, on_block=None)`
   成本（资金/费率/滑点/总费用）、收益与回撤、成交与拒绝统计、`limitations`。
 
 `provenance` 在提交时冻结进 manifest 并参与 manifest 哈希，执行前由 worker 复核。
+
+### 13.18 CI/CD 发布接口、环境键与证据字段（2026-11-04）
+
+本节是 CI/CD 专项的增量契约，不改变 13.1–13.16 的公开 HTTP 语义、账本/预约守恒、
+`QTS_DEPLOYMENT_ID` 的策略实例语义、租约/fencing 协议或 Control→Execution 命令边界。
+操作步骤见 `docs/CI_CD_RELEASE_RUNBOOK.md`，拓扑见 `docs/PROJECT_ARCHITECTURE.md` 8.5。
+
+**公开 API**
+
+- 不新增公开路由；`/health/live`、`/health/ready`、`/v1/trading/metrics` 的响应字段不变。
+  `/health/trading` 增加非秘密的 `release` 块（`release_id`/`commit`/`image_digest`/
+  `environment`，来自进程环境），control 侧并给出 `instance_owner`/`lease_token`/
+  `generation`，供观察窗口把每个样本绑定到实际运行的 release。`QTS_RELEASE_ID` 仍只用于
+  Compose label、日志和证据关联，**不是**执行 owner、租约 token 或策略实例标识。
+- `QTS_DEPLOYMENT_ID` 仍只表示策略运行实例；不得用 release id 替代或覆盖。
+
+**Demo Compose 环境键（`deploy/demo.env.example`）**
+
+| 键 | 语义 |
+| --- | --- |
+| `QTS_COMPOSE_PROJECT` | 必填；独立 Demo project，所有容器/卷按 project 隔离 |
+| `QTS_RELEASE_IMAGE` | 必填；`repo@sha256:<64 hex>`，应用服务唯一镜像 |
+| `QTS_EXPECTED_DIGEST` | 必填；必须与 `QTS_RELEASE_IMAGE` 的 digest 一致 |
+| `QTS_RELEASE_ID` / `QTS_RELEASE_COMMIT` | 发布证据关联；commit 必须为 40 位小写 hex |
+| `QTS_PREVIOUS_IMAGE_DIGEST` | 回滚目标 digest；用于 rollback evidence 校验 |
+| `QTS_POSTGRES_IMAGE` / `QTS_ALERT_IMAGE` | 必填；postgres/python 运行镜像的 digest pin |
+| `BINANCE_ENV` | overlay 硬编码为 `demo`；env 文件不能改成 testnet/production |
+| `QTS_ACCOUNT_ID` / `QTS_SYMBOLS` / `QTS_INSTRUMENTS` | Demo 专用账户与下单 allowlist；symbol 必须全部有 instrument 映射 |
+| `QTS_AUTH_REQUIRED` / `QTS_USERNAME` | Control API 必须启用会话鉴权；`QTS_AUTH_REQUIRED` 必须为 `1`，否则预检返回 `AUTH_REQUIRED_NOT_ENABLED` |
+| `QTS_STRATEGY_MODULE` / `QTS_STRATEGY_WARMUP_EVENTS` | 策略模块与预热下界；warmup 必须 >0 |
+| `QTS_EXTERNAL_ALERT_WEBHOOK_URL` | 外部告警 ack 路径；必须 https 且不是集群内 alert-sink |
+| `QTS_DR_REQUIRED` / `QTS_DR_EVIDENCE_PATH` / `QTS_BACKUP_RPO_SECONDS` / `QTS_BACKUP_OFF_HOST_ATTESTED` | DR gate 输入；RPO ≤300s，证据由 `trader.ops.dr_evidence` 校验 |
+| `QTS_SCHEMA_VERSION` / `QTS_SCHEMA_COMPAT_EVIDENCE_PATH` / `QTS_ROLLBACK_COMPAT_EVIDENCE_PATH` | expand-only 迁移与旧 digest 回滚兼容证据；不可逆或不兼容时拒绝自动回滚 |
+| `POSTGRES_PASSWORD` / `QTS_PASSWORD_HASH` / `QTS_ALERT_SIGNING_SECRET` | 只由受控 secret 注入；默认口令、占位符、缺失值均被预检拒绝 |
+
+`deploy/compose.demo.yml` 对 control/execution/research/history/backup 使用
+`QTS_RELEASE_IMAGE` 且 `build: !reset null`；宿主端口默认 65432（PG）、18090（Control）、
+18085（alert-sink）；容器 label 记录 `com.qts.release.id`、`com.qts.release.commit` 和
+`com.qts.environment=demo`。
+
+**发布预检 reason code**
+
+`scripts/deploy_preflight.py` 输出 `{ok, environment, release_id, release_commit,
+release_digest, errors:[{code,key}], warnings, checked_keys, host_evidence_evaluated}`，
+只含键名与稳定 code，不含值。`--no-host-evidence` 只用于不接触主机的远端 dry-run：
+它把 DR/schema/rollback 主机文件检查标为 `HOST_EVIDENCE_DEFERRED`，不构成部署批准；
+受保护 Demo runner 在启动容器前必须再执行一次完整预检（`host_evidence_evaluated=true`）。
+稳定 code 包括：`BINANCE_ENV_NOT_DEMO`、`POSTGRES_PASSWORD_DEFAULT_OR_MISSING`、
+`ALERT_SIGNING_SECRET_MISSING`、`AUTH_REQUIRED_NOT_ENABLED`、`CONTROL_PASSWORD_HASH_MISSING`、
+`ACCOUNT_ID_MISSING`、`ACCOUNT_ID_NOT_DEDICATED`、`SYMBOLS_MISSING`、`INSTRUMENTS_MISSING`、
+`INSTRUMENT_SYMBOL_MISMATCH`、`STRATEGY_MODULE_MISSING`、`STRATEGY_WARMUP_MISSING`、
+`EXTERNAL_ALERT_MISSING`、`EXTERNAL_ALERT_HEARTBEAT_MISSING`、`DR_REQUIRED_NOT_ENABLED`、`DR_EVIDENCE_PATH_MISSING`、
+`BACKUP_RPO_EXCEEDED`、`OFF_HOST_BACKUP_NOT_ATTESTED`、`RELEASE_ID_MISSING`、
+`RELEASE_COMMIT_INVALID`、`RELEASE_IMAGE_DIGEST_MISSING`、`RELEASE_IMAGE_DIGEST_MISMATCH`、
+`EXPECTED_DIGEST_MISSING`、`RELEASE_MANIFEST_COMMIT_MISMATCH`、`RELEASE_MANIFEST_DIGEST_MISMATCH`、
+`RELEASE_MANIFEST_ID_MISMATCH`、`RELEASE_MANIFEST_EVIDENCE_MISSING:<key>`、
+`RELEASE_MANIFEST_STARTUP_SMOKE_FAILED`、`SCHEMA_VERSION_MISSING`、`SCHEMA_COMPAT_EVIDENCE_MISSING`、
+`SCHEMA_COMPAT_EVIDENCE_INVALID`、`PREVIOUS_DIGEST_MISSING`、`ROLLBACK_COMPAT_EVIDENCE_MISSING`、
+`ROLLBACK_COMPAT_EVIDENCE_INVALID`、`ROLLBACK_DIGEST_MISMATCH`、
+`ROLLBACK_RELEASE_DIGEST_MISMATCH`、`HOST_EVIDENCE_DEFERRED`（仅 warning，dry-run），
+以及 DR gate 的 `DR_*`。
+
+**Release manifest**
+
+`scripts/release_manifest.py` 生成 JSON：`schema_version`、`release_id`、`created_at`、
+`commit`、`tree_clean`、`ref`、`workflow`、`workflow_run`、`image`、`image_digest`、
+`schema_version_applied`、`environment`、`dependencies.{ci_constraints,runtime_constraints}`
+（路径、present、SHA-256）、`evidence.{junit,coverage,frontend,sbom,scan,startup_smoke}`（文件 SHA-256 或
+目录树摘要）、`startup_smoke_summary.{passed,image,image_digest_ok,all_health}`、
+`non_claims`。manifest 不包含秘密，也不构成部署或 Demo 验收声明。
+默认（发布路径）**必须**提供全部必需证据：CI JUnit、coverage、前端 dist、SBOM、扫描
+结果和固定 digest 的启动 smoke；缺任一项即 `RELEASE_EVIDENCE_MISSING:<key>`，
+启动 smoke 未通过或 digest 不一致即 `RELEASE_STARTUP_SMOKE_NOT_PASSED` /
+`RELEASE_STARTUP_SMOKE_DIGEST_MISMATCH`。`scripts/deploy_preflight.py` 在校验
+release manifest 时重复检查这些证据（`RELEASE_MANIFEST_EVIDENCE_MISSING:<key>`、
+`RELEASE_MANIFEST_STARTUP_SMOKE_FAILED`），不允许只声明不提供。
+
+**Observation summary**
+
+`scripts/summarize_observation.py` 保留原有字段并新增：`min_ready_ratio`、
+`max_reconciliation_age_ms`、`reconciliation_age_evidence_present`、
+`final_reconciliation_age_ms`、`final_outbox_backlog`、`final_unbooked_fills`、
+`duplicate_or_resend_samples`、`release_binding`、`strict_release`。新增字段：
+`min_hours`、`strict_min_hours`、`effective_min_hours`、`strict_metrics_checked`、
+`strict_metrics_missing`、`strict_metrics_invalid`。新增 blocker：
+`READY_RATIO_BELOW_THRESHOLD`、`RECONCILIATION_AGE_UNKNOWN`、`RECONCILIATION_AGE_EXCEEDED`、
+`OUTBOX_BACKLOG_AT_END`、`UNBOOKED_FILLS_AT_END`、`DUPLICATE_OR_RESEND_EVIDENCE`、
+`RELEASE_EVIDENCE_MISSING`、`RELEASE_EVIDENCE_INVALID`、`RELEASE_ENVIRONMENT_NOT_DEMO`、
+`RELEASE_COMMIT_MISMATCH`、`RELEASE_COMMIT_INVALID`、`RELEASE_DIGEST_MISMATCH`、
+`RELEASE_DIGEST_INVALID`、`RELEASE_ID_MISSING`、`STRICT_WINDOW_SHORTER_THAN_24H`、
+`STRICT_METRICS_MISSING:<keys>` / `STRICT_METRICS_INVALID:<keys>`（聚合行）以及逐键 `STRICT_METRICS_MISSING:<key>` / `STRICT_METRICS_INVALID:<key>`、
+`RELEASE_RUNTIME_BINDING_MISSING`、`RELEASE_RUNTIME_CHECKS_MISSING`、
+`RELEASE_RUNTIME_CHECK_FAILED:<key>`、`RELEASE_RUNTIME_CONTAINERS_MISSING`、
+`RELEASE_RUNTIME_BINDING_INVALID`。历史兼容模式不因缺少 metrics 字段而失败；
+`--strict-release` 额外强制：窗口 ≥24h（`--strict-min-hours` 不得低于 24）、每个样本必须
+带 `reconciliation_age_ms`/`outbox_backlog`/`unbooked_fills`/`unknown_commands`/
+`balance_anomalies` 显式计数器（缺失或类型非法即阻断，缺席不等于零），且 release
+evidence 必须是目标主机实际 inspect 得到的运行时绑定。
+
+### 13.19 发布 provenance、运行时绑定与部署门禁（2026-11-05）
+
+父级最终核验提出的 F-P1..F-P8 对应的可执行门禁，配置键与语义如下（均不输出秘密值）。
+
+**`scripts/verify_release_provenance.py`（发布 provenance 门禁）**
+
+- 输入：`--run-id`、`--repository`、`--manifest`、`--commit`、`--digest`、`--release-id`、
+  可选 `--run-json`（离线测试用）或 `GITHUB_TOKEN`（在线拉取）。
+- 通过条件：Release Build run 是 `workflow_run` 触发、路径为
+  `.github/workflows/release-build.yml`、分支为 `main`、`status=completed`、
+  `conclusion=success`、`head_sha` 等于请求 commit，且 manifest 的
+  release_id/commit/image_digest/environment 与请求一致。
+- 失败 code：`PROVENANCE_EVENT_MISMATCH`、`PROVENANCE_WORKFLOW_MISMATCH`、
+  `PROVENANCE_BRANCH_MISMATCH`、`PROVENANCE_RUN_NOT_COMPLETED`、
+  `PROVENANCE_RUN_NOT_SUCCESSFUL`、`PROVENANCE_HEAD_SHA_MISMATCH`、
+  `PROVENANCE_RUN_ID_MISMATCH`、`PROVENANCE_REPOSITORY_MISMATCH`、
+  `MANIFEST_COMMIT_MISMATCH`、`MANIFEST_DIGEST_MISMATCH`、
+  `MANIFEST_RELEASE_ID_MISMATCH`、`MANIFEST_ENVIRONMENT_NOT_DEMO`、
+  `EXPECTED_COMMIT_INVALID`、`EXPECTED_DIGEST_INVALID`。
+- 受保护 Demo 工作流必须先跑该门禁，再 checkout `inputs.commit` 或执行带 secrets 的脚本。
+
+**`scripts/collect_runtime_release_binding.py`（运行时绑定采集）**
+
+- 输出 JSON：`runtime_inspected=true`、`compose_project`、`environment=demo`、
+  `release_id`、`commit`、`image_digest`、`containers{<service>:{name,running,health,image,labels}}`、
+  `health.{live,ready,trading}`、`owner_evidence`（健康端点不暴露租约 owner/fencing 时
+  明确写出缺失原因）、`checks.{all_running,all_healthy,labels_match,
+  image_digest_match,trading_ready}`、`errors`。
+- 失败 code：`CONTAINER_MISSING:<service>`、`CONTAINER_NOT_RUNNING:<service>`、
+  `CONTAINER_NOT_HEALTHY:<service>:<status>`、`LABEL_RELEASE_ID_MISMATCH:<service>`、
+  `LABEL_RELEASE_COMMIT_MISMATCH:<service>`、`LABEL_ENVIRONMENT_MISMATCH:<service>`、
+  `IMAGE_DIGEST_MISMATCH:<service>`、`HEALTH_LIVE_NOT_200`、`HEALTH_READY_NOT_200`、
+  `HEALTH_TRADING_NOT_READY`。
+
+**`scripts/deploy_gate.py`（部署前后门禁）**
+
+- `--mode pre`：要求新增风险已关闭（`new_risk_blocked=true`）、命令已收敛
+  （UNKNOWN/QUEUED/SENDING 均为 0）、outbox 无积压、无未入账成交、租约有效且
+  runtime owner/fencing 与租约一致、live/ready 为 200。
+- `--mode post`：在 pre 的基础上要求全部容器 healthy、应用容器 label/digest 与发布一致、
+  `/health/trading` 200 且 `ready=true`（发布前已关闭新增风险时允许 503 且 reasons 恰为
+  `NEW_RISK_BLOCKED`）。
+- `--wait-timeout`/`--poll-interval`：post 门禁在有界超时内轮询
+  （`up -d` 返回时容器仍为 starting），超时后才判定失败；pre 门禁不等待。脚本 argparse
+  默认 0（单次），`deploy-demo.yml` 显式传 600s/15s。
+- 事实采集：PostgreSQL 布尔经 `psql -tAc` 渲染为 `t`/`f`，实现按 `t/true/1/yes/on` 与
+  `f/false/0/no/off` 解析；空值或无法解析的值是“未知”，不是零。
+- 失败 code：`NEW_RISK_NOT_BLOCKED`、`NEW_RISK_STATE_UNKNOWN`、
+  `UNKNOWN_COMMANDS_PRESENT`、`COMMANDS_NOT_CONVERGED:QUEUED`、
+  `COMMANDS_NOT_CONVERGED:SENDING`、`OUTBOX_PENDING`、`UNBOOKED_FILLS_PRESENT`、
+  `EXECUTION_LEASE_INVALID`、`EXECUTION_OWNER_NOT_ALIGNED`、
+  `EXECUTION_FENCING_NOT_ALIGNED`、`FACTS_INVALID:<key>`（缺失或不可解析的事实，
+  含 `FACTS_INVALID:lease`、`FACTS_INVALID:runtime`）（健康/容器/label/digest 失败码同上）。
+
+### 13.20 父级第 2 轮核验：采集边界、运行时身份、输入注入与 artifact 传递链（2026-11-05）
+
+父级第 2 次核验（F-P1/F-P2/F-P3/F-P5/F-P8）后的可执行契约，取代 13.19 中对应的宽松语义。
+
+**观察窗口边界（F-P1）**
+
+`scripts/observe_trading_runtime.py` 的窗口从**第一个实际记录样本**起算（在 HTTP client
+初始化之后），末样本取到“首样本时间 + 请求时长”或之后：请求 24h 必须得到 ≥24h 的跨度，
+不会因 client 初始化/请求耗时或“时长减一个采样间隔”而缩短。strict 的 24h 下限不因此放宽。
+
+整合后观察器保留阶段 6 的 `kind=sample` / `kind=marker` / `kind=transition`、`seq`、
+`monotonic_ms`、`attempts` 与 supervisor 证据，并在每个 sample 增加 `runtime` 身份；密码只经
+`--password-file`/环境读取，不接受 argv 明文。`summarize_observation.py` 只把 `kind=sample`
+（或无 `kind` 的旧格式）计为样本，marker/transition 不计入样本，但 marker 仍用于窗口门禁。
+
+**运行时身份（F-P2）**
+
+- `/health/trading` 的响应新增 `release` 块：`release_id`、`commit`、`image_digest`、
+  `environment`；control 侧同时给出 `instance_owner` 与 `lease_token`。
+- 观察器把该身份写进**每个样本**的 `runtime` 字段
+  （`release_id`、`commit`、`image_digest`、`environment`、`instance_owner`、
+  `lease_token`、`observed_at_ms`）。
+- `scripts/collect_runtime_release_binding.py` 的 binding 新增 `runtime` 块（取自同一次
+  健康响应）与 `errors`（采集错误必须为空）。
+- `summarize_observation.py` 新增 `--expected-release-id`：由已验证 manifest 提供 release id，
+  用于锚定 binding 的 release label 校验；不传时退化为 binding 自身一致性检查（自指），
+  受保护工作流始终传入。
+- `scripts/release_binding.py` 校验实际事实而不是声明的布尔位：
+  - binding 事实：`RELEASE_RUNTIME_BINDING_MISSING`、`RELEASE_RUNTIME_CHECKS_MISSING`、
+    `RELEASE_RUNTIME_CHECK_FAILED:<key>`、`RELEASE_RUNTIME_ERRORS_MISSING`（缺 `errors`
+    键不等于采集无错误）、`RELEASE_RUNTIME_ERRORS_INVALID`、`RELEASE_RUNTIME_ERROR_PRESENT:<code>`、
+    `RELEASE_RUNTIME_GENERATED_AT_INVALID`、`RELEASE_RUNTIME_CONTAINERS_MISSING`、
+    `RELEASE_RUNTIME_CONTAINER_MISSING:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_NOT_PRESENT:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_NOT_RUNNING:<service>`、
+    `RELEASE_RUNTIME_CONTAINER_UNHEALTHY:<service>:<status>`、
+    `RELEASE_RUNTIME_CONTAINER_IMAGE_MISMATCH:<service>`、
+    `RELEASE_RUNTIME_LABEL_MISMATCH:<service>:<field>`、
+    `RELEASE_RUNTIME_HEALTH_MISSING`、`RELEASE_RUNTIME_HEALTH_NOT_READY:<live|ready|trading>`、
+    `RELEASE_RUNTIME_IDENTITY_MISSING[:<field>]`、`RELEASE_RUNTIME_IDENTITY_MISMATCH:<field>`、
+    `RELEASE_RUNTIME_OWNER_MISSING`。
+  - 样本归属：`SAMPLE_RUNTIME_IDENTITY_MISSING[:<field>]`、
+    `SAMPLE_RUNTIME_IDENTITY_MISMATCH:<field>`、
+    `SAMPLE_RUNTIME_TIMESTAMP_MISSING`、`SAMPLE_RUNTIME_TIMESTAMP_MISMATCH`、
+    `RELEASE_BINDING_WINDOW_MISMATCH`（binding 的采集时间必须落在窗口内）。
+    比较的样本身份字段是 release_id/commit/image_digest/environment；owner 记录在样本中
+    供审计，fencing token 可能因窗口内受控重启而推进，因此不作为全窗口相等条件。
+  - 兼容性读取模式（非 strict）不使用这些规则。
+
+**输入注入（F-P5）**
+
+两个受保护工作流把操作员输入放进 step `env`，用 `[[ ... =~ ... ]]` 校验格式后再以
+`"$VAR"` 引用；`run:` 脚本中不再出现 `${{ inputs.* }}` 展开。校验失败码：
+`RELEASE_BUILD_RUN_ID_INVALID`、`RELEASE_COMMIT_INVALID`、`RELEASE_IMAGE_DIGEST_INVALID`、
+`RELEASE_ID_INVALID`、`OBSERVATION_HOURS_INVALID`、`OBSERVATION_HOURS_BELOW_24`。
+Demo secrets 只注入到需要它们的步骤（E2E/观察/预检/部署），provenance 步骤没有 Demo 密钥。
+
+**artifact 传递链（F-P8）**
+
+- Release Build 只上传 `reports/` 一个根：下载后 `release-manifest.json` 位于 artifact 顶层，
+  启动 smoke 位于 `compose-smoke/compose-smoke.json`。
+- 消费工作流把证据下载到 `${{ runner.temp }}/qts-release`，第二次 checkout（默认
+  `clean=true`）不会删除它；preflight/provenance 使用同一路径。
+- `demo-evidence.yml` 在观察窗口**之后**采集运行时绑定，strict 摘要据此比对窗口与身份。
+
+**真实采集验证**
+
+`scripts/verify_deploy_gate_live.py` 在任务自有 Compose 项目（独立 project/端口/卷）中，
+通过真实 `docker compose exec -T postgres psql -tAc` 采集事实并验证门禁；它不接触既有
+`qts-postgres`/`qts_pgdata`。
+
+**外部告警接线**
+
+`deploy/compose.demo.yml` 将 control/execution 的 `QTS_ALERT_WEBHOOK_URL` 与
+`QTS_ALERT_HEARTBEAT_URL` 显式绑定到 `QTS_EXTERNAL_ALERT_WEBHOOK_URL` /
+`QTS_EXTERNAL_ALERT_HEARTBEAT_URL`（必须 https 且非集群内主机）；`alert-sink` 只保留为
+本地演练路径，Demo 发布不得把外部告警指向它。

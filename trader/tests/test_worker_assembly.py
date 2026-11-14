@@ -4,10 +4,11 @@ from dataclasses import replace
 
 import pytest
 
+from trader.core.application.strategy_protocol import MarketDataType
 from trader.runtime.trading_worker_main import build_runtime
-from trader.tests.test_trading_runtime import snapshot
+from trader.tests.test_trading_runtime import snapshot, start_runtime
 from trader.tests.test_trading_service import Clock, FakeExchange, command
-from trader.trading.models import NotReady
+from trader.trading.models import NotReady, TradingError
 from trader.trading.store import MemoryTradingStore
 
 
@@ -23,6 +24,7 @@ def build(**overrides):
         clock=Clock(),
         command_interval_seconds=0,
         reconcile_interval_seconds=0,
+        strategy_id="test",
     )
     args.update(overrides)
     return build_runtime(**args)
@@ -66,7 +68,7 @@ def test_strategy_instruments_must_be_inside_the_coverage_symbols():
 async def test_worker_without_private_session_stays_explicitly_blocked():
     rt = build()
     try:
-        assert not await rt.start()
+        assert not await start_runtime(rt)
         assert "PRIVATE_SESSION_NOT_ASSEMBLED" in (await rt.readiness())["reasons"]
         with pytest.raises(NotReady):
             await rt.place(command())
@@ -78,7 +80,7 @@ async def test_worker_without_private_session_stays_explicitly_blocked():
 @pytest.mark.asyncio
 async def test_worker_constructs_session_after_lease_and_waits_for_recovery():
     rt = build(private_session_factory=CoveredSession)
-    assert await rt.start()
+    assert await start_runtime(rt)
     assert rt.ready
     session = rt.private_session
     await rt.place(command())
@@ -90,7 +92,7 @@ async def test_worker_constructs_session_after_lease_and_waits_for_recovery():
 @pytest.mark.asyncio
 async def test_session_block_closes_live_command_and_strategy_gate():
     rt = build(private_session_factory=CoveredSession)
-    assert await rt.start()
+    assert await start_runtime(rt)
     try:
         await rt.block("PRIVATE_STREAM_DISCONNECTED")
         assert not rt.strategy_start_allowed
@@ -131,7 +133,7 @@ def session_factory(*, covered):
 async def test_worker_real_session_without_coverage_reports_precise_blocker():
     rt = build(private_session_factory=session_factory(covered=False))
     try:
-        assert not await rt.start()
+        assert not await start_runtime(rt)
         assert "PRIVATE_STREAM_COVERAGE_UNPROVEN" in (await rt.readiness())["reasons"]
         assert not (await rt.store.read("acct")).control["runtime"]["ready"]
     finally:
@@ -155,11 +157,20 @@ async def test_worker_strategy_to_ws_fill_uses_one_ledger_and_disconnect_blocks_
     )
 
     class Market:
+        calls = 0
+
+        async def get_klines(self, symbol, interval="1m", limit=200):
+            Market.calls += 1
+            # One closed 1m bar: open 940_000 + 60_000 = close 1_000_000 ms,
+            # matching the fake runtime clock. Binance reports the inclusive
+            # last millisecond as closeTime.
+            return [[940_000, "100", "100", "100", "100", "1", 999_999]]
+
         async def get_ticker_prices(self, symbols):
-            return {"BTCUSDT": Decimal("100")}
+            raise AssertionError("the closed-bar feed must not read tickers")
 
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         await feed_market_once(rt, Market(), {"BTCUSDT": ("BTC", "USDT")})
         assert len(rt.exchange.placed) == 1
         order_id = rt.exchange.placed[0][1]
@@ -192,6 +203,54 @@ async def test_worker_strategy_to_ws_fill_uses_one_ledger_and_disconnect_blocks_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data_type", [item for item in MarketDataType if item is not MarketDataType.KLINE]
+)
+async def test_runner_rejects_every_non_kline_before_side_effects(data_type):
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    from trader.core.application.strategy_protocol import MarketData
+    from trader.tests.test_unified_strategy_runner import Plugin
+    from trader.trading.strategy import UnifiedStrategyRunner
+
+    rt = build(
+        private_session_factory=session_factory(covered=True),
+        strategy_plugin=Plugin(),
+        instruments={"BTCUSDT": ("BTC", "USDT")},
+        deployment_id="worker-non-bar-gate",
+    )
+    assert await start_runtime(rt)
+    observation = MarketData(
+        symbol="BTCUSDT",
+        data_type=data_type,
+        price=Decimal("100"),
+        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+    )
+    try:
+        # Both the production assembly and the default constructor are strict.
+        for candidate in (
+            rt.strategy_runner,
+            UnifiedStrategyRunner(
+                rt,
+                deployment_id="default-non-bar-gate",
+                plugin=Plugin(),
+                instruments={"BTCUSDT": ("BTC", "USDT")},
+                book_id="book:test",
+            ),
+        ):
+            with pytest.raises(TradingError, match="NON_BAR_MARKET_DATA"):
+                await candidate.on_market_data(observation, event_id=f"non-bar-{data_type.value}")
+        assert rt.exchange.placed == []
+        state = await rt.store.read("acct")
+        assert not state.orders
+        assert not state.commands
+        assert not state.holds
+    finally:
+        await rt.stop()
+
+
+@pytest.mark.asyncio
 async def test_worker_blocks_when_the_strategy_warmup_cannot_be_satisfied():
     from trader.runtime.trading_worker_main import enforce_strategy_warmup
 
@@ -209,7 +268,7 @@ async def test_worker_blocks_when_the_strategy_warmup_cannot_be_satisfied():
         deployment_id="worker-warmup",
     )
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         assert await enforce_strategy_warmup(rt) is False
         readiness = await rt.readiness()
         assert "STRATEGY_WARMUP_NOT_CONFIGURED" in readiness["reasons"]
@@ -242,21 +301,34 @@ async def test_worker_warms_a_declared_plugin_from_the_recollected_window():
     )
     rt.strategy_runner.warmup_source = source
     try:
-        assert await rt.start()
+        assert await start_runtime(rt)
         from datetime import datetime, timezone
         from decimal import Decimal
 
         from trader.core.application.strategy_protocol import MarketData, MarketDataType
 
-        history.extend(
-            MarketData(
+        def closed_bar(index):
+            open_ms = (880 + index * 60) * 1000
+            close_ms = open_ms + 60_000
+            return MarketData(
                 symbol="BTCUSDT",
                 data_type=MarketDataType.KLINE,
-                price=Decimal("100"),
-                timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+                price=Decimal(str(100 + index)),
+                timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+                available_at_ms=close_ms,
+                kline_close=Decimal(str(100 + index)),
+                kline_interval="1m",
+                metadata={
+                    "bar_id": f"bar:BTCUSDT:1m:{open_ms}",
+                    "open_time_ms": open_ms,
+                    "close_time_ms": close_ms,
+                    "interval": "1m",
+                    "complete": True,
+                    "is_closed": True,
+                },
             )
-            for _ in range(2)
-        )
+
+        history.extend([closed_bar(0), closed_bar(1)])
         assert await enforce_strategy_warmup(rt) is True
         assert rt.strategy_runner.warmup_state is WarmupState.WARM
         assert rt.strategy_runner.warmup_remaining == 0

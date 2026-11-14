@@ -12,6 +12,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from trader.trading import books as book_ledger
+from trader.trading.core import policy_from_config
 from trader.trading.datasets import (
     canonical,
     dataset_metadata,
@@ -19,12 +21,62 @@ from trader.trading.datasets import (
     digest,
     freeze_dataset,
 )
+from trader.trading.eligibility import (
+    DATASET_ELIGIBILITY_GATE_UNAVAILABLE,
+    DATASET_PROVENANCE_MISMATCH,
+    DATASET_PROVENANCE_UNTRUSTED,
+    HISTORY_STORE_UNAVAILABLE,
+    link_is_trusted,
+)
 from trader.trading.research_schema import research_schema_sql
 from trader.trading.version import SPOT_RUNTIME_VERSION
 
+_STRATEGY_FIELDS = frozenset(
+    {"module_path", "params", "version", "code_hash", "strategy_id", "book_id"}
+)
+_MANIFEST_FIELDS = frozenset(
+    {
+        "dataset_ids",
+        "strategy",
+        "strategies",
+        "book_allocations",
+        "initial_cash",
+        "fee_bps",
+        "slippage_bps",
+        "engine",
+        "purpose",
+        "risk_config",
+        "provenance",
+        "runtime_version",
+    }
+)
+
+
+def _positive_decimal(value: Any, code: str) -> "Decimal":
+    from decimal import Decimal, DecimalException
+
+    try:
+        amount = Decimal(str(value))
+    except (DecimalException, TypeError, ValueError):
+        raise ValueError(code) from None
+    if not amount.is_finite() or amount <= 0:
+        raise ValueError(code)
+    return amount
+
+
+def _strategy_identity(spec: dict) -> tuple[str, str]:
+    """Resolve the stable ``strategy_id``/``book_id`` pair of one strategy."""
+    strategy_id = spec.get("strategy_id")
+    if not isinstance(strategy_id, str) or not strategy_id.strip():
+        raise ValueError("Joint strategies require a non-empty strategy_id")
+    strategy_id = strategy_id.strip()
+    book_id = book_ledger.book_id_for(strategy_id)
+    book_ledger.validate_strategy_book_id(book_id)
+    return strategy_id, book_id
+
 
 def freeze_strategy(spec: dict) -> dict:
-    if set(spec) - {"module_path", "params", "version", "code_hash"}:
+    if set(spec) - _STRATEGY_FIELDS:
         raise ValueError("Dynamic strategy code is not supported")
     module = spec.get("module_path", "")
     if not re.fullmatch(r"trader\.strategies\.[a-z][a-z0-9_]*", module):
@@ -39,12 +91,139 @@ def freeze_strategy(spec: dict) -> dict:
     params = spec.get("params", {})
     if not isinstance(params, dict):
         raise ValueError("Strategy params must be an object")
-    return {
+    frozen = {
         "module_path": module,
         "params": copy.deepcopy(params),
         "version": str(spec.get("version", "1")),
         "code_hash": code_hash,
     }
+    if "strategy_id" in spec or "book_id" in spec:
+        strategy_id, book_id = _strategy_identity(spec)
+        declared = spec.get("book_id")
+        if declared is not None and declared != book_id:
+            raise ValueError(
+                f"Strategy {strategy_id} must use its stable book {book_id}, not {declared}"
+            )
+        frozen["strategy_id"] = strategy_id
+        frozen["book_id"] = book_id
+    return frozen
+
+
+def normalize_backtest_manifest(manifest: dict) -> dict:
+    """The single manifest normalizer used by submit, retry and execution.
+
+    One shape feeds the frozen store, the worker revalidation and the retry
+    path, so a joint run cannot be accepted through a laxer caller. Nested
+    parameters and allocations are copied; a caller mutating its own input
+    after submission cannot change the frozen document.
+    """
+    from decimal import Decimal
+
+    if not isinstance(manifest, dict):
+        raise ValueError("Backtest manifest must be an object")
+    if set(manifest) - _MANIFEST_FIELDS:
+        raise ValueError("Unknown backtest manifest fields")
+    ids = manifest.get("dataset_ids", [])
+    if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
+        raise ValueError("Provide unique dataset_ids")
+    for dataset_id in ids:
+        if not isinstance(dataset_id, str) or not dataset_id.startswith("ds_"):
+            raise ValueError("dataset_ids must reference Research datasets (ds_*)")
+    engine = manifest.get("engine", "event_runtime")
+    purpose = manifest.get("purpose", "research_screening")
+    if engine != "event_runtime":
+        raise ValueError("Only the event runtime may execute frozen backtests")
+    if purpose not in {"research_screening", "admission_evidence"}:
+        raise ValueError("Unsupported purpose")
+    initial_cash = decimal_text(manifest.get("initial_cash", "10000"))
+    fee_bps = decimal_text(manifest.get("fee_bps", "10"))
+    slippage_bps = decimal_text(manifest.get("slippage_bps", "5"))
+    if (
+        Decimal(initial_cash) <= 0
+        or not 0 <= Decimal(fee_bps) <= 100
+        or not 0 <= Decimal(slippage_bps) <= 1000
+    ):
+        raise ValueError("Invalid capital or execution costs")
+    if purpose == "admission_evidence" and (Decimal(fee_bps) <= 0 or Decimal(slippage_bps) <= 0):
+        raise ValueError("Admission evidence requires fees and slippage")
+    raw_risk = manifest.get("risk_config", {}) or {}
+    if not isinstance(raw_risk, dict):
+        raise ValueError("risk_config must be an object")
+    risk_config = copy.deepcopy(raw_risk)
+    # Refuse an invalid risk policy at freeze time as well; the executor still
+    # builds the policy through the same shared parser.
+    policy_from_config(risk_config, Decimal(fee_bps) / Decimal(10000))
+
+    has_strategy = "strategy" in manifest
+    has_strategies = "strategies" in manifest
+    if has_strategy == has_strategies:
+        raise ValueError("Provide exactly one of strategy or strategies")
+    frozen: dict[str, Any] = {
+        "dataset_ids": sorted(ids),
+        "initial_cash": initial_cash,
+        "fee_bps": fee_bps,
+        "slippage_bps": slippage_bps,
+        "engine": engine,
+        "purpose": purpose,
+        "risk_config": risk_config,
+    }
+    if has_strategy:
+        if "book_allocations" in manifest:
+            raise ValueError("book_allocations require a joint strategies manifest")
+        strategy = freeze_strategy(manifest["strategy"])
+        if "strategy_id" in strategy:
+            raise ValueError("A single-strategy manifest must not declare strategy_id")
+        frozen["strategy"] = strategy
+    else:
+        strategies = manifest["strategies"]
+        if not isinstance(strategies, list) or len(strategies) < 2:
+            raise ValueError("A joint backtest requires at least two strategies")
+        frozen_strategies = []
+        seen_strategy_ids: set[str] = set()
+        seen_books: set[str] = set()
+        for item in strategies:
+            if not isinstance(item, dict):
+                raise ValueError("Each joint strategy must be an object")
+            strategy = freeze_strategy(item)
+            strategy_id = strategy["strategy_id"]
+            if strategy_id in seen_strategy_ids:
+                raise ValueError(f"Duplicate strategy_id: {strategy_id}")
+            seen_strategy_ids.add(strategy_id)
+            if strategy["book_id"] in seen_books:
+                raise ValueError(f"Duplicate strategy book: {strategy['book_id']}")
+            seen_books.add(strategy["book_id"])
+            frozen_strategies.append(strategy)
+        frozen_strategies.sort(key=lambda entry: entry["strategy_id"])
+        allocations = manifest.get("book_allocations")
+        if not isinstance(allocations, dict) or not allocations:
+            raise ValueError("A joint backtest needs explicit book_allocations")
+        if set(allocations) != seen_books:
+            raise ValueError("Book allocations must match the configured strategy books")
+        frozen_allocations: dict[str, str] = {}
+        total = Decimal(0)
+        for book_id in sorted(allocations):
+            amount = _positive_decimal(allocations[book_id], "Invalid book allocation")
+            frozen_allocations[book_id] = decimal_text(amount)
+            total += amount
+        if total != Decimal(initial_cash):
+            raise ValueError("Book allocations must sum to the initial cash")
+        frozen["strategies"] = frozen_strategies
+        frozen["book_allocations"] = frozen_allocations
+
+    if "runtime_version" in manifest:
+        if manifest["runtime_version"] != SPOT_RUNTIME_VERSION:
+            raise ValueError("Legacy runtime version; submit a new frozen job manifest")
+        frozen["runtime_version"] = SPOT_RUNTIME_VERSION
+    if "provenance" in manifest:
+        provenance = manifest["provenance"]
+        if not isinstance(provenance, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in provenance.items()
+        ):
+            raise ValueError("provenance must be an object of dataset ids to hashes")
+        if set(provenance) != set(frozen["dataset_ids"]):
+            raise ValueError(f"{DATASET_PROVENANCE_MISMATCH}: dataset set")
+        frozen["provenance"] = dict(provenance)
+    return frozen
 
 
 def _model_marker(record: dict) -> str:
@@ -82,6 +261,7 @@ class MemoryResearchStore:
 
     def __init__(self, clock=None):
         self.datasets: dict[str, dict] = {}
+        self.links: dict[str, dict] = {}
         self.jobs: dict[str, dict] = {}
         self.clock = clock or time.monotonic
 
@@ -97,23 +277,28 @@ class MemoryResearchStore:
         data = self.datasets.get(dataset_id)
         return copy.deepcopy(data) if data is not None else None
 
+    def register_dataset_link(self, dataset_id: str, link: dict) -> None:
+        """Attach trusted provenance to an in-memory dataset (test fixture)."""
+        self.links[dataset_id] = copy.deepcopy(link)
+
     async def get_dataset_link(self, dataset_id: str):
-        """In-memory stores never carry a trusted archive provenance link."""
-        return None
+        link = self.links.get(dataset_id)
+        return copy.deepcopy(link) if link is not None else None
 
     async def list_datasets(self, **filters: Any) -> list[dict]:
         """Catalog listing: metadata only, never the bar payload."""
         records = []
         for dataset_id, data in self.datasets.items():
+            link = self.links.get(dataset_id) or {}
             records.append(
                 {
                     "dataset_id": dataset_id,
                     "metadata": dataset_metadata(data),
-                    "month": None,
-                    "history_dataset_id": None,
-                    "official_eligible": False,
-                    "provenance_hash": None,
-                    "published_at": None,
+                    "month": link.get("month"),
+                    "history_dataset_id": link.get("history_dataset_id"),
+                    "official_eligible": bool(link.get("official_eligible")),
+                    "provenance_hash": link.get("provenance_hash"),
+                    "published_at": link.get("published_at"),
                     "created_at": None,
                 }
             )
@@ -545,10 +730,12 @@ class PostgresResearchStore:
 class BacktestApplication:
     def __init__(self, store, eligibility=None):
         self.store = store
-        # Optional async callable ``(dataset_id) -> bool``. When present, a
-        # dataset that is not backed by a trusted, published provenance link is
-        # refused. The eligibility decision never trusts a caller supplied
+        # A mandatory async callable ``(dataset_id) -> bool``. There is no
+        # ``eligibility=None`` mode: an application without a gate must never be
+        # able to submit a backtest. The decision never trusts a caller supplied
         # source string.
+        if eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
         self._eligibility = eligibility
 
     async def _dataset_links(self, dataset_ids: list[str]) -> dict[str, dict]:
@@ -562,86 +749,57 @@ class BacktestApplication:
                 links[dataset_id] = link
         return links
 
+    async def _trusted_provenance(self, dataset_ids: list[str]) -> dict[str, str]:
+        """Every dataset must have a trusted published provenance link."""
+        links = await self._dataset_links(dataset_ids)
+        trusted: dict[str, str] = {}
+        for dataset_id in dataset_ids:
+            link = links.get(dataset_id)
+            if not link_is_trusted(link):
+                raise ValueError(f"{DATASET_PROVENANCE_UNTRUSTED}: {dataset_id}")
+            trusted[dataset_id] = str(link["provenance_hash"])
+        return trusted
+
+    @staticmethod
+    def _match_manifest_provenance(provenance, trusted: dict[str, str]) -> dict[str, str]:
+        """A caller may repeat the trusted hashes, never invent different ones."""
+        if provenance is None:
+            return trusted
+        if not isinstance(provenance, dict):
+            raise ValueError("provenance must be an object")
+        if set(provenance) != set(trusted):
+            raise ValueError(f"{DATASET_PROVENANCE_MISMATCH}: dataset set")
+        for dataset_id, expected in trusted.items():
+            if str(provenance.get(dataset_id) or "") != expected:
+                raise ValueError(f"{DATASET_PROVENANCE_MISMATCH}: {dataset_id}")
+        return trusted
+
     async def submit(self, manifest: dict):
-        if set(manifest) - {
-            "dataset_ids",
-            "strategy",
-            "initial_cash",
-            "fee_bps",
-            "slippage_bps",
-            "engine",
-            "purpose",
-            "risk_config",
-            "provenance",
-        }:
-            raise ValueError("Unknown backtest manifest fields")
-        ids = manifest.get("dataset_ids", [])
-        if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
-            raise ValueError("Provide unique dataset_ids")
-        for dataset_id in ids:
-            if not isinstance(dataset_id, str) or not dataset_id.startswith("ds_"):
-                raise ValueError("dataset_ids must reference Research datasets (ds_*)")
+        frozen = normalize_backtest_manifest(manifest)
+        ids = frozen["dataset_ids"]
         datasets = []
         for dataset_id in ids:
             data = await self.store.get_dataset(dataset_id)
             if data is None:
                 raise ValueError("Dataset not found: " + dataset_id)
             datasets.append(data)
-        # BAR_V1 requires a common completed-bar calendar and quote asset.
-        first = datasets[0]
-        calendar = [(x["open_time_ms"], x["close_time_ms"]) for x in first["bars"]]
-        if len({x["identity"]["symbol"] for x in datasets}) != len(datasets):
-            raise ValueError("Duplicate instrument in run")
-        for data in datasets:
-            if (
-                data["identity"]["quote_asset"] != first["identity"]["quote_asset"]
-                or [(x["open_time_ms"], x["close_time_ms"]) for x in data["bars"]] != calendar
-            ):
-                raise ValueError("Datasets must share quote asset and bar calendar")
-        engine = manifest.get("engine", "event_runtime")
-        purpose = manifest.get("purpose", "research_screening")
-        if engine != "event_runtime":
-            raise ValueError("Only the event runtime may execute frozen backtests")
-        if purpose not in {"research_screening", "admission_evidence"}:
-            raise ValueError("Unsupported purpose")
-        if self._eligibility is not None:
-            for dataset_id in ids:
-                if not await self._eligibility(dataset_id):
-                    raise ValueError("Dataset has no trusted published provenance: " + dataset_id)
-        links = await self._dataset_links(ids)
-        provenance = manifest.get("provenance")
-        if provenance is None:
-            provenance = {
-                dataset_id: link.get("provenance_hash")
-                for dataset_id, link in links.items()
-                if link.get("provenance_hash")
-            }
-        if not isinstance(provenance, dict):
-            raise ValueError("provenance must be an object")
-        frozen = {
-            "dataset_ids": sorted(ids),
-            "strategy": freeze_strategy(manifest.get("strategy", {})),
-            "initial_cash": decimal_text(manifest.get("initial_cash", "10000")),
-            "fee_bps": decimal_text(manifest.get("fee_bps", "10")),
-            "slippage_bps": decimal_text(manifest.get("slippage_bps", "5")),
-            "engine": engine,
-            "purpose": purpose,
-            "runtime_version": SPOT_RUNTIME_VERSION,
-            "risk_config": manifest.get("risk_config", {}),
-            "provenance": provenance,
-        }
-        from decimal import Decimal
+        # BAR_V1 requires a shared venue, interval, quote asset, instrument set
+        # and completed-bar calendar. Refuse before any work is queued.
+        from trader.trading.backtest import validate_dataset_set
 
-        if (
-            Decimal(frozen["initial_cash"]) <= 0
-            or not 0 <= Decimal(frozen["fee_bps"]) <= 100
-            or not 0 <= Decimal(frozen["slippage_bps"]) <= 1000
-        ):
-            raise ValueError("Invalid capital or execution costs")
-        if purpose == "admission_evidence" and (
-            Decimal(frozen["fee_bps"]) <= 0 or Decimal(frozen["slippage_bps"]) <= 0
-        ):
-            raise ValueError("Admission evidence requires fees and slippage")
+        validate_dataset_set(datasets)
+        if self._eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
+        for dataset_id in ids:
+            if not await self._eligibility(dataset_id):
+                raise ValueError(
+                    f"Dataset has no trusted published provenance ({DATASET_PROVENANCE_UNTRUSTED}): "
+                    + dataset_id
+                )
+        trusted = await self._trusted_provenance(ids)
+        provenance = self._match_manifest_provenance(frozen.get("provenance"), trusted)
+        frozen["runtime_version"] = SPOT_RUNTIME_VERSION
+        frozen["provenance"] = provenance
         return await self.store.enqueue(frozen)
 
     async def get(self, run_id):
@@ -654,5 +812,56 @@ class BacktestApplication:
         return await self.store.cancel(run_id)
 
     async def retry(self, run_id):
-        """Re-queue a FAILED run with its frozen inputs untouched."""
+        """Re-queue a FAILED run only after re-verifying its frozen inputs."""
+        record = await self.store.get(run_id)
+        if record is None:
+            return None
+        if record.get("status") != "FAILED":
+            # Preserve the store's canonical conflict error and CAS semantics.
+            return await self.store.retry(run_id)
+        manifest = record.get("manifest") or {}
+        frozen = normalize_backtest_manifest(manifest)
+        if frozen.get("runtime_version") != SPOT_RUNTIME_VERSION:
+            raise ValueError("Legacy runtime version; submit a new frozen job manifest")
+        # The stored document itself must still be exactly the frozen input.
+        # A mutated manifest (including nested params/allocations) is refused
+        # instead of being retried under the old hash.
+        stored_hash = record.get("manifest_hash")
+        if stored_hash != digest(manifest) or stored_hash != digest(frozen):
+            raise ValueError("Frozen manifest hash mismatch")
+        dataset_ids = list(frozen["dataset_ids"])
+        if self._eligibility is None:
+            raise ValueError(DATASET_ELIGIBILITY_GATE_UNAVAILABLE)
+        for dataset_id in dataset_ids:
+            if not await self._eligibility(dataset_id):
+                raise ValueError(
+                    f"Dataset has no trusted published provenance ({DATASET_PROVENANCE_UNTRUSTED}): "
+                    + dataset_id
+                )
+        trusted = await self._trusted_provenance(dataset_ids)
+        self._match_manifest_provenance(frozen.get("provenance"), trusted)
         return await self.store.retry(run_id)
+
+
+class UnavailableBacktestApplication(BacktestApplication):
+    """Fail-closed research submission while the history store is unavailable.
+
+    Dataset eligibility needs the trusted, published provenance link that only
+    the history store can verify. Without that store there is no trustworthy
+    provenance, so submissions and retries are refused with a stable reason
+    instead of running with the eligibility gate skipped.
+    """
+
+    reason = HISTORY_STORE_UNAVAILABLE
+
+    def __init__(self, store, eligibility=None):
+        # This application never checks eligibility because it never accepts
+        # work. It must not inherit the mandatory gate construction.
+        self.store = store
+        self._eligibility = None
+
+    async def submit(self, manifest: dict):
+        raise ValueError(self.reason)
+
+    async def retry(self, run_id):
+        raise ValueError(self.reason)

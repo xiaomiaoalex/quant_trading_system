@@ -1,0 +1,126 @@
+# Branch preview overlay: an isolated, read-only view of this branch.
+#
+# Usage (from the repository root, with a filled, untracked env file):
+#   docker compose -f compose.yml -f deploy/compose.preview.yml \
+#     --env-file deploy/preview.env up -d
+#
+# Rules enforced here:
+# * the Compose project is separate from the shared local stack and from the
+#   Demo release project, so the preview containers and volumes are its own;
+# * nothing is rebuilt on the preview host: every image is supplied
+#   explicitly, the preview host never builds and never pulls;
+# * the Execution and backup services are disabled, so the preview can read
+#   and research but can never place, cancel or send an order;
+# * no exchange credential exists in this stack: the Execution secret files
+#   are removed and the Control service keeps its credential-free contract;
+# * the DR gate stays required and no DR evidence is mounted, so the console
+#   truthfully reports a blocked trading state instead of a fabricated READY;
+# * the only published port is the UI gateway on the loopback interface.
+#
+# The preview is a trial entry point for this branch.  It is not a release:
+# it carries no release evidence, no observation window and no DR proof.
+
+name: ${QTS_PREVIEW_COMPOSE_PROJECT:-qts-branch-preview}
+
+x-preview-app: &preview-app
+  image: ${QTS_PREVIEW_RUNTIME_IMAGE:?QTS_PREVIEW_RUNTIME_IMAGE must be an explicit image reference}
+  build: !reset null
+  restart: unless-stopped
+  labels:
+    com.qts.preview.id: ${QTS_PREVIEW_ID:?QTS_PREVIEW_ID is required}
+    com.qts.preview.commit: ${QTS_PREVIEW_COMMIT:?QTS_PREVIEW_COMMIT is required}
+    com.qts.preview.runtime_image_id: ${QTS_PREVIEW_RUNTIME_IMAGE_ID:?QTS_PREVIEW_RUNTIME_IMAGE_ID is required}
+
+services:
+  postgres:
+    # The preview uses the same immutable PostgreSQL image as the Demo release
+    # path.  It is pinned here and not taken from the environment: a preview
+    # must not silently switch to a different database image.  A host that
+    # received the image through ``docker save``/``docker load`` must load this
+    # exact reference; see docs/BRANCH_PREVIEW_RUNBOOK.md.
+    image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+    # The preview database is reachable from the Compose network only.
+    ports: !override []
+    environment:
+      POSTGRES_DB: ${QTS_PREVIEW_POSTGRES_DB:-trading}
+      POSTGRES_USER: ${QTS_PREVIEW_POSTGRES_USER:-trader}
+      POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
+    volumes: !override
+      - qts_preview_pgdata:/var/lib/postgresql/data
+
+  control:
+    <<: *preview-app
+    # The Control API is reached through the gateway, not from the host.
+    ports: !override []
+    environment:
+      POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
+      # The browser origin is the gateway origin; the session cookie is only
+      # allowed to be non-secure for this loopback origin.
+      QTS_ORIGIN: ${QTS_PREVIEW_ORIGIN:-http://127.0.0.1:18080}
+      QTS_AUTH_REQUIRED: "1"
+      QTS_USERNAME: ${QTS_PREVIEW_USERNAME:-owner}
+      QTS_PASSWORD_HASH: ${QTS_PREVIEW_PASSWORD_HASH:?QTS_PREVIEW_PASSWORD_HASH is required}
+      QTS_RELEASE_ID: ${QTS_PREVIEW_ID:?QTS_PREVIEW_ID is required}
+      QTS_RELEASE_COMMIT: ${QTS_PREVIEW_COMMIT:?QTS_PREVIEW_COMMIT is required}
+      QTS_RELEASE_IMAGE: ${QTS_PREVIEW_RUNTIME_IMAGE_ID:?QTS_PREVIEW_RUNTIME_IMAGE_ID is required}
+    # No DR evidence directory is mounted: the required DR gate stays
+    # unsatisfied and the console shows the real blocked state.
+    volumes: !override
+      - qts_preview_state:/var/lib/qts
+
+  research:
+    <<: *preview-app
+    environment:
+      POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
+
+  history:
+    <<: *preview-app
+    environment:
+      POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
+
+  execution:
+    # Disabled: the preview never runs the trading worker and never holds an
+    # exchange credential.
+    profiles: ["disabled"]
+    secrets: !override []
+
+  backup:
+    # Disabled: the preview has no off-host backup target and must not claim
+    # one.
+    profiles: ["disabled"]
+
+  alert-sink:
+    ports: !override
+      - "127.0.0.1:${QTS_PREVIEW_ALERT_PORT:-18085}:8085"
+
+  web:
+    image: ${QTS_PREVIEW_UI_IMAGE:?QTS_PREVIEW_UI_IMAGE must be an explicit image reference}
+    restart: unless-stopped
+    # Unprivileged user and unprivileged internal port; the host publication
+    # stays on the loopback interface.
+    user: "101:101"
+    environment:
+      # The gateway refuses to start when this metadata is missing or still a
+      # placeholder, so a preview can never publish a fabricated identity.
+      QTS_PREVIEW_ID: ${QTS_PREVIEW_ID:?QTS_PREVIEW_ID is required}
+      QTS_PREVIEW_COMMIT: ${QTS_PREVIEW_COMMIT:?QTS_PREVIEW_COMMIT is required}
+      QTS_PREVIEW_RUNTIME_IMAGE_ID: ${QTS_PREVIEW_RUNTIME_IMAGE_ID:?QTS_PREVIEW_RUNTIME_IMAGE_ID is required}
+    ports:
+      - "127.0.0.1:${QTS_PREVIEW_HTTP_PORT:-18080}:8080"
+    depends_on:
+      control:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:8080/index.html || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  qts_preview_pgdata:
+  qts_preview_state:

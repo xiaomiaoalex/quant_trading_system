@@ -9,6 +9,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.tests.fakes.research_eligibility import always_eligible, trust_postgres_dataset
 from trader.tests.test_research_runtime import bars, identity
 from trader.trading.jobs import BacktestApplication, PostgresResearchStore, ResearchWorker
 
@@ -68,7 +69,8 @@ def manifest(dataset_id):
 async def test_postgres_job_lifecycle_and_fencing_prevents_double_publish():
     async with research_store() as (store, pool):
         data = await store.register_dataset(identity(), bars())
-        application = BacktestApplication(store)
+        await trust_postgres_dataset(pool, data)
+        application = BacktestApplication(store, eligibility=always_eligible)
         job = await application.submit(manifest(data["dataset_id"]))
         assert job["status"] == "QUEUED"
 
@@ -97,9 +99,10 @@ async def test_postgres_job_lifecycle_and_fencing_prevents_double_publish():
 
 @pytest.mark.asyncio
 async def test_postgres_worker_failure_retry_and_cancel():
-    async with research_store() as (store, _pool):
+    async with research_store() as (store, pool):
         data = await store.register_dataset(identity(), bars())
-        application = BacktestApplication(store)
+        await trust_postgres_dataset(pool, data)
+        application = BacktestApplication(store, eligibility=always_eligible)
         job = await application.submit(manifest(data["dataset_id"]))
 
         worker = ResearchWorker(store, owner="worker-1")
@@ -152,7 +155,10 @@ async def test_postgres_dataset_tampering_is_rejected_at_execution():
 
     async with research_store() as (store, pool):
         data = await store.register_dataset(identity(), bars())
-        job = await BacktestApplication(store).submit(manifest(data["dataset_id"]))
+        await trust_postgres_dataset(pool, data)
+        job = await BacktestApplication(store, eligibility=always_eligible).submit(
+            manifest(data["dataset_id"])
+        )
         async with pool.acquire() as conn:
             await conn.execute(
                 """UPDATE research.datasets SET document=

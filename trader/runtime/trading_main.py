@@ -25,7 +25,8 @@ from trader.api.auth import AuthSettings, PostgresSessionStore
 from trader.api.env_config import get_binance_env, get_binance_recv_window
 from trader.api.routes.sse import get_sse_manager
 from trader.api.trading_app import create_trading_app
-from trader.trading.jobs import BacktestApplication, PostgresResearchStore
+from trader.runtime.history_plane import build_history_plane
+from trader.trading.jobs import PostgresResearchStore
 from trader.trading.models import ExchangeOrderResult, ExchangeOutcome
 from trader.trading.pg import create_pool
 from trader.trading.postgres import PostgresTradingStore
@@ -69,6 +70,7 @@ async def lifespan(app):
     pool = None
     broker = None
     runtime = None
+    history_store = None
     try:
         pool = await create_pool(min_size=1, max_size=10)
         store = PostgresTradingStore(pool)
@@ -77,7 +79,13 @@ async def lifespan(app):
         await sessions.initialize()
         app.state.sessions = sessions
         app.state.research_store = research_store
-        app.state.research_application = BacktestApplication(research_store)
+        # The composed development entry point uses the same fail-closed gate
+        # as the split Control process; there is no eligibility=None fallback.
+        history_store, history_service, research_application = await build_history_plane(
+            research_store
+        )
+        app.state.history_service = history_service
+        app.state.research_application = research_application
 
         api_key = os.getenv("BINANCE_API_KEY")
         secret_key = os.getenv("BINANCE_SECRET_KEY")
@@ -169,6 +177,11 @@ async def lifespan(app):
         if broker is not None:
             try:
                 await broker.disconnect()
+            except Exception:
+                pass
+        if history_store is not None:
+            try:
+                await history_store.disconnect()
             except Exception:
                 pass
         if pool is not None:

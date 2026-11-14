@@ -441,6 +441,11 @@ provenance 关联"]
   `/v1/research/strategies` 列出允许提交的已安装策略。
 - `FAILED` 的回测任务是终态：claim 只取 `QUEUED` 或租约过期的 `RUNNING`，
   重试必须显式调用 `POST /v1/research/backtests/{run_id}/retry`（保留 run id、冻结 manifest 与哈希）。
+- 阶段 4 起同一入口支持**联合回测**：manifest 可用 `strategies` + `book_allocations` 描述多个策略，
+  共享一个账户现金、按 `book:{strategy_id}` 隔离资金与持仓。`ResearchExecutor` 在独立 Worker 进程中
+  为每个策略/标的创建独立插件，复用 `EventBacktestRuntime` 与共享 `core` 经济函数；结果逐 book
+  导出权益、预算占用与手续费，并保留 dataset/provenance/runtime 版本链。Research Worker 只连接
+  Research 存储，不读取实盘账户状态，也不具备交易所发送能力。
 - 补录命令 `scripts/backfill_research_dataset_links.py` 默认 dry-run，
   为桥接之前就已发布的历史数据集补登 Research 数据集与 provenance（官方修订报冲突，不覆盖既有 ID）。
 
@@ -784,7 +789,7 @@ flowchart LR
 
 **边界约束**：
 
-- `trader.api.main.app` 必须挂载 `trader.api.routes.performance.router`，Control Plane 端点不能只存在于孤立 route module。
+- `trader.api.trading_app.create_trading_app()` 必须挂载 `trader.api.routes.performance.router`，Control Plane 端点不能只存在于孤立 route module。
 - Binance ticker 读取属于 Adapter/Service 边界 IO；Core domain models 只保存标准字段 `symbol`、`weight`、`period_return`、`metadata`。
 - `BenchmarkHolding` 写入幂等键为 `(benchmark_id, symbol, period_start_ms, period_end_ms)`；`PortfolioHoldingFact` 写入幂等键为 `(run_id, symbol, period_start_ms, period_end_ms)`。
 - 显式 config 中的 `constituents[].period_return` 必须按 symbol 传递到 persistence，用于后续 Brinson/归因计算；全局 `period_return` 只作为默认值。
@@ -872,17 +877,20 @@ flowchart TB
 - 独立运行入口为 `runtime/control_main.py`、`runtime/trading_worker_main.py`、
   `runtime/research_worker_main.py`、`runtime/history_worker_main.py`。
 - 历史归档导入进程 `runtime/history_worker_main.py` 用 PostgreSQL session advisory lock 保证同库单 owner；
-  只有 owner 执行启动恢复，恢复成功前不领取任务。旧 `trader.api.main` 的内嵌导入 worker 默认关闭。
-- 前端反代按路径拆分：`/v1/research/*` 与 `/v1/data/history/*` 指向新 Control API，其余 `/v1/*` 保持旧 API。
-  `QTS_CONTROL_API_TARGET` 未设置时两者仍指向同一目标，避免整体切端口导致旧页面失效。控制面只保存 QUEUED 命令并投递持久 outbox 到 SSE，
-  不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG 租约和
-  持久 runtime 元数据读取就绪。旧 `trader.api.main` 保留只读 connector/账户快照，
-  通过只读 broker 代理和生命周期退休门禁关闭旧发送器及自动恢复，旧投影撤单入口关闭。
+  只有 owner 执行启动恢复，恢复成功前不领取任务。
+- 阶段 6 起 Control API 是唯一 HTTP 进程：前端反代只指向 `QTS_CONTROL_API_TARGET`（默认
+  `http://localhost:8090`），不再按路径拆分旧 API。控制面只保存 QUEUED 命令并投递持久
+  outbox 到 SSE，不构建 broker；执行器轮询统一账户命令，持租约发送。控制面通过有效 PG
+  租约和持久 runtime 元数据读取就绪。旧 `trader/api/main.py` 进程、旧 OMS/ExecutionBudget/
+  AccountState 写入路径和旧 StrategyRunner 已删除。
 - 真实执行进程缺 private WS 覆盖证明时强制保持阻断，REST 快照不能代替流恢复屏障；
-  当前可验证闭环使用受控 fake，外部沙箱和 24h 最终切换尚未完成。
+  阶段 6 的真实 Demo 24h 窗口与覆盖/DR 证据以
+  `artifacts/foundation/phase6/windows/<run_id>/{window.json,observation.jsonl,dr/}`
+  为准；窗口完成前不得宣称 READY，完成后的实际结论以该证据和最新审核为准。
 - 执行器将 `PrivateTradingSession` 的世代缓冲、双快照和覆盖门禁装配到 Runtime
   启动、周期对账及主动重连；失联先持久关闭 stream/ready。可选新 `UnifiedStrategyRunner`
-  从 ticker 输入生成稳定命令，读取统一账户库存；不会进入旧 Runner 的预算/OMS 路径。
+  从**已收盘 K 线**生成稳定命令（阶段 3 起不再消费 REST ticker），读取统一账户库存；
+  不会进入旧 Runner 的预算/OMS 路径。
 - 覆盖证明由 Adapter 侧端口提供（`BinanceSpotCoverageProver`）：以交易所服务器时间
   界定窗口，完整分页回填订单与成交并逐笔映射本系统订单，连续两遍回填一致才返回
   证明；任何不确定性返回 `None` 并保持 `PRIVATE_STREAM_COVERAGE_UNPROVEN`。核心层
@@ -905,3 +913,341 @@ flowchart TB
 - 完整快照必须包含本系统尚未终结的挂单、本系统已关闭订单的终态和最近逐笔成交；仅依赖 `openOrders` 会把已撤/已成交订单误判为未知状态。
 - 交易所规则归一化位于 Adapter；MARKET BUY 以 quote 金额结算，成交 base 数量与请求数量不要求相等。
 - 主动重连入口只重建 venue 会话；重连后由周期对账恢复 `READY`，不触碰本地账本。
+
+### 8.1 阶段 0 冻结的目标拓扑与责任矩阵（2026-11-02）
+
+本节是阶段 0 对第 8 节的**增量冻结**，不改变第 8 节既有事实。完整依据、验收项与阶段划分见
+`docs/FOUNDATION_REFACTOR_PHASE0.md`；接口与数据契约见 `docs/INTERFACE_CONTRACTS.md`
+第 13.8（进程责任矩阵）、13.9（`book_id` 数据契约）、13.10（已知契约偏差）与 15.4（基线测试约定）节。
+
+**目标进程 / 端口 / 凭据 / 责任矩阵**：
+
+| 进程 | 入口 | 监听 | 交易所写凭据 | 账户经济状态写入 | 命令 | 事实入口 | 查询 |
+|---|---|---|---|---|---|---|---|
+| Control API | `trader/runtime/control_main.py` | `QTS_TRADING_API_PORT`，默认 `8090`，默认绑 `127.0.0.1` | **无**（`NoExchangeIO`，`control_main.py:27-32`） | **无**（只落 `QUEUED` 命令与账户内预约，`defer_send=True`，`control_main.py:110-112`） | 受理 PLACE / CANCEL / CONTROL（含 `RESOLVE`） | **无**（阶段 1 已移除公开事实入口） | 命令状态、订单、风险视图、指标、SSE |
+| Execution | `trader/runtime/trading_worker_main.py` | 无 HTTP | **有**（缺任一即 `BINANCE_CREDENTIALS_MISSING` 拒绝启动，`trading_worker_main.py:176-181`） | **唯一**（账本 / 持仓 / 预约 / 成交 / 余额） | 消费 `QUEUED` 并发送；持有 `trading_runtime_leases` | **唯一**（REST 对账、WS 成交、订单观测） | 就绪状态、内部指标 |
+| Research Worker | `trader/runtime/research_worker_main.py` | 无 | 无 | 无 | 无 | 无 | 发布冻结回测结果（fencing token） |
+| History Worker | `trader/runtime/history_worker_main.py` | 无 | 无（只读公开归档） | 无 | 无 | 无 | 导入历史数据集 |
+| PostgreSQL | `compose.yml` → `postgres:16` | `5432` | — | 存储 | 协调 | 协调 | 协调 |
+
+- 进程间只通过 PostgreSQL 协调，不引入消息中间件、集群或自动主备。
+- Control 进程**永远不持有交易所写凭据**，也不装配任何交易所 IO 端口。
+- 账户经济状态的唯一写入者是 Execution 进程；Control 只产生**意图**。
+- 旧 `trader/api/main.py`（端口 `8080`）已在阶段 6 删除；原只读查询迁移到 Control API（见 8.5）。
+
+**持久化模型边界（不是完整事件溯源）**：
+
+- 账户快照 `trading_accounts.state`（jsonb）是权威状态，每事务整体覆写；
+  `read()` 只读这一列（`trader/trading/postgres.py:203-212`）。
+- `trading_executions` / `trading_ledger` / `trading_events` 是**追加事实**，用于审计与重放证据，
+  但**无法单独重建**余额、持仓与预约。
+- `trading_commands` / `trading_order_projection` 是**可重建查询投影**。
+- 因此后续阶段**不引入事件溯源框架、不重写持久化形态**；新增的是账户快照内的字段与投影，
+  不是新的真相源。
+
+**阶段 1 已关闭的安全缺陷与旁路（2026-11-02，实现与契约见 `docs/INTERFACE_CONTRACTS.md` 13.11）**：
+
+- 余额差异未解释时**不再覆盖**权威内部余额；交易所余额作为 `reconciliation.venue_balances`
+  观测保留，差异经 `AccountRiskView.balance_differences` 与 metrics 可查询。`resolve` 必须携带
+  可核对证据，证据一致后以显式 `external_adjustment` 账目结算。
+- 存在未决 `UNKNOWN` PLACE 命令时不再发送任何新的 PLACE；新 PLACE 返回
+  `UNKNOWN_COMMAND_PENDING`。`UNKNOWN_COMMAND` 按 `command_id` 定向解除，其他命令结果不影响它。
+- Control API 不再暴露成交/观测/对账/resolve 事实写入口；操作员差异处理改为 `RESOLVE`
+  控制命令，由 Execution 进程校验证据后应用。Control 进程无论环境是否出现凭据都只持久排队。
+- 历史存储不可用时研究提交 fail-closed（`HISTORY_STORE_UNAVAILABLE`），不再回退到
+  无 eligibility checker 的应用。
+- 两处安全基线的 `xfail` 标记已移除，断言转为普通通过；真实验收证据见
+  `trader/tests/test_phase0_foundation_safety.py` 与 `trader/tests/test_phase1_foundation_safety.py`。
+
+### 8.2 阶段 2 已实现：统一订单规格与 book 子账簿（2026-11-02）
+
+本节是阶段 2 对第 8 / 8.1 节的增量事实；接口细节见 `docs/INTERFACE_CONTRACTS.md` 13.12，
+迁移步骤见 `docs/PHASE2_BOOK_LEDGER_MIGRATION.md`。
+
+**订单规格单入口**
+
+- `trader/trading/order_spec.py` 的 `build_order_spec()` / `OrderSpec.to_command()` 是策略到命令的
+  唯一规格路径；`Signal.order_type` 与 `Signal.time_in_force` 显式声明，`signal.metadata` 不再
+  提供隐式默认。`validate_order_command()` 在 service 与 Binance adapter 两处校验同一契约。
+- LIMIT 价格取信号价；MARKET 参考价及其来源/时点写入 `PlaceOrderCommand`、`order.queued`
+  事件和订单查询。当前生产 ticker 输入标为 `MARKET_REFERENCE_TICKER`；closed-bar 替换属阶段 3。
+
+**book 子账簿与双层预约**
+
+- `AccountState.books` 把账户资产稳定分区为 `UNALLOCATED` + `book:{strategy_id}`；
+  `trader/trading/books.py` 负责守恒、划拨、归属证据和逐 book 快照。
+- 一笔订单在同一账户事务内创建账户层 `state.holds` 与 book 层 `books[book_id].holds`；
+  成交按数量释放两层，撤单/拒绝/终态释放剩余预约，任一层失败回滚整个事务。
+- 同一 book 同 symbol 的未终结反向订单先拒绝 `BOOK_OPPOSITE_ORDER_IN_FLIGHT`。
+  book 预算只来自自身余额与持仓，不借用其他 book 或账户总余额；账户级 `SpotRiskEngine`
+  风控仍独立生效。
+- `ALLOCATE` 是 Control→PostgreSQL→Execution 的持久幂等命令；`GET /v1/trading/books`
+  提供阶段 4 需要的逐 book 权益/预算查询。Control 仍不写账户经济状态。
+
+**归属与迁移**
+
+- 旧快照在 `decode_state()` 中把存量资产放入 `UNALLOCATED`，既有在途订单/预约保守保留并
+  标记 `BOOK_ATTRIBUTION_UNKNOWN`；不猜测策略、不清库、不改写旧 ledger/events/订单。
+- 归属不明的成交按 `UNALLOCATED` 记账以保持守恒，同时阻断新增风险；只有逐单证据的
+  `RESOLVE` 才能解除。旧无 scope `UNKNOWN_COMMAND` 仅在能证明 `command_id` 归属时迁移。
+- 新栈准入风控仍只有 `SpotRiskEngine`；执行入口通过 `QTS_RISK_POLICY_JSON` / `QTS_FEE_RATE`
+  读取 `RiskPolicy`，未知字段拒绝。旧 `RiskService` 不构成第二套准入。
+
+**结算口径与联合回测（第 2 轮审核修复）**
+
+- `PlaceOrderCommand.settlement` 显式区分结算口径：`QUOTE` 表示交易所按 `qty * price` 的报价
+  额度成交（市价买入可换回多于 `qty` 的 base，但报价支出不得超过额度）；`BASE` 表示按请求的
+  base 数量成交（历史 bar 模拟器）。LIMIT 边界不变。
+- 成交释放两层预约使用真实成交：`qty * execution.price` + 仅 quote 币种的 fee；admission
+  `fee_rate` 只是缓冲。quote-settled MARKET BUY 不以 `booked_qty == command.qty` 推断完成，
+  只有报价预算耗尽或终态观察/显式终态事实才清真实剩余；LIMIT/BASE 完全成交语义不变。
+- 所有生产信号消费者都读取显式 `order_type`：内置 `fire_test` 声明 MARKET；`Signal.to_order_params`
+  缺失/非法 fail-closed；旧 OMS `execute_signal` 在 broker/经济副作用前校验，缺失/不支持分别
+  稳定拒绝 `ORDER_TYPE_REQUIRED` / `UNSUPPORTED_ORDER_TYPE`，价格不再决定订单类型。旧 OMS
+  未接入新服务/账簿，部署拓扑不变。
+- 所有业务命令由 `trader/trading/order_spec.py` 统一构造，策略、Control API、回测共用；
+  生产代码只允许 `store.decode_state()` 解码持久化命令。
+- `EventBacktestRuntime` 支持显式的 `strategy_books`（`strategy_id -> book:{strategy_id}`）与
+  `initial_allocations`：多策略联合回测里每个信号按 `strategy_id` 路由到自己的 book，
+  预算不足被该 book 拒绝；`BacktestResult.books` 复用 `books.book_snapshot` 输出逐 book
+  余额/持仓/预约/可用预算/权益，阶段 4 可直接读取。初始资金分配必须显式，剩余留在
+  `UNALLOCATED`，不按策略隐式归集，也不做任何内部撮合或净额。
+
+### 8.3 阶段 3 已实现：closed-bar 决策输入与资格链（2026-11-03）
+
+本节是阶段 3 对第 8 / 8.2 节的增量事实；接口细节见 `docs/INTERFACE_CONTRACTS.md` 13.15。
+
+**执行进程的行情路径**
+
+- `trader/runtime/trading_worker_main.py::feed_market_once` 只调用公开 K 线端点，过滤
+  `available_at_ms > 决策时钟` 的未完成 bar；不再装配或调用 `get_ticker_prices`。缺少 K 线
+  端口时以 `CLOSED_BAR_SOURCE_REQUIRED` 阻断，不回退 REST 快照。
+- 执行进程用 `VenueClock` 把决策时钟锚定到 venue server time，并以独立可注入的单调经过时间
+  推进；每次 feed 前重新采样，时间源/单调源失败直接阻断。策略可见性、warmup、对账与 feed
+  使用同一 venue 时间域，本地 wall clock 前跳/后跳不会让未收盘 bar 进入策略。
+- Binance 含尾 `closeTime` 在 `_kline_observation` 归一化为 BAR_V1 半开区间；真实时钟下
+  `timestamp`/`available_at_ms` 均为 bar 收盘时刻，`bar_id` 与 `open_time_ms` 进入观测和命令审计。
+- 新栈 `UnifiedStrategyRunner` 只接受完全指定的已收盘 KLINE；TICKER/TRADE/DEPTH/FUNDING/
+  INDEX_PRICE/MARK_PRICE 在插件与账户副作用前抛 `NON_BAR_MARKET_DATA`。KLINE 必须具备显式
+  open/interval/close/available 字段与 `kline_close`，缺失或矛盾时 fail-closed；不得用
+  timestamp/price 伪造 BAR_V1。没有 ticker 默认旁路或生产 opt-out；legacy orchestrator
+  不属于新栈，阶段 6 删除。
+- `UnifiedStrategyRunner` 在插件调用前检查可见性；预热窗口先整体验证再修改插件状态，
+  非 KLINE history 以 `STRATEGY_WARMUP_NON_BAR_DATA`、非法 bar 以
+  `STRATEGY_WARMUP_INVALID_BAR:<code>` 阻断。重复/乱序/重放 bar 不增加预热计数、
+  不产生第二个决策；预热窗口每次进程启动重新采集，不持久化插件指标状态。
+
+**研究资格链**
+
+- `trader/runtime/history_plane.py` 是 Control 与组合开发入口共享的 fail-closed 装配：
+  history store / bridge 装配失败时返回 `UnavailableBacktestApplication`，不存在
+  `eligibility=None` 的 `BacktestApplication` 构造。
+- `trader/trading/eligibility.py` 只认可信关联 + `PUBLISHED`/`persistence_ok`/
+  `backtest_eligible` 的历史数据集；存储异常统一 `HISTORY_STORE_UNAVAILABLE`。
+- 提交与 retry 都重新核验资格和冻结 provenance；数据集集合在入队前共享完整已收盘 bar
+  日历与 quote asset。真实 PG 覆盖见 `test_phase3_postgres.py` 与
+  `test_research_history_bridge_pg.py`（已登记 CI）。
+
+### 8.4 阶段 5 已实现：Compose / 监控 / 备份 / 故障恢复（2026-11-03）
+
+本节是阶段 5 对第 8 / 8.3 节的部署与运维增量；接口细节见
+`docs/INTERFACE_CONTRACTS.md` 13.16，操作步骤见 `docs/PHASE5_OPERATIONS_RUNBOOK.md`。
+
+**Compose 拓扑**
+
+- `compose.yml` 覆盖 postgres、control、execution、research、history 五个核心服务，
+  并增加 backup 与 alert-sink 两个阶段 5 必需服务。顶层 `name` 与全部宿主端口、卷名
+  参数化；不存在固定 `container_name`。演练必须使用独立 `-p` 项目与独立端口/卷。
+- Control 与 Execution 不共享 `env_file`，也不共享交易所凭据：Control 的环境禁止出现
+  `BINANCE_API_KEY` / `BINANCE_SECRET_KEY` / `*_FILE`；Execution 仅通过 Docker secrets
+  文件读取密钥。文件内容不会进入 Compose 渲染输出、argv 或证据。
+- Execution 缺少密钥时以 `BINANCE_CREDENTIALS_MISSING` 拒绝启动并退出码 2；非沙箱
+  `BINANCE_ENV` 以 `BINANCE_ENV_NOT_SANDBOX` 拒绝。Control 启动时若发现交易所凭据，
+  以 `CONTROL_EXCHANGE_CREDENTIALS_PRESENT` 拒绝启动。
+- `alert-sink` 是独立的接收进程，持久化 webhook/heartbeat 并提供 ack；生产可把
+  `QTS_ALERT_WEBHOOK_URL` / `QTS_ALERT_HEARTBEAT_URL` 指向外部告警服务。
+
+**健康与就绪**
+
+- `/health/live` 恒 200；`/health/ready` 只回答 API 请求依赖，依赖不可用时 200 `degraded` +
+  `reasons`（保留既有探测语义）；`/health/trading` 由 `RemoteTradingReadiness` 聚合账户风险原因、执行租约、
+  运行态与 DR 证据，未就绪返回 503 + 稳定 `reasons`。三者语义不可互换。
+- DR 证据不足时，Control 与 Execution 都保持非 READY；Execution 在每次新风险发送前
+  重新读取证据，过期即拒绝。`QTS_DR_REQUIRED=1` 是生产 Compose 的强制配置。
+
+**备份与恢复**
+
+- `backup` 服务每 `QTS_BACKUP_INTERVAL_SECONDS`（Compose 默认 240s，硬上限 300s）用导出快照执行
+  `pg_dump`，上传到 S3 兼容目标，`head_object` 核对长度+元数据并重新下载哈希；
+  只有回读哈希一致才记 `succeeded`。事实摘要（accounts/commands/executions/ledger/
+  events/outbox）与 dump 来自同一快照，供恢复后逐表比对。
+- `scripts/restore_postgres_drill.py` 把对象恢复到独立任务数据库，比较事实摘要与
+  不可变键集合、校验 book/account 守恒，并实测 RTO；证据写入
+  `dr-evidence.json`，由 DR gate 校验备份新鲜度、目标异机声明、恢复验证与 RTO。
+- 指定异机目标当前通过严格 SSH 隧道访问 rclone S3 服务；证据记录真实远端 host、隧道端点和 host-key 校验，拒绝把 loopback 当作异机。
+本地 S3 emulator 只用于故障注入/流程演练，`target_kind=local_emulator` 且
+  `off_host=false`，DR gate 必须拒绝；它不构成 5.6/5.7 的异机证据。
+
+**崩溃与租约**
+
+- 已提交的经济事实（账户快照、命令、成交、账本、事件、outbox）在同一 PG 事务提交；
+  进程崩溃后由新进程读取同一 schema，摘要/计数必须一致，且新 runtime 不得重发已提交命令。
+- `trading_runtime_leases` 的 fencing token 只增不减；冲突实例在 lease 获取前即返回
+  `EXECUTION_INSTANCE_CONFLICT`，不进入对账。旧实例失租后在下一次 IO 边界拒绝发送，
+  readiness 立即转非 READY；Control 通过租约读取独立观察同一事实。
+- 告警监控把 `UNKNOWN_COMMAND_PENDING`、`BALANCE_MISMATCH`、执行租约失效映射为
+  稳定告警码；只有接收端 ack 才计为投递，失败保持 pending 并重试，同时发送外部心跳。
+
+### 8.5 阶段 6 已实现：单栈收敛与持续沙箱（2026-11-04）
+
+本节记录阶段 6 对第 8 节的收敛结果；验收编号见 `docs/FOUNDATION_REFACTOR_PHASE0.md` 阶段 6。
+
+**唯一 HTTP 进程**
+
+- `create_trading_app()` 现在是唯一应用装配：认证、统一交易命令/查询、研究、历史归档、
+  data catalog、performance 读取、portfolio research、audit、chat 与 risk 配置/审计都在
+  Control 进程；`trader.api.main` 及其 8080 端口不再存在。
+- 旧执行栈模块（`trader.core.application.oms`、`trader.services.order`、
+  `execution_budget`、`strategy_runner`、`oms_callback`、`account_state`、
+  `account_stream_bridge`、`deployment`、`strategy_candidate`、`strategy_auto_pause`、
+  `strategy_runtime_orchestrator`、`monitor_service`、`reconciler_service`、`killswitch`、
+  `broker`、`event`、`portfolio`、`capital_allocator`、`nav_service`）已删除；
+  `trader/tests/test_phase6_single_stack.py` 以静态检查防止回归。
+- `trader/api/routes/control_views.py` 用统一账户聚合提供原只读/安全视图：
+  `/v1/monitor/*`、`/v1/orders`、`/v1/executions`、`/v1/killswitch`、`/v1/safety-gate/*`、
+  `/v1/brokers*`、`/v1/portfolio/*`、`/v1/reconciler/report`、`/v1/strategies/*` 读取、
+  `/v1/deployments/{id}/status|events*`、`/v1/events`、`/v1/allocations` 读取。
+  这些视图不构造交易所客户端、不写订单/成交/账本，也不写旧账户/投影表。
+- 新栈没有动态策略生命周期：`POST /v1/strategies/{id}/load`、`/v1/deployments/{id}/
+  {start,stop,pause,resume,unload}` 等返回 410 `LEGACY_STRATEGY_LIFECYCLE_RETIRED`。
+  策略由 `QTS_STRATEGY_MODULE` / `QTS_STRATEGY_CONFIG` 配置并随执行进程启动；只有
+  `UnifiedStrategyRunner` 产生新风险命令。
+- `/v1/reconciler/trigger` 返回 503 `RECONCILIATION_IS_EXECUTION_OWNED`：对账周期由执行
+  进程持有，Control 不能伪造一次对账。`/v1/replay*` 与 `/v1/snapshots*` 返回 410
+  `LEGACY_REPLAY_RETIRED`；研究回测使用 `/v1/research/backtests`。
+- `/v1/killswitch` POST 与 `/v1/safety-gate/enable` 映射为持久 `BLOCK_NEW_RISK` /
+  `RESUME_NEW_RISK` 控制命令，仍由执行进程按租约应用；不存在进程内第二套 KillSwitch。
+
+**观测与沙箱**
+
+- `/v1/trading/metrics` 增加 `evidence`（execution/ledger/event 计数与稳定 ID 摘要、
+  命令/订单状态计数、按命令的发送结果与 `repeated_send_commands`）、`coverage`
+  （私有 WS 覆盖证明摘要）与 `runtime.strategy`（当前策略、标的、预热状态）。
+- `scripts/observe_trading_runtime.py` 只从密码文件读取操作员口令，输出逐样本 JSONL：
+  墙钟/单调时间、健康与 reasons、unresolved/重试事实、重复记账/重发计数、覆盖证据、
+  重连/重启 marker；不输出凭据或 DSN。
+- `scripts/sandbox_supervisor.py` 提供可重复的 ≥24h Demo 沙箱窗口：任务自有 Compose 项目、
+  独立端口/卷、持续 off-host 备份+恢复 DR 证据、周期健康采样与窗口判定；窗口中断
+  （主机崩溃、监督进程重启）会写 `window_aborted`，不得追溯称为连续。
+
+**旧数据保留**
+
+- 旧账户/投影表（`account_balances`、`budget_reservations`、`position_lots`、
+  `strategy_positions_proj`、`reconciliation_log`）不再有生产写入者；`position_repository`
+  与 `execution_repository` 仅保留给 performance 读取历史事实。阶段 6 不删除既有数据。
+
+**分段累计与续跑（2026-11-10）**
+
+- 阶段 6 的连续 24h 窗口 `20261109T011441Z-efbba899` 因停止时 DR RPO 违约归档
+  not-acceptance；用户/父级授权改为在同一原始窗口/数据库身份上分段累计，不新建窗口。
+- `scripts/sandbox_supervisor.py` 增加 resume 路径：`--resume-from-run <original_run_id>`
+  与 `--segment-index <n>` 复用原 Compose 项目/卷/密钥/原端口，续跑前校验 continuation
+  DB baseline、lease/fencing token、outbox 去重与既有 queued 命令；启动前由
+  `trader/ops/startup_guard.py` 取得本机级 OS 锁并做孤儿探测。每段仍先完成 3 个连续
+  verified off-host DR cycle，DR internal breach 使整段失效、tail breach 只排除尾部。
+- `trader/strategies/observation_only.py`（及 `fire_test.observation_only`）提供无信号
+  策略：保留原 book 身份但不产生新命令，用于续跑段的观察-only 证据；镜像
+  `qts-runtime:local` 的当前 continuation 版本为 `b4cd10c9…`（原窗口历史镜像
+  `aea741d2…` 仅作历史）。
+- `scripts/phase6_segment_aggregate.py` 以 qualified-v3 计算 original/segments/cumulative：
+  per-sample 健康/证据/未决/覆盖/对账/风险/DR 年龄与 sample gap 判定，强不变量 fail-closed，
+  DR internal breach 段失效、tail breach 只排除尾部；输出 `qualified_satisfied` 与
+  `acceptance_satisfied` 分离，后者仍需独立 tester + fresh reviewer 签核。
+- 证据拓扑：`windows/<segment_run_id>/segment.json` 记录段身份/lease/baseline/identity；
+  `segment-continuation-20261109/aggregate-final-20261111.json` 是 final 累计
+  （original + validation + segment5 = 94,410,660ms，acceptance_satisfied=true）；
+  `segment-lineage-20261110.json` 是不可覆盖的 per-segment baseline lineage；
+  `compose-hashes-resume-20261110.json` 补充 resume 段实际 compose config hash。
+  segment 5 `20261110T075417Z-cc17f251` 的 24h window passed=true；segment 4
+  `703b71af` 按 incident `P6-INC-20261110-01` 零计入。
+- 原单栈/单 HTTP/单执行进程结构不变：没有新增 API 进程、没有第二套 OMS/执行栈、
+  没有新数据库/新账户；续跑只复用原项目与卷。
+
+### 8.6 CI/CD 交付与 Demo 发布拓扑（2026-11-04，整合后）
+
+本节是 CI/CD 专项对第 8 节的增量，不改变 8.1–8.4 的进程责任、账本或风控语义。
+操作细节见 `docs/CI_CD_RELEASE_RUNBOOK.md`，接口键名见
+`docs/INTERFACE_CONTRACTS.md` 13.18。
+
+**测试分层与合并门禁**
+
+- `ci/test_manifest.json` 是测试文件分类的唯一真相源：`trader/tests/test_*.py` 唯一属于
+  `p0` / `offline` / `loopback` / `postgres` / `ops` / `external` 之一。未分类、失效、
+  重复或 CI 选择缩小都会使 `scripts/verify_test_manifest.py` 失败；
+  `trader/tests/conftest.py` 在收集阶段拒绝未分类文件，并在导入前按本次 job 的
+  group/subset 限定收集范围，避免必过 job 因未选中的可选依赖产生 collection skip。
+- PR 必需 Job 由 `CI Required` 聚合：manifest、import、format、type、architecture、P0、
+  offline、loopback、Research/AI、Postgres、compose-config、frontend。任一 Job 失败、
+  跳过或取消都不能汇总为成功。`Research/AI` 使用 manifest 中审计过的 `research_ai`
+  子集，复用既有回放、影子/Paper 晋级、HITL 与研究准入测试，不新增第二套分类。
+  required job 的 `group` 与其 `subset` 成员所在组都不可被排除。
+- P0/offline 以 `QTS_TEST_NETWORK_POLICY=offline` 禁止 socket；coverage Job 同时运行
+  `p0,offline` 以对齐已测基线，P0 快速 Job 仍独立提供先行反馈。
+  `loopback` 组专放需要真实 loopback 监听器的告警接收器集成测试，以独立的必过
+  `loopback-gate` 在 `QTS_TEST_NETWORK_POLICY=loopback` 下运行（仍拒绝所有公网地址
+  和 DNS）；这样既不削弱 P0/offline 的严格离线策略，也不让这些测试以 skip 变绿。
+  Postgres Job 同样以 `loopback` 只放行本机 DSN，并设置 `REQUIRE_POSTGRES=1`，
+  跳过即失败。
+- Windows `phase6-guard-gate` 使用独立 `trader/requirements-ci.windows.constraints.txt`
+  带哈希锁（含 `colorama` 等 Windows-only 传递依赖），安装前要求 Docker daemon 可用；
+  guard JUnit 必须 `--require-zero-skipped --require-zero-xfailed` 并上传 artifact，
+  不允许 Docker 缺失时以 skip 变绿。Linux 锁保持 `x86_64-unknown-linux-gnu`，两者不混用。
+- `ops`/`external` 只在手动/定时的 `optional-gates.yml` 运行，不属于合并必需检查，也不
+  把可选依赖的 skip 计为通过。
+
+**不可变产物与发布**
+
+- `Release Build` 在 `CI Gate` 于 `main` 成功后按触发 commit 构建一次镜像，推送
+  `ghcr.io/<owner>/<repo>:<sha>` 并记录 digest、SBOM（CycloneDX）和漏洞扫描 SARIF。
+  PR 只构建验证，不推送、不生成 release manifest。
+- `scripts/release_manifest.py` 生成 manifest：commit、clean tree、workflow run、镜像 digest、
+  CI/runtime constraints 的 SHA-256、schema 版本、JUnit/coverage/前端 dist 的摘要。部署端
+  只接受 manifest 中的 digest，禁止 `latest` 或目标机重新 checkout/build。
+- `deploy/compose.demo.yml` 强制 `QTS_COMPOSE_PROJECT`、Demo 专用端口 65432/18090/18085、
+  project 前缀卷，`BINANCE_ENV=demo` 硬编码且不可被 env 文件覆盖，`build: !reset null`
+  禁止重建。基础镜像与 postgres/python 运行镜像均按 digest pin；`pg_dump`/`pg_restore`
+  从同一 pinned PostgreSQL 镜像多阶段复制，镜像构建不依赖 apt 网络。
+- `scripts/deploy_preflight.py` 在启动前 fail-closed：非 Demo、默认/缺失凭据、缺失账户/
+  标的 allowlist/warmup/外部告警/DR、错误或不匹配 digest、缺失 schema/回滚证据都阻断，
+  只输出 reason code 与键名，不输出秘密值。远端 dry-run 用 `--no-host-evidence` 延迟
+  主机证据检查并标记 `HOST_EVIDENCE_DEFERRED`；self-hosted 部署 job 在启动前执行完整
+  预检，二者不能互相冒充。
+- `deploy-demo.yml` 默认 dry-run，不连接主机；实际部署只允许受保护 `demo` 环境的
+  self-hosted runner 手动触发，需 `dry_run=false` 且 `confirm_deploy=true`。部署与 Demo
+  证据工作流共用 `qts-demo-<QTS_COMPOSE_PROJECT>` concurrency 组，同一目标串行。
+- 受保护工作流在 checkout `inputs.commit` 或执行带 secrets 的脚本之前必须通过
+  `scripts/verify_release_provenance.py`：Release Build run 必须是 `workflow_run` 触发、
+  `main`、成功、head SHA 与请求 commit 一致，且 release manifest 绑定一致。
+- 部署前后由 `scripts/deploy_gate.py` 做可执行门禁：pre 要求新增风险已关闭、命令收敛
+  （UNKNOWN/QUEUED/SENDING 均为 0）、无未入账成交、单一 owner/有效 fencing；post 要求
+  全部容器 healthy、固定 digest/label、`/health/trading` ready、无未入账成交，并在
+  `--wait-timeout` 内轮询以避开 `up -d` 的启动竞态。事实来自真实 PostgreSQL：
+  `psql -tAc` 的布尔按 `t/f` 解析，缺失或不可解析的事实按未知失败处理。
+  `scripts/verify_deploy_gate_live.py` 在任务自有 Compose project 中用真实
+  `docker compose exec` 复现该路径。
+- `demo-evidence.yml` 的严格观察要求目标主机实际采集的运行时绑定
+  （`scripts/collect_runtime_release_binding.py`）与 ≥24h 窗口：绑定在观察窗口**之后**
+  采集，每个样本携带 `/health/trading` 的运行时身份，strict 逐样本比对身份与时间戳，
+  并要求绑定的采集时间落在窗口内（`scripts/release_binding.py`）。
+- 受保护工作流的操作员输入只经 step `env` 传入，先按格式校验再以 `"$VAR"` 引用；
+  Release Build 只上传 `reports/` 一个根，消费工作流把证据下载到 checkout 目录之外，
+  因此第二次 checkout（默认 clean）不会删除证据。
+
+**Demo 验收边界**
+
+- Demo 是最高外部验收环境，不要求 testnet。镜像构建成功、dry-run、历史 Demo 结果都不能
+  自动代表当前 digest 已通过 24h；`summarize_observation.py --strict-release` 把
+  ready_ratio、对账年龄、末样本 outbox/未入账成交、重复/重发/覆盖证据与 release
+  commit+digest+environment 绑定为显式门禁。
+- 前端 `npm run test:coverage` 与 `npm run build` 作为 CI 证据和版本化 `dist` artifact；
+  本专项不新增公开前端托管服务，运行时托管路径仍是后续独立工作。

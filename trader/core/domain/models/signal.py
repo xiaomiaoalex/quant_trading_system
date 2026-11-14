@@ -48,6 +48,11 @@ class Signal:
     quantity: Decimal = Decimal("0")  # 建议数量
     confidence: Decimal = Decimal("1.0")  # 置信度 0-1
 
+    # 订单规格：必须由策略显式声明；None 表示没有可用规格，执行层会拒绝，
+    # 不再从 metadata 隐式默认 MARKET。
+    order_type: Optional[OrderType] = None
+    time_in_force: str = "GTC"
+
     # 风控参数
     stop_loss: Optional[Decimal] = None  # 止损价格
     take_profit: Optional[Decimal] = None  # 止盈价格
@@ -105,13 +110,28 @@ class Signal:
             )
 
     def to_order_params(self) -> Dict[str, Any]:
-        """转换为订单参数（供OMS使用）"""
+        """转换为订单参数（供 OMS 使用）。
+
+        订单类型必须由信号显式声明；缺失或非法时 fail-closed，绝不按价格猜测。
+        LIMIT 携带声明的限价；MARKET 的 price 只是参考价，不作为限价。
+        """
+        if self.order_type is None:
+            raise ValueError("ORDER_TYPE_REQUIRED")
+        try:
+            order_type = OrderType(self.order_type)
+        except (TypeError, ValueError):
+            raise ValueError(f"UNSUPPORTED_ORDER_TYPE: {self.order_type!r}") from None
+        price: Optional[Decimal] = None
+        if order_type is OrderType.LIMIT:
+            if self.price is None or Decimal(str(self.price)) <= 0:
+                raise ValueError("LIMIT_PRICE_REQUIRED")
+            price = self.price
         return {
             "symbol": self.symbol,
             "side": self.get_order_side(),
-            "order_type": OrderType.MARKET,  # 默认市价单
+            "order_type": order_type,
             "quantity": self.quantity,
-            "price": None,  # 市价单不需要价格
+            "price": price,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
             "strategy_name": self.strategy_name,

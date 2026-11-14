@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.tests.test_trading_service import fund_book
 from trader.trading.models import (
     Execution,
     OrderObservation,
@@ -203,6 +204,7 @@ async def test_adopted_order_does_not_create_a_reservation():
 async def test_a_new_command_uses_its_own_client_order_id():
     engine = service(defer_send=True)
     await engine.recover(snapshot())
+    await fund_book(engine, "book:test", {"USDT": Decimal("1000")})
     command = PlaceOrderCommand(
         command_id="cmd-1",
         account_id="acct",
@@ -212,6 +214,10 @@ async def test_a_new_command_uses_its_own_client_order_id():
         side="BUY",
         qty=Decimal("0.00019"),
         price=Decimal("77474.49"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     receipt = await engine.place(command, actor="test")
     assert receipt.cl_ord_id != "qts-abc123"

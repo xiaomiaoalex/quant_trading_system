@@ -14,6 +14,7 @@ from trader.core.application.strategy_protocol import (
     ValidationError,
     ValidationResult,
 )
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
 
 
@@ -98,6 +99,7 @@ class EmaCrossBtcStrategy:
         return Signal(
             strategy_name=self.strategy_id,
             signal_type=signal_type,
+            order_type=OrderType.MARKET,
             symbol=market_data.symbol,
             price=market_data.price,
             quantity=self.order_size,

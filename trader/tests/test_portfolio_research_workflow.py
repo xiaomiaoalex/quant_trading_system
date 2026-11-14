@@ -25,11 +25,11 @@ from insight.committee.schemas import (
     SpecialistType,
 )
 
-from services.committee_to_lifecycle_adapter import (
+from trader.services.committee_to_lifecycle_adapter import (
     CommitteeToLifecycleAdapter,
     LifecycleAdapterConfig,
 )
-from services.portfolio_research_workflow import (
+from trader.services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,
     WorkflowResult,

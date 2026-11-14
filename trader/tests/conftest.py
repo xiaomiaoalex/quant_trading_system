@@ -15,12 +15,17 @@
 - `.env`（Binance 演示配置）仍然加载，但其中的敏感键会被 `_restore_tracked_env` 剥离。
 """
 
+import asyncio
 import importlib
+import json
 import logging
 import os
+import socket
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from dotenv import load_dotenv
@@ -82,36 +87,24 @@ def _restore_asyncpg_module() -> None:
 def _reset_global_test_state() -> None:
     from trader.adapters.binance.proxy_failover import reset_proxy_failover_controller
     from trader.adapters.persistence.execution_repository import reset_execution_repository
-    from trader.adapters.persistence.killswitch_repository import reset_killswitch_repository
     from trader.adapters.persistence.market_risk_audit_repository import (
         reset_market_risk_audit_repository,
     )
     from trader.adapters.persistence.position_repository import reset_position_repository
     from trader.adapters.persistence.risk_repository import reset_risk_event_repository
-    from trader.adapters.persistence.runtime_state_repository import reset_runtime_state_repository
-    from trader.api import main as api_main
-    from trader.api.routes import monitor
-    from trader.api.routes.strategies import reset_strategy_route_state_for_tests
     from trader.core.domain.services.order_ownership_registry import reset_order_ownership_registry
     from trader.core.domain.services.position_lot_registry import reset_lot_manager
     from trader.services.strategy_event_service import reset_strategy_event_service
     from trader.storage.in_memory import reset_storage
 
-    reset_strategy_route_state_for_tests()
-    api_main._binance_connector_instance = None
-    api_main._binance_cascade_controller = None
-    monitor._monitor_service = None
-    monitor._portfolio_service = None
     reset_proxy_failover_controller()
     reset_strategy_event_service()
     reset_lot_manager()
     reset_order_ownership_registry()
     reset_execution_repository()
-    reset_killswitch_repository()
     reset_market_risk_audit_repository()
     reset_position_repository()
     reset_risk_event_repository()
-    reset_runtime_state_repository()
     reset_storage()
     _restore_tracked_env()
     _restore_asyncpg_module()
@@ -125,3 +118,373 @@ def isolate_global_test_state() -> Iterator[None]:
 
 
 _restore_tracked_env()
+
+
+# --------------------------------------------------------------------------- #
+# CI test-group manifest, network policy and strict Postgres enforcement.
+#
+# ci/test_manifest.json is the auditable source of truth for which tests run
+# in which CI job.  A new trader/tests/test_*.py file that is not classified
+# fails collection instead of silently escaping every required gate.
+# --------------------------------------------------------------------------- #
+
+_ROOT = Path(__file__).resolve().parents[2]
+_MANIFEST_PATH = _ROOT / "ci" / "test_manifest.json"
+_TEST_PREFIX = "trader/tests/"
+_GROUP_ENV = "QTS_TEST_GROUP"
+_EXCLUDE_GROUP_ENV = "QTS_TEST_EXCLUDE_GROUPS"
+_SUBSET_ENV = "QTS_TEST_SUBSET"
+_POLICY_ENV = "QTS_TEST_NETWORK_POLICY"
+
+# Captured once, before any guard is installed, so nested guard installation
+# (for example the network-policy self-test) still calls the real socket
+# implementation rather than another guard.
+_SOCKET_ORIGINALS: dict[str, object] = {
+    "connect": socket.socket.connect,
+    "connect_ex": socket.socket.connect_ex,
+    "create_connection": socket.create_connection,
+    "getaddrinfo": socket.getaddrinfo,
+    "socketpair": socket.socketpair,
+}
+
+
+def _load_manifest() -> tuple[dict[str, str], dict[str, set[str]], dict[str, Any]]:
+    payload = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    groups = payload.get("groups")
+    if not isinstance(groups, dict):
+        raise pytest.UsageError(f"test manifest has no 'groups' object: {_MANIFEST_PATH}")
+    mapping: dict[str, str] = {}
+    for group, names in groups.items():
+        if not isinstance(names, list):
+            raise pytest.UsageError(f"test manifest group is not a list: {group}")
+        for name in names:
+            mapping[f"{_TEST_PREFIX}{name}"] = group
+    raw_subsets = payload.get("ci_subsets") or {}
+    if not isinstance(raw_subsets, dict):
+        raise pytest.UsageError(
+            f"test manifest has an invalid 'ci_subsets' object: {_MANIFEST_PATH}"
+        )
+    subsets: dict[str, set[str]] = {}
+    for name, entries in raw_subsets.items():
+        if not isinstance(entries, list):
+            raise pytest.UsageError(f"test manifest subset is not a list: {name}")
+        subsets[name] = {f"{_TEST_PREFIX}{entry}" for entry in entries}
+    jobs = payload.get("ci_jobs") or {}
+    if not isinstance(jobs, dict):
+        raise pytest.UsageError(f"test manifest has an invalid 'ci_jobs' object: {_MANIFEST_PATH}")
+    return mapping, subsets, jobs
+
+
+def _selected_groups() -> set[str]:
+    raw = os.getenv(_GROUP_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _excluded_groups() -> set[str]:
+    raw = os.getenv(_EXCLUDE_GROUP_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _selected_subsets() -> set[str]:
+    raw = os.getenv(_SUBSET_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _required_groups(
+    jobs: dict[str, Any],
+    subsets: dict[str, set[str]],
+    group_map: dict[str, str],
+) -> set[str]:
+    """Groups whose files a required CI job runs; they may never be excluded.
+
+    A required job selects either a whole ``group`` or a named ``subset``.  Both
+    forms protect every file the job actually runs: a subset member that lives
+    in an otherwise optional group (the phase-6 guard test in ``ops``, for
+    example) must not become removable just because only its subset is listed.
+    """
+    required_files: set[str] = set()
+    for spec in jobs.values():
+        if not isinstance(spec, dict) or not spec.get("required"):
+            continue
+        group = spec.get("group")
+        if isinstance(group, str) and group:
+            required_files.update(key for key, value in group_map.items() if value == group)
+        subset = spec.get("subset")
+        if isinstance(subset, str) and subset in subsets:
+            required_files.update(subsets[subset])
+    return {group_map[key] for key in required_files if key in group_map}
+
+
+def _collect_ignore() -> list[str]:
+    """Never import test modules that this job does not run.
+
+    A test module that is not collected still gets imported by pytest during
+    collection, and an import-time ``pytest.importorskip`` or a module-level
+    skip marker in such a module is recorded as a *collection skip* even when
+    none of its items are selected.  The strict zero-skip evidence gate would
+    then reject a required job for an optional dependency or a platform it
+    never intended to exercise.  Restricting collection up front keeps each
+    job's imports limited to what it actually runs.
+    """
+    group_map, subsets, _jobs = _load_manifest()
+    excluded = _excluded_groups()
+    selected = _selected_groups()
+    selected_subsets = _selected_subsets()
+    subset_files: set[str] | None = (
+        set().union(*(subsets[name] for name in selected_subsets)) if selected_subsets else None
+    )
+    ignored: list[str] = []
+    for key, group in group_map.items():
+        if group in excluded:
+            ignored.append(key)
+        elif selected and group not in selected:
+            ignored.append(key)
+        elif subset_files is not None and key not in subset_files:
+            ignored.append(key)
+    return [key.removeprefix(_TEST_PREFIX) for key in ignored]
+
+
+collect_ignore = _collect_ignore()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    group_map, subsets, jobs = _load_manifest()
+    config._qts_group_map = group_map  # type: ignore[attr-defined]
+    config._qts_subsets = subsets  # type: ignore[attr-defined]
+    known = set(group_map.values())
+    selected = _selected_groups()
+    excluded = _excluded_groups()
+    unknown_selected = sorted(selected - known)
+    if unknown_selected:
+        raise pytest.UsageError(f"unknown {_GROUP_ENV} value(s): {', '.join(unknown_selected)}")
+    unknown_excluded = sorted(excluded - known)
+    if unknown_excluded:
+        raise pytest.UsageError(
+            f"unknown {_EXCLUDE_GROUP_ENV} value(s): {', '.join(unknown_excluded)}"
+        )
+    conflicting = sorted(selected & excluded)
+    if conflicting:
+        raise pytest.UsageError(
+            f"{_GROUP_ENV} and {_EXCLUDE_GROUP_ENV} both select: {', '.join(conflicting)}"
+        )
+    forbidden = sorted(excluded & _required_groups(jobs, subsets, group_map))
+    if forbidden:
+        raise pytest.UsageError(f"required CI group(s) cannot be excluded: {', '.join(forbidden)}")
+    unknown_subsets = sorted(_selected_subsets() - set(subsets))
+    if unknown_subsets:
+        raise pytest.UsageError(f"unknown {_SUBSET_ENV} value(s): {', '.join(unknown_subsets)}")
+    policy = os.getenv(_POLICY_ENV, "loopback").strip().lower()
+    if policy not in {"offline", "loopback", "open"}:
+        raise pytest.UsageError(f"{_POLICY_ENV} must be offline, loopback or open; got {policy!r}")
+    config._qts_network_policy = policy  # type: ignore[attr-defined]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    group_map: dict[str, str] = config._qts_group_map  # type: ignore[attr-defined]
+    subsets: dict[str, set[str]] = config._qts_subsets  # type: ignore[attr-defined]
+    selected = _selected_groups()
+    excluded = _excluded_groups()
+    selected_subsets = _selected_subsets()
+    subset_files: set[str] | None = (
+        set().union(*(subsets[name] for name in selected_subsets)) if selected_subsets else None
+    )
+    kept: list[pytest.Item] = []
+    matched_subset = 0
+    for item in items:
+        item_path = Path(str(getattr(item, "path", None) or item.fspath)).resolve()
+        try:
+            key = item_path.relative_to(_ROOT).as_posix()
+        except ValueError:
+            kept.append(item)
+            continue
+        if not key.startswith(_TEST_PREFIX) or not item_path.name.startswith("test_"):
+            kept.append(item)
+            continue
+        group = group_map.get(key)
+        if group is None:
+            raise pytest.UsageError(f"test file is not classified in ci/test_manifest.json: {key}")
+        if group in excluded:
+            continue
+        item.add_marker(getattr(pytest.mark, group))
+        if selected and group not in selected:
+            continue
+        if subset_files is not None:
+            if key not in subset_files:
+                continue
+            matched_subset += 1
+        kept.append(item)
+    items[:] = kept
+    if selected_subsets and matched_subset == 0:
+        raise pytest.UsageError(
+            f"{_SUBSET_ENV} selected {sorted(selected_subsets)} but no classified test file matched"
+        )
+
+    if "postgres" in selected and os.getenv("REQUIRE_POSTGRES") == "1":
+        if _REAL_ASYNCPG is None:
+            raise pytest.UsageError("REQUIRE_POSTGRES=1 but asyncpg is not importable")
+        from trader.adapters.persistence.postgres import is_postgres_available
+
+        if not is_postgres_available():
+            raise pytest.UsageError(
+                "REQUIRE_POSTGRES=1 but no PostgreSQL DSN is configured "
+                "(POSTGRES_CONNECTION_STRING or POSTGRES_HOST/POSTGRES_DB/"
+                "POSTGRES_USER/POSTGRES_PASSWORD)"
+            )
+        dsn = os.getenv("POSTGRES_CONNECTION_STRING", "").strip()
+        if not dsn:
+            host = os.getenv("POSTGRES_HOST", "").strip()
+            database = os.getenv("POSTGRES_DB", "").strip()
+            user = os.getenv("POSTGRES_USER", "").strip()
+            password = os.getenv("POSTGRES_PASSWORD", "")
+            port = os.getenv("POSTGRES_PORT", "5432").strip() or "5432"
+            dsn = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+        async def _probe() -> None:
+            connection = await _REAL_ASYNCPG.connect(dsn, timeout=5)
+            try:
+                await connection.fetchval("SELECT 1")
+            finally:
+                await connection.close()
+
+        try:
+            asyncio.run(_probe())
+        except Exception as exc:
+            raise pytest.UsageError(
+                "REQUIRE_POSTGRES=1 but PostgreSQL is unreachable or the DSN is "
+                f"invalid: {type(exc).__name__}: {exc}"
+            ) from exc
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    outcome = yield
+    report = outcome.get_result()
+    if (
+        report.skipped
+        and os.getenv("REQUIRE_POSTGRES") == "1"
+        and item.get_closest_marker("postgres") is not None
+    ):
+        report.outcome = "failed"
+        report.longrepr = (
+            "REQUIRE_POSTGRES=1: a Postgres test was skipped; a required PG job "
+            f"must never turn a missing dependency into green: {item.nodeid}"
+        )
+
+
+def _loopback_host(host: object) -> bool:
+    if host is None:
+        return True
+    if isinstance(host, bytes):
+        host = host.decode("utf-8", "replace")
+    text = str(host).strip().strip("[]").lower()
+    return text in {"", "localhost", "127.0.0.1", "::1"} or text.startswith("127.")
+
+
+def _install_network_guard(policy: str) -> dict[str, object]:
+    """Restrict sockets for the test process according to the CI group policy.
+
+    ``offline``  - P0/unit: no socket connect at all, including loopback.
+    ``loopback`` - Postgres/local HTTP groups: loopback only, public blocked.
+    ``open``     - explicit external/ops runs only: no restriction.
+    """
+    previous: dict[str, object] = {
+        "connect": socket.socket.connect,
+        "connect_ex": socket.socket.connect_ex,
+        "create_connection": socket.create_connection,
+        "getaddrinfo": socket.getaddrinfo,
+        "socketpair": socket.socketpair,
+    }
+    if policy == "open":
+        return previous
+
+    def _unwrap(function: object) -> object:
+        seen: set[int] = set()
+        while getattr(function, "_qts_guard", False) and id(function) not in seen:
+            seen.add(id(function))
+            function = getattr(function, "_qts_underlying", function)
+        return function
+
+    originals = {key: _unwrap(value) for key, value in _SOCKET_ORIGINALS.items()}
+    # CPython's socket.socketpair() creates a loopback listener on Windows.
+    # That is the asyncio event-loop self-pipe, not test traffic, so it is the
+    # only loopback connection allowed in the otherwise fully-offline mode.
+    pair_state = {"active": False}
+
+    def _allowed(host: object) -> bool:
+        if pair_state["active"] and _loopback_host(host):
+            return True
+        if policy == "offline":
+            return False
+        return _loopback_host(host)
+
+    def _host_of(address: object) -> object:
+        if isinstance(address, tuple) and address:
+            return address[0]
+        return address
+
+    def guarded_connect(self, address):  # type: ignore[no-untyped-def]
+        host = _host_of(address)
+        if not _allowed(host):
+            raise PermissionError(
+                f"QTS_NETWORK_BLOCKED ({policy}): outbound socket to {host!r} is "
+                "forbidden for this test group; use a fake/transport double or "
+                "move the test to the explicit external/ops group"
+            )
+        return originals["connect"](self, address)  # type: ignore[operator]
+
+    def guarded_connect_ex(self, address):  # type: ignore[no-untyped-def]
+        host = _host_of(address)
+        if not _allowed(host):
+            raise PermissionError(f"QTS_NETWORK_BLOCKED ({policy}): {host!r}")
+        return originals["connect_ex"](self, address)  # type: ignore[operator]
+
+    def guarded_create_connection(address, *args, **kwargs):  # type: ignore[no-untyped-def]
+        host = _host_of(address)
+        if not _allowed(host):
+            raise PermissionError(f"QTS_NETWORK_BLOCKED ({policy}): {host!r}")
+        return originals["create_connection"](address, *args, **kwargs)  # type: ignore[operator]
+
+    def guarded_getaddrinfo(host, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if not _allowed(host):
+            raise PermissionError(f"QTS_NETWORK_BLOCKED ({policy}): DNS {host!r}")
+        return originals["getaddrinfo"](host, *args, **kwargs)  # type: ignore[operator]
+
+    def guarded_socketpair(*args, **kwargs):  # type: ignore[no-untyped-def]
+        pair_state["active"] = True
+        try:
+            return originals["socketpair"](*args, **kwargs)  # type: ignore[operator]
+        finally:
+            pair_state["active"] = False
+
+    for name, guarded in (
+        ("connect", guarded_connect),
+        ("connect_ex", guarded_connect_ex),
+        ("create_connection", guarded_create_connection),
+        ("getaddrinfo", guarded_getaddrinfo),
+        ("socketpair", guarded_socketpair),
+    ):
+        setattr(guarded, "_qts_guard", True)
+        setattr(guarded, "_qts_underlying", originals[name])
+
+    socket.socket.connect = guarded_connect  # type: ignore[method-assign]
+    socket.socket.connect_ex = guarded_connect_ex  # type: ignore[method-assign]
+    socket.create_connection = guarded_create_connection  # type: ignore[assignment]
+    socket.getaddrinfo = guarded_getaddrinfo  # type: ignore[assignment]
+    socket.socketpair = guarded_socketpair  # type: ignore[assignment]
+    return previous
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    policy = getattr(session.config, "_qts_network_policy", "loopback")
+    session.config._qts_network_originals = _install_network_guard(policy)  # type: ignore[attr-defined]
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    originals = getattr(session.config, "_qts_network_originals", None)
+    if not originals:
+        return
+    socket.socket.connect = originals["connect"]  # type: ignore[method-assign]
+    socket.socket.connect_ex = originals["connect_ex"]  # type: ignore[method-assign]
+    socket.create_connection = originals["create_connection"]  # type: ignore[assignment]
+    socket.getaddrinfo = originals["getaddrinfo"]  # type: ignore[assignment]
+    socket.socketpair = originals["socketpair"]  # type: ignore[assignment]

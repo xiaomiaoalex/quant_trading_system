@@ -22,7 +22,7 @@ from insight.committee.schemas import (
 )
 from insight.committee.specialists import TrendAgent
 
-from services.portfolio_research_workflow import (
+from trader.services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,
     WorkflowResult,

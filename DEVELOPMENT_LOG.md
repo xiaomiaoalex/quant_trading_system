@@ -1513,3 +1513,27 @@
     `mypy` 对改动模块无错误。
 - 风险/遗留: 就绪率约 0.62，周期性完整对齐按契约仍会短暂收回就绪；外部中断时长取决于本地代理稳定性。
   `.env` 中的 `BINANCE_BACKUP_PROXY_URL=127.0.0.1:10808` 当前无进程监听，建议运维侧停用该备用项。
+
+## 2026-11-04 阶段 6：单栈收敛与持续沙箱（进行中）
+
+- 删除旧 HTTP 进程与旧执行栈：`trader/api/main.py`、旧 OMS/ExecutionBudget/OrderService、
+  `strategy_runner`/`oms_callback`/`account_state`/`account_stream_bridge`、旧 monitor/
+  reconciler/killswitch/broker/event/portfolio 服务，以及依赖旧 Runner 的 backtest/
+  candidate/deployment 写路径。所有删除前均复制到
+  `artifacts/foundation/phase6/deletion-backup/`；Git 基线 `c6fe450` 仍是权威恢复点。
+- `create_trading_app()` 成为唯一 HTTP 装配：认证、统一交易命令/查询、研究、历史、
+  data catalog、performance 读取、portfolio research、audit、chat、risk 配置/审计都在
+  Control 进程；新增 `trader/api/routes/control_views.py` 用统一账户聚合提供原只读/
+  安全视图。旧策略生命周期写入口返回 410 `LEGACY_STRATEGY_LIFECYCLE_RETIRED`，
+  reconciler 手动触发返回 503 `RECONCILIATION_IS_EXECUTION_OWNED`，replay 返回 410。
+- `/v1/trading/metrics` 增加 execution/ledger/event 计数与身份摘要、按命令发送结果、
+  重复发送命令列表、私有 WS 覆盖证明摘要与当前策略/预热状态；观察脚本改为密码文件 +
+  逐样本 JSONL（墙钟/单调时间、健康 reasons、unresolved、覆盖、转换 marker）。
+- 新增 `scripts/sandbox_supervisor.py`：任务自有 Compose 项目、动态空闲端口、持续
+  off-host 备份+恢复 DR 证据、执行前首次 DR 门禁、资金显式划拨、窗口判定与
+  `window_aborted` 语义。
+- 修复 Demo 真实账户中的 `EXPIRED_IN_MATCH` 终态映射：恢复回填不再因未知终态崩溃。
+- 验证（工程师侧）：全量 `trader/tests` 3286 passed / 57 skipped（未带 PG DSN 时仅
+  phase3/4/5 PG 用例按设计要求 DSN）；带 DSN 的 CI PostgreSQL 清单 106 passed、0 skipped；
+  P0 99 passed；前端 typecheck/tests(156)/build 通过。
+- 待完成：独立测试员与全新只读审核；随后在冻结源码上运行真实 >=24h Demo 沙箱窗口。

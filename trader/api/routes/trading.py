@@ -11,17 +11,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from trader.api.auth import AuthSettings, csrf_for, verify_password
-from trader.trading.models import (
-    AccountRiskView,
-    Conflict,
-    Execution,
-    NotReady,
-    OrderObservation,
-    PlaceOrderCommand,
-    ReconcileSnapshot,
-    TradingError,
-    json_value,
-)
+from trader.trading.models import AccountRiskView, Conflict, NotReady, TradingError, json_value
+from trader.trading.order_spec import build_order_spec
 from trader.trading.risk import RiskRejected
 
 router = APIRouter(tags=["Trading"])
@@ -42,10 +33,25 @@ class PlaceOrderRequest(BaseModel):
     qty: Decimal
     price: Decimal
     deployment_id: str = "manual"
-    order_type: Literal["MARKET", "LIMIT"] = "LIMIT"
+    order_type: Literal["MARKET", "LIMIT"]
+    book_id: str = Field(min_length=1)
+    # Where the economic price came from and when it was observed. The manual
+    # path must state this explicitly; the service and adapter validate it.
+    price_source: str = Field(min_length=1)
+    price_at_ms: int = Field(ge=0)
     time_in_force: str = "GTC"
     decision_id: str = ""
     actor: str | None = None  # legacy input; ignored, identity comes from the session
+
+
+class AllocateRequest(BaseModel):
+    command_id: str = Field(min_length=1, max_length=128)
+    account_id: str = Field(min_length=1)
+    book_id: str = Field(min_length=1)
+    asset: str = Field(min_length=1)
+    amount: Decimal
+    reason: str = Field(min_length=1, max_length=500)
+    actor: str | None = None
 
 
 class CancelRequest(BaseModel):
@@ -57,44 +63,12 @@ class CancelRequest(BaseModel):
 class ControlRequest(BaseModel):
     command_id: str = Field(min_length=1, max_length=128)
     account_id: str = Field(min_length=1)
-    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT"]
+    action: Literal["BLOCK_NEW_RISK", "RESUME_NEW_RISK", "CANCEL_ALL", "RECONNECT", "RESOLVE"]
+    # RESOLVE settles one pending difference. The control process only records
+    # the command; the execution process checks the evidence and applies it.
+    code: str = ""
+    evidence: dict | None = None
     actor: str | None = None
-
-
-class ObservationRequest(BaseModel):
-    account_id: str
-    cl_ord_id: str
-    status: str
-    cumulative_qty: Decimal
-    broker_order_id: str = ""
-    observed_at_ms: int = 0
-    source: str = "REST"
-
-
-class ExecutionRequest(BaseModel):
-    account_id: str
-    cl_ord_id: str
-    symbol: str
-    exec_id: str
-    qty: Decimal
-    price: Decimal
-    fee: Decimal = Decimal("0")
-    fee_asset: str = ""
-    occurred_at_ms: int = 0
-    venue: str = "binance_spot"
-
-
-class ReconcileRequest(BaseModel):
-    account_id: str
-    checked_at_ms: int
-    generation: int
-    balances: dict[str, Decimal]
-    external_locked: dict[str, Decimal] = Field(default_factory=dict)
-    open_orders: list[ObservationRequest] = Field(default_factory=list)
-    executions: list[ExecutionRequest] = Field(default_factory=list)
-    marks: dict[str, dict] = Field(default_factory=dict)
-    stream_healthy: bool = True
-    complete: bool = True
 
 
 def _service(request: Request):
@@ -180,22 +154,49 @@ async def me(request: Request, response: Response):
 
 @router.post("/v1/trading/orders", status_code=202)
 async def place_order(payload: PlaceOrderRequest, request: Request):
-    command = PlaceOrderCommand(
-        command_id=payload.command_id,
-        account_id=payload.account_id,
-        symbol=payload.symbol,
-        base_asset=payload.base_asset,
-        quote_asset=payload.quote_asset,
-        side=payload.side,
-        qty=payload.qty,
-        price=payload.price,
-        deployment_id=payload.deployment_id,
-        order_type=payload.order_type,
-        time_in_force=payload.time_in_force,
-        decision_id=payload.decision_id,
-    )
     try:
+        # The transport DTO is not the order contract: the command is built by
+        # the shared order-spec factory, exactly like the strategy path.
+        spec = build_order_spec(
+            symbol=payload.symbol,
+            side=payload.side,
+            order_type=payload.order_type,
+            qty=payload.qty,
+            limit_price=payload.price if payload.order_type == "LIMIT" else None,
+            reference_price=payload.price if payload.order_type == "MARKET" else None,
+            reference_price_source=payload.price_source,
+            reference_at_ms=payload.price_at_ms,
+            decision_at_ms=payload.price_at_ms,
+            time_in_force=payload.time_in_force,
+            book_id=payload.book_id,
+            price_source=payload.price_source,
+        )
+        command = spec.to_command(
+            command_id=payload.command_id,
+            account_id=payload.account_id,
+            base_asset=payload.base_asset,
+            quote_asset=payload.quote_asset,
+            deployment_id=payload.deployment_id,
+            decision_id=payload.decision_id,
+        )
         receipt = await _executor(request).place(command, actor=request.state.actor)
+    except Exception as exc:
+        raise _handle(exc) from exc
+    return _receipt(receipt)
+
+
+@router.post("/v1/trading/allocations", status_code=202)
+async def allocate(payload: AllocateRequest, request: Request):
+    try:
+        receipt = await _executor(request).allocate(
+            payload.command_id,
+            payload.account_id,
+            payload.book_id,
+            payload.asset,
+            payload.amount,
+            actor=request.state.actor,
+            reason=payload.reason,
+        )
     except Exception as exc:
         raise _handle(exc) from exc
     return _receipt(receipt)
@@ -223,6 +224,8 @@ async def control_action(payload: ControlRequest, request: Request):
             payload.account_id,
             payload.action,
             actor=request.state.actor,
+            code=payload.code,
+            evidence=payload.evidence,
         )
     except Exception as exc:
         raise _handle(exc) from exc
@@ -273,6 +276,14 @@ async def risk_view(account_id: str, request: Request):
     return json_value(view)
 
 
+@router.get("/v1/trading/books")
+async def books(request: Request, account_id: str = Query(...)):
+    try:
+        return await _service(request).books(account_id)
+    except Exception as exc:
+        raise _handle(exc) from exc
+
+
 @router.get("/v1/trading/metrics")
 async def metrics(request: Request, account_id: str = Query(...)):
     try:
@@ -281,95 +292,7 @@ async def metrics(request: Request, account_id: str = Query(...)):
         raise _handle(exc) from exc
 
 
-@router.post("/v1/trading/observations", status_code=202)
-async def observe(payload: ObservationRequest, request: Request):
-    observation = OrderObservation(
-        account_id=payload.account_id,
-        cl_ord_id=payload.cl_ord_id,
-        status=payload.status,
-        cumulative_qty=payload.cumulative_qty,
-        broker_order_id=payload.broker_order_id,
-        observed_at_ms=payload.observed_at_ms,
-        source=payload.source,
-    )
-    try:
-        await _service(request).observe(observation)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return {"ok": True}
-
-
-@router.post("/v1/trading/executions", status_code=202)
-async def record_execution(payload: ExecutionRequest, request: Request):
-    execution = Execution(
-        account_id=payload.account_id,
-        cl_ord_id=payload.cl_ord_id,
-        symbol=payload.symbol,
-        exec_id=payload.exec_id,
-        qty=payload.qty,
-        price=payload.price,
-        fee=payload.fee,
-        fee_asset=payload.fee_asset,
-        occurred_at_ms=payload.occurred_at_ms,
-        venue=payload.venue,
-    )
-    try:
-        applied = await _service(request).record_execution(execution)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return {"applied": applied}
-
-
-@router.post("/v1/trading/reconcile", status_code=202)
-async def reconcile(payload: ReconcileRequest, request: Request):
-    snapshot = ReconcileSnapshot(
-        account_id=payload.account_id,
-        checked_at_ms=payload.checked_at_ms,
-        generation=payload.generation,
-        balances=payload.balances,
-        external_locked=payload.external_locked,
-        open_orders=[
-            OrderObservation(
-                account_id=item.account_id,
-                cl_ord_id=item.cl_ord_id,
-                status=item.status,
-                cumulative_qty=item.cumulative_qty,
-                broker_order_id=item.broker_order_id,
-                observed_at_ms=item.observed_at_ms,
-                source=item.source,
-            )
-            for item in payload.open_orders
-        ],
-        executions=[
-            Execution(
-                account_id=item.account_id,
-                cl_ord_id=item.cl_ord_id,
-                symbol=item.symbol,
-                exec_id=item.exec_id,
-                qty=item.qty,
-                price=item.price,
-                fee=item.fee,
-                fee_asset=item.fee_asset,
-                occurred_at_ms=item.occurred_at_ms,
-                venue=item.venue,
-            )
-            for item in payload.executions
-        ],
-        marks=payload.marks,
-        stream_healthy=payload.stream_healthy,
-        complete=payload.complete,
-    )
-    try:
-        view = await _service(request).recover(snapshot)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return json_value(view)
-
-
-@router.post("/v1/trading/resolve/{code}", status_code=202)
-async def resolve(code: str, request: Request, account_id: str = Query(...)):
-    try:
-        view = await _service(request).resolve(account_id, code, actor=request.state.actor)
-    except Exception as exc:
-        raise _handle(exc) from exc
-    return json_value(view)
+# Fact write endpoints (executions / observations / reconcile / resolve) are
+# deliberately absent from the control plane. Only the execution process writes
+# account facts; an operator session settles a difference through the durable
+# RESOLVE control command above, which the execution process checks and applies.

@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.trading import books as book_ledger
 from trader.trading.models import (
     AccountState,
     CancelOrderCommand,
@@ -26,6 +27,8 @@ from trader.trading.models import (
 from trader.trading.risk import RiskPolicy
 from trader.trading.service import TradingService
 from trader.trading.store import MemoryTradingStore
+
+TEST_BOOK = "book:test"
 
 
 class FakeExchange:
@@ -69,8 +72,16 @@ def command(command_id="cmd-1", **overrides) -> PlaceOrderCommand:
         price=Decimal("100"),
         deployment_id="dep-1",
         decision_id="dec-1",
+        order_type="LIMIT",
+        book_id=TEST_BOOK,
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     values.update(overrides)
+    if "price_source" not in overrides:
+        values["price_source"] = (
+            "SIGNAL_LIMIT" if values.get("order_type") == "LIMIT" else "MARKET_REFERENCE_TICKER"
+        )
     return PlaceOrderCommand(**values)
 
 
@@ -91,6 +102,24 @@ def make_service(exchange=None, clock=None, store=None, policy=None):
     )
 
 
+async def fund_book(service, book_id: str, allocations: dict[str, Decimal]) -> None:
+    """Explicitly fund a test book from the account's UNALLOCATED bucket.
+
+    This is fixture setup through the same pure allocation rule; the durable
+    allocation command itself is covered by the phase 2 safety tests.
+    """
+    state = await service.store.read("acct")
+    existing = state.books.get(book_id)
+    if existing is not None and any(amount > 0 for amount in existing.balances.values()):
+        return
+    async with service.store.transaction("acct") as state:
+        book_ledger.migrate_book_ledger(state)
+        for asset, amount in allocations.items():
+            if amount <= 0:
+                continue
+            book_ledger.allocate(state, book_id, asset, amount)
+
+
 async def bootstrap(
     service,
     *,
@@ -103,14 +132,14 @@ async def bootstrap(
     open_orders=(),
     executions=(),
     marks=None,
+    book_id=TEST_BOOK,
 ):
+    balances = balances if balances is not None else {"USDT": Decimal("1000"), "BTC": Decimal("0")}
     snapshot = ReconcileSnapshot(
         account_id="acct",
         checked_at_ms=checked,
         generation=generation,
-        balances=(
-            balances if balances is not None else {"USDT": Decimal("1000"), "BTC": Decimal("0")}
-        ),
+        balances=balances,
         external_locked=external_locked or {},
         open_orders=list(open_orders),
         executions=list(executions),
@@ -118,7 +147,9 @@ async def bootstrap(
         complete=complete,
         stream_healthy=stream_healthy,
     )
-    return await service.recover(snapshot)
+    view = await service.recover(snapshot)
+    await fund_book(service, book_id, dict(balances))
+    return view
 
 
 @pytest.mark.asyncio
@@ -612,7 +643,19 @@ async def test_balance_mismatch_is_evidence_and_blocks_new_risk():
     assert view.status != "READY"
     assert "BALANCE_MISMATCH" in view.reasons
     state = await service.store.read("acct")
-    assert state.balances["USDT"] == Decimal("990")  # exchange remains the balance truth
+    # The venue value is an observation; the authoritative balance stays the
+    # one the ledger explains, and the difference remains visible.
+    assert state.balances["USDT"] == Decimal("1000")
+    assert view.venue_balances["USDT"] == "990"
+    assert view.balance_differences["USDT"] == {
+        "internal": "1000",
+        "venue": "990",
+        "difference": "-10",
+    }
+    entry = next(
+        item for item in state.reconciliation["unresolved"] if item["code"] == "BALANCE_MISMATCH"
+    )
+    assert entry["detail"]["USDT"]["difference"] == "-10"
 
 
 @pytest.mark.asyncio
@@ -1029,3 +1072,54 @@ async def test_limit_order_still_requires_an_exact_fill_cover():
     assert order["status"] != "FILLED"
     view = await service.risk_view("acct")
     assert "ORDER_OBSERVATION_CONFLICT" in view.reasons
+
+
+@pytest.mark.asyncio
+async def test_allocation_waits_for_the_first_reconciliation_before_moving_assets():
+    """A queued ALLOCATE must not fail permanently while the account is unrecovered.
+
+    The execution process starts its command loop before the private-session
+    recovery has produced the first account snapshot. Applying an allocation at
+    that moment sees an empty UNALLOCATED book and would mark a valid operator
+    command FAILED. It must stay durable until reconciliation has run.
+    """
+    exchange = FakeExchange()
+    store = MemoryTradingStore()
+    control = TradingService(
+        store, exchange, RiskPolicy(), clock=lambda: 1_000_000, defer_send=True
+    )
+    receipt = await control.allocate(
+        "alloc-1",
+        "acct",
+        "book:test",
+        "USDT",
+        Decimal("100"),
+        actor="operator",
+        reason="sandbox budget",
+    )
+    assert receipt.status == "QUEUED"
+
+    execution = TradingService(store, exchange, RiskPolicy(), clock=lambda: 1_000_000)
+    before = await execution.resume_queued("acct")
+    state = await store.read("acct")
+    assert state.commands["alloc-1"].status == "QUEUED"
+    assert (
+        "book:test" not in state.books
+        or state.books["book:test"].balances.get("USDT", Decimal(0)) == 0
+    )
+    assert [item.status for item in before] == ["QUEUED"]
+
+    await execution.recover(
+        ReconcileSnapshot(
+            account_id="acct",
+            checked_at_ms=1_000_000,
+            generation=1,
+            balances={"USDT": Decimal("1000")},
+            marks={"USDT": {"price": Decimal("1"), "at_ms": 1_000_000}},
+        )
+    )
+    after = await execution.resume_queued("acct")
+    state = await store.read("acct")
+    assert state.commands["alloc-1"].status == "CONFIRMED"
+    assert state.books["book:test"].balances["USDT"] == Decimal("100")
+    assert [item.status for item in after] == ["CONFIRMED"]

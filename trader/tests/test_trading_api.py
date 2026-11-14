@@ -10,6 +10,7 @@ import pytest
 
 from trader.api.auth import AuthSettings, MemorySessionStore, hash_password
 from trader.api.trading_app import create_trading_app
+from trader.tests.fakes.research_eligibility import always_eligible, trust_memory_dataset
 from trader.tests.test_trading_service import Clock, FakeExchange, bootstrap, command, make_service
 from trader.trading.jobs import BacktestApplication, MemoryResearchStore
 from trader.trading.service import TradingService
@@ -45,7 +46,7 @@ async def build_client(*, ready=True, reasons=(), research=False):
         require_auth=True,
     )
     store = MemoryResearchStore() if research else None
-    application = BacktestApplication(store) if research else None
+    application = BacktestApplication(store, eligibility=always_eligible) if research else None
     app = create_trading_app(
         trading_service=service,
         research_store=store,
@@ -75,6 +76,10 @@ def order_payload(**overrides):
         "qty": "1",
         "price": "100",
         "deployment_id": "dep-1",
+        "order_type": "LIMIT",
+        "book_id": "book:test",
+        "price_source": "MANUAL_LIMIT",
+        "price_at_ms": 1_000_000,
     }
     values.update(overrides)
     return values
@@ -291,6 +296,7 @@ async def test_research_api_returns_a_durable_run_id_and_rejects_vectorbt_admiss
         )
         assert dataset_response.status_code == 201, dataset_response.text
         dataset_id = dataset_response.json()["dataset_id"]
+        trust_memory_dataset(store, dataset_id)
 
         manifest = {
             "dataset_ids": [dataset_id],

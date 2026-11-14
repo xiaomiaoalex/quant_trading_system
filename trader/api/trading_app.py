@@ -6,10 +6,25 @@ Tests and local smoke runs can inject memory stores and a fake exchange.
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 
 from trader.api.auth import AuthSettings, SessionMiddleware
-from trader.api.routes import data_history, health, research, sse, trading
+from trader.api.routes import (
+    audit,
+    chat,
+    control_views,
+    data_catalog,
+    data_history,
+    health,
+    performance,
+    portfolio_research,
+    research,
+    risk,
+    sse,
+    trading,
+)
 
 
 def create_trading_app(
@@ -33,6 +48,7 @@ def create_trading_app(
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.state.account_id = os.getenv("QTS_ACCOUNT_ID", "binance_spot")
     app.state.trading_service = trading_service
     app.state.research_store = research_store
     app.state.research_application = research_application
@@ -46,6 +62,16 @@ def create_trading_app(
     app.add_middleware(SessionMiddleware)
     app.include_router(health.router)
     app.include_router(trading.router)
+    app.include_router(control_views.router)
+    # Non-execution surfaces migrated from the retired process: durable
+    # research/data/performance reads, operator audit and chat authoring, and
+    # risk configuration/audit. None of them holds an order or accounting path.
+    app.include_router(data_catalog.router)
+    app.include_router(performance.router)
+    app.include_router(portfolio_research.router)
+    app.include_router(audit.router)
+    app.include_router(chat.router)
+    app.include_router(risk.router)
     app.include_router(research.router)
     if include_history:
         app.include_router(data_history.router)
