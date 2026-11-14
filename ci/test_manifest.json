@@ -71,6 +71,7 @@
       "test_capital_structure_signals.py",
       "test_chat_interface.py",
       "test_china_stock_market_rule_plugin.py",
+      "test_cicd_ci_group_exclusion.py",
       "test_cicd_ci_tools.py",
       "test_cicd_compose_smoke.py",
       "test_cicd_demo_compose.py",
@@ -82,9 +83,12 @@
       "test_cicd_observation_gate.py",
       "test_cicd_parentfix2_offline.py",
       "test_cicd_parentfix_offline.py",
+      "test_cicd_preview_env.py",
       "test_cicd_release_provenance.py",
       "test_cicd_ruleset.py",
       "test_cicd_runtime_binding.py",
+      "test_cicd_sandbox_limits_independent.py",
+      "test_code_sandbox_unix_limits.py",
       "test_committee_portfolio_constructor.py",
       "test_committee_reviewers.py",
       "test_committee_specialists.py",
@@ -149,11 +153,9 @@
       "test_phase3_independent_venue_clock.py",
       "test_phase4_independent_offline.py",
       "test_phase4_joint_backtest.py",
-      "test_phase5_alerting.py",
       "test_phase5_credentials.py",
       "test_phase5_dr_evidence.py",
       "test_phase5_health.py",
-      "test_phase5_independent_offline.py",
       "test_phase6_control_views.py",
       "test_phase6_independent_offline.py",
       "test_phase6_market_loop.py",
@@ -212,6 +214,10 @@
       "test_venue_order_adoption.py",
       "test_worker_assembly.py"
     ],
+    "loopback": [
+      "test_phase5_alerting.py",
+      "test_phase5_independent_offline.py"
+    ],
     "postgres": [
       "test_cicd_independent_postgres.py",
       "test_cicd_migration_compat.py",
@@ -256,6 +262,10 @@
     },
     "offline-gate": {
       "group": "offline",
+      "required": true
+    },
+    "loopback-gate": {
+      "group": "loopback",
       "required": true
     },
     "postgres-integration": {

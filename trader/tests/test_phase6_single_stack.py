@@ -135,7 +135,9 @@ def test_control_app_has_no_fact_write_route() -> None:
     from trader.api.trading_app import create_trading_app
 
     app = create_trading_app()
-    paths = {getattr(route, "path", "") for route in app.routes}
+    # FastAPI 0.162 keeps included routers lazy (``_IncludedRouter``), so the
+    # OpenAPI schema is the version-stable projection of the route table.
+    paths = set(app.openapi().get("paths", {}))
     for path in FACT_WRITE_ROUTES:
         assert path not in paths
     # The single trade write surface and its read/control companions stay.

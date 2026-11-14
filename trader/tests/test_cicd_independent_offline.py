@@ -230,7 +230,7 @@ def test_repository_manifest_classifies_every_file_exactly_once(tmp_path, capsys
     # every classified file is accounted for in exactly one group.
     assert payload["total_test_files"] == sum(payload["groups"].values())
     assert payload["total_test_files"] > 0
-    for group in ("p0", "offline", "postgres", "ops", "external"):
+    for group in ("p0", "offline", "loopback", "postgres", "ops", "external"):
         assert payload["groups"].get(group, 0) > 0
 
 

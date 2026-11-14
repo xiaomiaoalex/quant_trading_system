@@ -392,12 +392,10 @@ def test_there_is_exactly_one_http_assembly_and_no_second_entrypoint() -> None:
 
 def test_control_route_table_exposes_no_fact_write_entry() -> None:
     app = create_trading_app()
-    entries = {
-        (getattr(route, "path", ""), method)
-        for route in app.routes
-        for method in (getattr(route, "methods", set()) or set())
-    }
-    paths = {path for path, _method in entries}
+    # FastAPI 0.162 keeps included routers lazy (``_IncludedRouter``), so
+    # ``app.routes`` no longer exposes the included paths.  The OpenAPI schema
+    # is the version-stable projection of the same route table.
+    paths = set(app.openapi().get("paths", {}))
     for forbidden in (
         "/v1/trading/executions",
         "/v1/trading/observations",
@@ -2349,7 +2347,7 @@ async def test_ensure_tunnel_reuses_a_live_tunnel_that_passes_the_probe(
     monkeypatch.setattr(module, "_probe_bucket", record_probe)
     started = []
     monkeypatch.setattr(
-        module, "_start_tunnel", lambda destination, port: started.append(destination)
+        module, "_start_tunnel", lambda destination, port, **kwargs: started.append(destination)
     )
 
     await supervisor._ensure_tunnel()
@@ -2377,7 +2375,7 @@ async def test_ensure_tunnel_rebuilds_and_readbacks_after_a_failed_probe(
     monkeypatch.setattr(module, "_probe_bucket", fake_probe)
     started = []
 
-    def fake_start(destination, remote_port):
+    def fake_start(destination, remote_port, **kwargs):
         started.append((destination, remote_port))
         return (
             SimpleNamespace(terminate=lambda: None, wait=lambda timeout=5: 0),

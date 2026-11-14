@@ -146,10 +146,25 @@ python scripts/drill_lease_fencing.py --output artifacts/foundation/phase5/evide
 
 ## 9. 指定异机备份目标（my-server）
 
-用户指定并经 SSH 严格 host-key 校验的备份机：
+用户指定并经 SSH 严格 host-key 校验的备份机。地址**不再内置默认值**：备份机地址
+必须显式配置（`--remote-host` 优先于环境变量 `QTS_OFFHOST_HOST`），两者都没有时
+脚本在产生任何远端副作用之前 fail-closed（退出码 2，错误
+`REMOTE_HOST_NOT_CONFIGURED`），不会猜测旧地址或新地址。
 
-- SSH：`alex@192.168.3.4`，期望主机名 `my-server`；使用 `BatchMode=yes` 与
-  `StrictHostKeyChecking=yes`。不复制私钥，不修改远端 SSH/防火墙/ACL。
+- 当前地址：`192.168.0.105`，用户 `alex`，期望主机名 `my-server`；使用
+  `BatchMode=yes` 与 `StrictHostKeyChecking=yes`。不复制私钥，不修改远端
+  SSH/防火墙/ACL。
+- 已知主机身份：该机器在 `known_hosts` 中登记的身份仍是历史地址 `192.168.3.4`。
+  用 `--host-key-alias`（或 `QTS_OFFHOST_HOST_KEY_ALIAS`）显式指定该别名，SSH 以
+  `HostKeyAlias=192.168.3.4` 去核对既有条目；**不关闭 host-key 校验**。例如：
+
+```text
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o HostKeyAlias=192.168.3.4 \
+  alex@192.168.0.105
+```
+
+  旧地址 `192.168.3.4` 在此只作为**已知主机身份别名**保留，不再是任何脚本的默认
+  连接地址。
 - 远端目录：`~/qts-backups/{bootstrap,data,secrets,artifacts}`（700），其中
   `bootstrap/rclone` 为固定来源的 rclone v1.75.2 二进制（SHA-256
   `ed7ab1f17876bb006c3df3949a3044959671afd9112362dacaa5dd1647735bc1`，
@@ -160,14 +175,23 @@ python scripts/drill_lease_fencing.py --output artifacts/foundation/phase5/evide
   `~/qts-backups/data/<bucket>`，S3 凭据在 `~/qts-backups/secrets/rclone.env`
   （600，内容不进入仓库/argv/证据）。远端现有应用容器、端口和网络不触碰。
 - 本机通过严格 SSH local forward 访问远端 loopback S3；证据记录
-  `transport=ssh_tunnel`、`remote_host=192.168.3.4`、`tunnel_endpoint_host=127.0.0.1`、
+  `transport=ssh_tunnel`、`remote_host=192.168.0.105`、
+  `remote_host_key_alias=192.168.3.4`、`tunnel_endpoint_host=127.0.0.1`、
   `ssh_host_key_verified=true`，不把 loopback 本身当作异机。
 - 演练命令：
 
 ```text
 python scripts/drill_offhost_backup.py \
-  --remote-host 192.168.3.4 --ssh-user alex --expected-hostname my-server \
+  --remote-host 192.168.0.105 --host-key-alias 192.168.3.4 \
+  --ssh-user alex --expected-hostname my-server \
   --evidence-dir artifacts/foundation/phase5/evidence/offhost
+```
+
+  也可以用环境变量等价配置（命令行优先）：
+
+```text
+export QTS_OFFHOST_HOST=192.168.0.105
+export QTS_OFFHOST_HOST_KEY_ALIAS=192.168.3.4
 ```
 
 该脚本会创建任务自有本地 PostgreSQL 容器/卷和源/恢复数据库，执行 3 次间隔 120s 的
@@ -179,7 +203,8 @@ python scripts/drill_offhost_backup.py \
 关闭/删除远端演练存储（只在需要清理时；会删除已验证备份对象，执行前另行确认）：
 
 ```text
-ssh alex@192.168.3.4 'docker stop qts-p5-rclone-<run_id>; docker rm qts-p5-rclone-<run_id>; \
+ssh -o HostKeyAlias=192.168.3.4 alex@192.168.0.105 \
+  'docker stop qts-p5-rclone-<run_id>; docker rm qts-p5-rclone-<run_id>; \
   docker network rm qts-p5-offhost-net-<run_id>; docker rmi qts-p5-rclone:<run_id>'
 ```
 

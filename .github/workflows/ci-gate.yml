@@ -97,7 +97,7 @@ jobs:
           scripts/summarize_observation.py scripts/release_binding.py \
           scripts/collect_runtime_release_binding.py scripts/deploy_gate.py \
           scripts/observe_trading_runtime.py scripts/verify_release_provenance.py \
-          scripts/verify_deploy_gate_live.py conftest.py"
+          scripts/verify_deploy_gate_live.py scripts/validate_preview_env.py conftest.py"
           # isort must use the same line length as black, otherwise the two
           # formatters disagree about where an import wraps.
           python -m isort --check-only --profile black --line-length 100 trader/ $FILES
@@ -143,7 +143,8 @@ jobs:
             scripts/deploy_gate.py \
             scripts/observe_trading_runtime.py \
             scripts/verify_release_provenance.py \
-            scripts/verify_deploy_gate_live.py
+            scripts/verify_deploy_gate_live.py \
+            scripts/validate_preview_env.py
 
   architecture-gate:
     name: Architecture Compliance
@@ -162,6 +163,7 @@ jobs:
     needs: [manifest-gate]
     env:
       QTS_TEST_GROUP: p0
+      QTS_TEST_EXCLUDE_GROUPS: external
       QTS_TEST_NETWORK_POLICY: offline
     steps:
       - uses: actions/checkout@v4
@@ -207,6 +209,7 @@ jobs:
       # P0 is repeated here so the coverage report matches the measured
       # baseline; the separate p0-gate job remains the fast-feedback gate.
       QTS_TEST_GROUP: p0,offline
+      QTS_TEST_EXCLUDE_GROUPS: external
       QTS_TEST_NETWORK_POLICY: offline
     steps:
       - uses: actions/checkout@v4
@@ -253,6 +256,54 @@ jobs:
             reports/coverage-gate.json
           if-no-files-found: warn
 
+  loopback-gate:
+    name: Loopback Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [manifest-gate]
+    env:
+      # These files drive a real loopback alert receiver, so they cannot run
+      # under the strict "offline" policy that blocks every socket.  The
+      # loopback policy still blocks every public address and DNS lookup.
+      QTS_TEST_GROUP: loopback
+      QTS_TEST_EXCLUDE_GROUPS: external
+      QTS_TEST_NETWORK_POLICY: loopback
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            trader/requirements-ci.txt
+            trader/requirements-ci.constraints.txt
+
+      - name: Install dependencies from locked constraints
+        run: |
+          python -m pip install --require-hashes -r trader/requirements-ci.constraints.txt
+
+      - name: Run loopback integration tests
+        run: |
+          python -m pytest -q trader/tests --tb=short --strict-markers \
+            --junitxml=reports/junit-loopback.xml
+
+      - name: Enforce loopback evidence
+        run: |
+          python scripts/check_junit.py reports/junit-loopback.xml \
+            --require-zero-skipped --require-zero-xfailed \
+            --json-out reports/junit-loopback.json
+
+      - name: Upload loopback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loopback-evidence
+          path: |
+            reports/junit-loopback.*
+          if-no-files-found: error
+
   research-ai-gate:
     name: Research and AI Gate
     runs-on: ubuntu-latest
@@ -260,6 +311,7 @@ jobs:
     needs: [manifest-gate]
     env:
       QTS_TEST_SUBSET: research_ai
+      QTS_TEST_EXCLUDE_GROUPS: external
       QTS_TEST_NETWORK_POLICY: offline
     steps:
       - uses: actions/checkout@v4
@@ -321,6 +373,7 @@ jobs:
       POSTGRES_CONNECTION_STRING: postgresql://trader:trader_pwd@127.0.0.1:5432/trading
       REQUIRE_POSTGRES: "1"
       QTS_TEST_GROUP: postgres
+      QTS_TEST_EXCLUDE_GROUPS: external
       QTS_TEST_NETWORK_POLICY: loopback
     steps:
       - uses: actions/checkout@v4
@@ -386,6 +439,7 @@ jobs:
     needs: [manifest-gate]
     env:
       QTS_TEST_SUBSET: phase6_guard
+      QTS_TEST_EXCLUDE_GROUPS: external
       QTS_TEST_NETWORK_POLICY: open
     steps:
       - uses: actions/checkout@v4
@@ -527,6 +581,7 @@ jobs:
       - architecture-gate
       - p0-gate
       - offline-gate
+      - loopback-gate
       - research-ai-gate
       - postgres-integration
       - compose-config-gate

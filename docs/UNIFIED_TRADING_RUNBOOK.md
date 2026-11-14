@@ -238,9 +238,14 @@ docker compose -p qts_p6_build build
 docker image inspect --format "{{.Id}} {{.Created}}" qts-runtime:local
 
 # 真实 >=24h Demo 窗口（动态空闲端口；--no-build 使用刚构建的镜像）
+# 异机地址必须显式给出：命令行优先于 $QTS_OFFHOST_HOST，两者都没有时 fail-closed。
+# --host-key-alias 指定 known_hosts 中已有的身份（历史地址 192.168.3.4），
+# 不关闭 StrictHostKeyChecking。
 python scripts/sandbox_supervisor.py --duration-hours 24 \
   --lookback-ms 3600000 --runtime-lookback-ms 3600000 \
-  --coverage-lookback-ms 86400000 --no-build
+  --coverage-lookback-ms 86400000 --no-build \
+  --remote-host 192.168.0.105 --host-key-alias 192.168.3.4 \
+  --ssh-user alex --expected-hostname my-server
 # 证据：artifacts/foundation/phase6/windows/<run_id>/{window.json,observation.jsonl,dr/}
 ```
 
@@ -349,7 +354,8 @@ digest 通过。阶段 6 的窗口由 supervisor 的 window.json 判定，不要
 
 **启动前检查（全部满足才启动）**
 
-- 备份机 `192.168.3.4` 的 SSH/S3 可达，且 supervisor 完成 3 个连续 verified off-host DR cycle；
+- 备份机 `192.168.0.105`（known_hosts 身份别名为历史地址 `192.168.3.4`）的
+  SSH/S3 可达，且 supervisor 完成 3 个连续 verified off-host DR cycle；
   备份机不可达时 fail-closed，不得启动。
 - 无 observer、DR 隧道、运行中的 `qts_p6_sandbox_*` 容器；startup guard 锁空闲；
   当前 continuation baseline `db-baseline-continuation-20261110.json`（67/450/65/199/319）

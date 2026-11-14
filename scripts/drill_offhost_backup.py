@@ -49,21 +49,19 @@ from trader.ops.restore import (  # noqa: E402
     write_dr_evidence,
 )
 from trader.ops.s3 import S3Config, S3Target  # noqa: E402
+from trader.ops.ssh_target import (  # noqa: E402
+    RemoteTargetNotConfigured,
+    resolve_host_key_alias,
+    resolve_remote_host,
+    ssh_base_argv,
+)
 
 RCLONE_SOURCE = "https://downloads.rclone.org/rclone-current-linux-amd64.zip"
 RCLONE_VERSION = "v1.75.2"
 RCLONE_BINARY_SHA256 = "ed7ab1f17876bb006c3df3949a3044959671afd9112362dacaa5dd1647735bc1"
 RCLONE_ARCHIVE_SHA256 = "349ac8fba6ff65d6247043f1750cdcb518ec5d500ef91463a10d37c0ccdf3702"
 
-SSH_BASE = [
-    "ssh",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "ConnectTimeout=15",
-]
+
 
 
 def _free_port() -> int:
@@ -99,21 +97,32 @@ def _ssh(
     *,
     timeout: float = 120,
     input_bytes: bytes | None = None,
+    host_key_alias: str = "",
 ) -> subprocess.CompletedProcess:
     # sh -s receives LF bytes; text-mode Windows input would turn LF into CRLF.
     payload = (script.rstrip("\n") + "\n").encode("utf-8") if input_bytes is None else input_bytes
-    return _run(SSH_BASE + [destination, "sh", "-s"], timeout=timeout, input_bytes=payload)
+    return _run(
+        ssh_base_argv(host_key_alias) + [destination, "sh", "-s"],
+        timeout=timeout,
+        input_bytes=payload,
+    )
 
 
-def _ssh_checked(destination: str, script: str, *, timeout: float = 120) -> str:
-    result = _ssh(destination, script, timeout=timeout)
+def _ssh_checked(
+    destination: str,
+    script: str,
+    *,
+    timeout: float = 120,
+    host_key_alias: str = "",
+) -> str:
+    result = _ssh(destination, script, timeout=timeout, host_key_alias=host_key_alias)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", "replace")[-800:]
         raise RuntimeError(f"SSH_COMMAND_FAILED:{result.returncode}:{stderr}")
     return result.stdout.decode("utf-8", "replace")
 
 
-def _remote_probe(destination: str) -> dict[str, Any]:
+def _remote_probe(destination: str, *, host_key_alias: str = "") -> dict[str, Any]:
     output = _ssh_checked(
         destination,
         """
@@ -127,6 +136,7 @@ printf 'home_kib='; df -Pk "$HOME" | tail -1 | awk '{print $4}'
 printf 'qts_backups='; test -e "$HOME/qts-backups" && echo exists || echo absent
 printf 'ssh_ok=1'
 """,
+        host_key_alias=host_key_alias,
     )
     parsed: dict[str, str] = {}
     for line in output.splitlines():
@@ -136,7 +146,7 @@ printf 'ssh_ok=1'
     return parsed
 
 
-def _remote_prepare(destination: str, remote_dir: str) -> str:
+def _remote_prepare(destination: str, remote_dir: str, *, host_key_alias: str = "") -> str:
     return _ssh_checked(
         destination,
         f"""
@@ -152,10 +162,11 @@ fi
 "$R/bootstrap/rclone" version | head -1
 sha256sum "$R/bootstrap/rclone" | awk '{{print $1}}'
 """,
+        host_key_alias=host_key_alias,
     )
 
 
-def _remote_free_port(destination: str) -> int:
+def _remote_free_port(destination: str, *, host_key_alias: str = "") -> int:
     output = _ssh_checked(
         destination,
         """
@@ -173,15 +184,22 @@ for port in range(19000, 19050):
         s.close()
 PY
 """,
+        host_key_alias=host_key_alias,
     )
     return int(output.strip().splitlines()[-1])
 
 
-def _remote_write_secret(destination: str, path: str, content: str) -> None:
+def _remote_write_secret(
+    destination: str,
+    path: str,
+    content: str,
+    *,
+    host_key_alias: str = "",
+) -> None:
     # No ``sh -s`` here: the remote command's stdin is the secret content, not
     # the shell script, so ``cat`` receives exactly the secret bytes.
     result = _run(
-        SSH_BASE + [destination, f"umask 077; cat > {shlex.quote(path)}"],
+        ssh_base_argv(host_key_alias) + [destination, f"umask 077; cat > {shlex.quote(path)}"],
         timeout=60,
         input_bytes=content.encode("utf-8"),
     )
@@ -196,6 +214,8 @@ def _remote_start_storage(
     image: str,
     remote_port: int,
     env_path: str,
+    *,
+    host_key_alias: str = "",
 ) -> dict[str, Any]:
     container = f"qts-p5-rclone-{run_id}"
     network = f"qts-p5-offhost-net-{run_id}"
@@ -228,7 +248,9 @@ printf 'image_ref=%s\n' "$IMG"
 printf 'network=%s\n' "$N"
 printf 'data_dir=%s\n' "$R/data"
 """
-    return _parse_key_values(_ssh_checked(destination, script, timeout=300))
+    return _parse_key_values(
+        _ssh_checked(destination, script, timeout=300, host_key_alias=host_key_alias)
+    )
 
 
 def _parse_key_values(text: str) -> dict[str, str]:
@@ -240,7 +262,7 @@ def _parse_key_values(text: str) -> dict[str, str]:
     return values
 
 
-def _remote_health(destination: str, port: int) -> int:
+def _remote_health(destination: str, port: int, *, host_key_alias: str = "") -> int:
     output = _ssh_checked(
         destination,
         f"""
@@ -254,14 +276,20 @@ except Exception as exc:
 PY
 """,
         timeout=60,
+        host_key_alias=host_key_alias,
     )
     return int(output.strip().splitlines()[-1] or "0")
 
 
-def _start_tunnel(destination: str, remote_port: int) -> tuple[subprocess.Popen, int]:
+def _start_tunnel(
+    destination: str,
+    remote_port: int,
+    *,
+    host_key_alias: str = "",
+) -> tuple[subprocess.Popen, int]:
     local_port = _free_port()
     process = subprocess.Popen(
-        SSH_BASE
+        ssh_base_argv(host_key_alias)
         + [
             "-N",
             "-o",
@@ -398,6 +426,7 @@ def _stop_local_pg(container: str, volume: str, env_file: Path) -> None:
 async def run(args) -> dict[str, Any]:
     run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
     destination = f"{args.ssh_user}@{args.remote_host}"
+    host_key_alias = getattr(args, "host_key_alias", "") or ""
     evidence_dir = args.evidence_dir.resolve() / run_id
     evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence: dict[str, Any] = {
@@ -405,6 +434,7 @@ async def run(args) -> dict[str, Any]:
         "run_id": run_id,
         "recorded_at_ms": int(time.time() * 1000),
         "remote_destination": destination,
+        "remote_host_key_alias": host_key_alias,
         "remote_dir": args.remote_dir,
         "target_kind": "s3_compatible",
         "transport": "ssh_tunnel",
@@ -416,12 +446,12 @@ async def run(args) -> dict[str, Any]:
     pg_volume = ""
     pg_env_file: Path | None = None
     try:
-        evidence["remote_probe"] = _remote_probe(destination)
+        evidence["remote_probe"] = _remote_probe(destination, host_key_alias=host_key_alias)
         if evidence["remote_probe"].get("hostname") != args.expected_hostname:
             raise RuntimeError(
                 "REMOTE_HOSTNAME_MISMATCH:" + str(evidence["remote_probe"].get("hostname", ""))
             )
-        prepared = _remote_prepare(destination, args.remote_dir)
+        prepared = _remote_prepare(destination, args.remote_dir, host_key_alias=host_key_alias)
         evidence["remote_prepare"] = prepared
         if RCLONE_VERSION not in prepared or RCLONE_BINARY_SHA256 not in prepared:
             raise RuntimeError("RCLONE_ARTIFACT_DOES_NOT_MATCH_PIN")
@@ -436,12 +466,13 @@ async def run(args) -> dict[str, Any]:
         password = secrets.token_urlsafe(24)
         access_key = "qts" + secrets.token_hex(8)
         secret_key = secrets.token_urlsafe(24)
-        remote_port = _remote_free_port(destination)
+        remote_port = _remote_free_port(destination, host_key_alias=host_key_alias)
         env_path = f"{args.remote_dir}/secrets/rclone.env"
         _remote_write_secret(
             destination,
             env_path,
             f'RCLONE_AUTH_KEY="{access_key},{secret_key}"\n',
+            host_key_alias=host_key_alias,
         )
         image = f"qts-p5-rclone:{run_id}"
         storage = _remote_start_storage(
@@ -451,6 +482,7 @@ async def run(args) -> dict[str, Any]:
             image,
             remote_port,
             env_path,
+            host_key_alias=host_key_alias,
         )
         evidence["storage"] = {
             **storage,
@@ -460,14 +492,17 @@ async def run(args) -> dict[str, Any]:
             "secret_env_path": env_path,
             "health_probe_note": "S3 API was verified by bucket create/put/head/get; GET / status is informational",
         }
-        health_status = _remote_health(destination, remote_port)
+        health_status = _remote_health(destination, remote_port, host_key_alias=host_key_alias)
         evidence["storage"]["health_status"] = health_status
 
-        tunnel, local_port = _start_tunnel(destination, remote_port)
+        tunnel, local_port = _start_tunnel(
+            destination, remote_port, host_key_alias=host_key_alias
+        )
         evidence["tunnel"] = {
             "local_port": local_port,
             "remote_port": remote_port,
             "strict_host_key_checking": True,
+            "host_key_alias": host_key_alias,
         }
         s3_config = S3Config(
             endpoint_url=f"http://127.0.0.1:{local_port}",
@@ -512,6 +547,7 @@ async def run(args) -> dict[str, Any]:
             attested_by=(
                 f"user-designated {destination}; StrictHostKeyChecking=yes; "
                 f"remote hostname {evidence['remote_probe']['hostname']}"
+                + (f"; HostKeyAlias={host_key_alias}" if host_key_alias else "")
             ),
             target_kind="s3_compatible",
             transport="ssh_tunnel",
@@ -633,10 +669,25 @@ async def run(args) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="QTS off-host S3 backup/restore drill")
-    parser.add_argument("--remote-host", default=os.getenv("QTS_OFFHOST_HOST", "192.168.3.4"))
+    parser.add_argument(
+        "--remote-host",
+        default=None,
+        help=(
+            "designated off-host address; overrides $QTS_OFFHOST_HOST. "
+            "There is no default: the drill fails closed when it is not configured."
+        ),
+    )
     parser.add_argument("--ssh-user", default=os.getenv("QTS_OFFHOST_USER", "alex"))
     parser.add_argument(
         "--expected-hostname", default=os.getenv("QTS_OFFHOST_HOSTNAME", "my-server")
+    )
+    parser.add_argument(
+        "--host-key-alias",
+        default=None,
+        help=(
+            "known_hosts identity used for the connection (ssh HostKeyAlias); "
+            "overrides $QTS_OFFHOST_HOST_KEY_ALIAS. Host-key checking stays enabled."
+        ),
     )
     parser.add_argument("--remote-dir", default=os.getenv("QTS_OFFHOST_DIR", "qts-backups"))
     parser.add_argument("--runs", type=int, default=3)
@@ -647,6 +698,15 @@ def main() -> None:
         default=ROOT / "artifacts/foundation/phase5/evidence/offhost",
     )
     args = parser.parse_args()
+    try:
+        args.remote_host = resolve_remote_host(args.remote_host)
+    except RemoteTargetNotConfigured as exc:
+        print(
+            json.dumps({"error": "REMOTE_HOST_NOT_CONFIGURED", "detail": str(exc)}),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+    args.host_key_alias = resolve_host_key_alias(args.host_key_alias)
     evidence = asyncio.run(run(args))
     print(json.dumps({"passed": evidence.get("passed"), "run_id": evidence.get("run_id")}))
     raise SystemExit(0 if evidence.get("passed") else 1)

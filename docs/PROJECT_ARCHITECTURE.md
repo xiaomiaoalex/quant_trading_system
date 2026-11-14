@@ -1182,16 +1182,22 @@ flowchart TB
 **测试分层与合并门禁**
 
 - `ci/test_manifest.json` 是测试文件分类的唯一真相源：`trader/tests/test_*.py` 唯一属于
-  `p0` / `offline` / `postgres` / `ops` / `external` 之一。未分类、失效、重复或 CI 选择
-  缩小都会使 `scripts/verify_test_manifest.py` 失败；`trader/tests/conftest.py` 在收集阶段
-  拒绝未分类文件。
+  `p0` / `offline` / `loopback` / `postgres` / `ops` / `external` 之一。未分类、失效、
+  重复或 CI 选择缩小都会使 `scripts/verify_test_manifest.py` 失败；
+  `trader/tests/conftest.py` 在收集阶段拒绝未分类文件，并在导入前按本次 job 的
+  group/subset 限定收集范围，避免必过 job 因未选中的可选依赖产生 collection skip。
 - PR 必需 Job 由 `CI Required` 聚合：manifest、import、format、type、architecture、P0、
-  offline、Research/AI、Postgres、compose-config、frontend。任一 Job 失败、跳过或取消
-  都不能汇总为成功。`Research/AI` 使用 manifest 中审计过的 `research_ai` 子集，复用
-  既有回放、影子/Paper 晋级、HITL 与研究准入测试，不新增第二套分类。
+  offline、loopback、Research/AI、Postgres、compose-config、frontend。任一 Job 失败、
+  跳过或取消都不能汇总为成功。`Research/AI` 使用 manifest 中审计过的 `research_ai`
+  子集，复用既有回放、影子/Paper 晋级、HITL 与研究准入测试，不新增第二套分类。
+  required job 的 `group` 与其 `subset` 成员所在组都不可被排除。
 - P0/offline 以 `QTS_TEST_NETWORK_POLICY=offline` 禁止 socket；coverage Job 同时运行
-  `p0,offline` 以对齐已测基线，P0 快速 Job 仍独立提供先行反馈；Postgres Job 以
-  `loopback` 只放行本机 DSN，并设置 `REQUIRE_POSTGRES=1`，跳过即失败。
+  `p0,offline` 以对齐已测基线，P0 快速 Job 仍独立提供先行反馈。
+  `loopback` 组专放需要真实 loopback 监听器的告警接收器集成测试，以独立的必过
+  `loopback-gate` 在 `QTS_TEST_NETWORK_POLICY=loopback` 下运行（仍拒绝所有公网地址
+  和 DNS）；这样既不削弱 P0/offline 的严格离线策略，也不让这些测试以 skip 变绿。
+  Postgres Job 同样以 `loopback` 只放行本机 DSN，并设置 `REQUIRE_POSTGRES=1`，
+  跳过即失败。
 - Windows `phase6-guard-gate` 使用独立 `trader/requirements-ci.windows.constraints.txt`
   带哈希锁（含 `colorama` 等 Windows-only 传递依赖），安装前要求 Docker daemon 可用；
   guard JUnit 必须 `--require-zero-skipped --require-zero-xfailed` 并上传 artifact，

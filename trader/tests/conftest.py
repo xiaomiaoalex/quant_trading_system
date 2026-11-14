@@ -25,6 +25,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 from dotenv import load_dotenv
@@ -131,6 +132,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MANIFEST_PATH = _ROOT / "ci" / "test_manifest.json"
 _TEST_PREFIX = "trader/tests/"
 _GROUP_ENV = "QTS_TEST_GROUP"
+_EXCLUDE_GROUP_ENV = "QTS_TEST_EXCLUDE_GROUPS"
 _SUBSET_ENV = "QTS_TEST_SUBSET"
 _POLICY_ENV = "QTS_TEST_NETWORK_POLICY"
 
@@ -146,7 +148,7 @@ _SOCKET_ORIGINALS: dict[str, object] = {
 }
 
 
-def _load_manifest() -> tuple[dict[str, str], dict[str, set[str]]]:
+def _load_manifest() -> tuple[dict[str, str], dict[str, set[str]], dict[str, Any]]:
     payload = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
     groups = payload.get("groups")
     if not isinstance(groups, dict):
@@ -167,11 +169,19 @@ def _load_manifest() -> tuple[dict[str, str], dict[str, set[str]]]:
         if not isinstance(entries, list):
             raise pytest.UsageError(f"test manifest subset is not a list: {name}")
         subsets[name] = {f"{_TEST_PREFIX}{entry}" for entry in entries}
-    return mapping, subsets
+    jobs = payload.get("ci_jobs") or {}
+    if not isinstance(jobs, dict):
+        raise pytest.UsageError(f"test manifest has an invalid 'ci_jobs' object: {_MANIFEST_PATH}")
+    return mapping, subsets, jobs
 
 
 def _selected_groups() -> set[str]:
     raw = os.getenv(_GROUP_ENV, "")
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _excluded_groups() -> set[str]:
+    raw = os.getenv(_EXCLUDE_GROUP_ENV, "")
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
@@ -180,14 +190,86 @@ def _selected_subsets() -> set[str]:
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
+def _required_groups(
+    jobs: dict[str, Any],
+    subsets: dict[str, set[str]],
+    group_map: dict[str, str],
+) -> set[str]:
+    """Groups whose files a required CI job runs; they may never be excluded.
+
+    A required job selects either a whole ``group`` or a named ``subset``.  Both
+    forms protect every file the job actually runs: a subset member that lives
+    in an otherwise optional group (the phase-6 guard test in ``ops``, for
+    example) must not become removable just because only its subset is listed.
+    """
+    required_files: set[str] = set()
+    for spec in jobs.values():
+        if not isinstance(spec, dict) or not spec.get("required"):
+            continue
+        group = spec.get("group")
+        if isinstance(group, str) and group:
+            required_files.update(key for key, value in group_map.items() if value == group)
+        subset = spec.get("subset")
+        if isinstance(subset, str) and subset in subsets:
+            required_files.update(subsets[subset])
+    return {group_map[key] for key in required_files if key in group_map}
+
+
+def _collect_ignore() -> list[str]:
+    """Never import test modules that this job does not run.
+
+    A test module that is not collected still gets imported by pytest during
+    collection, and an import-time ``pytest.importorskip`` or a module-level
+    skip marker in such a module is recorded as a *collection skip* even when
+    none of its items are selected.  The strict zero-skip evidence gate would
+    then reject a required job for an optional dependency or a platform it
+    never intended to exercise.  Restricting collection up front keeps each
+    job's imports limited to what it actually runs.
+    """
+    group_map, subsets, _jobs = _load_manifest()
+    excluded = _excluded_groups()
+    selected = _selected_groups()
+    selected_subsets = _selected_subsets()
+    subset_files: set[str] | None = (
+        set().union(*(subsets[name] for name in selected_subsets)) if selected_subsets else None
+    )
+    ignored: list[str] = []
+    for key, group in group_map.items():
+        if group in excluded:
+            ignored.append(key)
+        elif selected and group not in selected:
+            ignored.append(key)
+        elif subset_files is not None and key not in subset_files:
+            ignored.append(key)
+    return [key.removeprefix(_TEST_PREFIX) for key in ignored]
+
+
+collect_ignore = _collect_ignore()
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    group_map, subsets = _load_manifest()
+    group_map, subsets, jobs = _load_manifest()
     config._qts_group_map = group_map  # type: ignore[attr-defined]
     config._qts_subsets = subsets  # type: ignore[attr-defined]
     known = set(group_map.values())
-    unknown = sorted(_selected_groups() - known)
-    if unknown:
-        raise pytest.UsageError(f"unknown {_GROUP_ENV} value(s): {', '.join(unknown)}")
+    selected = _selected_groups()
+    excluded = _excluded_groups()
+    unknown_selected = sorted(selected - known)
+    if unknown_selected:
+        raise pytest.UsageError(f"unknown {_GROUP_ENV} value(s): {', '.join(unknown_selected)}")
+    unknown_excluded = sorted(excluded - known)
+    if unknown_excluded:
+        raise pytest.UsageError(
+            f"unknown {_EXCLUDE_GROUP_ENV} value(s): {', '.join(unknown_excluded)}"
+        )
+    conflicting = sorted(selected & excluded)
+    if conflicting:
+        raise pytest.UsageError(
+            f"{_GROUP_ENV} and {_EXCLUDE_GROUP_ENV} both select: {', '.join(conflicting)}"
+        )
+    forbidden = sorted(excluded & _required_groups(jobs, subsets, group_map))
+    if forbidden:
+        raise pytest.UsageError(f"required CI group(s) cannot be excluded: {', '.join(forbidden)}")
     unknown_subsets = sorted(_selected_subsets() - set(subsets))
     if unknown_subsets:
         raise pytest.UsageError(f"unknown {_SUBSET_ENV} value(s): {', '.join(unknown_subsets)}")
@@ -201,6 +283,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     group_map: dict[str, str] = config._qts_group_map  # type: ignore[attr-defined]
     subsets: dict[str, set[str]] = config._qts_subsets  # type: ignore[attr-defined]
     selected = _selected_groups()
+    excluded = _excluded_groups()
     selected_subsets = _selected_subsets()
     subset_files: set[str] | None = (
         set().union(*(subsets[name] for name in selected_subsets)) if selected_subsets else None
@@ -220,6 +303,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         group = group_map.get(key)
         if group is None:
             raise pytest.UsageError(f"test file is not classified in ci/test_manifest.json: {key}")
+        if group in excluded:
+            continue
         item.add_marker(getattr(pytest.mark, group))
         if selected and group not in selected:
             continue

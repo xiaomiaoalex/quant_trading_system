@@ -1,0 +1,15 @@
+# Build context for Frontend/Dockerfile.preview.
+#
+# The preview image is built from the console sources only: no dependency
+# directory, no local build output and no environment file ever enters the
+# image.  The test sources stay in the context because ``tsc -b`` compiles the
+# same project as the CI frontend gate does.
+
+node_modules
+dist
+coverage
+frontend_docs
+*.tsbuildinfo
+.env
+.env.*
+npm-debug.log*

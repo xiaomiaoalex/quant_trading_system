@@ -101,14 +101,14 @@ jobs:
           path: artifacts/ci
 
       - name: Scan the built image and write an SBOM
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
         with:
           image-ref: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE_NAME, steps.build.outputs.digest) || format('{0}:{1}', env.IMAGE_NAME, env.SOURCE_SHA) }}
           format: cyclonedx
           output: reports/sbom.cdx.json
 
       - name: Fail on critical or high image vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2
         with:
           image-ref: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE_NAME, steps.build.outputs.digest) || format('{0}:{1}', env.IMAGE_NAME, env.SOURCE_SHA) }}
           format: sarif

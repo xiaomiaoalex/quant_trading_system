@@ -12,6 +12,7 @@ asyncio_mode = "auto"
 markers = [
  "p0: trading-safety regression subset that must stay green on every PR",
  "offline: remaining offline test files; no public network",
+ "loopback: integration tests that drive a real loopback listener; no public network",
  "postgres: tests that require a real PostgreSQL DSN",
  "ops: host/Docker/evidence drills; explicit optional workflow only",
  "external: optional research dependencies (e.g. vectorbt); explicit optional workflow only",

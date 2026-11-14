@@ -64,22 +64,18 @@ from trader.ops.restore import (  # noqa: E402
     write_dr_evidence,
 )
 from trader.ops.s3 import S3Config, S3Target  # noqa: E402
+from trader.ops.ssh_target import (  # noqa: E402
+    RemoteTargetNotConfigured,
+    resolve_host_key_alias,
+    resolve_remote_host,
+    ssh_base_argv,
+)
 from trader.ops.startup_guard import (  # noqa: E402
     GuardHeldError,
     OrphanCheckUnavailable,
     OrphanDetectedError,
     StartupGuard,
 )
-
-SSH = [
-    "ssh",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "ConnectTimeout=15",
-]
 
 
 def _run(argv: list[str], *, timeout: float = 120, env: dict | None = None):
@@ -116,17 +112,32 @@ def _wait_http(url: str, timeout: float, *, expect: int = 200) -> dict:
     return last or {"error": "TIMEOUT"}
 
 
-def _ssh_checked(destination: str, script: str, *, timeout: float = 120) -> str:
+def _ssh_checked(
+    destination: str,
+    script: str,
+    *,
+    timeout: float = 120,
+    host_key_alias: str = "",
+) -> str:
     payload = (script.rstrip("\n") + "\n").encode("utf-8")
     result = subprocess.run(
-        SSH + [destination, "sh", "-s"], input=payload, capture_output=True, timeout=timeout
+        ssh_base_argv(host_key_alias) + [destination, "sh", "-s"],
+        input=payload,
+        capture_output=True,
+        timeout=timeout,
     )
     if result.returncode != 0:
         raise RuntimeError("SSH_COMMAND_FAILED:" + result.stderr.decode("utf-8", "replace")[-500:])
     return result.stdout.decode("utf-8", "replace")
 
 
-def _remote_probe(host: str, user: str, expected_hostname: str) -> dict[str, Any]:
+def _remote_probe(
+    host: str,
+    user: str,
+    expected_hostname: str,
+    *,
+    host_key_alias: str = "",
+) -> dict[str, Any]:
     destination = f"{user}@{host}"
     output = _ssh_checked(
         destination,
@@ -138,6 +149,7 @@ printf 'rclone='; docker ps --format '{{.Names}}' | grep -i rclone | head -1 || 
 printf 'port='; docker ps --format '{{.Names}} {{.Ports}}' | grep -i rclone | sed -n 's/.*127.0.0.1:\\([0-9][0-9]*\\)->9000.*/\\1/p' | head -1
 printf 'secret='; test -r "$HOME/qts-backups/secrets/rclone.env" && echo yes || echo no
 """,
+        host_key_alias=host_key_alias,
     )
     parsed = {}
     for line in output.splitlines():
@@ -154,20 +166,29 @@ printf 'secret='; test -r "$HOME/qts-backups/secrets/rclone.env" && echo yes || 
     return parsed
 
 
-def _remote_credentials(destination: str) -> tuple[str, str]:
-    output = _ssh_checked(destination, 'cat "$HOME/qts-backups/secrets/rclone.env"')
+def _remote_credentials(destination: str, *, host_key_alias: str = "") -> tuple[str, str]:
+    output = _ssh_checked(
+        destination,
+        'cat "$HOME/qts-backups/secrets/rclone.env"',
+        host_key_alias=host_key_alias,
+    )
     match = re.search(r'RCLONE_AUTH_KEY="?([^",\s]+),([^"\s]+)"?', output)
     if not match:
         raise RuntimeError("REMOTE_RCLONE_CREDENTIAL_INVALID")
     return match.group(1), match.group(2)
 
 
-def _start_tunnel(destination: str, remote_port: int) -> tuple[subprocess.Popen, int]:
+def _start_tunnel(
+    destination: str,
+    remote_port: int,
+    *,
+    host_key_alias: str = "",
+) -> tuple[subprocess.Popen, int]:
     local_port = _free_port()
     diagnostics = Path(tempfile.gettempdir()) / f"qts-tunnel-{local_port}.log"
     handle = diagnostics.open("wb")
     process = subprocess.Popen(
-        SSH
+        ssh_base_argv(host_key_alias)
         + [
             "-N",
             "-o",
@@ -469,6 +490,10 @@ class SandboxSupervisor:
         self.observer: subprocess.Popen | None = None
         self.tunnel: subprocess.Popen | None = None
         self.context: dict[str, Any] = {}
+        # The known-hosts identity used for every off-host SSH command.  It is
+        # carried in the context so the probe, the credential read and the
+        # tunnel all use the same strict identity.
+        self.context["host_key_alias"] = str(getattr(args, "host_key_alias", "") or "")
         self.feeder: DrFeeder | None = None
         self.dr_stop = asyncio.Event()
         self._dr_task: asyncio.Task | None = None
@@ -1045,7 +1070,9 @@ class SandboxSupervisor:
         else:
             self._discard_tunnel()
         self.tunnel, local_port = _start_tunnel(
-            self.context["ssh_destination"], self.context["remote_port"]
+            self.context["ssh_destination"],
+            self.context["remote_port"],
+            host_key_alias=str(self.context.get("host_key_alias", "") or ""),
         )
         self.context["local_port"] = local_port
         self.context["s3_config"] = S3Config(
@@ -1549,14 +1576,18 @@ class SandboxSupervisor:
         )
         self.context["operator_password"] = secrets_info["operator_password"]
 
+        host_key_alias = str(self.context.get("host_key_alias", "") or "")
         remote = _remote_probe(
-            self.args.remote_host, self.args.ssh_user, self.args.expected_hostname
+            self.args.remote_host,
+            self.args.ssh_user,
+            self.args.expected_hostname,
+            host_key_alias=host_key_alias,
         )
         self.context["remote_probe"] = remote
         self.context["ssh_destination"] = remote["destination"]
         self.context["remote_port"] = int(remote["port"])
         self.context["access_key"], self.context["secret_key"] = _remote_credentials(
-            remote["destination"]
+            remote["destination"], host_key_alias=host_key_alias
         )
         self.context["bucket"] = f"qts-p6-sandbox-{self.run_id.lower()}"
         self.context["dr_evidence_path"] = self.dr_evidence_path
@@ -1923,9 +1954,24 @@ def main() -> None:
         default="",
         help="explicit egress for the host-side preflight; empty inherits BINANCE_PROXY_URL",
     )
-    parser.add_argument("--remote-host", default="192.168.3.4")
+    parser.add_argument(
+        "--remote-host",
+        default=None,
+        help=(
+            "designated off-host address; overrides $QTS_OFFHOST_HOST. "
+            "There is no default: the window fails closed when it is not configured."
+        ),
+    )
     parser.add_argument("--ssh-user", default="alex")
     parser.add_argument("--expected-hostname", default="my-server")
+    parser.add_argument(
+        "--host-key-alias",
+        default=None,
+        help=(
+            "known_hosts identity used for the connection (ssh HostKeyAlias); "
+            "overrides $QTS_OFFHOST_HOST_KEY_ALIAS. Host-key checking stays enabled."
+        ),
+    )
     parser.add_argument(
         "--resume-from-run",
         default="",
@@ -1945,6 +1991,21 @@ def main() -> None:
         parser.error("--runtime-lookback-ms must be >= --lookback-ms")
     if args.coverage_lookback_ms < args.runtime_lookback_ms:
         parser.error("--coverage-lookback-ms must be >= --runtime-lookback-ms")
+    if not args.guard_probe:
+        # The guard probe is a local diagnostic that exits before any remote
+        # side effect, so it needs no off-host address.  Every real entry
+        # resolves the target here, before the guard is taken and before any
+        # Demo/Compose/DR side effect: an unconfigured target fails closed
+        # instead of guessing an address.
+        try:
+            args.remote_host = resolve_remote_host(args.remote_host)
+        except RemoteTargetNotConfigured as exc:
+            print(
+                json.dumps({"error": "REMOTE_HOST_NOT_CONFIGURED", "detail": str(exc)}),
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from None
+        args.host_key_alias = resolve_host_key_alias(args.host_key_alias)
 
     run_id = _new_run_id()
     guard = StartupGuard(None, run_id=run_id, entry="scripts/sandbox_supervisor.py")

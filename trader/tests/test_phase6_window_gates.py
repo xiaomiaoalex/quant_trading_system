@@ -329,7 +329,7 @@ def test_ensure_tunnel_rebuilds_after_a_failed_application_probe(
     module, supervisor = _tunnel_supervisor(tmp_path, _FakeTunnel())
     started: list[int] = []
 
-    def fake_start(destination, remote_port):
+    def fake_start(destination, remote_port, **kwargs):
         started.append(remote_port)
         return _FakeTunnel(), 12345
 
@@ -360,7 +360,7 @@ def test_ensure_tunnel_reuses_a_live_application_healthy_tunnel(
     monkeypatch.setattr(
         module,
         "_start_tunnel",
-        lambda destination, port: (started.append(port), (_FakeTunnel(), 1))[1],
+        lambda destination, port, **kwargs: (started.append(port), (_FakeTunnel(), 1))[1],
     )
     monkeypatch.setattr(module, "_probe_bucket", lambda config: None)
     asyncio.run(supervisor._ensure_tunnel())

@@ -2,8 +2,8 @@
 
 The CI gate must never silently shrink its test selection.  ``ci/test_manifest.json``
 is the single source of truth: every current test file belongs to exactly one
-group (``p0``, ``offline``, ``postgres``, ``ops`` or ``external``) and every
-required CI job selects its group through ``--qts-group``.
+group (``p0``, ``offline``, ``loopback``, ``postgres``, ``ops`` or ``external``) and
+every required CI job selects its group through ``--qts-group``.
 
 This checker is dependency-free (stdlib only) so it can run before pip install.
 It fails on:
@@ -35,7 +35,7 @@ DEFAULT_WORKFLOWS = (
     ROOT / ".github" / "workflows" / "deploy-demo.yml",
     ROOT / ".github" / "workflows" / "demo-evidence.yml",
 )
-REQUIRED_GROUPS = ("p0", "offline", "postgres", "ops", "external")
+REQUIRED_GROUPS = ("p0", "offline", "loopback", "postgres", "ops", "external")
 PYTEST_LINE = re.compile(r"(?:python\s+-m\s+)?pytest\b")
 RAW_TEST_FILE = re.compile(r"trader/tests/test_[A-Za-z0-9_*.-]+\.py")
 GROUP_ENV = re.compile(r"QTS_TEST_GROUP\s*[:=]\s*['\"]?([A-Za-z0-9_,-]+)")
