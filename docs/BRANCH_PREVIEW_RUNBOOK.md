@@ -96,19 +96,45 @@ ssh alex@192.168.0.105 'gunzip -c /tmp/qts-preview-ui-<tag>.tar.gz | docker load
 ssh alex@192.168.0.105 'gunzip -c /tmp/qts-postgres-pinned.tar.gz | docker load'
 ```
 
-**关于 digest 的如实说明**：`docker save` 保存的是**本地镜像**与其已知的
-`RepoDigest`。如果导出时用的是浮动 tag（`postgres:16`），镜像携带的是**该 tag
-当时指向的** manifest digest，可能与叠加层固定的 `5db6dac2...` 不同；这种
-“只有 tag、digest 不匹配”的镜像**不满足**叠加层的固定引用，`up` 会失败。
-正确做法是按上面的第 4 步**按 digest 引用**取出再导出，或在有 registry 访问的
-机器上 `docker pull` 后核对：
+**关于离线 `save`/`load` 绑定的如实说明（2026-11-14 实测修正）**：
+`docker save` 保存的是**本地镜像的内容与已知的 tag**；`docker load` 到离线主机后，
+**`repo:tag@sha256:...` 形式的 `RepoDigest` 绑定可能不保留**。本次部署在
+`/home/alex/qts-preview-2f5a3d5` 的 `load.log` 中即观察到：PostgreSQL 镜像导入后
+只剩同一个**内容 image ID**
+`sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a`，
+叠加层里 `postgres:16@sha256:5db6dac2...` 的 `RepoDigest` 引用不再可用，
+直接 `up` 会因找不到该引用而失败。**不得再假定"按 digest 取出再 save"就能在
+离线主机上保留 `RepoDigest`**。
 
-```text
-docker image inspect postgres:16@sha256:5db6dac2... --format '{{.Id}} {{index .RepoDigests 0}}'
-```
+离线主机上的正确绑定流程是**同内容 image ID 绑定**：
 
-预览的绑定证据是**实际 image ID**（`QTS_PREVIEW_RUNTIME_IMAGE_ID` 与校验器的
-`--check-images` 比对），不是"看起来像 digest"的字符串。
+1. 在有 registry 访问的机器上按固定 digest 取出镜像，并记录实际内容 ID：
+
+   ```text
+   docker pull postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+   docker image inspect --format '{{.Id}}' postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+   ```
+
+2. `docker save` / `docker load` 后，在预览主机上**严格校验导入的镜像 ID 与记录值相等**：
+
+   ```text
+   docker image inspect --format '{{.Id}}' sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+   ```
+
+   不相等即停止部署，不得继续、不得改固定 digest、不得改用浮动 tag。
+
+3. 用一个**仅属于本次部署目录**的 `compose.offline.yaml`（不提交、不覆盖
+   `compose.yml` 或任何既有服务定义），把 PostgreSQL 服务的 `image` 改写成
+   `sha256:<与上面完全相同的 64 位 ID>`，再用
+   `docker compose -f compose.yml -f deploy/compose.preview.yml -f compose.offline.yaml ...`
+   启动。`deploy/compose.preview.yml` 中固定的 `postgres:16@sha256:...` 仍作为
+   **意图声明与审计锚点**保留；离线主机通过内容 ID 引用同一份不可变镜像内容。
+   这个方法只改写本次 task 目录内的叠加文件，不改动仓库里的固定引用，也不触碰
+   既有服务或既有卷。
+
+运行时镜像与 UI 镜像的绑定证据同样是**实际 image ID**
+（`QTS_PREVIEW_RUNTIME_IMAGE_ID` 与校验器的 `--check-images` 比对），
+不是"看起来像 digest"的字符串。
 
 ## 5. 凭据（每次部署现生成，不入库）
 

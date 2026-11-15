@@ -8,7 +8,12 @@
 #
 # Rules enforced here:
 # * the application image is an immutable ``repo@sha256:<digest>`` reference;
-# * no service may be rebuilt on the target host (``build: !reset null``);
+# * no service may be rebuilt on the target host. ``build: !reset null`` is
+#   therefore repeated literally inside every service: Compose v2 (the line the
+#   GitHub runner ships, e.g. 2.38.2) silently ignores a ``!reset`` that is only
+#   inherited through the ``<<:`` merge key, so keeping it solely in the anchor
+#   leaves the base ``build:`` block in the merged config. Verified against
+#   Compose 2.29.1, 2.33.0, 2.40.3 and 5.x;
 # * every application service runs with ``BINANCE_ENV=demo`` (hard-coded, not
 #   overridable by the environment file);
 # * the Compose project name is mandatory and the host ports are Demo-specific,
@@ -40,6 +45,7 @@ services:
 
   control:
     <<: *demo-app
+    build: !reset null
     environment:
       QTS_ALERT_WEBHOOK_URL: ${QTS_EXTERNAL_ALERT_WEBHOOK_URL:?QTS_EXTERNAL_ALERT_WEBHOOK_URL is required}
       QTS_ALERT_HEARTBEAT_URL: ${QTS_EXTERNAL_ALERT_HEARTBEAT_URL:?QTS_EXTERNAL_ALERT_HEARTBEAT_URL is required}
@@ -51,6 +57,7 @@ services:
 
   execution:
     <<: *demo-app
+    build: !reset null
     environment:
       # Hard-coded Demo: the environment file cannot turn this into testnet or
       # production, and preflight rejects any non-demo rendering.
@@ -63,12 +70,15 @@ services:
 
   research:
     <<: *demo-app
+    build: !reset null
 
   history:
     <<: *demo-app
+    build: !reset null
 
   backup:
     <<: *demo-app
+    build: !reset null
 
   alert-sink:
     image: ${QTS_ALERT_IMAGE:?QTS_ALERT_IMAGE must be python:3.12-slim@sha256:<64 hex>}

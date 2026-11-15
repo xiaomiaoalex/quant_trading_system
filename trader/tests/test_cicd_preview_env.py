@@ -8,6 +8,7 @@ reject that form instead of accepting it and letting the deploy break later.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from scripts.validate_preview_env import parse_env_file, validate
@@ -97,3 +98,58 @@ def test_short_commit_is_rejected():
     values["QTS_PREVIEW_COMMIT"] = "abc123"
     problems = validate(values, {"QTS_PREVIEW_PASSWORD_HASH": f"'{HASH}'"})
     assert any("40 character hex commit" in problem for problem in problems)
+
+
+def _preview_service_blocks() -> dict[str, list[str]]:
+    text = (Path(__file__).resolve().parents[2] / "deploy/compose.preview.yml").read_text(
+        encoding="utf-8"
+    )
+    services = text.split("\nservices:\n", 1)[1]
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in services.splitlines():
+        header = re.match(r"^  ([a-z0-9-]+):\s*$", line)
+        if header:
+            current = header.group(1)
+            blocks[current] = []
+        elif current is not None:
+            blocks[current].append(line)
+    return blocks
+
+
+def test_every_preview_app_service_declares_its_own_build_reset():
+    """A ``!reset`` inherited through ``<<:`` is not honoured by all Compose versions.
+
+    Measured on the GitHub runner's Compose 2.38.2 and on the preview server's
+    Compose 5.1.3: with the reset only in the x-preview-app anchor, control,
+    research and history retained the base ``build:`` block and the server-side
+    no-build preflight stopped the preview. Host Compose 5.6.1 happens to honour
+    the inherited reset, so a local render there is not sufficient evidence.
+    """
+    blocks = _preview_service_blocks()
+    anchored = {
+        name
+        for name, body in blocks.items()
+        if any(line.strip() == "<<: *preview-app" for line in body)
+    }
+    assert anchored == {"control", "research", "history"}
+    for name in sorted(anchored):
+        assert any(line.strip() == "build: !reset null" for line in blocks[name]), (
+            f"{name} inherits '<<: *preview-app' without a literal 'build: !reset null'; "
+            "Compose 2.38.2 and 5.1.3 both retain the base build block in that case"
+        )
+    # The two profile-disabled services never appear in a default render, but
+    # must also be build-free if their profiles are ever enabled.
+    for name in ("execution", "backup"):
+        assert any(line.strip() == "build: !reset null" for line in blocks[name]), name
+
+
+def test_preview_runbook_no_longer_claims_save_preserves_repo_digest():
+    text = (Path(__file__).resolve().parents[2] / "docs/BRANCH_PREVIEW_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    assert "RepoDigest" in text
+    assert "可能不保留" in text, "the runbook must state that save/load may lose RepoDigest"
+    assert "compose.offline.yaml" in text
+    assert "sha256:<与上面完全相同的 64 位 ID>" in text
+    assert "不得再假定" in text

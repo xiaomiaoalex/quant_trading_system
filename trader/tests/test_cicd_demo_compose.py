@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -56,6 +57,45 @@ def test_env_example_contains_no_real_secret_values():
     assert values["QTS_SCHEMA_VERSION"] == "3"
     assert values["QTS_EXTERNAL_ALERT_WEBHOOK_URL"].startswith("https://")
     assert values["QTS_EXTERNAL_ALERT_HEARTBEAT_URL"].startswith("https://")
+
+
+def _service_blocks() -> dict[str, list[str]]:
+    """Split the overlay's ``services:`` section into per-service line blocks."""
+    text = _overlay_text()
+    services = text.split("\nservices:\n", 1)[1]
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in services.splitlines():
+        header = re.match(r"^  ([a-z0-9-]+):\s*$", line)
+        if header:
+            current = header.group(1)
+            blocks[current] = []
+        elif current is not None:
+            blocks[current].append(line)
+    return blocks
+
+
+def test_every_service_inheriting_the_demo_anchor_resets_build_literally():
+    """A ``!reset`` that arrives only through ``<<:`` is ignored by Compose v2.
+
+    The GitHub runner ships Compose 2.38.2. There, ``build: !reset null``
+    declared solely in the ``x-demo-app`` anchor leaves the base ``build:``
+    block in the merged config, so the target host could rebuild the release
+    image. Each anchored service must therefore declare the reset itself.
+    """
+    blocks = _service_blocks()
+    anchored = {
+        name
+        for name, body in blocks.items()
+        if any(line.strip() == "<<: *demo-app" for line in body)
+    }
+    assert anchored == {"control", "execution", "research", "history", "backup"}
+    for name in sorted(anchored):
+        assert any(line.strip() == "build: !reset null" for line in blocks[name]), (
+            f"{name} inherits '<<: *demo-app' but never declares 'build: !reset null' literally; "
+            "Compose v2 ignores a reset inherited through the merge key, leaving the base build "
+            "block in place"
+        )
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not installed")

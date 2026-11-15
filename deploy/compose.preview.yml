@@ -19,6 +19,14 @@
 #
 # The preview is a trial entry point for this branch.  It is not a release:
 # it carries no release evidence, no observation window and no DR proof.
+#
+# ``build: !reset null`` is repeated literally inside every service (including
+# the two disabled by profile), not only in the x-preview-app anchor. A
+# ``!reset`` inherited through the ``<<:`` merge key is silently ignored by
+# several Compose releases: verified on the GitHub runner's Compose 2.38.2 and
+# on the preview server's Compose 5.1.3, where control/research/history retained
+# the base build: block. Host Compose 5.6.1 happens to honour it, so a local
+# render on that version is NOT evidence that the server will be build-free.
 
 name: ${QTS_PREVIEW_COMPOSE_PROJECT:-qts-branch-preview}
 
@@ -50,6 +58,7 @@ services:
 
   control:
     <<: *preview-app
+    build: !reset null
     # The Control API is reached through the gateway, not from the host.
     ports: !override []
     environment:
@@ -70,24 +79,30 @@ services:
 
   research:
     <<: *preview-app
+    build: !reset null
     environment:
       POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
 
   history:
     <<: *preview-app
+    build: !reset null
     environment:
       POSTGRES_PASSWORD: ${QTS_PREVIEW_POSTGRES_PASSWORD:?QTS_PREVIEW_POSTGRES_PASSWORD is required}
 
   execution:
     # Disabled: the preview never runs the trading worker and never holds an
-    # exchange credential.
+    # exchange credential. The literal build reset is kept even though the
+    # service is excluded by its profile: if a future profile change enables
+    # it, it must still never build on the preview host.
     profiles: ["disabled"]
+    build: !reset null
     secrets: !override []
 
   backup:
     # Disabled: the preview has no off-host backup target and must not claim
-    # one.
+    # one. Same literal reset as execution, for the same fail-closed reason.
     profiles: ["disabled"]
+    build: !reset null
 
   alert-sink:
     ports: !override
