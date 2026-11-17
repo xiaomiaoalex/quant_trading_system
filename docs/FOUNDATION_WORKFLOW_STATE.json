@@ -1,0 +1,991 @@
+{
+  "workflow_version": 3,
+  "updated_at": "2026-11-17T13:47:11.770079+00:00",
+  "branch": "feat/foundation-refactor",
+  "base_commit": "c6fe450260eeb59d46c9caee591fb1625510b443",
+  "head_commit": "d69150b901b3028ec0d7b237760efc23fd8da0e3",
+  "phase": 6,
+  "state": "PHASE_COMPLETE",
+  "authorization": {
+    "user_instruction": "很好，请你按计划启动阶段四，完成后继续阶段五直至完成全部计划。",
+    "recorded_at": "2026-11-03T16:16:44.995294+08:00",
+    "authorized_phases": [
+      4,
+      5,
+      6
+    ],
+    "last_planned_phase": 6,
+    "scope": "Implement and validate remaining foundation phases, with engineer-led independent test/review loops and parent-controlled local commits; advance to the next phase after verified commit without routine confirmation.",
+    "completion_rule": "All remaining frozen acceptance criteria must have actual supporting evidence; required unavailable checks remain incomplete, not pass.",
+    "permission_boundary": {
+      "local_phase_commits": true,
+      "isolated_nonproduction_compose_and_rehearsals": "Within planned phase 5 and existing host permissions; own disposable resources only",
+      "off_host_backup_and_alert_tests": "Use verified designated test targets with synthetic/nonproduction data and approved credentials; no guessed destinations",
+      "phase6_continuous_sandbox": "Authorized planned non-real-funds sandbox; verify test endpoint/account identity; capture actual >=24h evidence",
+      "production_deployment": false,
+      "real_funds": false,
+      "push_or_merge": false,
+      "destructive_existing_data_or_history": false,
+      "acl_or_sandbox_expansion": false,
+      "designated_offhost_backup_setup": "User-designated my-server via SSH: isolated task-owned nonproduction backup storage and synthetic-data validation; no unrelated service changes"
+    },
+    "routing": "Engineer owns daily test/review; parent receives final stage delivery or three-attempt escalation; genuine missing external prerequisites may require user input without blocking independent work.",
+    "designated_backup_host": {
+      "address": "192.168.0.105",
+      "ssh_user": "alex",
+      "expected_hostname": "my-server",
+      "ssh_authentication": "existing key/config",
+      "ssh_host_key_policy": "StrictHostKeyChecking=yes",
+      "ssh_host_key_alias": "192.168.3.4",
+      "migration_record": "branch_preview_20261112"
+    },
+    "designated_backup_host_record": "artifacts/foundation/phase5/parent-designated-backup-host.json"
+  },
+  "latest_user_acceptance_override": {
+    "source": "User's current instruction: continue the prior window and count its 11 hours rather than repeatedly starting fresh 24-hour windows.",
+    "recorded_at": "2026-11-09T20:46:00+08:00",
+    "status": "authorized_segmented_acceptance_pending_implementation_and_independent_verification",
+    "supersedes": [
+      "artifacts/foundation/phase6/parent-network-switch-20261109/decision.md",
+      "parent-network-switch-20261109 required_before_new_window's fresh-window-only requirement"
+    ],
+    "original_run_id": "20261109T011441Z-efbba899",
+    "minimum_cumulative_hours": 24,
+    "original_approximate_hours_to_retain": 11,
+    "continuous_window_required_for_completion": false,
+    "segmented_cumulative_demo_run_allowed": true,
+    "immutable_history": true,
+    "original_run_not_retroactively_continuous": true,
+    "excluded_from_credited_time": [
+      "host downtime and time between segments",
+      "not-ready periods",
+      "DR RPO breach and other unqualified periods",
+      "unexplained unresolved, unproven private-stream coverage and other invalid intervals"
+    ],
+    "required_distinct_durations": [
+      "wall_clock",
+      "active_candidate_runtime",
+      "qualified_cumulative_runtime"
+    ],
+    "required_safety": [
+      "Recover and prove the original database and event/execution/ledger identities; never reset or double-book history.",
+      "Verify no duplicate sends and reconcile original pending commands/orders before new risk.",
+      "Preserve the existing execution ownership, fencing, snapshot/coverage and fail-closed invariants.",
+      "Each segment has fresh verified DR, per-segment RPO<=300000ms and an auditable end boundary; cross-segment RPO breaches remain disclosed.",
+      "The existing clean-fresh-account preflight must not reject known prior-run trades during a proven continuation.",
+      "An observation-only strategy or explicit no-new-order mode must not manufacture replacement trades.",
+      "Aggregate historical and continuation evidence under the revised 6.1/6.2 contract with tester and fresh reviewer acceptance."
+    ],
+    "launch_boundary": "Do not start the superseded fresh 24-hour plan. Resume only after the engineer has a reviewed continuation path; a new continuation process/segment ID is evidence continuity, not an erased original run.",
+    "source_write_owner_unchanged": true,
+    "commit_authorized": false,
+    "cicd_write_lease_released": true,
+    "parent_decision": "artifacts/foundation/phase6/parent-segmented-continuation-20261109/decision.md",
+    "engineer_dispatch_message_id": "5a15cea7-6b4b-4896-8f90-42a2c5173195"
+  },
+  "dispatch_owner": {
+    "agent_id": "18e99d90-33f5-41f9-8a2f-672d109886bb",
+    "server_id": "srv_3QDZImHo82uk",
+    "workspace_id": "wks_d919696e0ced8ace"
+  },
+  "write_owner": {
+    "agent_id": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "role": "engineer_coordinator",
+    "scope": "Phase6 implementation, legacy cleanup and non-real-funds sandbox per work order; serialize independent-test write leases",
+    "routine_results_do_not_go_to_parent": true,
+    "dispatch_pending": false,
+    "succession": {
+      "predecessor": "4c592f2d-2019-4f36-877a-c3314ccc9978",
+      "effective_at": "2026-11-08T19:40:14+08:00",
+      "reason": "User-directed engineer-context handoff; original work order retained"
+    }
+  },
+  "source_write_lease_released": true,
+  "completed_phases": [
+    {
+      "phase": 0,
+      "commit": "9b01f3af43bfdcd7c44a571c312d76a547e6f37a"
+    },
+    {
+      "phase": 1,
+      "commit": "1c587f33c65fda0f95d8992d6195b1b209f84ed6"
+    },
+    {
+      "phase": 2,
+      "commit": "fa5fab7ddabcfd93d3828a3761a47a1ca45b4281",
+      "source_digest": "58e7a0c947afb33d0caafb49d8fb7104ecdc0cef690be8c6df8babde9e054a47",
+      "completed_at": "2026-11-03T00:48:39.246727+08:00",
+      "acceptance": "artifacts/foundation/phase2/parent-final-acceptance-after-evidence-completion.json",
+      "commit_evidence": "artifacts/foundation/phase2/parent-phase2-commit-evidence.json",
+      "accepted_unique_tests": 327
+    },
+    {
+      "phase": 3,
+      "commit": "1b1564bc4ad0c14c9b035582d384713661d96861",
+      "source_digest": "bf5a26272dd30ee8f700704420f8def56c5b30a901db525a6e8e146bd3c714fd",
+      "completed_at": "2026-11-03T11:47:08.493372+08:00",
+      "acceptance": "artifacts/foundation/phase3/parent-final-acceptance-r4.json",
+      "commit_evidence": "artifacts/foundation/phase3/parent-phase3-commit-evidence.json",
+      "submitted_full_trader_tests_passed": 3674
+    },
+    {
+      "phase": 4,
+      "commit": "7995c02d4a704aa3c201edb12da3da0e6c2f16e6",
+      "source_digest": "cfcb8a1351d07dcaa03181ffc27c7fcaa07230d2fc40e30a8603c09a4ffe6682",
+      "completed_at": "2026-11-03T19:27:58.900538+08:00",
+      "acceptance": "artifacts/foundation/phase4/parent-final-acceptance.json",
+      "commit_evidence": "artifacts/foundation/phase4/parent-phase4-commit-evidence.json",
+      "submitted_full_trader_tests_passed": 3702
+    },
+    {
+      "phase": 5,
+      "commit": "c6fe450260eeb59d46c9caee591fb1625510b443",
+      "source_digest": "2d963b2ca5f338e68ae0e167ce555110e7ec7c67e565640e3c0b8d537c92b447",
+      "completed_at": "2026-11-04T12:16:42.210886+08:00",
+      "acceptance": "artifacts/foundation/phase5/parent-final-acceptance.json",
+      "commit_evidence": "artifacts/foundation/phase5/parent-phase5-commit-evidence.json",
+      "submitted_full_trader_tests_passed": 3871,
+      "parent_fresh_offline_passed": 68
+    },
+    {
+      "phase": 6,
+      "commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "source_digest": "350649a9d3b7fee7c3ffa890d425d64f96f8a60eea028919e2a133945e003c07",
+      "implementation_source_digest": "9fe09e9b9d8f7787b130e89dceba5e3787a345f314f9a780c062d49556d70c99",
+      "completed_at": "2026-11-11T19:29:10+08:00",
+      "acceptance": "artifacts/foundation/phase6/parent-final-acceptance.json",
+      "commit_evidence": "artifacts/foundation/phase6/parent-phase6-commit-evidence.json",
+      "submitted_full_trader_tests_passed": 3504,
+      "qualified_cumulative_ms": 94410660,
+      "segmented_acceptance": true,
+      "original_run_retroactively_continuous": false
+    }
+  ],
+  "phase_history": [
+    {
+      "phase": 2,
+      "state": "PHASE_COMPLETE",
+      "commit": "fa5fab7ddabcfd93d3828a3761a47a1ca45b4281",
+      "state_archive": "artifacts/foundation/phase2/phase2-complete-state-at-phase3-start.json",
+      "state_sha256": "15721bcd947d37cfc8ea829688b731c00a9b9a3c0eca56d9505bc7f3bcb023f7"
+    },
+    {
+      "phase": 3,
+      "state": "PHASE_COMPLETE",
+      "commit": "1b1564bc4ad0c14c9b035582d384713661d96861",
+      "source_digest": "bf5a26272dd30ee8f700704420f8def56c5b30a901db525a6e8e146bd3c714fd",
+      "completed_at": "2026-11-03T11:47:08.493372+08:00",
+      "state_archive": "artifacts/foundation/phase3/phase3-complete-state-at-phase4-start.json",
+      "state_sha256": "93def1ca84ed5c3e1c6ce7121cd5323bbeded0a77bbb93247bb91488c2cd8f47"
+    },
+    {
+      "phase": 4,
+      "state": "PHASE_COMPLETE",
+      "commit": "7995c02d4a704aa3c201edb12da3da0e6c2f16e6",
+      "source_digest": "cfcb8a1351d07dcaa03181ffc27c7fcaa07230d2fc40e30a8603c09a4ffe6682",
+      "completed_at": "2026-11-03T19:27:58.900538+08:00",
+      "state_archive": "artifacts/foundation/phase4/phase4-complete-state-at-phase5-start.json",
+      "state_sha256": "a8548116626ffab842ac9a3624ef77bc480a77c4b14396950107ca6b0718f38b"
+    },
+    {
+      "phase": 5,
+      "state": "PHASE_COMPLETE",
+      "commit": "c6fe450260eeb59d46c9caee591fb1625510b443",
+      "source_digest": "2d963b2ca5f338e68ae0e167ce555110e7ec7c67e565640e3c0b8d537c92b447",
+      "completed_at": "2026-11-04T12:16:42.210886+08:00",
+      "state_archive": "artifacts/foundation/phase5/phase5-complete-state-at-phase6-start.json",
+      "state_sha256": "8a8f116e776e9a9da48bdb26bb80eaa5f97616da7db7b25ab1278cfe58cd9a2f"
+    },
+    {
+      "phase": 6,
+      "state": "PHASE_COMPLETE",
+      "commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "source_digest": "350649a9d3b7fee7c3ffa890d425d64f96f8a60eea028919e2a133945e003c07",
+      "completed_at": "2026-11-11T19:29:10+08:00",
+      "acceptance": "artifacts/foundation/phase6/parent-final-acceptance.json",
+      "commit_evidence": "artifacts/foundation/phase6/parent-phase6-commit-evidence.json"
+    }
+  ],
+  "agents": {
+    "engineer": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "tester": null,
+    "reviewer": null
+  },
+  "roles": {
+    "engineer": {
+      "profile_id": "agent_profile_implementer_minimax",
+      "profile_name": "工程师",
+      "provider": "claude",
+      "model": "claude-opus-5-5",
+      "settings": {
+        "modeId": "auto",
+        "thinkingOptionId": "xhigh"
+      },
+      "verified_at": "2026-11-04T12:23:58.039329+08:00"
+    },
+    "tester": {
+      "profile_id": "agent_profile_tester_deepseek_harness",
+      "profile_name": "测试员",
+      "provider": "deepseek-harness",
+      "model": "[\"magpie\",\"workbuddy/auto\"]",
+      "settings": {
+        "thinkingOptionId": "high",
+        "features": {
+          "auto_accept": false
+        }
+      },
+      "verified_at": "2026-11-03T19:33:41.702045+08:00"
+    },
+    "reviewer": {
+      "profile_id": "agent_profile_reviewer_deepseek",
+      "profile_name": "审核员（DeepSeek）",
+      "provider": "deepseek-harness",
+      "model": "[\"magpie\",\"workbuddy/auto\"]",
+      "settings": {
+        "thinkingOptionId": "high"
+      },
+      "verified_at": "2026-11-03T19:33:41.702045+08:00"
+    }
+  },
+  "profiles_verified_via_list_profiles": true,
+  "limits": {
+    "same_finding_max_fix_retest_attempts_before_parent": 3,
+    "finding_count_scope": "per_stable_root_cause",
+    "legacy_phase_review_round_limit_removed_by_user": true
+  },
+  "review_rounds_completed": 15,
+  "next_review_round": 16,
+  "test_attempt": 1,
+  "consecutive_test_failures": 0,
+  "history_policy": "Prior phase state archived unchanged; recurring root causes retain attempt history; review numbering is phase-local",
+  "processed_message_ids": [
+    "d1264b19-b572-49a9-895d-ca4726816d6c",
+    "b51dba59-6ba0-470c-b366-c2463be0ee60",
+    "5702e876-15ce-4639-8660-73415b1a5e7d",
+    "9606e13b-dab3-4549-8653-3c12cb8c5f1e",
+    "05389ff9-cf2d-432c-aa08-37c1ffe06f6a",
+    "1c784318-9da7-4368-bbf7-1966a0acfd0a",
+    "a450f837-d839-4ecf-8c3b-33f7758ce44b",
+    "b761530e-0157-4f1c-b652-b273c7548dd0",
+    "a48a0e83-5bc2-4370-87ab-f10431391733",
+    "8e1b774e-f0ff-46bb-a751-d27019aff96c",
+    "a1e96512-100f-4927-81a5-8c4a8262efd7",
+    "31600ed8-0e2f-46a8-887e-a6d8b97488f5",
+    "fe242eb2-02dc-4109-a772-343c49f6d199",
+    "b73777ae-49ce-4d21-81de-992a0d7e4ef2",
+    "71c70903-f738-40ac-834d-0df3a7556913",
+    "2d5f0c26-d1e4-4249-b100-abbaffe17ecd",
+    "fd986c8d-5b39-4bf5-8e0d-0a934a436628",
+    "044fca52-41c3-42ec-b4f1-f765e5e1da30",
+    "3b0900e1-8f3b-4bb1-afe0-b3a20eb3aeeb",
+    "2c0b338f-5e13-46dd-9cb7-7fd960a04543",
+    "9afcbd5b-7996-4cb1-af94-9b5aa1bc657f",
+    "e497d927-ea24-4c2d-bcce-16c0f388e2f4",
+    "a5bf61d6-8508-4447-8bea-ca37f16f6a1b",
+    "e19922a4-57db-4cba-9a58-aeab0e2f5f95",
+    "f131dccb-126e-465d-b0ff-d88b0a2daeb6",
+    "c90d9f3d-9ee2-403e-a462-5c352c646ed5",
+    "162e456a-2991-4ff0-a72b-ad603b063fab",
+    "baa4a617-5ff1-42ab-ab65-42074583b2ac",
+    "2ecaf200-ff90-4b9c-a428-1d18ef0de883",
+    "528dc34a-9b63-47f2-a47c-e7cdf6118902",
+    "ad12f1e2-4c6c-4319-831d-092590eadca4",
+    "52eeba3c-2c9e-4bee-a3d7-7c020ed1eb4a",
+    "a9cb0120-cc50-48e1-b96d-25386f81f9c7",
+    "90fab824-cccb-4838-a975-0f1277f2fe59",
+    "c147b83b-5486-4952-b2ad-a6ba9db19223",
+    "fb741784-8df2-40d3-8c0c-cdebc96c9512",
+    "0b96aae6-722a-4c41-96df-8efc6323bac6",
+    "cd5edc35-f68f-4ce2-9d36-8d6fadb5b723",
+    "61fbeee5-2eda-46fe-985c-ae5821700f22",
+    "ccbef768-6550-46b8-a702-d4507040299a",
+    "eb9951a1-055f-4262-83d3-6d6326f7a0ae",
+    "68a3f2f1-aeed-498e-b031-1680c1fea2a2",
+    "131a7a4d-29b2-403a-adc2-54be17f1b5a8",
+    "380713d0-8a20-4439-9ea9-158ebc47192f",
+    "04469e6e-f4f8-4493-829b-0d877200b855",
+    "5fe6147c-5b54-40dc-9b0b-4dfcf425f4bc",
+    "57c20f3e-7d35-4b60-bce2-a8304c5884ee",
+    "09682ac3-8cc4-4d35-895b-378ef1f6b4a1",
+    "499f95f8-6e6f-41c5-aa30-944c2f4c829a",
+    "36a7719a-2257-4ea9-9fa7-61411a300d08",
+    "67030a77-b306-4124-a2fc-1132e4dc1971",
+    "0c056901-6ada-4874-a798-00a15a75a9ab",
+    "48d65fad-cdfe-403c-8b91-d1c47efde2ea",
+    "f800bffc-8b72-463b-9395-0e8c02c45a83",
+    "fcacd2f2-4cd3-4259-b338-8e9f5f33ba33",
+    "e5b92a1e-fc08-4d04-a499-be4a77c9cdb3",
+    "8498ab4b-d69d-490f-ae08-1f838ff27613",
+    "223dd61f-a823-4da0-9c81-0fef8ba85583",
+    "dea15c8c-a85a-43c8-b99c-da4a63df816a",
+    "68311bb7-214a-41a1-884a-f850e47fbae7",
+    "bf882509-5881-43ca-a460-08a195dd1588",
+    "c4a25391-c560-442f-a770-b32111a212fa",
+    "e7a40f46-7720-4f76-903f-41f17e171d17",
+    "aaf6123a-2116-496c-afa6-0b26a2bf9ac6",
+    "264d0a62-11d8-4745-b91d-abceda4f849a",
+    "918b3b99-bc1e-4c60-b524-e770f79cd541",
+    "3645bebe-4dc2-4860-9167-8712be939cbe",
+    "f14f7710-436f-4760-a0bc-ee062abd3003",
+    "fc155a06-1854-4e45-9e82-abf12c4eab86",
+    "0984bf54-9545-4b11-87e4-9ceb8bbdae84",
+    "9400aeb5-fd52-49d6-905b-2d7f01917ae5",
+    "e56ad339-0681-402f-a40d-62339327e678",
+    "2b38985e-e74d-41f8-98aa-a0e07744a5a2",
+    "75b509eb-cd97-4ec8-be50-6e899a24e3f7",
+    "738ce4d5-e54a-4c69-aac6-bb1574c36aa9",
+    "b2552ba4-9907-460a-8ba9-33177075ba93",
+    "c4565542-e1d6-4077-8d59-997462ccf389",
+    "43ef4dcf-4567-438a-ac31-580b997d15ef",
+    "8dffd2fc-9cf0-4f2f-82d2-9833f3c0a604",
+    "7406daf2-2f8c-490b-94dd-4c3df4aec41c"
+  ],
+  "artifact_directory": "artifacts/foundation/phase6",
+  "input_snapshot_path": "artifacts/foundation/phase6/phase6-input-snapshot.json",
+  "input_source_digest": "9cd369048b31ed3147a34eaeeaa78af255943eb95a730ff521e8d9750704bae6",
+  "work_order": "artifacts/foundation/phase6/parent-phase6-work-order.md",
+  "required_acceptance": [
+    "6.1",
+    "6.2",
+    "6.3",
+    "6.4",
+    "6.5",
+    "6.6",
+    "6.7",
+    "6.8",
+    "6.9",
+    "6.10",
+    "6.11",
+    "6.12"
+  ],
+  "required_gates": [
+    "independent_tests",
+    "latest_read_only_review",
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "G6"
+  ],
+  "commit_authorized": false,
+  "next_phase_authorized": false,
+  "blocker": null,
+  "resolved_blocker": {
+    "id": "P6-ENV-WIRELESS-STABILITY",
+    "type": "external_prerequisite_and_launch_guard",
+    "status": "closed_by_verified_segmented_acceptance",
+    "phase_completion_blocked": false,
+    "closed_at": "2026-11-11T19:29:10+08:00",
+    "closure_evidence": "artifacts/foundation/phase6/parent-final-acceptance.json",
+    "engineer_may_continue_independent_work": true,
+    "receipt": "artifacts/foundation/phase6/parent-successor-20261108/receipt.json"
+  },
+  "permissions": {
+    "engineer_local_tester_reviewer_dispatch": true,
+    "tester_reviewer_dispatch": false,
+    "child_commit": false,
+    "push": false,
+    "merge": false,
+    "deploy": false,
+    "real_account_operations": false,
+    "history_rewrite": false,
+    "acl_or_approval_changes": false,
+    "nonproduction_task_owned_compose_and_rehearsal": true,
+    "backup_and_alert_test_endpoints": "Only verified designated test targets and synthetic/task-owned data",
+    "existing_resource_destruction": false
+  },
+  "coordinator": {
+    "agent_id": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "role": "engineer",
+    "owns_routine_dispatch": true,
+    "tester_reviewer_reports_to": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "issue_ledger": "artifacts/foundation/phase6/engineer-issue-ledger.json",
+    "handoff": "artifacts/foundation/phase6/parent-phase6-work-order.md",
+    "phase_status": "complete",
+    "source_write_lease_released": true
+  },
+  "dispatch_rule": "engineer_local_loop_parent_only_on_final_delivery_or_same_finding_three_failed_attempts",
+  "notifications": true,
+  "polling": false,
+  "notification_routing": {
+    "parent_engineer_notify_on_finish": false,
+    "tester_reviewer_completion_recipient": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "routine_reports_copy_parent": false,
+    "final_or_escalation_explicit_notify_on_finish": false
+  },
+  "tester_write_paths": [
+    "trader/tests/test_phase6_independent*.py",
+    "docs/PHASE6_INDEPENDENT_TEST_REPORT.md",
+    "artifacts/foundation/phase6/tester-*"
+  ],
+  "excluded_paths": [
+    ".workbuddy/",
+    "workflow/",
+    "artifacts/foundation/phase2/",
+    "artifacts/foundation/phase3/",
+    "artifacts/foundation/phase4/",
+    "artifacts/foundation/phase5/",
+    ".worktrees/",
+    "docs/CI_CD_IMPROVEMENT_RFC.md",
+    "docs/CI_CD_WORKFLOW_STATE.json"
+  ],
+  "unrelated_processes": "Existing local qts-postgres/data and unrelated remote applications are not sandbox resources. Retain the verified remote backup objects and use isolated task-owned resources.",
+  "execution_support": {
+    "mode": "engineer_controlled_if_child_channel_unavailable",
+    "policy": "Preserve ACL/approval denials; never bypass via another terminal; retain exact argv, direct returncodes, raw logs, JUnit and byte hashes; independent analyst retains verdict"
+  },
+  "plan_continuation": {
+    "authorized": true,
+    "phases": [
+      4,
+      5,
+      6
+    ],
+    "active_phase": 6,
+    "remaining_after_active": [],
+    "advance_trigger": "Verified phase6 final handoff plus successful parent local commit",
+    "ordinary_phase_confirmation_required": false,
+    "authorization_record": "artifacts/foundation/phase4/remaining-plan-authorization.json",
+    "no_periodic_polling": true,
+    "phase4_complete": true,
+    "phase5_complete": true,
+    "final_planned_phase": 6,
+    "advance_eligible": false,
+    "plan_complete": true,
+    "phase6_complete": true
+  },
+  "review_history": [],
+  "inherited_issue_ledger": "artifacts/foundation/phase5/engineer-issue-ledger.json",
+  "state_history": [
+    {
+      "from": "phase4:PHASE_COMPLETE",
+      "to": "phase5:IMPLEMENTING",
+      "at": "2026-11-03T19:32:15.806091+08:00",
+      "reason": "Automatic continuation under user authorization after verified phase4 local commit",
+      "base_commit": "7995c02d4a704aa3c201edb12da3da0e6c2f16e6"
+    },
+    {
+      "from": "phase5:launch_pending",
+      "to": "phase5:IMPLEMENTING",
+      "at": "2026-11-03T19:33:41.702045+08:00",
+      "agent_id": "5a4dfb1a-57a7-402d-9bd1-0e9e6ffe568f",
+      "evidence": "create_agent acknowledged status=running"
+    },
+    {
+      "from": "IMPLEMENTING (agent closed after crash)",
+      "to": "IMPLEMENTING",
+      "at": "2026-11-03T22:50:04.572118+08:00",
+      "reason": "Same persistent engineer session restored; user started Docker; existing PostgreSQL volume healthy; inspected files preserved",
+      "recovery_assessment": "artifacts/foundation/phase5/crash-recovery-20261103T224025+0800/assessment.json"
+    },
+    {
+      "from": "IMPLEMENTING",
+      "to": "BLOCKED",
+      "at": "2026-11-04T01:14:39.485151+08:00",
+      "reason": "Engineer released all phase-5 write leases after independent review; required off-host backup/restore evidence blocked by P5-ENV-3; parent verified frozen bytes and raw test evidence. No code repair attempt consumed.",
+      "verification": "artifacts/foundation/phase5/parent-resource-blocker-verification.json"
+    },
+    {
+      "from": "BLOCKED",
+      "to": "IMPLEMENTING",
+      "at": "2026-11-04T08:36:54.110993+08:00",
+      "reason": "User designated alex@192.168.3.4 / my-server as backup host; parent verified strict SSH-key login, identity, capacity and Docker. Resuming existing engineer for setup and required evidence; 5.6/5.7 remain pending.",
+      "source_digest": "5c14dd9d1e6acfd96d5d3461150b0243034851cc9d1bba7f098b81eba730b6e2",
+      "target_record": "artifacts/foundation/phase5/parent-designated-backup-host.json"
+    },
+    {
+      "from": "phase5:IMPLEMENTING",
+      "to": "phase5:PHASE_COMPLETE",
+      "at": "2026-11-04T12:16:42.210886+08:00",
+      "reason": "Parent verified 45 source files, latest independent pass, off-host backup/restore and fresh 68-test offline check; commit verified",
+      "commit": "c6fe450260eeb59d46c9caee591fb1625510b443"
+    },
+    {
+      "from": "phase5:PHASE_COMPLETE",
+      "to": "phase6:IMPLEMENTING",
+      "at": "2026-11-04T12:16:42.210886+08:00",
+      "reason": "Automatic final planned phase under existing user authorization",
+      "base_commit": "c6fe450260eeb59d46c9caee591fb1625510b443"
+    },
+    {
+      "from": "phase6:launch_pending",
+      "to": "phase6:IMPLEMENTING",
+      "at": "2026-11-04T12:23:58.039329+08:00",
+      "agent_id": "4c592f2d-2019-4f36-877a-c3314ccc9978",
+      "evidence": "create_agent acknowledged status=running"
+    },
+    {
+      "from": "phase6:IMPLEMENTING (predecessor archived)",
+      "to": "phase6:IMPLEMENTING (successor)",
+      "at": "2026-11-08T19:40:14+08:00",
+      "agent_id": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+      "evidence": "Parent verified predecessor closed/archived and successor workspace identity; decision queued"
+    },
+    {
+      "from": "phase6:IMPLEMENTING",
+      "to": "phase6:PHASE_COMPLETE",
+      "at": "2026-11-11T19:29:10+08:00",
+      "reason": "Parent verified 168 frozen source files, segmented cumulative evidence, independent tester round23 and fresh reviewer round15; local commit verified",
+      "commit": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "source_write_lease_released": true
+    },
+    {
+      "from": "phase6:PHASE_COMPLETE at 833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "to": "phase6:PHASE_COMPLETE with accepted CI/CD integration at 8f1d76ab7963c7a053014102686d51fd653b9b39",
+      "at": "2026-11-11T23:53:27+08:00",
+      "reason": "CI/CD parent accepted the merge and fast-forwarded the target ref; foundation parent synchronized root while preserving user documents and untracked inputs",
+      "integration_acceptance": ".worktrees/cicd-foundation-integration/artifacts/cicd/integration-20261111/parent-verification/parent-final-acceptance.json",
+      "root_sync_record": "artifacts/foundation/phase6/parent-cicd-root-sync-20261111/root-sync-verification.json"
+    }
+  ],
+  "last_dispatch": {
+    "at": "2026-11-08T19:40:14+08:00",
+    "status": "idle",
+    "role": "engineer_coordinator",
+    "agent_id": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+    "server_id": "srv_3QDZImHo82uk",
+    "workspace_id": "wks_d919696e0ced8ace",
+    "notify_on_finish": false,
+    "work_order": "artifacts/foundation/phase6/parent-phase6-work-order.md",
+    "provider_dispatch_confirmed": false,
+    "delivery_status": "queued",
+    "dispatch_message_id": "a8727470-937e-4e69-a820-6da118e936a3",
+    "action": "adopt_verified_successor_and_require_launch_guard",
+    "profile_id": "agent_profile_implementer_minimax",
+    "provider_model": "claude/claude-opus-5-5"
+  },
+  "recovery_history": [
+    {
+      "at": "2026-11-03T22:50:04.572118+08:00",
+      "reason": "User reported computer crash and manually restarted Docker",
+      "assessment": "artifacts/foundation/phase5/crash-recovery-20261103T224025+0800/assessment.json",
+      "same_engineer_resumed": true,
+      "agent_id": "5a4dfb1a-57a7-402d-9bd1-0e9e6ffe568f",
+      "native_session_id": "0f21d4a2-1f87-45c7-ac69-450617479b6a",
+      "database_recovered": true,
+      "no_findings_or_attempts_reset": true
+    }
+  ],
+  "workspace_frozen": true,
+  "inherited_finding_notes": [
+    {
+      "canonical_id": "P5-EVIDENCE-INDEX-STALE",
+      "aliases": [
+        "P5-R2-NF-1",
+        "P5-R3-BF-1"
+      ],
+      "status": "closed",
+      "historical_repair_entries": 2,
+      "reason": "Same stale evidence-index symptom across rounds must not be reset if it recurs; preserve original ledger entries"
+    },
+    {
+      "canonical_id": "P3-R1-3.1-CLOCK",
+      "status": "closed",
+      "historical_attempts": 2
+    },
+    {
+      "canonical_id": "P3-PARENT-INPUT-TYPE-GATE",
+      "status": "closed",
+      "historical_attempts": 2
+    }
+  ],
+  "cross_task_boundaries": [
+    {
+      "other_branch": "feature/ci-cd-hardening",
+      "other_worktree": "D:/Code of Python/quant_trading_system/.worktrees/cicd-hardening",
+      "coordinator": "e36d6105-e0bb-4f27-bbbd-225b5a55da2e",
+      "record": "artifacts/foundation/phase6/parent-cross-task-boundary-20261104.json",
+      "integration_status": "integrated_and_root_synchronized",
+      "accepted_foundation_head": "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+      "integrated_head": "8f1d76ab7963c7a053014102686d51fd653b9b39",
+      "integrated_tree": "69b64db2acd7b0a44076d99631840728ed9835f4",
+      "merge_parents": [
+        "833cc0207066ae83689a5bc42053a4ab7d02f6a2",
+        "56577c78cccec7a91fca1678df7b0a27593f0f28"
+      ],
+      "integration_completion_message_id": "7406daf2-2f8c-490b-94dd-4c3df4aec41c",
+      "integration_worktree": "D:/Code of Python/quant_trading_system/.worktrees/cicd-foundation-integration",
+      "integration_acceptance": ".worktrees/cicd-foundation-integration/artifacts/cicd/integration-20261111/parent-verification/parent-final-acceptance.json",
+      "integration_acceptance_sha256": "f63e5cb6273248ebda5f555f254ff3202fcd7fbcbe838ee08e05f6c30aab75ec",
+      "root_sync_record": "artifacts/foundation/phase6/parent-cicd-root-sync-20261111/root-sync-verification.json",
+      "root_synchronized_at": "2026-11-11T23:53:27+08:00",
+      "root_index_and_tracked_worktree_match_head": true,
+      "user_acceptance_original_preserved": true,
+      "user_acceptance_only_insertions_in_merged": true,
+      "untracked_inputs_preserved": true,
+      "root_write_lease_released_at": "2026-11-11T19:29:10+08:00",
+      "integration_handoff": {
+        "source_message_id": "e56ad339-0681-402f-a40d-62339327e678",
+        "received_at": "2026-11-05T18:01:03+08:00",
+        "receipt": "artifacts/foundation/phase6/parent-cicd-integration-receipt-20261105.json",
+        "receipt_sha256": "2a613b15de1c3a34b70c677bad726a126e4ca3dba1425241953012d237a286f3",
+        "package_relative_to_worktree": "artifacts/cicd/parent-verification-20261105/integration-handoff.json",
+        "package_sha256": "61e117037dc4aa736294a93372142823dd6454c89e96b121cae041c87dd43e88",
+        "implementation_commit": "ed3ac61c6f142783a8862d6c4f40e66796cbb904",
+        "branch_head": "56577c78cccec7a91fca1678df7b0a27593f0f28",
+        "current_merge_base": "c6fe450260eeb59d46c9caee591fb1625510b443",
+        "identity_and_integrity_verified": true,
+        "merged_result_accepted": true,
+        "readiness_notification_sent": true,
+        "readiness_message_id": "f9d194bf-5fa7-40b2-9850-2a7bf64cb40c",
+        "readiness_delivery_status": "queued",
+        "readiness_trigger": "Accepted phase6 local commit plus explicit root source write-lease release",
+        "readiness_recipient": "e36d6105-e0bb-4f27-bbbd-225b5a55da2e",
+        "notify_on_finish": false
+      }
+    }
+  ],
+  "protected_external_inputs": [
+    {
+      "path": "docs/UNIFIED_TRADING_ACCEPTANCE.md",
+      "sha256": "196d4cf1794413f81dd4dd4034daed7b20edb58cf5438698bfd15d04044ed34e",
+      "uncommitted_diff_sha256": "079290a770ee27628e3b4c79a2ed5445cbc7c26516e12189640b629bb6343305",
+      "origin": "User change reported by CI/CD coordinator in message 9400aeb5-fd52-49d6-905b-2d7f01917ae5",
+      "preserve": true,
+      "default_stage6_stage_policy": "exclude from automatic staging; read as governing input and record evidence separately",
+      "post_integration_status": "content_preserved_in_merged_head; original archived; no remaining uncommitted delta",
+      "preserved_original": "artifacts/foundation/phase6/parent-cicd-root-sync-20261111/UNIFIED_TRADING_ACCEPTANCE.user-before-sync.md"
+    },
+    {
+      "path": "docs/UNIFIED_TRADING_RUNBOOK.md",
+      "sha256": "929e7b234007dd18126ac00d841af6031497a4c7ba291cf448dab60a7c9971cf",
+      "uncommitted_diff_sha256": "465e55c39c9a1650e4073efe7e5d003965f226f22d7c1cc60b6c040d1886bdba",
+      "origin": "User change reported by CI/CD coordinator in message 9400aeb5-fd52-49d6-905b-2d7f01917ae5",
+      "preserve": true,
+      "default_stage6_stage_policy": "exclude from automatic staging; read as governing input and record evidence separately",
+      "post_integration_status": "reviewed CI/CD and phase-6 merge result synchronized with HEAD; no additional root delta"
+    }
+  ],
+  "acceptance_environment": {
+    "primary_required": "Demo",
+    "testnet_required": false,
+    "actual_current_source_evidence_required": true,
+    "continuous_window_min_hours": 24,
+    "segmented_cumulative_override": "latest_user_acceptance_override; original window not retroactively continuous",
+    "private_stream_coverage_required": true,
+    "basis_message_id": "9400aeb5-fd52-49d6-905b-2d7f01917ae5"
+  },
+  "parent_escalation": {
+    "source_message_id": "2b38985e-e74d-41f8-98aa-a0e07744a5a2",
+    "recorded_at": "2026-11-05T20:36:31+08:00",
+    "classification": "environmental_assistance_with_parent_detected_implementation_findings",
+    "receipt": "artifacts/foundation/phase6/parent-escalation-20261105/receipt.json",
+    "receipt_sha256": "531b400d2e9ba476fbb843a25d0c6674208c44786cef4d967438d233404bd970",
+    "decision": "artifacts/foundation/phase6/parent-escalation-20261105/decision.md",
+    "decision_sha256": "79e8b4816cccf231c8a97296cf23916633deb311b6ba21fec8d6aa1b05d3da50",
+    "finding_ids": [
+      "P6-PARENT-RPO-WINDOW-BOUNDARIES",
+      "P6-PARENT-S3-RECONNECT-IDEMPOTENCY"
+    ],
+    "phase_state": "IMPLEMENTING",
+    "source_write_owner_unchanged": true,
+    "source_write_lease_released": false,
+    "engineer_may_continue_after_parent_analysis": true,
+    "commit_authorized": false,
+    "solution_dispatch_id": "32a23b67-9390-4847-aaca-87ad83b88eaf",
+    "next_handoff": "Complete final phase delivery or genuine same-finding three-failed-fix escalation; environment recovery alone is not a new parent trigger",
+    "precision_correction_dispatch_id": "3fb7738d-fd3a-4b7b-881b-ec9cd0ecbdae",
+    "delivery_status": "queued",
+    "status": "solution_dispatched",
+    "blocking_phase_completion": true
+  },
+  "environment_prerequisite": {
+    "source_message_id": "75b509eb-cd97-4ec8-be50-6e899a24e3f7",
+    "recorded_at": "2026-11-06T19:12:31+08:00",
+    "status": "intermittent_local_wireless_path_reported",
+    "receipt": "artifacts/foundation/phase6/parent-environment-20261106/receipt.json",
+    "receipt_sha256": "4097dad4fec34471398f33403fc4ae34f28a669d4a18033b095af71892b37671",
+    "decision": "artifacts/foundation/phase6/parent-environment-20261106/decision.md",
+    "local_network": "192.168.0.103/24 via 192.168.0.1",
+    "required_target": "alex@192.168.3.4 / my-server",
+    "confirmed_ssh_timeout_outside_sandbox": true,
+    "pending_acceptance": [
+      "6.1",
+      "6.2"
+    ],
+    "source_write_owner_unchanged": true,
+    "write_lease_released": false,
+    "existing_read_only_watcher_retained": true,
+    "automatic_continuation_requires": "Strict SSH host identity/hostname, three fresh verified DR cycles, existing clean and Demo preflight",
+    "parent_dispatch": {
+      "primary_message_id": "f5e8bccb-d25d-4b03-898d-6edb1c39b8b4",
+      "clarification_message_id": "eed99a94-95a4-4477-b5d3-dd00eaf804f4",
+      "to_agent_id": "4c592f2d-2019-4f36-877a-c3314ccc9978",
+      "server_id": "srv_3QDZImHo82uk",
+      "notify_on_finish": false,
+      "delivery_status": "queued",
+      "provider_dispatch_confirmed": false
+    },
+    "prior_blocker": {
+      "id": "P6-ENV-BACKUP-REACHABILITY",
+      "type": "external_prerequisite",
+      "status": "awaiting_user_network_recovery",
+      "phase_completion_blocked": true,
+      "engineer_may_continue_independent_work": true,
+      "receipt": "artifacts/foundation/phase6/parent-environment-20261106/receipt.json"
+    },
+    "recovery_record": {
+      "observed_at": "2026-11-07T21:34:59+08:00",
+      "run_id": "20261107T083226Z-50077d3c",
+      "successful_dr_cycles": 152,
+      "failed_dr_cycles": 0,
+      "max_successful_backup_gap_ms": 130667,
+      "evidence": "artifacts/foundation/phase6/parent-egress-20261107/receipt.json",
+      "fresh_parent_ssh_probe_performed": false,
+      "historical_network_snapshot_remains_historical": true
+    },
+    "latest_observation": {
+      "recorded_at": "2026-11-08T19:40:14+08:00",
+      "status": "no_window_observed_at_parent_snapshot",
+      "wifi_signal_percent": 38,
+      "signal_threshold_is_operational_not_acceptance": true,
+      "exclusive_launch_guard_required_before_next_new_launch": true
+    }
+  },
+  "egress_decision": {
+    "source_message_id": "738ce4d5-e54a-4c69-aac6-bb1574c36aa9",
+    "recorded_at": "2026-11-07T21:40:50+08:00",
+    "receipt": "artifacts/foundation/phase6/parent-egress-20261107/receipt.json",
+    "receipt_sha256": "c3fe51e56e13f4ec13a219f0f560c339a485a9a2b5bc95731a2330e4e0704fe3",
+    "decision": "artifacts/foundation/phase6/parent-egress-20261107/decision.md",
+    "decision_sha256": "60630b24065595b6e9006130182867a2bf6338c2626af4c1e5fa0572b47b54de",
+    "status": "split_explicit_egress_permitted_execution_path_evidence_required",
+    "preserve_current_window": true,
+    "current_run_id": "20261107T083226Z-50077d3c",
+    "snapshot_is_progress_not_acceptance": true,
+    "dispatch_message_id": "ff99cd7c-e82e-4030-b926-10ec265f1b72",
+    "notify_on_finish": false
+  },
+  "phase6_succession": {
+    "source_message_id": "b2552ba4-9907-460a-8ba9-33177075ba93",
+    "recorded_at": "2026-11-08T19:40:14+08:00",
+    "predecessor": {
+      "agent_id": "4c592f2d-2019-4f36-877a-c3314ccc9978",
+      "status": "closed",
+      "archived": true
+    },
+    "successor": {
+      "agent_id": "231a51ed-bcba-4dd2-afe6-271e45f72164",
+      "status": "idle",
+      "ownership_transferred": true
+    },
+    "receipt": "artifacts/foundation/phase6/parent-successor-20261108/receipt.json",
+    "receipt_sha256": "d47425343984f7d8985e263f3c5086980b886153a83b060f832ee07b9ed1cc91",
+    "decision": "artifacts/foundation/phase6/parent-successor-20261108/decision.md",
+    "decision_sha256": "200610ca4cc5a32aaca5e55d387ff8684d999863c4d3dd21c628b8b6cadd4d96",
+    "dispatch": {
+      "first_attempt": "Tool approval review timeout; not assumed delivered",
+      "retry_message_id": "a8727470-937e-4e69-a820-6da118e936a3",
+      "delivery_status": "queued",
+      "provider_dispatch_confirmed": false,
+      "notify_on_finish": false,
+      "active_turn_behavior": "steer",
+      "routine_reply_required": false
+    },
+    "phase_or_attempt_history_reset": false
+  },
+  "branch_preview_20261112": {
+    "user_instruction": "Deploy feat/foundation-refactor to the designated server for an isolated trial, then merge to main through a PR after verification; update current documentation and operational address configuration.",
+    "recorded_at": "2026-11-12T16:54:00+08:00",
+    "phase": "branch-preview-and-main-pr",
+    "source_write_owner": "2ef0df65-d055-42e5-be2f-1f2c308ddf77",
+    "parent": "18e99d90-33f5-41f9-8a2f-672d109886bb",
+    "pr_number": 122,
+    "pr_url": "https://github.com/xiaomiaoalex/quant_trading_system/pull/122",
+    "initial_pr_commit": "8f1d76ab7963c7a053014102686d51fd653b9b39",
+    "trial_scope": "Isolated task-owned UI/Control/research/history/PostgreSQL preview; execution and real funds excluded unless separately verified and authorized.",
+    "trial_access": "Localhost-bound HTTP through strict SSH tunnel; preserve secure-cookie and authentication semantics.",
+    "merge_boundary": "PR only after actual required CI and preview verification; no direct main push.",
+    "network_observation": "SSH identity and hostname verified at 192.168.0.105 using the existing known-host entry for the same server; Docker Hub and Demo direct connectivity were not verified.",
+    "historical_evidence_policy": "Preserve old addresses in historical reports and tests; parameterize operational destinations instead of assuming a new LAN address.",
+    "status": "SCAN_FIX_RETURNED_FOR_DIAGNOSTIC_CORRECTIONS",
+    "committed_ci_repair": "b638de29c034c560e0c19e1521482d1a6c676491",
+    "source_digest": "924e9319caf4c58221193a450b7dad7cc5f1e1971325ce57f0e1fea839c5c968",
+    "parent_verification": "artifacts/branch-preview-20261112/parent-final-20261115/verification.json",
+    "pushed": true,
+    "ci_run_id": 43727736382,
+    "release_run_id": 43727736396,
+    "release_blocker": "Actual Trivy scan exit 1; exact findings not yet available; action resolution/build/SBOM succeeded",
+    "linux_pg_remote_job": "success on CI run 43727736382",
+    "preview_candidate_commit": "b638de29c034c560e0c19e1521482d1a6c676491",
+    "ssh_target_coverage_decision": "accepted non-blocking; parent no-network resolver probes passed; no permanent test coverage claimed",
+    "merge_completed": false,
+    "ci_status": "success",
+    "remote_ci_blocker": null,
+    "remote_ci_passed_jobs": 14,
+    "preview_project_candidate": "qts-preview-b638de2",
+    "preview_candidate_origin": "http://127.0.0.1:18081",
+    "remote_write_scope": "/home/alex/qts-preview-b638de2 and task-owned project only",
+    "preview_prepare_status": "PASSED_FOR_B638DE2_CANDIDATE_ONLY",
+    "preview_images": {
+      "commit": "b638de29c034c560e0c19e1521482d1a6c676491",
+      "source_archive_sha256": "773e05ab0d2da4fa0b37dfd57784c35b12939370a1edda5e74bd00531f9800a5",
+      "results": {
+        "runtime": {
+          "command": [
+            "docker",
+            "build",
+            "--progress=plain",
+            "--build-arg",
+            "QTS_REVISION=b638de29c034c560e0c19e1521482d1a6c676491",
+            "--build-arg",
+            "QTS_VERSION=branch-preview",
+            "-t",
+            "qts-runtime:preview-b638de29c034",
+            "."
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 129.09990048408508
+        },
+        "ui": {
+          "command": [
+            "docker",
+            "build",
+            "--progress=plain",
+            "--label",
+            "org.opencontainers.image.revision=b638de29c034c560e0c19e1521482d1a6c676491",
+            "-f",
+            "Frontend/Dockerfile.preview",
+            "-t",
+            "qts-preview-ui:b638de29c034",
+            "Frontend"
+          ],
+          "exit_code": 0,
+          "elapsed_seconds": 2.702208995819092
+        }
+      },
+      "runtime": {
+        "tag": "qts-runtime:preview-b638de29c034",
+        "image_id": "sha256:f23ba4dc2002dcd657018288c2ad41f0ba6ec63931a60acde18fd1f17fbe48c1"
+      },
+      "ui": {
+        "tag": "qts-preview-ui:b638de29c034",
+        "image_id": "sha256:4999fd73830634b9566f2af89f7af490b6e95f04cfee9e9a2a4d56d3a8dcd5d3"
+      }
+    },
+    "image_archive_sha256": "1dfa19bc70dc482750aad5b8f35d320156eee6b8f7a1191ad8a8e3ac0901dba2",
+    "updated_at": "2026-11-15T23:13:37.407806+08:00",
+    "prior_preview_blocker": {
+      "status": "BLOCKED_BEFORE_START",
+      "commit": "2f5a3d5a74c261a3e4dec6e526abe53109a96d02",
+      "project": "qts-preview-2f5a3d5",
+      "compose_version": "v5.1.3",
+      "services_with_build": [
+        "control",
+        "history",
+        "research"
+      ],
+      "task_containers": [],
+      "existing_service_changes": [],
+      "postgres_image_id": "sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a",
+      "remote_evidence": "/home/alex/qts-preview-2f5a3d5/prepare-blocker.json",
+      "next": "Engineer fixes Demo and preview Compose reset semantics, then independent review and parent new commit/build"
+    },
+    "preview_verification": "artifacts/branch-preview-20261112/parent-final-20261115/verification.json",
+    "scan_parent_review": "artifacts/branch-preview-20261112/parent-final-20261116/review-round1.json",
+    "functional_trial_gap": {
+      "reported_at": "2026-11-16T06:59:49.749023+00:00",
+      "status": "CONSOLE_REDESIGN_DOCUMENTED_IMPLEMENTATION_NOT_STARTED",
+      "findings": [
+        "Strategy UI invokes retired load/deployment lifecycle endpoints (HTTP410)",
+        "Preview disables execution and has no venue credentials; page/health smoke does not validate a working Demo strategy"
+      ],
+      "fresh_public_network_probe": {
+        "utc": "2026-11-16T06:59:05Z",
+        "path": "server host via independent authenticated proxy",
+        "demo_rest_status": 200,
+        "public_ws_status": 101,
+        "ws_hold_seconds": 10.002,
+        "private_account_verified": false
+      },
+      "scope": "User requested systematic console redesign including first-class data management and risk control; retired endpoint patch task superseded; implementation and functional Demo validation remain outstanding.",
+      "merge_blocked_until_resolved": true,
+      "prior_patch_engineer": "235713af-cb27-41dc-85a2-dcc5c2fa4b2d",
+      "prior_patch_engineer_archived": true,
+      "design": "docs/QUANT_CONSOLE_REDESIGN_RFC.md"
+    },
+    "independent_preview_review": {
+      "commit": "b638de29c034c560e0c19e1521482d1a6c676491",
+      "verdict": "PASS_FOR_ISOLATED_PREVIEW_ONLY",
+      "reviewer": "c9fb242f-e038-400f-a129-1cf67cf9f291",
+      "source_message_id": "ee212369-afbf-45da-a2ac-10db1760bff7",
+      "receipt": "artifacts/branch-preview-20261112/parent-final-20261117/preview-independent-review-receipt.json",
+      "receipt_sha256": "9fac1c990e1f04e7c59f019b27bf2e1fc7481394ea7203a0a56bb5184e6999ed"
+    }
+  },
+  "latest_external_prerequisite": {
+    "finding_id": "ENV-DR-HOST-UNREACHABLE-20261109B",
+    "source_message_id": "43ef4dcf-4567-438a-ac31-580b997d15ef",
+    "status": "network_restoration_observed_pending_segmented_continuation_plan",
+    "pending_acceptance": [
+      "6.1",
+      "6.2"
+    ],
+    "write_owner_unchanged": true,
+    "no_window_running": true,
+    "backup_service_missing": false,
+    "original_remote_backup_store_currently_unavailable": false,
+    "local_database_readable": true,
+    "parent_audit": "artifacts/foundation/phase6/parent-storage-audit-20261109/audit.json",
+    "parent_audit_sha256": "8d2999b6aa8215be94ac1fe7ea82de74526c6080ca130affeddd5b4a405b7be0",
+    "remote_target": "alex@192.168.3.4 / my-server",
+    "reprovision_authorization": false,
+    "commit_authorized": false,
+    "cicd_write_lease_released": true,
+    "restoration_verification": "artifacts/foundation/phase6/parent-storage-restored-20261109/restoration-verification.json",
+    "restoration_verification_sha256": "df86f0e249a9ed695863296b3884a9628c9d89df6a2fd9b16145452db0c768c4",
+    "restored_phase5_three_object_hashes_match": true,
+    "engineer_dispatch_message_id": "5986a4c9-312d-48c8-9864-1251c4df2c19",
+    "parent_network_receipt": "artifacts/foundation/phase6/parent-network-switch-20261109/decision.md",
+    "current_network_observation": {
+      "ssid": "TP-LINK_F2BD",
+      "profile": "TP-LINK_F2BD 2",
+      "ipv4": "192.168.0.103",
+      "gateway": "192.168.0.1",
+      "dr_target": "192.168.3.4",
+      "strict_ssh_timeout": true,
+      "running_phase6_containers": 0,
+      "running_phase6_supervisor_observer_or_dr_tunnel_processes": 0,
+      "mutations": false
+    },
+    "aborted_run": {
+      "run_id": "20261109T011441Z-efbba899",
+      "acceptance": false,
+      "window_json_absent": true,
+      "samples": 1318,
+      "dr_cycles": 324,
+      "dr_successes": 323,
+      "dr_failures": 1,
+      "dr_tail_errors": 7,
+      "last_dr_success_utc": "2026-11-09T12:09:57.551Z",
+      "max_internal_successful_backup_gap_ms": 231086,
+      "dr_gap_at_declared_stop_ms": 481449,
+      "dr_rpo_limit_ms": 300000,
+      "engineer_report_gap_at_stop_seconds": 429.7,
+      "discrepancy": "The engineer message's 429.7s differs from the declared-stop journal arithmetic and the posthoc summary's 481.7s. The authoritative computed gap is 481449ms; all exceed the RPO. This is an evidence-boundary correction, not a code finding or a verdict change.",
+      "source_manifests_recomputed_match": true,
+      "historical_prewindow_dr_cycles": 3,
+      "prewindow_max_successful_backup_gap_ms": 120553,
+      "evidence_directory": "artifacts/foundation/phase6/windows-aborted/20261109T011441Z-efbba899"
+    },
+    "required_before_new_window": [
+      "Superseded by latest_user_acceptance_override; do not launch a fresh independent 24-hour window.",
+      "Use the reviewed original-run continuation path with fresh DR and fail-closed recovery before the next segment."
+    ],
+    "parent_network_snapshot": "artifacts/foundation/phase6/parent-network-switch-20261109/network-snapshot.json"
+  },
+  "console_redesign": {
+    "status": "DESIGN_COMMITTED_IMPLEMENTATION_NOT_STARTED",
+    "document": "docs/QUANT_CONSOLE_REDESIGN_RFC.md",
+    "commit": "d69150b901b3028ec0d7b237760efc23fd8da0e3",
+    "pushed": true,
+    "pr_number": 122,
+    "ci_gate_run": 44096126851,
+    "release_run": 44096126940,
+    "remote_checks": "in_progress",
+    "scope": "Design only; scan fix and server-egress files excluded pending separate completion",
+    "merged": false,
+    "deployed": false
+  }
+}

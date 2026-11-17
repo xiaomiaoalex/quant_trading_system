@@ -88,6 +88,8 @@
       "test_cicd_ruleset.py",
       "test_cicd_runtime_binding.py",
       "test_cicd_sandbox_limits_independent.py",
+      "test_cicd_scan_gate_diagnostics.py",
+      "test_cicd_scan_gate_independent.py",
       "test_code_sandbox_unix_limits.py",
       "test_committee_portfolio_constructor.py",
       "test_committee_reviewers.py",

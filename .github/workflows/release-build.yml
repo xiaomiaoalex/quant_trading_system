@@ -108,6 +108,7 @@ jobs:
           output: reports/sbom.cdx.json
 
       - name: Fail on critical or high image vulnerabilities
+        id: scan-gate
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE_NAME, steps.build.outputs.digest) || format('{0}:{1}', env.IMAGE_NAME, env.SOURCE_SHA) }}
@@ -116,6 +117,36 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          version: v0.70.0
+          # NOTE: trivy-action v0.36.0 drops the severity filter in SARIF mode
+          # (see its entrypoint.sh), so this gate actually fails on every
+          # fixable finding regardless of severity.  The gate is deliberately
+          # left stricter than the documented CRITICAL,HIGH intent: it is not
+          # weakened, and the image must reach zero fixable findings to pass.
+
+      - name: Show image vulnerability details when the gate fails
+        # The gate step above fails the job, so the finding list would be
+        # invisible without this step.  It only reads the SARIF report that
+        # Trivy already wrote, so it neither rescans nor changes the outcome.
+        # The explicit failure() is required: a step-level "if" that names no
+        # status function gets the implicit success(), so a step that only
+        # checks steps.scan-gate.outcome would be skipped exactly when the
+        # gate failed and the report is needed.
+        if: failure() && steps.scan-gate.outcome == 'failure'
+        continue-on-error: true
+        run: python scripts/summarize_trivy_sarif.py reports/trivy.sarif
+
+      - name: Upload scan evidence
+        # Keep the SARIF report and the SBOM of every run, including pull
+        # requests, so a failing scan can be audited without re-running it.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-scan-evidence
+          path: |
+            reports/trivy.sarif
+            reports/sbom.cdx.json
+          if-no-files-found: warn
 
       - name: Run fixed-digest isolated Compose startup smoke (main releases only)
         if: env.PUBLISH == 'true'
