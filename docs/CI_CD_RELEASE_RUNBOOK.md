@@ -4,6 +4,26 @@
 本文是操作手册，不是已执行记录；当前分支没有执行任何远端发布、真实 Demo 交易、
 24h 当前 digest 观察或生产部署。**Demo 是本项目最高外部验收环境，不要求 testnet。**
 
+## 0. 日常改动的实际入口（2026-11-18 更新）
+
+| 阶段 | 责任 | 实际命令 / 门禁 |
+|---|---|---|
+| Windows 编辑 | 开发者 | 编辑后运行 `python -m isort --check-only --profile black --line-length 100 trader/ scripts/...` 与 `python -m black --check --line-length 100 trader/ scripts/...`；shell 文件由 `.gitattributes` 固定 LF |
+| Linux 本地验证 | 开发者 | `python scripts/run_ci_checks.py --scope manifest|p0|offline|loopback|postgres|research-ai|windows-guard|linux-docker --reports-dir reports`；scope 与 CI job 共用参数、检查器和零 skip/xfail/coverage 规则 |
+| PR 候选镜像 | CI | `pr-preview-smoke-gate` 在测试用 merge SHA 的干净 checkout 上构建 runtime/UI，分别记录 image ID 和 PR head/tested merge SHA；本地 image ID 不等同于 registry digest |
+| 隔离预览 | CI | `preview-stack` scope 在 `compose up` 前渲染并校验实际配置，随后仅启动任务自有 project 的允许服务；真实浏览器检查登录与阻断状态，成功失败均清理该 project |
+| 合并 main | CI / 维护者 | `CI Required` 必须所有依赖 job 为 success；它失败时 PR 不得合并，不能把已通过的旧 digest 当作新 merge SHA 的证据 |
+| 正式发布 | 受保护环境 | `Release Build` 在成功 main CI 后构建一次并推送不可变 digest；后续 provenance、预检、固定 digest 启动、观察和人工批准按本手册第 2–10 节执行 |
+
+统一 runner 会记录平台、源版本、参数、命令 stdout/stderr、退出码、开始结束时间和证据是否齐全。
+失败、超时和缺失 JUnit/coverage 都是非零退出；证据目录包含 runner 记录，由 `if: always()` 的
+upload 步骤上传。它不会生成空 passed XML，也不会复用旧报告。`pr-preview-smoke-gate` 已进入
+`CI Required` 的 `needs`，因此 failure/cancelled/skipped 都会阻断 PR。
+
+合并 SHA 改变后必须重新执行候选镜像与 Required 检查；同一已验证发布构件不得在预览主机重建或重打标签。schema 向前回滚不能替代容器回滚：
+`docs/CI_CD_RELEASE_RUNBOOK.md` 第 5/9 节要求先判断兼容性与账务守恒，再决定是否固定旧
+digest 重启。历史 Demo/Demo 观察证据绑定当时的 commit + digest，不能直接绑定到新 digest。
+
 ## 1. 不可混淆的结论
 
 | 事件 | 能证明 | 不能证明 |

@@ -3,6 +3,11 @@
 `test_manifest.json` 是 `trader/tests/test_*.py` 的唯一分类来源。每个文件必须且只能
 属于一个组：
 
+开发者与 CI 共用 `python scripts/run_ci_checks.py --scope <scope> --reports-dir reports`：
+scope 映射现有 manifest 组和 job 参数，并沿用 `check_junit.py` / `check_coverage.py` 的阈值。
+Requested-but-unsupported platform checks, failed subprocesses, timeouts and missing evidence all return non-zero; the record keeps raw stdout/stderr with the actual exit code.
+PR 的 `pr-preview-smoke-gate` 也是 `CI Required` 的必需依赖。
+
 | 组 | CI Job | 网络策略 | skip 政策 |
 | --- | --- | --- | --- |
 | `p0` | `P0 Regression Tests` | `QTS_TEST_NETWORK_POLICY=offline` | JUnit 强制 `skipped=0`、`xfailed=0` |

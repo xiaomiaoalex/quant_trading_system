@@ -59,6 +59,22 @@
 python scripts/validate_preview_env.py --env-file <preview.env> --check-images
 ```
 
+CI 的 PR 候选预览使用同一契约，但值来自 runner 的显式环境变量而不是仓库内文件：
+
+```text
+python scripts/prepare_pr_preview.py \
+  --head-sha <PR_HEAD_SHA> --merge-sha <TESTED_MERGE_SHA> \
+  --runtime-image <本地 runtime tag> --runtime-image-id <docker image inspect 的 ID> \
+  --ui-image <本地 UI tag> --ui-image-id <docker image inspect 的 ID> \
+  --preview-plan reports/pr-preview-plan.json
+python scripts/run_ci_checks.py --scope preview-stack --reports-dir reports
+```
+
+`prepare_pr_preview.py` 分别记录 PR head SHA 与实际测试的 merge SHA，从不把两者混用；
+它只生成本地 image ID 计划，不声称 registry digest。`preview-stack` scope 只渲染
+Compose 并验证 shell 覆盖值、端口、服务、构建路径、venue secret 和镜像绑定；校验失败
+时不会写出 env 文件，因此后续 `compose up` 没有可继续使用的输入。
+
 校验器会拒绝：缺失或空值、占位符（`REPLACE_WITH` 等）、非 40 位十六进制 commit、
 非 `sha256:<64 hex>` 的镜像 ID、非 `scrypt$<salt>$<hash>` 的口令哈希、未加单引号
 因而会被 Compose 展开 `$` 的口令哈希、非 loopback 的 `QTS_PREVIEW_ORIGIN`、以及

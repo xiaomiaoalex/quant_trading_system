@@ -144,6 +144,103 @@ def test_every_preview_app_service_declares_its_own_build_reset():
         assert any(line.strip() == "build: !reset null" for line in blocks[name]), name
 
 
+def test_rendered_compose_gate_rejects_unsafe_service_shape(tmp_path, monkeypatch):
+    """Rendering must be checked, not only the env file.
+
+    ``docker compose config`` is replaced by a synthetic render so the test
+    stays offline and does not depend on a local Docker daemon.  The expected
+    failures come from the preview contract, not from the validator internals.
+    """
+    from scripts import validate_preview_env as validator
+
+    values = _base_values()
+    values["QTS_PREVIEW_ORIGIN"] = "http://127.0.0.1:18080"
+    values["QTS_PREVIEW_HTTP_PORT"] = "18080"
+    compose_file = tmp_path / "compose.preview.yml"
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+
+    def fake_run(*args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = __import__("json").dumps(
+                {
+                    "services": {
+                        "control": {
+                            "image": "wrong-image:tag",
+                            "build": {"context": "."},
+                            "ports": [{"host_ip": "0.0.0.0", "published": "18080"}],
+                            "labels": {
+                                "com.qts.preview.runtime_image_id": values[
+                                    "QTS_PREVIEW_RUNTIME_IMAGE_ID"
+                                ]
+                            },
+                        },
+                        "execution": {"image": "qts-runtime:preview-test"},
+                    },
+                    "secrets": {"binance_api_key": {"file": "/tmp/key"}},
+                }
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(validator.subprocess, "run", fake_run)
+    problems, summary = validator.check_compose(values, compose_file)
+
+    assert summary["rendered"] is True
+    assert any("residual build path" in item for item in problems)
+    assert any("outside loopback" in item for item in problems)
+    assert any("execution" in item for item in problems)
+    assert any("venue secrets" in item for item in problems)
+    assert any("do not all bind" in item for item in problems)
+    assert summary["venue_secret_names"] == ["binance_api_key"]
+
+
+def test_rendered_compose_gate_accepts_a_clean_preview(tmp_path, monkeypatch):
+    from scripts import validate_preview_env as validator
+
+    values = _base_values()
+    values["QTS_PREVIEW_ORIGIN"] = "http://127.0.0.1:18080"
+    values["QTS_PREVIEW_HTTP_PORT"] = "18080"
+    compose_file = tmp_path / "compose.preview.yml"
+    compose_file.write_text("services: {}\n", encoding="utf-8")
+
+    def fake_run(*args, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = __import__("json").dumps(
+                {
+                    "services": {
+                        "control": {
+                            "image": values["QTS_PREVIEW_RUNTIME_IMAGE"],
+                            "build": None,
+                            "ports": [],
+                            "labels": {
+                                "com.qts.preview.runtime_image_id": values[
+                                    "QTS_PREVIEW_RUNTIME_IMAGE_ID"
+                                ]
+                            },
+                        },
+                        "gateway": {
+                            "image": "qts-preview-ui:preview-test",
+                            "ports": [{"host_ip": "127.0.0.1", "published": "18080"}],
+                        },
+                    },
+                    "secrets": {},
+                }
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(validator.subprocess, "run", fake_run)
+    problems, summary = validator.check_compose(values, compose_file)
+
+    assert problems == []
+    assert summary["image_bindings_match"] is True
+    assert summary["build_paths"] == []
+
+
 def test_preview_runbook_no_longer_claims_save_preserves_repo_digest():
     text = (Path(__file__).resolve().parents[2] / "docs/BRANCH_PREVIEW_RUNBOOK.md").read_text(
         encoding="utf-8"

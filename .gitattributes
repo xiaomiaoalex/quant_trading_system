@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell entrypoints must keep LF endings on every development platform.
+*.sh text eol=lf
+*.bash text eol=lf
+Dockerfile text eol=lf
+**/Dockerfile text eol=lf
+**/Dockerfile.* text eol=lf
