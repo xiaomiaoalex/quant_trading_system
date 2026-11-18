@@ -356,9 +356,10 @@ class _ConditionParser:
             self.uses_status_function = True
             return ("status", value)
         operator = self.take()
-        assert operator[0] == "operator" and operator[1] in {"==", "!="}, (
-            f"unsupported comparison in {value}"
-        )
+        assert operator[0] == "operator" and operator[1] in {
+            "==",
+            "!=",
+        }, f"unsupported comparison in {value}"
         literal = self.take()
         assert literal[0] == "literal", f"unsupported literal {literal}"
         return ("compare", value, operator[1], literal[1])
@@ -893,18 +894,16 @@ def test_t5_summary_step_cannot_change_the_gate_outcome() -> None:
     # once the job status is ``failure``.
     gate_failed = ActionsContext("failure", {"scan-gate": "failure"})
     gate_passed = ActionsContext("success", {"scan-gate": "success"})
-    assert step_condition_holds(condition, gate_failed) is True, (
-        "the diagnosis step is skipped exactly when the finding list is needed"
-    )
-    assert step_condition_holds(condition, gate_passed) is False, (
-        "a passing gate must not print a finding list"
-    )
+    assert (
+        step_condition_holds(condition, gate_failed) is True
+    ), "the diagnosis step is skipped exactly when the finding list is needed"
+    assert (
+        step_condition_holds(condition, gate_passed) is False
+    ), "a passing gate must not print a finding list"
 
     # Control: the form that only inspects the step outcome is skipped by the
     # implicit success() as soon as the gate failed.
-    assert (
-        step_condition_holds("steps.scan-gate.outcome == 'failure'", gate_failed) is False
-    )
+    assert step_condition_holds("steps.scan-gate.outcome == 'failure'", gate_failed) is False
     # always() keeps running whatever the job status is.
     assert step_condition_holds("always()", gate_failed) is True
     assert step_condition_holds("always()", gate_passed) is True
