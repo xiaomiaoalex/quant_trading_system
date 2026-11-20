@@ -16,15 +16,22 @@ from trader.core.domain.models.performance import StrategyRun
 from trader.services.performance import PerformanceService
 
 
-def test_performance_router_is_mounted_on_main_app() -> None:
-    """Performance API endpoints must be reachable through the main FastAPI app."""
-    from trader.api.main import app
+def test_performance_router_is_mounted_on_control_app() -> None:
+    """Performance API endpoints must be reachable through the Control app.
 
-    route_paths = {getattr(route, "path", "") for route in app.routes}
+    The OpenAPI schema is used instead of ``app.routes``: FastAPI 0.162 keeps
+    included routers as lazy ``_IncludedRouter`` entries that only expand when
+    the schema or a request is built, so reading ``app.routes`` no longer sees
+    the included paths on every supported version.
+    """
+    from trader.api.trading_app import create_trading_app
 
-    assert "/v1/performance/benchmark/project" in route_paths
-    assert "/v1/performance/benchmark/config" in route_paths
-    assert "/v1/performance/initial-weights" in route_paths
+    app = create_trading_app()
+    schema_paths = set(app.openapi().get("paths", {}))
+
+    assert "/v1/performance/benchmark/project" in schema_paths
+    assert "/v1/performance/benchmark/config" in schema_paths
+    assert "/v1/performance/initial-weights" in schema_paths
 
 
 @pytest.fixture

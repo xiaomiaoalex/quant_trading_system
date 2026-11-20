@@ -4,13 +4,17 @@ from decimal import Decimal
 
 import pytest
 
+from trader.tests.test_trading_service import fund_book
 from trader.trading.models import (
     Execution,
+    NotReady,
     OrderObservation,
     PlaceOrderCommand,
     ReconcileSnapshot,
     VenueOrder,
 )
+from trader.trading import books as book_ledger
+from trader.trading.risk import available_balance
 from trader.trading.service import TradingService
 from trader.trading.store import MemoryTradingStore
 
@@ -192,7 +196,9 @@ async def test_conflicting_content_for_the_same_execution_key_still_blocks():
 
 
 @pytest.mark.asyncio
-async def test_adopted_order_does_not_create_a_reservation():
+async def test_adopted_filled_order_does_not_create_a_reservation():
+    # A fully filled order locks nothing. Only the remaining quantity of a live
+    # order has to be reserved, which the tests below pin down.
     engine = service()
     await engine.recover(snapshot(executions=[execution()], venue_orders=[venue_order()]))
     state = await engine.store.read("acct")
@@ -200,9 +206,137 @@ async def test_adopted_order_does_not_create_a_reservation():
 
 
 @pytest.mark.asyncio
+async def test_open_adopted_order_rebuilds_its_reservation():
+    engine = service()
+    await engine.recover(
+        snapshot(
+            observations=[
+                OrderObservation("acct", "qts-abc123", "OPEN", Decimal("0"), "42", 1_000_000)
+            ],
+            venue_orders=[venue_order(status="OPEN", order_type="LIMIT", filled_qty=Decimal("0"))],
+            balances={"USDT": Decimal("100")},
+        )
+    )
+    state = await engine.store.read("acct")
+    hold = state.holds["qts-abc123"]
+    assert hold.asset == "USDT"
+    assert hold.amount == Decimal("0.00019") * Decimal("77474.49") * Decimal("1.001")
+    # An adopted order has no strategy book, so the unallocated layer must
+    # report the same reservation instead of advertising the cash as spendable.
+    unallocated = state.books[book_ledger.UNALLOCATED]
+    assert unallocated.holds["qts-abc123"].amount == hold.amount
+    assert book_ledger.book_available(unallocated, "USDT") == Decimal("100") - hold.amount
+
+
+@pytest.mark.asyncio
+async def test_adopted_open_buy_does_not_free_the_funds_it_already_locked():
+    engine = service(defer_send=True)
+    await engine.recover(
+        snapshot(
+            observations=[
+                OrderObservation("acct", "qts-abc123", "OPEN", Decimal("0"), "42", 1_000_000)
+            ],
+            venue_orders=[
+                venue_order(
+                    status="OPEN",
+                    order_type="LIMIT",
+                    qty=Decimal("0.0009"),
+                    price=Decimal("100000"),
+                    filled_qty=Decimal("0"),
+                )
+            ],
+            balances={"USDT": Decimal("100")},
+        )
+    )
+    state = await engine.store.read("acct")
+    # 90.09 USDT is locked by the adopted order, so only 9.91 stays spendable.
+    # The book contract blocks the account while the adopted order has no
+    # strategy attribution; the reservation is what keeps those funds out of
+    # reach once an operator settles the attribution.
+    assert available_balance(state, "USDT") == Decimal("100") - Decimal("90.09")
+
+
+@pytest.mark.asyncio
+async def test_adopted_open_order_without_a_reliable_price_blocks_new_risk():
+    engine = service(defer_send=True)
+    await engine.recover(
+        snapshot(
+            observations=[
+                OrderObservation("acct", "qts-abc123", "OPEN", Decimal("0"), "42", 1_000_000)
+            ],
+            venue_orders=[
+                venue_order(
+                    status="OPEN", order_type="LIMIT", price=Decimal("0"), filled_qty=Decimal("0")
+                )
+            ],
+            balances={"USDT": Decimal("100")},
+        )
+    )
+    state = await engine.store.read("acct")
+    assert not state.holds
+    codes = {entry["code"] for entry in state.reconciliation["unresolved"]}
+    assert "ORDER_HOLD_UNRECONSTRUCTED" in codes
+    await fund_book(engine, "book:test", {"USDT": Decimal("100")})
+    command = PlaceOrderCommand(
+        command_id="cmd-3",
+        account_id="acct",
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        side="BUY",
+        qty=Decimal("0.000001"),
+        price=Decimal("100000"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
+    )
+    with pytest.raises(NotReady):
+        await engine.place(command, actor="test")
+
+
+@pytest.mark.asyncio
+async def test_adopted_open_sell_reserves_the_base_quantity():
+    engine = service()
+    await engine.recover(
+        snapshot(
+            observations=[
+                OrderObservation("acct", "qts-abc123", "OPEN", Decimal("0"), "42", 1_000_000)
+            ],
+            venue_orders=[
+                venue_order(side="SELL", status="OPEN", order_type="LIMIT", filled_qty=Decimal("0"))
+            ],
+        )
+    )
+    state = await engine.store.read("acct")
+    hold = state.holds["qts-abc123"]
+    assert hold.asset == "BTC"
+    assert hold.amount == Decimal("0.00019")
+
+
+@pytest.mark.asyncio
+async def test_adopted_cancelled_order_with_a_partial_fill_reserves_nothing():
+    engine = service()
+    view = await engine.recover(
+        snapshot(
+            venue_orders=[
+                venue_order(status="CANCELLED", order_type="LIMIT", filled_qty=Decimal("0"))
+            ]
+        )
+    )
+    state = await engine.store.read("acct")
+    assert not state.holds
+    assert "ORDER_HOLD_UNRECONSTRUCTED" not in {
+        entry["code"] for entry in state.reconciliation["unresolved"]
+    }
+    assert "BALANCE_MISMATCH" not in view.reasons
+
+
+@pytest.mark.asyncio
 async def test_a_new_command_uses_its_own_client_order_id():
     engine = service(defer_send=True)
     await engine.recover(snapshot())
+    await fund_book(engine, "book:test", {"USDT": Decimal("1000")})
     command = PlaceOrderCommand(
         command_id="cmd-1",
         account_id="acct",
@@ -212,6 +346,10 @@ async def test_a_new_command_uses_its_own_client_order_id():
         side="BUY",
         qty=Decimal("0.00019"),
         price=Decimal("77474.49"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
     receipt = await engine.place(command, actor="test")
     assert receipt.cl_ord_id != "qts-abc123"

@@ -567,9 +567,9 @@ class VersionManager:
         # 内存缓存
         self._versions: Dict[str, List[VersionInfo]] = {}  # strategy_id -> versions
         self._active_version: Dict[str, VersionId] = {}  # strategy_id -> active version
-        self._stored_strategies: Dict[str, StoredStrategy] = (
-            {}
-        )  # version_id string -> stored strategy
+        self._stored_strategies: Dict[
+            str, StoredStrategy
+        ] = {}  # version_id string -> stored strategy
 
     def _make_version_id_str(self, version_id: VersionId) -> str:
         """生成版本ID字符串"""

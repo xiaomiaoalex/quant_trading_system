@@ -4,6 +4,7 @@ Tests for QuantStats tearsheet generation (Stage 4B).
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import MagicMock, patch
 
@@ -103,9 +104,11 @@ def test_generate_tearsheet_default_path_uses_tempdir(tmp_path):
     expected_default = str(Path(tempfile.gettempdir()) / f"tearsheet_{run_id}.html")
 
     result = generate_tearsheet(curve, run_id=run_id)
-    # Must use tempdir path, not /tmp
+    # Must use tempdir path, not a hardcoded location.
     assert result is None or result == expected_default
-    if result:
+    if result and os.name == "nt":
+        # On Unix tempfile.gettempdir() *is* /tmp, so the hardcoded-path check
+        # only means something on Windows.
         assert not result.startswith("/tmp"), "Must not use hardcoded /tmp on non-Unix platforms"
 
 

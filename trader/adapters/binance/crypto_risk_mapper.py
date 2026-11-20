@@ -82,7 +82,7 @@ def map_exchange_info(
 
 
 def map_leverage_brackets(
-    data: list[dict[str, Any]] | dict[str, Any]
+    data: list[dict[str, Any]] | dict[str, Any],
 ) -> dict[str, list[LeverageBracket]]:
     items = data if isinstance(data, list) else [data]
     result: dict[str, list[LeverageBracket]] = {}

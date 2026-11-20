@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "workflow": "verified-phase-workflow",
+  "profiles": {
+    "orchestrator": "architect",
+    "engineer": "engineer",
+    "tester": "tester",
+    "reviewer": "reviewer"
+  },
+  "isolation": {
+    "mode": "single-writer-shared-workspace",
+    "state_path": ".paseo/workflow-state.json",
+    "artifact_directory": "artifacts/workflow/"
+  },
+  "limits": {
+    "max_review_rounds": 3,
+    "max_consecutive_test_failures": 3
+  },
+  "commit_policy": {
+    "authorized_committer": "parent",
+    "automatic_push": false,
+    "automatic_merge": false,
+    "automatic_deploy": false
+  },
+  "phases": []
+}

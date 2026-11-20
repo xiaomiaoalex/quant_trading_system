@@ -3,7 +3,6 @@
 核心应用层包含交易系统的关键业务逻辑组件。
 
 核心组件：
-- OMS: 订单管理系统，处理订单状态迁移和幂等
 - RiskEngine: 风险引擎，交易前/中/后三层风控
 - DeterministicLayer: 确定性层，事件回放与恢复
 - HITLGovernance: 人机交互治理，AI+人工协作
@@ -15,7 +14,6 @@
 3. KillSwitch 机制保障系统安全
 """
 
-from trader.core.application.oms import OMS
 from trader.core.application.risk_engine import (
     KillSwitchLevel,
     RejectionReason,
@@ -37,9 +35,6 @@ from trader.core.application.strategy_protocol import (
 )
 
 __all__ = [
-    # OMS
-    "OMS",
-    # Risk Engine
     "RiskLevel",
     "KillSwitchLevel",
     "RejectionReason",

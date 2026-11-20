@@ -7,7 +7,7 @@ description = "Workspace"
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
- "aiohttp==3.11.16",
+ "aiohttp==3.14.5",
  "websockets>=12.0,<16",
  "pandas>=2.2.3",
  "numpy>=1.26.4",
@@ -22,8 +22,8 @@ dependencies = [
  "fastapi>=0.115.12",
  "uvicorn>=0.34.0",
  # Testing
- "black==24.4.2",
- "isort==5.13.2",
+ "ruff==0.16.2",
+ "pre-commit>=4.0.0",
  "pytest>=8.3.4",
  "pytest-asyncio>=0.25.2",
  "openpyxl>=3.1.5",
@@ -73,8 +73,28 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.pytest.ini_options]
+# Groups are assigned from ci/test_manifest.json by the root conftest.  Register
+# them for --strict-markers and for human-readable `pytest -m` filtering.
+markers = [
+ "p0: trading-safety regression subset that must stay green on every PR",
+ "offline: remaining offline test files; no public network",
+ "postgres: tests that require a real PostgreSQL DSN",
+ "ops: host/Docker/evidence drills; explicit optional workflow only",
+ "external: optional research dependencies (e.g. vectorbt); explicit optional workflow only",
+ "integration: legacy marker retained for compatibility",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["code"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", ".worktrees", ".kilo", ".workbuddy", "Frontend", "artifacts", "logs", "reports", "data", "secrets"]
+
+[tool.ruff.lint]
+select = ["I"]
 
 [tool.mypy]
 python_version = "3.12"

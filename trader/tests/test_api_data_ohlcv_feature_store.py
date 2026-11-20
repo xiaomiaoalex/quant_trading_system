@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from trader.adapters.persistence.feature_store import get_feature_store
-from trader.api.main import app
+from trader.api.trading_app import create_trading_app
+
+app = create_trading_app()
 from trader.storage.in_memory import get_storage
 
 

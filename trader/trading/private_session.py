@@ -178,6 +178,20 @@ class PrivateTradingSession:
                 replace(last, stream_healthy=True),
                 proof,
             )
+            if proof is not None:
+                # Persist the reviewable coverage fact in the same account
+                # aggregate the health/metrics readers already consult. A
+                # socket state or local receive time can never populate this.
+                async with self.service.store.transaction(self.account_id) as state:
+                    state.reconciliation["coverage"] = {
+                        "source": proof.source,
+                        "generation": proof.stream_generation,
+                        "connected_from": proof.connected_from,
+                        "covered_through": proof.covered_through,
+                        "buffered_through": proof.buffered_through,
+                        "contiguous": proof.contiguous,
+                        "recorded_at_ms": await self._now(),
+                    }
         except NotReady as exc:
             self.last_reason = str(exc)
             return False

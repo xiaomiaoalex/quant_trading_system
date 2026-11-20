@@ -71,6 +71,11 @@ class MarketData:
     price: Decimal
     volume: Decimal = Decimal("0")
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Availability moment of a completed observation (integer milliseconds since
+    # the epoch). A BAR_V1 bar is invisible before ``available_at_ms`` and this
+    # value equals ``close_time_ms``. ``None`` means "use the observation
+    # timestamp"; the strategy boundary still enforces the moment with its clock.
+    available_at_ms: Optional[int] = None
 
     # K线数据（当 data_type == KLINE 时）
     kline_open: Optional[Decimal] = None

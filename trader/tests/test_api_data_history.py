@@ -14,7 +14,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from trader.adapters.market_data.binance_vision import ArchiveNotFoundError
-from trader.api.main import app
+from trader.api.trading_app import create_trading_app
+
+app = create_trading_app()
 from trader.core.domain.services.ohlcv_archive import (
     KlineBar,
     expected_points_for_month,

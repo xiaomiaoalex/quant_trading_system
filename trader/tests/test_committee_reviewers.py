@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+
 from insight.committee.orthogonality import OrthogonalityAgent, OrthogonalityResult
 from insight.committee.red_team import RiskCostRedTeamAgent
 from insight.committee.schemas import (

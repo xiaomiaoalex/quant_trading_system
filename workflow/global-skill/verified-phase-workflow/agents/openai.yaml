@@ -1,0 +1,3 @@
+interface:
+  display_name: "Verified Phase Workflow"
+  short_description: "Independent testing and review gates for staged development"

@@ -1084,6 +1084,9 @@ class HealthCheckResponse(BaseModel):
     time: str = Field(default_factory=_utc_time)
     checks: Dict[str, ComponentHealth] = Field(default_factory=dict)
     dependencies: Optional[DependencyStatus] = None
+    # Stable machine-readable blockers. Liveness never carries reasons; a
+    # ready/trading 503 always does.
+    reasons: List[str] = Field(default_factory=list)
 
 
 # ==================== Monitor Models ====================

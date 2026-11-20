@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from trader.trading.eligibility import HISTORY_STORE_UNAVAILABLE
 from trader.trading.strategy_catalog import list_installed_strategies
 
 router = APIRouter(tags=["Research"])
@@ -225,7 +226,10 @@ async def retry_backtest(run_id: str, request: Request):
     try:
         record = await application.retry(run_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # A storage outage is not a state conflict: retry cannot re-verify
+        # eligibility until the history store is reachable again.
+        status_code = 503 if str(exc) == HISTORY_STORE_UNAVAILABLE else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     if record is None:
         raise HTTPException(status_code=404, detail="Backtest run not found")
     return record

@@ -10,8 +10,9 @@ from trader.core.application.strategy_protocol import (
     MarketDataType,
     describe_plugin_warmup,
 )
+from trader.core.domain.models.order import OrderType
 from trader.core.domain.models.signal import Signal, SignalType
-from trader.tests.test_trading_runtime import runtime, snapshot
+from trader.tests.test_trading_runtime import runtime, snapshot, start_runtime
 from trader.trading.models import NotReady
 from trader.trading.strategy import UnifiedStrategyRunner, WarmupState
 
@@ -35,18 +36,42 @@ class Plugin:
             raise RuntimeError("indicator backend unavailable")
         return Signal(
             signal_type=SignalType.BUY,
+            order_type=OrderType.MARKET,
             symbol=data.symbol,
             price=data.price,
             quantity=Decimal("1"),
         )
 
 
+_BAR_SEQUENCE = 0
+
+
 def market(symbol="BTCUSDT", price="100"):
+    global _BAR_SEQUENCE
+    _BAR_SEQUENCE += 1
+    open_ms = 940_000
+    close_ms = 1_000_000
     return MarketData(
         symbol=symbol,
         data_type=MarketDataType.KLINE,
         price=Decimal(price),
-        timestamp=datetime.fromtimestamp(1000, tz=timezone.utc),
+        volume=Decimal("1"),
+        timestamp=datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc),
+        available_at_ms=close_ms,
+        kline_open=Decimal(price),
+        kline_high=Decimal(price),
+        kline_low=Decimal(price),
+        kline_close=Decimal(price),
+        kline_interval="1m",
+        metadata={
+            "bar_id": f"warmup-bar:{_BAR_SEQUENCE}",
+            "open_time_ms": open_ms,
+            "close_time_ms": close_ms,
+            "available_at_ms": close_ms,
+            "interval": "1m",
+            "complete": True,
+            "is_closed": True,
+        },
     )
 
 
@@ -56,6 +81,7 @@ def runner(rt, plugin=None, *, warmup_events=0, warmup_source=None, instruments=
         deployment_id="deployment-warmup",
         plugin=plugin if plugin is not None else Plugin(stateful=False),
         instruments=instruments or {"BTCUSDT": ("BTC", "USDT")},
+        book_id="book:test",
         warmup_events=warmup_events,
         warmup_source=warmup_source,
         on_block=rt.block,
@@ -75,7 +101,7 @@ def test_warmup_spec_treats_undeclared_plugins_as_stateful():
 @pytest.mark.asyncio
 async def test_undeclared_stateful_plugin_blocks_new_risk():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin()
     strategy = runner(rt, plugin)
     rt.strategy_runner = strategy
@@ -97,7 +123,7 @@ async def test_undeclared_stateful_plugin_blocks_new_risk():
 @pytest.mark.asyncio
 async def test_stateless_plugin_is_warm_without_observations():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=False, warmup_events=0)
     strategy = runner(rt, plugin)
     try:
@@ -113,7 +139,7 @@ async def test_stateless_plugin_is_warm_without_observations():
 @pytest.mark.asyncio
 async def test_warmup_requires_every_instrument_before_trading():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=2)
     strategy = runner(
         rt,
@@ -145,7 +171,7 @@ async def test_warmup_requires_every_instrument_before_trading():
 @pytest.mark.asyncio
 async def test_restart_requires_a_fresh_warmup_before_trading():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     try:
         first = runner(rt, Plugin(stateful=True, warmup_events=1), warmup_events=1)
         assert await first.on_market_data(market(), event_id="warm-1") is None
@@ -166,7 +192,7 @@ async def test_restart_requires_a_fresh_warmup_before_trading():
 @pytest.mark.asyncio
 async def test_history_replay_warms_the_plugin_without_live_events():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=3)
     history = [market(price=str(100 + index)) for index in range(3)]
 
@@ -189,7 +215,7 @@ async def test_history_replay_warms_the_plugin_without_live_events():
 @pytest.mark.asyncio
 async def test_incomplete_history_blocks_with_a_precise_reason():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=3)
 
     async def source():
@@ -211,7 +237,7 @@ async def test_incomplete_history_blocks_with_a_precise_reason():
 @pytest.mark.asyncio
 async def test_history_source_failure_blocks_instead_of_trading_cold():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=2)
 
     async def source():
@@ -232,7 +258,7 @@ async def test_history_source_failure_blocks_instead_of_trading_cold():
 @pytest.mark.asyncio
 async def test_plugin_error_during_warmup_blocks_new_risk():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=2, fail_on=1)
     strategy = runner(rt, plugin, warmup_events=2)
     try:
@@ -250,7 +276,7 @@ async def test_plugin_error_during_warmup_blocks_new_risk():
 @pytest.mark.asyncio
 async def test_plugin_declaration_is_the_lower_bound_for_the_warmup_length():
     rt = runtime(snap=snapshot())
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=5)
     strategy = runner(rt, plugin, warmup_events=2)
     try:
@@ -269,7 +295,7 @@ async def test_plugin_declaration_is_the_lower_bound_for_the_warmup_length():
 @pytest.mark.asyncio
 async def test_warmup_never_bypasses_account_recovery():
     rt = runtime(snap=None)
-    await rt.start()
+    await start_runtime(rt)
     plugin = Plugin(stateful=True, warmup_events=1)
     strategy = runner(rt, plugin, warmup_events=1)
     try:

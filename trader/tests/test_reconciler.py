@@ -197,10 +197,11 @@ class TestGracePeriodEdge:
     def test_grace_period_at_exactly_zero(self):
         """Test when grace_period_remaining_sec is exactly 0 - should be handled immediately."""
         r = Reconciler(grace_period_sec=60.0)
-        # Order created exactly 60 seconds ago
-        created = datetime.now(timezone.utc) - timedelta(seconds=60)
+        # A fake clock keeps the boundary exact instead of racing real time.
+        fixed_now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        created = fixed_now - timedelta(seconds=60)
         local = [make_local("order-1", "SUBMITTED", created_at=created)]
-        report = r.reconcile(local, [])
+        report = r.reconcile(local, [], now=fixed_now)
         assert report.ghost_count == 1
         assert report.drifts[0].grace_period_remaining_sec is not None
         assert report.drifts[0].grace_period_remaining_sec == 0.0

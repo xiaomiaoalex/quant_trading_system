@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from trader.tests.test_trading_service import Clock, FakeExchange, command
+from trader.tests.test_trading_service import TEST_BOOK, Clock, FakeExchange, command, fund_book
 from trader.trading.models import Execution, NotReady, OrderObservation, ReconcileSnapshot
 from trader.trading.risk import RiskPolicy
 from trader.trading.runtime import TradingRuntime
@@ -60,11 +60,22 @@ def runtime(
     )
 
 
+async def start_runtime(rt, *, book_id: str = TEST_BOOK):
+    """Start the runtime and explicitly fund the test strategy book."""
+    started = await rt.start()
+    if started and rt.service is not None:
+        state = await rt.store.read(rt.account_id)
+        unallocated = state.books.get("UNALLOCATED")
+        amounts = dict(unallocated.balances) if unallocated is not None else {}
+        await fund_book(rt.service, book_id, amounts)
+    return started
+
+
 @pytest.mark.asyncio
 async def test_startup_reconciles_before_becoming_ready_and_allows_strategies():
     clock = Clock()
     rt = runtime(clock=clock, snap=snapshot())
-    assert await rt.start() is True
+    assert await start_runtime(rt) is True
     assert rt.stages == [
         "storage",
         "ledger_risk_oms",
@@ -87,7 +98,7 @@ async def test_symbol_outside_coverage_scope_never_reaches_the_venue():
     snap = snapshot()
     snap.marks["ETHUSDT"] = {"price": Decimal("100"), "at_ms": 1_000_000}
     rt = runtime(snap=snap, allowed_symbols={"BTCUSDT"})
-    assert await rt.start()
+    assert await start_runtime(rt)
     try:
         with pytest.raises(NotReady, match="SYMBOL_NOT_IN_COVERAGE_SCOPE"):
             await rt.place(command(symbol="ETHUSDT", base_asset="ETH"))
@@ -105,7 +116,7 @@ async def test_symbol_outside_coverage_scope_never_reaches_the_venue():
 @pytest.mark.asyncio
 async def test_runtime_without_reconciliation_cannot_start_strategies_or_place_orders():
     rt = runtime(snap=None)
-    assert await rt.start() is False
+    assert await start_runtime(rt) is False
     assert rt.strategy_start_allowed is False
     with pytest.raises(NotReady):
         await rt.place(command())
@@ -125,8 +136,8 @@ async def test_second_execution_instance_is_blocked_until_the_lease_is_released(
         owner="runtime-2",
         snap=snapshot(generation=2, checked=1_000_100),
     )
-    assert await first.start() is True
-    assert await second.start() is False
+    assert await start_runtime(first) is True
+    assert await start_runtime(second) is False
     assert "EXECUTION_INSTANCE_CONFLICT" in second.last_reasons
     await second.stop()
 
@@ -137,7 +148,7 @@ async def test_second_execution_instance_is_blocked_until_the_lease_is_released(
         owner="runtime-3",
         snap=snapshot(generation=3, checked=1_000_200),
     )
-    assert await third.start() is True
+    assert await start_runtime(third) is True
     await third.stop()
 
 
@@ -145,7 +156,7 @@ async def test_second_execution_instance_is_blocked_until_the_lease_is_released(
 async def test_database_outage_makes_readiness_503_but_liveness_is_separate():
     store = MemoryTradingStore()
     rt = runtime(store, snap=snapshot())
-    assert await rt.start() is True
+    assert await start_runtime(rt) is True
     store.fail_transactions = True
     readiness = await rt.readiness()
     assert readiness["ready"] is False
@@ -161,7 +172,7 @@ async def test_stale_reconciliation_blocks_new_risk():
         snap=snapshot(checked=1_000_000),
     )
     rt.policy = RiskPolicy(max_reconciliation_age_ms=1000)
-    assert await rt.start() is True
+    assert await start_runtime(rt) is True
     clock.now = 1_002_000
     readiness = await rt.readiness()
     assert readiness["ready"] is False
@@ -182,7 +193,7 @@ async def test_outbox_dispatch_retries_without_losing_fills():
         delivered.append(event["event_type"])
 
     rt = runtime(snap=snapshot(), notifier=notifier)
-    assert await rt.start() is True
+    assert await start_runtime(rt) is True
     receipt = await rt.place(command())
     assert await rt.drain_outbox() == 0
     assert await rt.drain_outbox() == 2
@@ -197,7 +208,7 @@ async def test_restart_recovers_orders_holds_positions_and_never_reapplies_fills
     clock = Clock(1_000_000)
     store = MemoryTradingStore()
     first = runtime(store, clock=clock, owner="runtime-1", snap=snapshot())
-    assert await first.start() is True
+    assert await start_runtime(first) is True
     receipt = await first.place(command(qty=Decimal("2"), price=Decimal("100")))
     execution = Execution(
         "acct",
@@ -230,7 +241,7 @@ async def test_restart_recovers_orders_holds_positions_and_never_reapplies_fills
             executions=[execution],
         ),
     )
-    assert await second.start() is True
+    assert await start_runtime(second) is True
     state = await store.read("acct")
     assert state.orders[receipt.cl_ord_id].booked_qty == Decimal("1")
     assert state.positions["BTCUSDT"] == Decimal("1")
@@ -251,7 +262,7 @@ async def test_two_processes_share_the_same_storage_and_cannot_both_reserve():
     clock = Clock()
     one = runtime(store, clock=clock, owner="runtime-1", snap=snapshot())
     two = runtime(store, clock=clock, owner="runtime-2", snap=snapshot())
-    assert await one.start() is True
+    assert await start_runtime(one) is True
     # Three and four share the store but are not started as runtimes; they model
     # a second process that reaches the same account transaction.
     service_two = TradingService(store, FakeExchange(), policy=RiskPolicy(), clock=clock)
@@ -272,7 +283,7 @@ async def test_two_processes_share_the_same_storage_and_cannot_both_reserve():
 @pytest.mark.asyncio
 async def test_incomplete_snapshot_never_enables_trading():
     rt = runtime(snap=snapshot(complete=False))
-    assert await rt.start() is False
+    assert await start_runtime(rt) is False
     readiness = await rt.readiness()
     assert readiness["ready"] is False
     assert "INCOMPLETE_SNAPSHOT" in readiness["reasons"]
@@ -315,7 +326,7 @@ async def test_periodic_reconciliation_observes_terminal_orders():
     rt = runtime(clock=clock, snap=None)
     rt.snapshot_provider = provider
     rt.reconcile_interval_seconds = 0.01
-    assert await rt.start() is True
+    assert await start_runtime(rt) is True
     await asyncio.sleep(0.2)
     state = await rt.store.read("acct")
     assert state.reconciliation.get("checked_at_ms") >= 1_000_200
@@ -332,7 +343,7 @@ async def test_runtime_retries_the_execution_lease_until_the_stale_owner_expires
     rt.lease_seconds = 30
     rt.lease_retry_interval_seconds = 0.02
     rt.reconcile_interval_seconds = 0.01
-    assert await rt.start() is False
+    assert await start_runtime(rt) is False
     assert "EXECUTION_INSTANCE_CONFLICT" in rt.last_reasons
 
     store.expire_lease("trading:acct")
@@ -345,7 +356,7 @@ async def test_runtime_retries_the_execution_lease_until_the_stale_owner_expires
 @pytest.mark.asyncio
 async def test_expired_execution_lease_blocks_sends_before_background_renewal():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     rt.store.expire_lease(rt.lease_scope)
     try:
         with pytest.raises(NotReady):
@@ -365,8 +376,8 @@ async def test_conflicting_runtime_api_cannot_bypass_owner_using_ready_shared_ac
     store = MemoryTradingStore()
     first = runtime(store, owner="owner", snap=snapshot())
     second = runtime(store, owner="contender", snap=snapshot())
-    assert await first.start()
-    assert not await second.start()
+    assert await start_runtime(first)
+    assert not await start_runtime(second)
     app = create_trading_app(trading_service=second.service)
     app.state.trading_runtime = second
     try:
@@ -384,6 +395,10 @@ async def test_conflicting_runtime_api_cannot_bypass_owner_using_ready_shared_ac
                     "side": "BUY",
                     "qty": "1",
                     "price": "100",
+                    "order_type": "LIMIT",
+                    "book_id": "book:test",
+                    "price_source": "MANUAL_LIMIT",
+                    "price_at_ms": 1_000_000,
                 },
             )
             assert response.status_code == 503
@@ -397,7 +412,7 @@ async def test_conflicting_runtime_api_cannot_bypass_owner_using_ready_shared_ac
 @pytest.mark.asyncio
 async def test_runtime_service_send_boundary_rechecks_lease_after_order_admission():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     # A caller retaining the service must not bypass execution ownership.
     rt.store.expire_lease(rt.lease_scope)
     try:
@@ -411,7 +426,7 @@ async def test_runtime_service_send_boundary_rechecks_lease_after_order_admissio
 @pytest.mark.asyncio
 async def test_cancel_available_while_risk_blocked_but_never_after_lease_loss():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     try:
         placed = await rt.place(command())
         await rt.control("block", "acct", "BLOCK_NEW_RISK")
@@ -429,7 +444,7 @@ async def test_cancel_available_while_risk_blocked_but_never_after_lease_loss():
 @pytest.mark.asyncio
 async def test_runtime_cannot_send_for_account_outside_its_lease():
     rt = runtime(snap=snapshot())
-    assert await rt.start()
+    assert await start_runtime(rt)
     try:
         with pytest.raises(NotReady, match="EXECUTION_ACCOUNT_MISMATCH"):
             await rt.place(command(account_id="another-account"))

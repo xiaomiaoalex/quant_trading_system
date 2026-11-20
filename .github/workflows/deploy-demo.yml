@@ -1,0 +1,317 @@
+name: Deploy Demo (Dry Run by Default)
+
+# Manual, protected-environment workflow.  The default path never connects to
+# a Demo host: it verifies the release manifest, runs the non-host preflight
+# and renders the merged Compose configuration.  The actual deploy job only
+# runs on the dedicated self-hosted Demo runner when the operator explicitly
+# sets dry_run=false and confirm_deploy=true under the protected `demo`
+# environment (required reviewers are configured in GitHub, not in this file).
+#
+# Host-local DR/schema/rollback evidence is deferred in the remote dry run and
+# checked again, fail-closed, on the Demo runner before any container starts.
+#
+# Operator input never reaches a shell as text: every value is passed through
+# a step environment variable and validated before it is used.  The release
+# evidence is downloaded outside the checkout directory, so the second
+# checkout (which cleans the workspace) cannot delete it.
+#
+# This workflow never asks for testnet or production credentials.  It does not
+# run exchange operations itself.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_build_run_id:
+        description: "Release Build workflow run id that produced the manifest"
+        required: true
+        type: string
+      image_digest:
+        description: "Immutable image reference repo@sha256:<64 hex>"
+        required: true
+        type: string
+      commit:
+        description: "Full 40-character commit"
+        required: true
+        type: string
+      release_id:
+        description: "Release id from the manifest"
+        required: true
+        type: string
+      dry_run:
+        description: "Validate only; never connect to a host"
+        required: true
+        default: true
+        type: boolean
+      confirm_deploy:
+        description: "Second explicit confirmation for the self-hosted deploy job"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: qts-demo-${{ vars.QTS_DEMO_COMPOSE_PROJECT || github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Release Preflight (No Host Connection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: demo
+    steps:
+      - name: Checkout the trusted default branch for the verifier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate the operator inputs
+        env:
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo "RELEASE_BUILD_RUN_ID_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "RELEASE_COMMIT_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_IMAGE_DIGEST" =~ ^([A-Za-z0-9._/-]+@)?sha256:[0-9a-f]{64}$ ]] || { echo "RELEASE_IMAGE_DIGEST_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "RELEASE_ID_INVALID" >&2; exit 1; }
+          echo "Operator inputs validated."
+
+      - name: Download the release manifest from the build run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.release_build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: release-evidence
+          # Outside the checkout directory: the next checkout cleans the
+          # workspace and would otherwise delete the downloaded evidence.
+          path: ${{ runner.temp }}/qts-release
+          if-no-files-found: error
+
+      - name: Verify release build provenance and manifest binding
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/qts-release
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_provenance.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$RELEASE_BUILD_RUN_ID" \
+            --manifest "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            --commit "$RELEASE_COMMIT" \
+            --digest "$RELEASE_IMAGE_DIGEST" \
+            --release-id "$RELEASE_ID" \
+            --run-json-out "$RELEASE_EVIDENCE_DIR/release-build-run.json" \
+            --json-out "$RELEASE_EVIDENCE_DIR/provenance.json"
+
+      - name: Checkout the now-trusted release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+
+      - name: Fail-closed release preflight (host evidence deferred)
+        env: &demo-env
+          BINANCE_ENV: demo
+          QTS_COMPOSE_PROJECT: ${{ vars.QTS_DEMO_COMPOSE_PROJECT }}
+          QTS_DEMO_CONTROL_PORT: ${{ vars.QTS_DEMO_CONTROL_PORT }}
+          QTS_RELEASE_ID: ${{ inputs.release_id }}
+          QTS_RELEASE_COMMIT: ${{ inputs.commit }}
+          QTS_RELEASE_IMAGE: ${{ inputs.image_digest }}
+          QTS_EXPECTED_DIGEST: ${{ inputs.image_digest }}
+          QTS_PREVIOUS_IMAGE_DIGEST: ${{ vars.QTS_DEMO_PREVIOUS_IMAGE_DIGEST }}
+          QTS_POSTGRES_IMAGE: ${{ vars.QTS_DEMO_POSTGRES_IMAGE }}
+          QTS_ALERT_IMAGE: ${{ vars.QTS_DEMO_ALERT_IMAGE }}
+          POSTGRES_PASSWORD: ${{ secrets.DEMO_POSTGRES_PASSWORD }}
+          QTS_PASSWORD_HASH: ${{ secrets.DEMO_CONTROL_PASSWORD_HASH }}
+          QTS_ALERT_SIGNING_SECRET: ${{ secrets.DEMO_ALERT_SIGNING_SECRET }}
+          QTS_AUTH_REQUIRED: "1"
+          QTS_USERNAME: ${{ vars.QTS_DEMO_USERNAME }}
+          QTS_ACCOUNT_ID: ${{ vars.QTS_DEMO_ACCOUNT_ID }}
+          QTS_SYMBOLS: ${{ vars.QTS_DEMO_SYMBOLS }}
+          QTS_INSTRUMENTS: ${{ vars.QTS_DEMO_INSTRUMENTS }}
+          QTS_STRATEGY_MODULE: ${{ vars.QTS_DEMO_STRATEGY_MODULE }}
+          QTS_STRATEGY_WARMUP_EVENTS: ${{ vars.QTS_DEMO_STRATEGY_WARMUP_EVENTS }}
+          QTS_EXTERNAL_ALERT_WEBHOOK_URL: ${{ vars.QTS_DEMO_EXTERNAL_ALERT_WEBHOOK_URL }}
+          QTS_EXTERNAL_ALERT_HEARTBEAT_URL: ${{ vars.QTS_DEMO_EXTERNAL_ALERT_HEARTBEAT_URL }}
+          QTS_DR_REQUIRED: "1"
+          QTS_DR_EVIDENCE_PATH: ${{ vars.QTS_DEMO_DR_EVIDENCE_PATH }}
+          QTS_DR_EVIDENCE_DIR: ${{ vars.QTS_DEMO_DR_EVIDENCE_DIR }}
+          QTS_BACKUP_RPO_SECONDS: ${{ vars.QTS_DEMO_BACKUP_RPO_SECONDS }}
+          QTS_BACKUP_OFF_HOST_ATTESTED: ${{ vars.QTS_DEMO_BACKUP_OFF_HOST_ATTESTED }}
+          QTS_BACKUP_ATTESTED_BY: ${{ vars.QTS_DEMO_BACKUP_ATTESTED_BY }}
+          QTS_SCHEMA_VERSION: ${{ vars.QTS_DEMO_SCHEMA_VERSION }}
+          QTS_SCHEMA_COMPAT_EVIDENCE_PATH: ${{ vars.QTS_DEMO_SCHEMA_COMPAT_EVIDENCE_PATH }}
+          QTS_ROLLBACK_COMPAT_EVIDENCE_PATH: ${{ vars.QTS_DEMO_ROLLBACK_COMPAT_EVIDENCE_PATH }}
+          BINANCE_API_KEY_FILE_PATH: ${{ vars.QTS_DEMO_API_KEY_FILE }}
+          BINANCE_SECRET_KEY_FILE_PATH: ${{ vars.QTS_DEMO_SECRET_KEY_FILE }}
+          RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/qts-release
+        run: |
+          set -euo pipefail
+          python scripts/deploy_preflight.py \
+            --release-manifest "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            --no-host-evidence \
+            --json-out "$RELEASE_EVIDENCE_DIR/preflight.json"
+
+      - name: Render the merged Compose configuration (never uploaded)
+        env: *demo-env
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yml -f deploy/compose.demo.yml config --quiet
+          echo "Merged configuration is valid; it is not uploaded because it contains environment values."
+
+      - name: Record dry-run boundary
+        if: inputs.dry_run
+        run: |
+          echo "DRY RUN ONLY: no host connection, no container start, no exchange action."
+          echo "Host-local DR/schema/rollback evidence was deferred, not approved."
+          echo "A dry run is not evidence that the current digest was deployed or observed."
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-preflight-evidence
+          path: ${{ runner.temp }}/qts-release
+          if-no-files-found: warn
+
+  deploy:
+    name: Apply on the Dedicated Demo Runner
+    if: ${{ !inputs.dry_run && inputs.confirm_deploy }}
+    needs: [preflight]
+    runs-on: [self-hosted, qts-demo]
+    timeout-minutes: 30
+    environment: demo
+    steps:
+      - name: Checkout the trusted default branch for the verifier
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Validate the operator inputs
+        env:
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo "RELEASE_BUILD_RUN_ID_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "RELEASE_COMMIT_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_IMAGE_DIGEST" =~ ^([A-Za-z0-9._/-]+@)?sha256:[0-9a-f]{64}$ ]] || { echo "RELEASE_IMAGE_DIGEST_INVALID" >&2; exit 1; }
+          [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || { echo "RELEASE_ID_INVALID" >&2; exit 1; }
+          echo "Operator inputs validated."
+
+      - name: Download the release manifest from the build run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.release_build_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: release-evidence
+          path: ${{ runner.temp }}/qts-release
+          if-no-files-found: error
+
+      - name: Verify release build provenance and manifest binding
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_BUILD_RUN_ID: ${{ inputs.release_build_run_id }}
+          RELEASE_COMMIT: ${{ inputs.commit }}
+          RELEASE_IMAGE_DIGEST: ${{ inputs.image_digest }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/qts-release
+        run: |
+          set -euo pipefail
+          python scripts/verify_release_provenance.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$RELEASE_BUILD_RUN_ID" \
+            --manifest "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            --commit "$RELEASE_COMMIT" \
+            --digest "$RELEASE_IMAGE_DIGEST" \
+            --release-id "$RELEASE_ID" \
+            --run-json-out "$RELEASE_EVIDENCE_DIR/release-build-run.json" \
+            --json-out "$RELEASE_EVIDENCE_DIR/provenance.json"
+
+      - name: Checkout the now-trusted release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+
+      - name: Fail-closed preflight with host-local evidence
+        env: *demo-env
+        run: |
+          set -euo pipefail
+          python scripts/deploy_preflight.py \
+            --release-manifest "$RELEASE_EVIDENCE_DIR/release-manifest.json" \
+            --json-out "$RELEASE_EVIDENCE_DIR/preflight-host.json"
+
+      - name: Pre-deploy risk, convergence and single-owner gate
+        env: *demo-env
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/deploy
+          python scripts/deploy_gate.py --mode pre \
+            --project "$QTS_COMPOSE_PROJECT" \
+            --compose-file compose.yml \
+            --compose-file deploy/compose.demo.yml \
+            --control-url "http://127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}" \
+            --account-id "$QTS_ACCOUNT_ID" \
+            --expected-release-id "$QTS_RELEASE_ID" \
+            --expected-commit "$QTS_RELEASE_COMMIT" \
+            --expected-digest "${QTS_RELEASE_IMAGE#*@}" \
+            --output artifacts/deploy/pre-gate.json
+
+      - name: Deploy the verified digest
+        env: *demo-env
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yml -f deploy/compose.demo.yml pull postgres control execution research history backup alert-sink
+          docker compose -f compose.yml -f deploy/compose.demo.yml up -d --no-build
+          docker compose -f compose.yml -f deploy/compose.demo.yml ps
+
+      - name: Post-deploy health, readiness and accounting gate
+        env: *demo-env
+        run: |
+          set -euo pipefail
+          # `up -d` returns while containers are still starting, so the gate
+          # polls inside a bounded timeout instead of failing on the race.
+          python scripts/deploy_gate.py --mode post \
+            --project "$QTS_COMPOSE_PROJECT" \
+            --compose-file compose.yml \
+            --compose-file deploy/compose.demo.yml \
+            --control-url "http://127.0.0.1:${QTS_DEMO_CONTROL_PORT:-18090}" \
+            --account-id "$QTS_ACCOUNT_ID" \
+            --expected-release-id "$QTS_RELEASE_ID" \
+            --expected-commit "$QTS_RELEASE_COMMIT" \
+            --expected-digest "${QTS_RELEASE_IMAGE#*@}" \
+            --wait-timeout "${QTS_DEPLOY_POST_GATE_TIMEOUT_SECONDS:-600}" \
+            --poll-interval "${QTS_DEPLOY_POST_GATE_POLL_SECONDS:-15}" \
+            --output artifacts/deploy/post-gate.json
+
+      - name: Collect deployment evidence into one artifact root
+        if: always()
+        env:
+          RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/qts-release
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/deploy
+          cp "$RELEASE_EVIDENCE_DIR/preflight-host.json" artifacts/deploy/ 2>/dev/null || true
+          cp "$RELEASE_EVIDENCE_DIR/provenance.json" artifacts/deploy/ 2>/dev/null || true
+          cp "$RELEASE_EVIDENCE_DIR/release-build-run.json" artifacts/deploy/ 2>/dev/null || true
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-deploy-evidence
+          # One root: mixing the workspace with the runner temp directory would
+          # make upload-artifact pick a much higher common ancestor.
+          path: artifacts/deploy/
+          if-no-files-found: warn

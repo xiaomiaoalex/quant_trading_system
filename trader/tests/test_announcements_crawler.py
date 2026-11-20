@@ -949,9 +949,9 @@ class TestWsStreamOrchestration:
         ws_source = crawler._get_ws_source()
         assert ws_source is not None
         # 增强断言：验证返回类型是 BinanceWsAnnouncementSource
-        assert isinstance(
-            ws_source, BinanceWsAnnouncementSource
-        ), f"Expected BinanceWsAnnouncementSource, got {type(ws_source).__name__}"
+        assert isinstance(ws_source, BinanceWsAnnouncementSource), (
+            f"Expected BinanceWsAnnouncementSource, got {type(ws_source).__name__}"
+        )
         # 验证 ws_source 具有必要的方法和属性
         assert hasattr(ws_source, "connect")
         assert hasattr(ws_source, "subscribe")

@@ -105,7 +105,6 @@ class Test429RateLimitStormPrevention:
             patch("random.random", return_value=1.0),
             patch("random.uniform", side_effect=lambda a, b: max(a, b)),
         ):
-
             d1 = controller.next_delay("task")
             d2 = controller.next_delay("task")
             d3 = controller.next_delay("task")

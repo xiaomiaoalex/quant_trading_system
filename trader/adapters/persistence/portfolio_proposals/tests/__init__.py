@@ -17,7 +17,7 @@ class TestMyStore:
     def store(self):
         # 创建你的 store 实例
         ...
-    
+
     def test_contract_save_and_get(self, store):
         run_contract_tests.test_save_and_get(store)
 ```
@@ -44,7 +44,7 @@ T = TypeVar("T", bound=PortfolioProposalStore)
 
 
 def run_contract_tests(
-    store_factory: Callable[[], PortfolioProposalStore]
+    store_factory: Callable[[], PortfolioProposalStore],
 ) -> list[Callable[..., Any]]:
     """
     运行所有契约测试

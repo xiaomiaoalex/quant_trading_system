@@ -1513,3 +1513,114 @@
     `mypy` 对改动模块无错误。
 - 风险/遗留: 就绪率约 0.62，周期性完整对齐按契约仍会短暂收回就绪；外部中断时长取决于本地代理稳定性。
   `.env` 中的 `BINANCE_BACKUP_PROXY_URL=127.0.0.1:10808` 当前无进程监听，建议运维侧停用该备用项。
+
+### 2026-11-02 - 领养订单重建资金预约（Codex review P1）
+
+- 发现的问题: PR #121 上的 Codex 自动审查指出，`_adopt_venue_order` 只重建订单聚合、不重建 `state.holds`。
+  `available_balance` 只扣本地 hold，而快照余额是交易所总量（含 locked），于是被挂单占住的资金在本地回到可用；
+  `SpotRiskEngine._check_exposure` 也跳过无 hold 的开放买单，敞口限额同时漏算。REST 返回本系统命名空间内、
+  本地已丢失的开放订单时触发，可导致超买。
+- 根因: 当初为避免重复冻结而没有建 hold，但余额口径本就是总量，本地 hold 是唯一占用凭证；另 `adoptable()`
+  取 `average_price` 作参考价，未成交订单该值为 0，即使建 hold 也会算成 0。
+- 改动:
+  - `trader/trading/service.py`: 新增 `_restore_order_holds`，在快照应用后为每个缺 hold 的活动订单按剩余量重建：
+    买单 quote `remaining × price × (1 + fee_rate)`，卖单 base `remaining`；每笔真实成交仍由 `release_hold` 递减。
+    重建后调用 `book_ledger.mirror_account_holds` 同步 `UNALLOCATED`，使 account 层与分账本层报告同一占用。
+    参考价不可用时写 `ORDER_HOLD_UNRECONSTRUCTED` 阻断新增风险（不 fail-open），订单终态或剩余归零后自动消除。
+  - `trader/core/application/ports/__init__.py`: `BrokerOrder` 新增 `limit_price`（默认 0，向后兼容），
+    区分交易所限价与成交均价。
+  - `binance_spot_demo_broker.py` 解析响应 `price`；`spot_execution_adapter.py` 优先用限价、
+    无可靠限价时回退成交均价；`testing/fake_broker.py` 同步。
+  - 契约补 `docs/INTERFACE_CONTRACTS.md` 三条（预约重建口径、参考价来源、阻断与消除条件）。
+- 验证: 先禁用修复运行，4 个新增测试按预期失败；恢复后 `test_venue_order_adoption.py` 13 项通过。
+  已重放到 `feat/foundation-refactor`（Phase 6 完成态 `b4f37a1`）：分账本、服务与阶段 2 安全测试
+  79 项通过，P0 五件套加适配器 8 个文件 138 项通过。未运行 Postgres 集成测试（本机无 PG 实例）。
+- 风险/遗留: adopt 订单没有 book 归属，Phase 2 的 `BOOK_ATTRIBUTION_UNKNOWN` 会先整户阻断，
+  直到运维显式归属；两层保护叠加，本修复保证归属完成后预约仍然存在。
+
+## 2026-11-04 阶段 6：单栈收敛与持续沙箱（进行中）
+
+- 删除旧 HTTP 进程与旧执行栈：`trader/api/main.py`、旧 OMS/ExecutionBudget/OrderService、
+  `strategy_runner`/`oms_callback`/`account_state`/`account_stream_bridge`、旧 monitor/
+  reconciler/killswitch/broker/event/portfolio 服务，以及依赖旧 Runner 的 backtest/
+  candidate/deployment 写路径。所有删除前均复制到
+  `artifacts/foundation/phase6/deletion-backup/`；Git 基线 `c6fe450` 仍是权威恢复点。
+- `create_trading_app()` 成为唯一 HTTP 装配：认证、统一交易命令/查询、研究、历史、
+  data catalog、performance 读取、portfolio research、audit、chat、risk 配置/审计都在
+  Control 进程；新增 `trader/api/routes/control_views.py` 用统一账户聚合提供原只读/
+  安全视图。旧策略生命周期写入口返回 410 `LEGACY_STRATEGY_LIFECYCLE_RETIRED`，
+  reconciler 手动触发返回 503 `RECONCILIATION_IS_EXECUTION_OWNED`，replay 返回 410。
+- `/v1/trading/metrics` 增加 execution/ledger/event 计数与身份摘要、按命令发送结果、
+  重复发送命令列表、私有 WS 覆盖证明摘要与当前策略/预热状态；观察脚本改为密码文件 +
+  逐样本 JSONL（墙钟/单调时间、健康 reasons、unresolved、覆盖、转换 marker）。
+- 新增 `scripts/sandbox_supervisor.py`：任务自有 Compose 项目、动态空闲端口、持续
+  off-host 备份+恢复 DR 证据、执行前首次 DR 门禁、资金显式划拨、窗口判定与
+  `window_aborted` 语义。
+- 修复 Demo 真实账户中的 `EXPIRED_IN_MATCH` 终态映射：恢复回填不再因未知终态崩溃。
+- 验证（工程师侧）：全量 `trader/tests` 3286 passed / 57 skipped（未带 PG DSN 时仅
+  phase3/4/5 PG 用例按设计要求 DSN）；带 DSN 的 CI PostgreSQL 清单 106 passed、0 skipped；
+  P0 99 passed；前端 typecheck/tests(156)/build 通过。
+- 待完成：独立测试员与全新只读审核；随后在冻结源码上运行真实 >=24h Demo 沙箱窗口。
+
+## 2026-11-16 Release 扫描门禁修复（Release 43727736396）
+
+- 诊断:
+  - Release 43727736396 的 Trivy 步骤 exit 1，PR 未上传 SARIF，实际 findings 在日志里不可见。
+  - 用同版 Trivy 0.70.0 复现父代理构建的 `qts-runtime:preview-b638de29c034`：52 个 finding
+    （debian 5 + python-pkg 47），0 个 secret finding，不是工具故障。
+  - HIGH：`apt`/`libapt-pkg7.0` 3.0.3→3.0.4（CVE-2026-109518）、`zlib1g`→deb13u1
+    （CVE-2026-85091、CVE-2026-76844）、`aiohttp` 3.11.16→3.14.5（CVE-2025-69223、
+    CVE-2026-111064、CVE-2026-111066、CVE-2026-123817、CVE-2026-69244）。
+  - MEDIUM（同样可修复、同样会触发门禁）：`pip` 25.0.1（CVE-2025-8869、CVE-2026-13346、
+    CVE-2026-3219、CVE-2026-6357、CVE-2026-8643）与 `aiohttp` 中危项。
+  - 门禁语义澄清：trivy-action v0.36.0 在 SARIF 模式下丢弃 severity 输入
+    （其 entrypoint.sh 中 `unset TRIVY_SEVERITY`），实际门禁对所有可修复严重度生效，
+    比文档写的 CRITICAL,HIGH 更严。本次不削弱该行为（保持更严），而是把可修复项全部修掉。
+- 改动:
+  - `Dockerfile`：基础镜像 `python:3.12-slim` 换到 2026-11-16 digest
+    `sha256:5e2bdb1b…`（apt 3.0.4）；新增 `zlib1g` 定向升级（`--only-upgrade`，基础镜像
+    快照 2026-11-04 早于 trixie-security 的 deb13u1）；构建期 pip 固定 26.3，安装完成后
+    卸载 pip，运行时镜像不再携带包管理器（pip 26.x 自带 `pip/_vendor/bom.cdx.json`，
+    Trivy 会把其中的 setuptools 70.3.0 当作已安装包并报 CVE-2025-47273 HIGH）。
+  - 依赖锁：`aiohttp` 3.11.16→3.14.5（runtime / CI / Windows CI 三份 uv 哈希锁 +
+    requirements + pyproject 同步）；其余依赖的版本与哈希逐项比对无变化。
+  - `.github/workflows/release-build.yml`：门禁步骤加 `id: scan-gate`；失败时用
+    `scripts/summarize_trivy_sarif.py` 打印 SARIF 明细；新增 `always()` 上传 SARIF+SBOM 的
+    `release-scan-evidence` artifact；门禁参数（severity / exit-code / ignore-unfixed）未变，
+    未引入任何 ignore 文件。
+  - 新增 `scripts/summarize_trivy_sarif.py` 与 `trader/tests/test_cicd_scan_gate_diagnostics.py`
+    （已登记进 `ci/test_manifest.json` offline 组）。
+- 验证:
+  - 同版 Trivy 0.70.0 复扫修复后镜像：两种严重度口径均为 0 finding、0 secret，
+    门禁等价退出码 0（`trivy-final-all.json` / `trivy-final-ch.json`）。
+  - 镜像内版本核对：apt 3.0.4、zlib1g deb13u1、aiohttp 3.14.5、pip 已移除、python 3.12.16。
+  - 隔离 venv 按 Windows CI 哈希锁安装 aiohttp 3.14.5：P0 99 项、定向 161 项
+    （aiohttp 适配与既有 CI 断言）全绿；black / isort 通过；release-build.yml YAML 可解析。
+  - 原始证据：`artifacts/branch-preview-20261112/engineer-scan-20261115/`。
+- 风险/遗留:
+  - `zlib1g` 定向升级依赖当前 trixie-security 仓库内容（基础镜像快照早于该安全更新）；
+    构建后扫描仍是最终把关。
+  - 运行时镜像不再含 pip：任何依赖变更都必须重建镜像。
+  - Trivy 仍为 0.70.0（action 默认），官方已有 0.76.2；本次不做工具升级（避免连带语义
+    变化），建议单独评审后再升。
+  - 未执行：GitHub Actions 端到端验证（需父代理推送后由 CI 跑 Release）、offline 组全量
+    本地运行、Postgres 组。
+
+## 2026-11-16 Release 扫描门禁修复：父代理核验发现的两个阻断
+
+- 阻断 1（诊断步骤在真正失败时被跳过）:
+  - 原条件 `if: steps.scan-gate.outcome == 'failure'` 缺少显式状态函数。GitHub Actions 对
+    未写状态函数的 step 级 `if` 注入隐含 `success()`，门禁失败后 job 状态为 failure，
+    该步骤会被跳过——恰好在最需要打印明细时失效。
+  - 改为 `if: failure() && steps.scan-gate.outcome == 'failure'`（官方文档
+    “failure() with conditions”）。
+  - 测试改为建模 Actions 状态函数语义（`always()/failure()/success()/cancelled()` 与隐含
+    `success()`），不再把某一条字面表达式当成契约；同时保留“门禁通过时不打印”的反向断言。
+- 阻断 2（摘要脚本对损坏报告不 fail-closed）:
+  - 原实现对 `{}`、`{"runs": null}`、`{"runs":[{}]}` 打印 “No findings” 并 exit 0；对
+    `{"runs":[{"results":"invalid"}]}` 抛 AttributeError 并 exit 1（冒充 finding）。
+  - 现在校验最小 Trivy SARIF 结构（顶层对象、`runs` 数组、每个 run 的 `results` 数组、
+    记录为对象；可选字段类型错误也报错），任何读取/解码/结构错误一律 exit 2 且不打印
+    traceback；`{"runs":[{"results":[]}]}` 仍是 exit 0。
+- 未执行: GitHub Actions 端到端验证（仍需父代理提交后由 CI 跑）；摘要脚本的
+  `--fail-on` 默认值仍为 HIGH，与门禁实际口径的差异属于非阻断观察项，不在此轮修改。

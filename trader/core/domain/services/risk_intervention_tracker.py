@@ -16,14 +16,14 @@ RiskInterventionTracker - 风控干预追踪器
 
 使用方式：
     tracker = RiskInterventionTracker()
-    
+
     # 记录风控干预
     tracker.record(RiskInterventionRecord(...))
-    
+
     # 获取量化指标
     metrics = tracker.get_metrics(strategy_id="strategy_A")
     print(f"Risk Intervention Rate: {metrics.intervention_rate}")
-    
+
     # 查询记录
     records = tracker.get_records(strategy_id="strategy_A", limit=100)
 """

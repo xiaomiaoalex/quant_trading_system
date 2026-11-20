@@ -2,6 +2,7 @@
 """
 简化版验证脚本 - 直接测试核心功能
 """
+
 import sys
 
 sys.path.insert(0, ".")

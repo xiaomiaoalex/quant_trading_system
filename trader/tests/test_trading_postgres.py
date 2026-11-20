@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -214,6 +215,92 @@ async def test_postgres_execution_dedup_and_restart_replay():
         with pytest.raises(Conflict):
             await restarted.record_execution(conflicting)
         assert "EXECUTION_KEY_CONFLICT" in (await restarted.risk_view("acct")).reasons
+
+
+@pytest.mark.asyncio
+async def test_postgres_snapshot_and_append_tables_stay_consistent_across_restart():
+    """Real PG: concurrent same-account transactions keep both views equal.
+
+    The account snapshot is authoritative; the append tables are its evidence.
+    A restart (new store instance) must read exactly the same state.
+    """
+    if not await _can_connect():
+        pytest.skip("PostgreSQL not available")
+    async with pg_store() as (store, pool):
+        clock = Clock(1_000_000)
+        await _bootstrap(store, clock)
+        one = service(store, clock)
+        two = service(store, clock)
+
+        results = await asyncio.gather(
+            one.place(command(command_id="a", qty=Decimal("1"), price=Decimal("100"))),
+            two.place(command(command_id="b", qty=Decimal("1"), price=Decimal("100"))),
+        )
+        assert [result.status for result in results] == ["CONFIRMED", "CONFIRMED"]
+
+        state = await store.read("acct")
+        assert len(state.orders) == 2
+        assert len(state.holds) == 2
+        assert state.balances["USDT"] == Decimal("1000")
+
+        async with pool.acquire() as conn:
+            ledger_rows = await conn.fetch(
+                "SELECT data FROM trading_ledger WHERE account_id=$1", "acct"
+            )
+            execution_count = await conn.fetchval(
+                "SELECT count(*) FROM trading_executions WHERE account_id=$1", "acct"
+            )
+            command_rows = await conn.fetch(
+                "SELECT command_id,status FROM trading_commands WHERE account_id=$1", "acct"
+            )
+            raw_snapshot = await conn.fetchval(
+                "SELECT state FROM trading_accounts WHERE account_id=$1", "acct"
+            )
+        assert len(ledger_rows) == len(state.ledger) == 1
+        assert execution_count == len(state.executions) == 0
+        assert {row["command_id"]: row["status"] for row in command_rows} == {
+            result.command_id: "CONFIRMED" for result in results
+        }
+        snapshot_document = (
+            json.loads(raw_snapshot) if isinstance(raw_snapshot, str) else raw_snapshot
+        )
+        assert snapshot_document["balances"]["USDT"] == "1000"
+
+        # Restart: a fresh store instance over the same database reads the same.
+        restarted = PostgresTradingStore(pool)
+        after = await restarted.read("acct")
+        assert after.balances == state.balances
+        assert set(after.orders) == set(state.orders)
+        assert set(after.holds) == set(state.holds)
+        assert set(after.commands) == set(state.commands)
+        assert after.reconciliation == state.reconciliation
+
+        # A booked fill lands in both the snapshot and the append table.
+        fill = Execution(
+            "acct",
+            results[0].cl_ord_id,
+            "BTCUSDT",
+            "pg-e-1",
+            Decimal("1"),
+            Decimal("100"),
+            Decimal("0.1"),
+            "USDT",
+            1_000_100,
+        )
+        restarted_service = service(restarted, clock)
+        assert await restarted_service.record_execution(fill) is True
+        assert await restarted_service.record_execution(fill) is False
+        async with pool.acquire() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM trading_executions WHERE account_id=$1", "acct"
+                )
+                == 1
+            )
+        again = await PostgresTradingStore(pool).read("acct")
+        assert again.balances["USDT"] == Decimal("899.9")
+        assert again.orders[results[0].cl_ord_id].booked_qty == Decimal("1")
+        assert len(again.executions) == 1
 
 
 @pytest.mark.asyncio

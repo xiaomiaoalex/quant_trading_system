@@ -19,7 +19,6 @@ import pytest
 
 from trader.adapters.broker.testing.fake_broker import FakeBroker, FakeBrokerConfig
 from trader.adapters.persistence.memory.event_store import InMemoryStorage
-from trader.core.application.oms import OMS
 from trader.core.application.risk_engine import RejectionReason, RiskConfig, RiskEngine
 from trader.core.domain.models.money import Money
 from trader.core.domain.models.order import Order, OrderSide, OrderStatus, OrderType
@@ -269,69 +268,6 @@ class TestFakeBroker:
 
 
 # ==================== Application Tests ====================
-
-
-class TestOMS:
-    """测试OMS订单管理系统"""
-
-    @pytest.mark.asyncio
-    async def test_create_and_submit_order(self):
-        """测试创建和提交订单"""
-        # 准备
-        broker = FakeBroker()
-        storage = InMemoryStorage()
-        oms = OMS(broker, storage)
-
-        await broker.connect()
-        await storage.connect()
-
-        # 创建订单
-        order = await oms.create_order(
-            symbol="BTCUSDT",
-            side=OrderSide.BUY,
-            order_type=OrderType.MARKET,
-            qty=Decimal("0.1"),
-            strategy_name="test_strategy",
-        )
-
-        assert order.status == OrderStatus.PENDING
-
-        # 提交订单
-        await oms.submit_order(order.cl_ord_id)
-
-        # 等待成交回调
-        await asyncio.sleep(0.5)
-
-        # 验证订单状态
-        order = oms.get_order(order.cl_ord_id)
-        assert order.status in [OrderStatus.SUBMITTED, OrderStatus.FILLED]
-
-    @pytest.mark.asyncio
-    async def test_order_recovery(self):
-        """测试订单恢复"""
-        broker = FakeBroker()
-        storage = InMemoryStorage()
-        oms = OMS(broker, storage)
-
-        await broker.connect()
-        await storage.connect()
-
-        # 创建订单
-        order = await oms.create_order(
-            symbol="BTCUSDT",
-            side=OrderSide.BUY,
-            order_type=OrderType.MARKET,
-            qty=Decimal("0.1"),
-            strategy_name="test_strategy",
-        )
-
-        # 模拟重启：清空内存，重新加载
-        oms._orders.clear()
-        await oms.recover()
-
-        # 订单应该从存储中恢复
-        recovered = oms.get_order(order.cl_ord_id)
-        assert recovered is not None
 
 
 class TestRiskEngine:

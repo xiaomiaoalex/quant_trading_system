@@ -623,7 +623,12 @@ async def _process_restart_phase(
     await research.initialize()
     try:
         dataset_id = dataset_ids[0]
-        record = await BacktestApplication(research).submit(
+
+        async def dataset_eligible(candidate: str) -> bool:
+            link = await research.get_dataset_link(candidate)
+            return bool(link and link.get("official_eligible"))
+
+        record = await BacktestApplication(research, eligibility=dataset_eligible).submit(
             {
                 "dataset_ids": [dataset_id],
                 "strategy": {"module_path": args.strategy, "params": {}},

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 
+from trader.tests.fakes.research_eligibility import always_eligible, trust_memory_dataset
 from trader.trading.backtest import EventBacktestRuntime, StrategySignal, validate_dataset_set
 from trader.trading.datasets import INTERVAL_MS, freeze_dataset
 from trader.trading.jobs import BacktestApplication, MemoryResearchStore, ResearchWorker
@@ -439,10 +440,11 @@ def test_vectorbt_cannot_produce_admission_evidence():
     from trader.trading.jobs import BacktestApplication
 
     store = MemoryResearchStore()
-    application = BacktestApplication(store)
+    application = BacktestApplication(store, eligibility=always_eligible)
 
     async def submit():
-        await store.register_dataset(identity(), bars())
+        registered = await store.register_dataset(identity(), bars())
+        trust_memory_dataset(store, registered["dataset_id"])
         data = await store.list_datasets()
         manifest = {
             "dataset_ids": [data[0]["dataset_id"]],
@@ -481,7 +483,8 @@ async def test_research_executor_runs_frozen_manifest_with_installed_plugin():
         for index, price in enumerate(prices)
     ]
     data = await store.register_dataset(identity(), bar_list)
-    application = BacktestApplication(store)
+    trust_memory_dataset(store, data["dataset_id"])
+    application = BacktestApplication(store, eligibility=always_eligible)
     job = await application.submit(
         {
             "dataset_ids": [data["dataset_id"]],

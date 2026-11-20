@@ -123,6 +123,10 @@ def command():
         side="BUY",
         qty=Decimal("1"),
         price=Decimal("100"),
+        order_type="LIMIT",
+        book_id="book:test",
+        price_source="SIGNAL_LIMIT",
+        price_at_ms=1_000_000,
     )
 
 
@@ -291,6 +295,9 @@ async def test_market_buy_rounds_the_quote_amount_to_the_asset_precision():
             qty=Decimal("0.0002"),
             price=Decimal("77551.96"),
             order_type="MARKET",
+            book_id="book:test",
+            price_source="MARKET_REFERENCE_TICKER",
+            price_at_ms=1_000_000,
         ),
         "qts-m",
     )
@@ -315,6 +322,9 @@ async def test_market_sell_quantity_is_floored_to_the_step_size():
             qty=Decimal("0.001234567"),
             price=Decimal("77551.96"),
             order_type="MARKET",
+            book_id="book:test",
+            price_source="MARKET_REFERENCE_TICKER",
+            price_at_ms=1_000_000,
         ),
         "qts-s",
     )
@@ -336,9 +346,63 @@ async def test_limit_below_minimum_notional_is_rejected_without_sending():
             qty=Decimal("0.0001"),
             price=Decimal("100"),
             order_type="LIMIT",
+            book_id="book:test",
+            price_source="SIGNAL_LIMIT",
+            price_at_ms=1_000_000,
         ),
         "qts-small",
     )
     assert result.outcome == ExchangeOutcome.REJECTED
     assert "NOTIONAL_BELOW_MINIMUM" in result.reason
     assert broker.place_calls == []
+
+
+def test_expired_in_match_is_classified_as_terminal_cancel() -> None:
+    """Binance STP can report EXPIRED_IN_MATCH for a resting order.
+
+    The recovery backfill must classify that terminal status instead of raising
+    and making the whole account unreadable.
+    """
+    from trader.adapters.broker.binance_spot_demo_broker import (
+        BinanceSpotDemoBroker,
+        BinanceSpotDemoBrokerConfig,
+    )
+
+    broker = BinanceSpotDemoBroker(BinanceSpotDemoBrokerConfig(api_key="test", secret_key="test"))
+    assert broker._parse_order_status("EXPIRED_IN_MATCH") == OrderStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_fetch_trades_filters_retained_history_before_the_lookback() -> None:
+    """A sandbox may return retained trades even when startTime is supplied.
+
+    Trades before the recovery window are already represented by opening
+    balances; replaying them into a fresh ledger creates UNBOOKED_EXECUTIONS.
+    """
+    broker = FakeBroker()
+    broker.trades["BTCUSDT"] = [
+        {
+            "id": 1,
+            "orderId": "old-order",
+            "price": "90",
+            "qty": "0.1",
+            "commission": "0.01",
+            "commissionAsset": "USDT",
+            "time": 1_000_000,
+        },
+        {
+            "id": 2,
+            "orderId": "new-order",
+            "price": "100",
+            "qty": "0.1",
+            "commission": "0.01",
+            "commissionAsset": "USDT",
+            "time": 2_000_000,
+        },
+    ]
+    provider = BinanceSpotSnapshotProvider(
+        broker, account_id="acct", symbols=["BTCUSDT"], clock=lambda: 2_000_100
+    )
+    trades, complete = await provider.fetch_trades("BTCUSDT", 1_500_000)
+    assert complete is True
+    assert [trade["id"] for trade in trades] == [2]

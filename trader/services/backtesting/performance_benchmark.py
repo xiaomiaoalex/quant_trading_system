@@ -15,7 +15,7 @@ Performance Targets:
 Usage:
     benchmark = PerformanceBenchmark(backtest_engine)
     results = benchmark.run_all()
-    
+
     # Individual tests
     benchmark.test_1year_backtest()
     benchmark.test_memory_usage()
@@ -117,7 +117,7 @@ class BenchmarkReport:
             "total_benchmarks": len(self.results),
             "passed": passed,
             "failed": failed,
-            "success_rate": f"{passed/len(self.results)*100:.1f}%" if self.results else "0%",
+            "success_rate": f"{passed / len(self.results) * 100:.1f}%" if self.results else "0%",
             "total_duration_seconds": self.total_duration,
             "system_info": self.system_info,
         }
@@ -409,11 +409,11 @@ class PerformanceBenchmark:
 
             if passed:
                 logger.info(
-                    f"Memory usage passed: {peak_mb:.2f}MB (target: {self._targets.memory_max/(1024*1024):.0f}MB)"
+                    f"Memory usage passed: {peak_mb:.2f}MB (target: {self._targets.memory_max / (1024 * 1024):.0f}MB)"
                 )
             else:
                 logger.warning(
-                    f"Memory usage FAILED: {peak_mb:.2f}MB (target: {self._targets.memory_max/(1024*1024):.0f}MB)"
+                    f"Memory usage FAILED: {peak_mb:.2f}MB (target: {self._targets.memory_max / (1024 * 1024):.0f}MB)"
                 )
 
             return benchmark_result
@@ -695,6 +695,6 @@ class BenchmarkRunner:
             "total_benchmarks": len(self._reports),
             "passed": total_passed,
             "failed": total_failed,
-            "success_rate": f"{total_passed/len(self._reports)*100:.1f}%",
+            "success_rate": f"{total_passed / len(self._reports) * 100:.1f}%",
             "benchmarks": [r.summary() for r in self._reports],
         }

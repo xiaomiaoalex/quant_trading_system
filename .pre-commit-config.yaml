@@ -1,0 +1,14 @@
+# Python formatting/linting via Ruff (replaces Black + isort).
+# Install once per clone with: python -m pip install pre-commit && pre-commit install
+# Run on demand with: pre-commit run --all-files
+# Scope matches the Python Formatting Gate in .github/workflows/ci-gate.yml:
+# trader/ plus the CI/ops scripts owned by this delivery.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff-check
+        args: [--fix, --select, I]
+        files: '(^trader/|^scripts/(verify_test_manifest|check_junit|check_coverage|compose_smoke|deploy_preflight|release_manifest|summarize_observation|release_binding|collect_runtime_release_binding|deploy_gate|observe_trading_runtime|verify_release_provenance|verify_deploy_gate_live|validate_preview_env|validate_preview_stack|prepare_pr_preview|preview_browser_smoke|run_ci_checks)\.py$|^conftest\.py$)'
+      - id: ruff-format
+        files: '(^trader/|^scripts/(verify_test_manifest|check_junit|check_coverage|compose_smoke|deploy_preflight|release_manifest|summarize_observation|release_binding|collect_runtime_release_binding|deploy_gate|observe_trading_runtime|verify_release_provenance|verify_deploy_gate_live|validate_preview_env|validate_preview_stack|prepare_pr_preview|preview_browser_smoke|run_ci_checks)\.py$|^conftest\.py$)'

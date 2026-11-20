@@ -32,7 +32,7 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 Write-Host "Starting backend..."
-$BackendCommand = "Set-Location -LiteralPath $RootLiteral; `$env:POSTGRES_CONNECTION_STRING = $PgConnLiteral; python -m uvicorn trader.api.main:app --host 127.0.0.1 --port 8080 --reload"
+$BackendCommand = "Set-Location -LiteralPath $RootLiteral; `$env:POSTGRES_CONNECTION_STRING = $PgConnLiteral; python -m uvicorn trader.runtime.control_main:app --host 127.0.0.1 --port 8090 --reload"
 Start-Process -FilePath $PowerShellExe -ArgumentList @(
     "-NoExit",
     "-NoProfile",

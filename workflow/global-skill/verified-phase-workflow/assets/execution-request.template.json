@@ -1,0 +1,20 @@
+{
+  "kind": "execution_request",
+  "request_id": "replace-with-unique-id",
+  "phase": "replace-with-phase-id",
+  "base_commit": "replace-with-full-base-hash",
+  "source_digest": "replace-with-frozen-source-digest",
+  "commands": [
+    {
+      "id": "replace-with-check-id",
+      "argv": ["replace-with-project-command"],
+      "cwd": ".",
+      "environment_variable_names": [],
+      "purpose": "replace-with-required-evidence",
+      "output_path": "replace-with-artifact-path",
+      "required": true
+    }
+  ],
+  "ready_for_parent_execution": true,
+  "workspace_frozen": true
+}

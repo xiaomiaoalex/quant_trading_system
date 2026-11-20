@@ -11,12 +11,12 @@ ShadowModeVerifier - 影子模式验证框架
 
 使用方式：
     verifier = ShadowModeVerifier()
-    
+
     report = await verifier.verify(
         strategy_id="strategy_A",
         lookback_period=timedelta(days=7),
     )
-    
+
     if not report.overall_healthy:
         print(f"偏差告警: {report.recommendations}")
 """

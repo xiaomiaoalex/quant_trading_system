@@ -36,6 +36,10 @@ def test_entrypoint_starts_api_and_refuses_trading_without_credentials(monkeypat
                 "side": "BUY",
                 "qty": "1",
                 "price": "100",
+                "order_type": "LIMIT",
+                "book_id": "book:test",
+                "price_source": "MANUAL_LIMIT",
+                "price_at_ms": 1_000_000,
             },
         )
         assert command.status_code in {401, 503}

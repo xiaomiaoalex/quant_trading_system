@@ -1,0 +1,34 @@
+name: qts-server-egress
+
+# Isolated single-service egress proxy. The real config directory lives outside
+# the repository at /home/alex/qts-server-egress/config (0700, files 0600).
+services:
+  egress:
+    image: qts-server-egress/mihomo:1.19.34
+    pull_policy: never
+    container_name: qts-server-egress
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:17890:7890"
+    volumes:
+      - ./config:/etc/mihomo:rw
+    networks:
+      - egress
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  egress:
+    name: qts-server-egress-net
+    driver: bridge

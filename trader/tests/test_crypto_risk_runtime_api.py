@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from trader.api.crypto_risk_runtime import get_crypto_risk_runtime_manager
-from trader.api.main import app
+from trader.api.trading_app import create_trading_app
+
+app = create_trading_app()
 from trader.api.routes import risk as risk_routes
 from trader.core.domain.models.crypto_risk import (
     CryptoAccountRisk,
@@ -256,7 +258,9 @@ async def test_crypto_risk_probe_returns_read_only_runtime_check() -> None:
     assert payload["checks"]["mark_prices"]["details"]["mark_prices"] == {"BTCUSDT": "50000"}
     assert payload["checks"]["leverage_brackets"]["status"] == "passed"
 
-    events = client.get("/v1/events", params={"stream_key": "risk:crypto"}).json()
+    events = client.get(
+        "/v1/risk/crypto/audit", params={"event_type": "crypto_risk.probe_run"}
+    ).json()
     assert events[0]["event_type"] == "crypto_risk.probe_run"
     assert events[0]["payload"]["ok"] is True
     assert events[0]["payload"]["requested_by"] == "operator"

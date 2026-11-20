@@ -22,19 +22,19 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from insight.committee.schemas import CommitteeRun, ProposalStatus
 from pydantic import BaseModel
 
-from services.committee_to_lifecycle_adapter import (
+from insight.committee.schemas import CommitteeRun, ProposalStatus
+from trader.core.application.hitl_governance import HITLGovernance
+from trader.services.committee_to_lifecycle_adapter import (
     CommitteeToLifecycleAdapter,
     LifecycleAdapterConfig,
 )
-from services.portfolio_research_workflow import (
+from trader.services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,
     WorkflowResult,
 )
-from trader.core.application.hitl_governance import HITLGovernance
 from trader.services.strategy_lifecycle_manager import StrategyLifecycleManager
 
 logger = logging.getLogger(__name__)

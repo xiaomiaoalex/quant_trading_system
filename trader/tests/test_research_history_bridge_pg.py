@@ -32,6 +32,7 @@ from trader.adapters.persistence.research_history_bridge_store import (
     ResearchHistoryStoreError,
 )
 from trader.core.domain.services.ohlcv_archive import KlineBar
+from trader.tests.fakes.research_eligibility import always_eligible, trust_postgres_dataset
 from trader.trading.datasets import dataset_metadata
 from trader.trading.jobs import PostgresResearchStore
 from trader.trading.research_bridge import (
@@ -63,18 +64,29 @@ def _with_database(dsn: str, database: str) -> str:
 def isolated_dsn():
     base = _base_dsn()
     admin_dsn = _with_database(base, "postgres")
-    target_dsn = _with_database(base, TEST_DB_NAME)
+    # The Research DDL is schema-qualified (`research.*`), so a search_path
+    # schema cannot isolate this path. A unique disposable database is the
+    # strongest available isolation and is dropped after this module.
+    database = TEST_DB_NAME + "_" + uuid.uuid4().hex[:8]
+    target_dsn = _with_database(base, database)
 
     async def _ensure_database() -> None:
         import asyncpg
 
         conn = await asyncpg.connect(admin_dsn)
         try:
-            exists = await conn.fetchval(
-                "SELECT 1 FROM pg_database WHERE datname = $1", TEST_DB_NAME
-            )
+            exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", database)
             if not exists:
-                await conn.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+                await conn.execute(f'CREATE DATABASE "{database}"')
+        finally:
+            await conn.close()
+
+    async def _drop_database() -> None:
+        import asyncpg
+
+        conn = await asyncpg.connect(admin_dsn)
+        try:
+            await conn.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
         finally:
             await conn.close()
 
@@ -84,7 +96,8 @@ def isolated_dsn():
         asyncio.run(_ensure_database())
     except Exception as exc:  # pragma: no cover - environment dependent
         pytest.skip(f"Cannot prepare isolated test database: {exc}")
-    return target_dsn
+    yield target_dsn
+    asyncio.run(_drop_database())
 
 
 def _bars(count: int, start_ms: int = 0) -> List[KlineBar]:
@@ -381,9 +394,10 @@ async def test_failed_runs_are_terminal_and_retry_is_explicit(isolated_dsn):
             _bars(4), symbol="BTCUSDT", archive_sha256="b" * 64, month="2026-09"
         )
         await research.register_dataset(document["identity"], document["bars"])
+        await trust_postgres_dataset(pool, document)
         from trader.trading.jobs import BacktestApplication
 
-        record = await BacktestApplication(research).submit(
+        record = await BacktestApplication(research, eligibility=always_eligible).submit(
             {
                 "dataset_ids": [document["dataset_id"]],
                 "strategy": {"module_path": "trader.strategies.ema_cross_btc"},

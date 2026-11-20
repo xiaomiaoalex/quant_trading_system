@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+
 from insight.committee.portfolio_constructor import (
     CapitalAllocation,
     ConflictResult,
@@ -175,7 +176,9 @@ class TestPortfolioConstructor:
         reviews = [create_test_review(f"prop_{i}") for i in range(1, 4)]
 
         result = self.constructor.construct(
-            proposals, reviews, total_capital=Decimal("5000")  # 总资金少于最小值
+            proposals,
+            reviews,
+            total_capital=Decimal("5000"),  # 总资金少于最小值
         )
 
         for alloc in result.capital_allocations:

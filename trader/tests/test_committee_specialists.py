@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
+
 from insight.committee.router import CommitteeRouter
 from insight.committee.schemas import SpecialistType, ValidationResult, Violation, ViolationType
 from insight.committee.specialists import (

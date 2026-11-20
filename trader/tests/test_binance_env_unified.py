@@ -102,9 +102,9 @@ class TestBinanceEnvConfig:
 
         os.environ["BINANCE_ENV"] = "demo"
         config = get_binance_env_config()
-        assert required_fields.issubset(
-            config.keys()
-        ), f"Missing fields: {required_fields - config.keys()}"
+        assert required_fields.issubset(config.keys()), (
+            f"Missing fields: {required_fields - config.keys()}"
+        )
 
     def test_is_valid_binance_env(self):
         """is_valid_binance_env should correctly validate environments."""

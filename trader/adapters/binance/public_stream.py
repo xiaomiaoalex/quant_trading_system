@@ -260,7 +260,7 @@ class PublicStreamManager(BaseStreamFSM):
             try:
                 sleep_delay = self._apply_jitter(delay)
                 logger.info(
-                    f"[{self._name}] Reconnecting in {sleep_delay:.2f}s " f"(base={delay:.2f}s)"
+                    f"[{self._name}] Reconnecting in {sleep_delay:.2f}s (base={delay:.2f}s)"
                 )
                 await asyncio.sleep(sleep_delay)
 
@@ -383,7 +383,7 @@ class PublicStreamManager(BaseStreamFSM):
                     self._public_config.ping_interval + self._public_config.stale_timeout
                 ):
                     logger.warning(
-                        f"[{self._name}] Pong timeout: " f"{time_since_pong:.1f}s since last pong"
+                        f"[{self._name}] Pong timeout: {time_since_pong:.1f}s since last pong"
                     )
                     await self.reconnect()
 

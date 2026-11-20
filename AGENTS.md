@@ -9,6 +9,7 @@
 - Python 工程约定：按需读 `rules/L1_TECH_STACK.md`；交易业务改动读 `rules/L2_BUSINESS.md`。
 - 回测、风控、Binance、OMS：从 `skills/_meta/index.yaml` 选相关 SPEC；这些是仓库参考文件，不要求预加载全部。
 - 多阶段或跨模块工作：按需读 `rules/L3_WORKFLOW.md`；RFC 用于需要记录的设计决策，已有明确授权时不设额外签字阶段。
+- 基础重构的代理交接：遵循 `docs/FOUNDATION_AGENT_WORKFLOW.md`，先读 `docs/FOUNDATION_WORKFLOW_STATE.json`；父 Agent 只在阶段开始、同一问题三轮未解和阶段最终交付时介入，日常实现—测试—审核闭环由工程师协调，阶段通过后仅父 Agent 提交。
 - 前端修改另读 `Frontend/AGENTS.md`。`.claude/get-shit-done/` 是 Claude 专用可选工作流，仅在用户选择该流程时加载；嵌套 worktree 不是当前仓库指令来源。
 
 ## 交易正确性

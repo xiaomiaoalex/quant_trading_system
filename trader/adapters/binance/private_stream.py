@@ -760,7 +760,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 try:
                     sleep_delay = self._apply_jitter(delay)
                     logger.info(
-                        f"[{self._name}] Reconnecting in {sleep_delay:.2f}s " f"(base={delay:.2f}s)"
+                        f"[{self._name}] Reconnecting in {sleep_delay:.2f}s (base={delay:.2f}s)"
                     )
                     await asyncio.sleep(sleep_delay)
 
@@ -1014,7 +1014,7 @@ class PrivateStreamManager(BaseStreamFSM):
                 )
                 if time_since_pong > max_pong_lag:
                     logger.warning(
-                        f"[{self._name}] Pong timeout: " f"{time_since_pong:.1f}s since last pong"
+                        f"[{self._name}] Pong timeout: {time_since_pong:.1f}s since last pong"
                     )
                     self._set_state(StreamState.STALE_DATA)
                     self._metrics.stale_count += 1

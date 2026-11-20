@@ -6,6 +6,8 @@ from trader.strategies.ema_cross_btc import EmaCrossBtcStrategy
 from trader.strategies.ema_cross_btc import get_plugin as get_ema_cross_btc_plugin
 from trader.strategies.fire_test import FireTestStrategy
 from trader.strategies.fire_test import get_plugin as get_fire_test_plugin
+from trader.strategies.observation_only import ObservationOnlyStrategy
+from trader.strategies.observation_only import get_plugin as get_observation_only_plugin
 from trader.strategies.rsi_grid import RsiGridStrategy
 from trader.strategies.rsi_grid import get_plugin as get_rsi_grid_plugin
 
@@ -14,8 +16,10 @@ __all__ = [
     "RsiGridStrategy",
     "DcaBtcStrategy",
     "FireTestStrategy",
+    "ObservationOnlyStrategy",
     "get_ema_cross_btc_plugin",
     "get_rsi_grid_plugin",
     "get_dca_btc_plugin",
     "get_fire_test_plugin",
+    "get_observation_only_plugin",
 ]

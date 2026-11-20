@@ -95,6 +95,8 @@ class Reconciler:
         local_orders: List[LocalOrderSnapshot],
         exchange_orders: List[ExchangeOrderSnapshot],
         external_order_ids: Optional[Set[str]] = None,
+        *,
+        now: Optional[datetime] = None,
     ) -> ReconcileReport:
         """
         执行对账。
@@ -107,7 +109,9 @@ class Reconciler:
         返回:
         - ReconcileReport: 包含漂移检测结果和统计信息
         """
-        now = datetime.now(timezone.utc)
+        # `now` is injectable so grace-period boundaries can be tested with a
+        # fake clock instead of racing the wall clock.
+        now = now or datetime.now(timezone.utc)
 
         local_by_id = {o.cl_ord_id: o for o in local_orders}
         exchange_by_id = {o.cl_ord_id: o for o in exchange_orders}

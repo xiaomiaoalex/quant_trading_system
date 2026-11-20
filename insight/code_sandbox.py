@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import ast
 import io
+import os
 import re
 import sys
+import threading
 import time
 import builtins
 from dataclasses import dataclass, field
@@ -469,6 +471,88 @@ class CodeSandbox:
         except Exception:
             pass
         return None
+
+    def _current_address_space_bytes(self) -> int:
+        """Return the process virtual address space that RLIMIT_AS enforces.
+
+        ``/proc/self/statm`` field 0 is the total program size in pages (VmSize).
+        Field 1 would be the resident set size, which is *not* what RLIMIT_AS
+        limits: comparing RSS against RLIMIT_AS can place the soft limit below
+        the process's current address space and fail the next mapping.
+
+        Raises instead of guessing: an unmeasurable address space must fail
+        closed rather than silently run the sandbox without a memory limit.
+        """
+        with open("/proc/self/statm", "r", encoding="ascii") as handle:
+            fields = handle.read().split()
+        return int(fields[0]) * os.sysconf("SC_PAGE_SIZE")
+
+    def _temporary_resource_limits(self) -> list[tuple[int, tuple[int, int]]]:
+        """Apply soft-only limits relative to the calling process, preserving hard limits.
+
+        A hard RLIMIT_AS/RLIMIT_CPU lowered in the shared pytest/coverage process
+        can never be raised back and kills the whole suite with exit 137.  Only
+        the soft limit is lowered, never above a limit the caller already set
+        tighter, and the original pair is restored after execution.
+        """
+        usage = resource.getrusage(resource.RUSAGE_SELF)  # type: ignore[attr-defined]
+        original_as = resource.getrlimit(resource.RLIMIT_AS)  # type: ignore[attr-defined]
+        original_cpu = resource.getrlimit(resource.RLIMIT_CPU)  # type: ignore[attr-defined]
+        infinity = resource.RLIM_INFINITY  # type: ignore[attr-defined]
+        memory_budget = self._config.max_memory_mb * 1024 * 1024
+        try:
+            current_as = self._current_address_space_bytes()
+        except (OSError, ValueError, IndexError) as exc:
+            raise SandboxResourceError(f"PROCESS_ADDRESS_SPACE_UNKNOWN:{exc}") from exc
+        consumed_cpu = int(usage.ru_utime + usage.ru_stime)
+
+        memory_soft = current_as + memory_budget
+        cpu_soft = consumed_cpu + max(1, int(self._config.timeout_seconds)) + 1
+
+        if original_as[0] != infinity and memory_soft > original_as[0]:
+            memory_soft = original_as[0]
+        if original_cpu[0] != infinity and cpu_soft > original_cpu[0]:
+            cpu_soft = original_cpu[0]
+
+        # A caller soft limit already below the process's current address
+        # space leaves no valid execution window: keeping it would both break
+        # RLIMIT_AS semantics and be able to fail the very next mapping, while
+        # raising it would loosen the caller's constraint.  Refuse instead.
+        if original_as[0] != infinity and original_as[0] < current_as:
+            raise SandboxResourceError("PROCESS_MEMORY_SOFT_LIMIT_BELOW_ADDRESS_SPACE")
+        if original_cpu[0] != infinity and original_cpu[0] <= consumed_cpu:
+            raise SandboxResourceError("PROCESS_CPU_SOFT_LIMIT_EXHAUSTED")
+
+        if original_as[1] != infinity and memory_soft > original_as[1]:
+            raise SandboxResourceError("PROCESS_MEMORY_HEADROOM_UNAVAILABLE")
+        if original_cpu[1] != infinity and cpu_soft > original_cpu[1]:
+            raise SandboxResourceError("PROCESS_CPU_HEADROOM_UNAVAILABLE")
+
+        saved: list[tuple[int, tuple[int, int]]] = []
+        try:
+            resource.setrlimit(  # type: ignore[attr-defined]
+                resource.RLIMIT_AS, (memory_soft, original_as[1])  # type: ignore[attr-defined]
+            )
+            saved.append((resource.RLIMIT_AS, original_as))  # type: ignore[attr-defined]
+            resource.setrlimit(  # type: ignore[attr-defined]
+                resource.RLIMIT_CPU, (cpu_soft, original_cpu[1])  # type: ignore[attr-defined]
+            )
+            saved.append((resource.RLIMIT_CPU, original_cpu))  # type: ignore[attr-defined]
+        except (ValueError, OSError) as exc:
+            self._restore_resource_limits(saved)
+            raise SandboxResourceError(f"RESOURCE_LIMIT_UNAVAILABLE:{exc}") from exc
+        return saved
+
+    @staticmethod
+    def _restore_resource_limits(saved: list[tuple[int, tuple[int, int]]]) -> None:
+        failures: list[BaseException] = []
+        for kind, limits in reversed(saved):
+            try:
+                resource.setrlimit(kind, limits)  # type: ignore[attr-defined]
+            except (ValueError, OSError) as exc:  # pragma: no cover - defensive
+                failures.append(exc)
+        if failures:
+            raise SandboxResourceError(f"RESOURCE_LIMIT_RESTORE_FAILED:{failures[0]}")
     
     def execute(
         self,
@@ -499,18 +583,6 @@ class CodeSandbox:
         start_time = time.time()
         result = SandboxResult(status=SandboxStatus.SUCCESS)
         
-        # 设置资源限制（Unix only）
-        if UNIX_AVAILABLE:
-            try:
-                # 内存限制
-                max_memory_bytes = self._config.max_memory_mb * 1024 * 1024
-                resource.setrlimit(resource.RLIMIT_AS, (max_memory_bytes, max_memory_bytes))  # type: ignore[attr-defined]
-                
-                # CPU时间限制
-                resource.setrlimit(resource.RLIMIT_CPU, (int(self._config.timeout_seconds), int(self._config.timeout_seconds) + 10))  # type: ignore[attr-defined]
-            except (ValueError, OSError):
-                pass  # 可能某些平台不支持
-        
         # 创建受限执行环境
         # 注意：移除了 getattr/setattr/hasattr/delattr 等危险函数
         restricted_builtins = {k: v for k, v in vars(builtins).items() if k in [
@@ -528,17 +600,62 @@ class CodeSandbox:
         sandbox_context['market_data'] = market_data
         sandbox_context['Decimal'] = Decimal
         
-        # 执行代码
+        saved_limits: list[tuple[int, tuple[int, int]]] = []
+        old_alarm_handler = None
+        old_xcpu_handler = None
+        old_timer: Optional[tuple[float, float]] = None
+        unix_platform = (
+            UNIX_AVAILABLE
+            and hasattr(signal, "SIGALRM")
+            and hasattr(signal, "SIGXCPU")
+            and hasattr(signal, "setitimer")
+            and hasattr(signal, "getitimer")
+            and hasattr(signal, "ITIMER_REAL")
+        )
+        unix_signals = False
         try:
-            # 捕获超时信号（Unix only）
-            if UNIX_AVAILABLE:
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("Execution timeout")
-                
-                old_handler = signal.signal(signal.SIGALRM, timeout_handler)  # type: ignore[attr-defined]
-                signal.alarm(int(self._config.timeout_seconds))  # type: ignore[attr-defined]
-            
+            if UNIX_AVAILABLE and not unix_platform:
+                raise SandboxResourceError("SANDBOX_RESOURCE_GUARD_UNAVAILABLE")
+            # 捕获超时信号（Unix only）；限制仅在当前执行期间生效。
+            if unix_platform:
+                # Read the caller's timer *before* applying any limits.  If the
+                # snapshot itself fails, refuse with the process still exactly
+                # as we found it, instead of leaving lowered limits behind.
+                try:
+                    old_timer = signal.getitimer(signal.ITIMER_REAL)  # type: ignore[attr-defined]
+                except (ValueError, OSError) as exc:
+                    raise SandboxResourceError(
+                        f"SANDBOX_TIMER_SNAPSHOT_UNAVAILABLE:{exc}"
+                    ) from exc
+                if threading.current_thread() is not threading.main_thread():
+                    # signal handlers (the only timeout guard) cannot be
+                    # installed from a worker thread: refuse instead of running
+                    # unbounded code.
+                    raise SandboxResourceError("SANDBOX_REQUIRES_MAIN_THREAD")
+                saved_limits = self._temporary_resource_limits()
+                unix_signals = True
+
             try:
+                if unix_signals:
+                    # Handlers are installed inside this try so that a failure
+                    # here still runs the finally that restores the limits.
+
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("Execution timeout")
+
+                    # ``old_timer`` was captured before any limits were applied.
+                    try:
+                        old_xcpu_handler = signal.signal(signal.SIGXCPU, timeout_handler)  # type: ignore[attr-defined]
+                        old_alarm_handler = signal.signal(signal.SIGALRM, timeout_handler)  # type: ignore[attr-defined]
+                        # setitimer keeps sub-second timeouts.
+                        signal.setitimer(  # type: ignore[attr-defined]
+                            signal.ITIMER_REAL, float(self._config.timeout_seconds)  # type: ignore[attr-defined]
+                        )
+                    except (ValueError, OSError) as exc:
+                        raise SandboxResourceError(
+                            f"SANDBOX_TIMEOUT_GUARD_UNAVAILABLE:{exc}"
+                        ) from exc
+
                 # 创建执行环境
                 exec_globals = {
                     '__builtins__': restricted_builtins,
@@ -556,16 +673,45 @@ class CodeSandbox:
                     result.output = exec_globals.get('result')
                 
             finally:
-                if UNIX_AVAILABLE:
-                    signal.alarm(0)  # type: ignore[attr-defined]
-                    signal.signal(signal.SIGALRM, old_handler)  # type: ignore[attr-defined]
-                    
+                if unix_signals:
+                    teardown_error: Optional[BaseException] = None
+                    try:
+                        signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)  # type: ignore[attr-defined]
+                    except (ValueError, OSError) as exc:
+                        # A timer that cannot be cancelled must not be silently
+                        # ignored, but it also must not stop the limits and the
+                        # handlers from being restored.
+                        teardown_error = SandboxResourceError(
+                            f"SANDBOX_TIMER_CANCEL_FAILED:{exc}"
+                        )
+                    if old_xcpu_handler is not None:
+                        # Stop repeat SIGXCPU delivery before raising the soft
+                        # CPU limit.  Only touch SIGXCPU when this call really
+                        # installed a handler: otherwise the caller's own
+                        # handler would be replaced by SIG_IGN and never
+                        # restored.
+                        signal.signal(signal.SIGXCPU, signal.SIG_IGN)  # type: ignore[attr-defined]
+                    try:
+                        self._restore_resource_limits(saved_limits)
+                    finally:
+                        if old_alarm_handler is not None:
+                            signal.signal(signal.SIGALRM, old_alarm_handler)  # type: ignore[attr-defined]
+                        if old_xcpu_handler is not None:
+                            signal.signal(signal.SIGXCPU, old_xcpu_handler)  # type: ignore[attr-defined]
+                        if old_timer is not None and (old_timer[0] > 0 or old_timer[1] > 0):
+                            signal.setitimer(signal.ITIMER_REAL, *old_timer)  # type: ignore[attr-defined]
+                    if teardown_error is not None:
+                        raise teardown_error
+
         except TimeoutError:
             result.status = SandboxStatus.TIMEOUT
             result.error = f"执行超时（{self._config.timeout_seconds}秒）"
         except MemoryError:
             result.status = SandboxStatus.RESOURCE_EXCEEDED
             result.error = f"内存超限（{self._config.max_memory_mb}MB）"
+        except SandboxResourceError as e:
+            result.status = SandboxStatus.RESOURCE_EXCEEDED
+            result.error = f"资源限制不可用: {e}"
         except Exception as e:
             result.status = SandboxStatus.RUNTIME_ERROR
             result.error = f"执行错误: {type(e).__name__}: {str(e)}"

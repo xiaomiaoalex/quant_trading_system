@@ -169,8 +169,7 @@ class CommitteeToLifecycleAdapter:
             run.final_status = ProposalStatus.REJECTED
 
             logger.info(
-                f"CommitteeRun rejected: run_id={run.run_id}, "
-                f"rejector={rejector}, reason={reason}"
+                f"CommitteeRun rejected: run_id={run.run_id}, rejector={rejector}, reason={reason}"
             )
 
             return {

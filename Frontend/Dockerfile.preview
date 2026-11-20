@@ -1,0 +1,39 @@
+# Immutable branch-preview UI image: Node build -> nginx static runtime.
+#
+# The image is built once on a host that has Docker and network access and is
+# then transferred to the preview host.  The preview host never builds and
+# never pulls.
+#
+#   docker build -f Frontend/Dockerfile.preview -t qts-preview-ui:<tag> Frontend
+#
+# The build context is Frontend/; Frontend/.dockerignore keeps node_modules,
+# local build output and test files out of the context.  Base images are pinned
+# by manifest digest: nginx@sha256:583b7f2f... was the verified current
+# manifest on 2026-11-12 and node@sha256:fb4cd12c... the matching Node 20
+# builder.  Never fall back to a floating tag.
+#
+# This file is separate from the repository-root runtime Dockerfile on purpose:
+# the runtime image carries the trading services, the preview UI image carries
+# only the console and its reverse proxy.
+
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+RUN npm run build
+
+FROM nginx:stable-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
+
+# The preview gateway serves the built single-page application and forwards the
+# same-origin API paths to the Control service.  It listens on the unprivileged
+# port 8080 and runs as an unprivileged user (see deploy/compose.preview.yml).
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.preview.conf /etc/nginx/nginx.conf
+# The entrypoint refuses to start with placeholder release metadata.
+COPY preview-entrypoint.sh /usr/local/bin/preview-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/preview-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/preview-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 8080
