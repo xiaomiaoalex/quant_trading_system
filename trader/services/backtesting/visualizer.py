@@ -89,7 +89,7 @@ class BacktestVisualizer:
         """Check if matplotlib is available."""
         if not _HAS_MATPLOTLIB:
             raise ImportError(
-                "matplotlib is required for visualization. " "Install with: pip install matplotlib"
+                "matplotlib is required for visualization. Install with: pip install matplotlib"
             )
 
     def _parse_timestamps(self, timestamps: List[Any]) -> List[datetime]:
@@ -595,7 +595,7 @@ class BacktestVisualizer:
             color="orange",
             linestyle="-",
             linewidth=1.5,
-            label=f"Mean: {sum(returns)/len(returns):.4f}",
+            label=f"Mean: {sum(returns) / len(returns):.4f}",
         )
 
         ax_hist.set_title(title, fontsize=self.config.title_fontsize, pad=10)

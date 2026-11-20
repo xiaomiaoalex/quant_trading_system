@@ -633,6 +633,68 @@ def test_t2_rendered_table_is_ordered_and_contains_the_evidence() -> None:
         assert fixed in rendered
 
 
+MALFORMED_SARIF_TEXTS = {
+    "empty_object": "{}",
+    "null_runs": '{"runs": null}',
+    "run_without_results": '{"runs": [{}]}',
+    "results_not_an_array": '{"runs": [{"results": "invalid"}]}',
+    "result_not_an_object": '{"runs": [{"results": [null]}]}',
+    "top_level_array": "[]",
+    "top_level_string": '"invalid"',
+    "top_level_null": "null",
+    "runs_not_an_array": '{"runs": "invalid"}',
+    "message_not_an_object": '{"runs": [{"results": [{"message": "invalid"}]}]}',
+    "locations_not_an_array": '{"runs": [{"results": [{"locations": "invalid"}]}]}',
+}
+
+
+@pytest.mark.parametrize("text", MALFORMED_SARIF_TEXTS.values(), ids=list(MALFORMED_SARIF_TEXTS))
+def test_t2_fail_closed_on_structurally_broken_reports(tmp_path: Path, capsys, text: str) -> None:
+    """A structurally invalid report must never be reported as a clean scan.
+
+    The counter-examples are taken from the definition of a Trivy SARIF
+    document (top-level object with ``runs`` array, each run with ``results``
+    array, each result a record), not from the implementation's exception
+    types or constants.
+    """
+    report = tmp_path / "malformed.sarif"
+    report.write_text(text, encoding="utf-8")
+    assert summarize_trivy_sarif.main([str(report)]) == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "No findings" not in captured.out
+
+
+@pytest.mark.parametrize(
+    "path_kind",
+    ["missing", "directory", "invalid_utf8", "broken_json"],
+)
+def test_t2_fail_closed_on_unreadable_reports(tmp_path: Path, capsys, path_kind: str) -> None:
+    report = tmp_path / "broken.sarif"
+    if path_kind == "directory":
+        report.mkdir()
+    elif path_kind == "invalid_utf8":
+        report.write_bytes(b'{"runs": [{"results": []}]}\xff\xfe')
+    elif path_kind == "broken_json":
+        report.write_text("{not json", encoding="utf-8")
+    assert summarize_trivy_sarif.main([str(report)]) == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "No findings" not in captured.out
+
+
+def test_t2_valid_empty_and_real_reports_still_work(tmp_path: Path, capsys) -> None:
+    """The fail-closed checks must not turn a valid clean report into a failure."""
+    valid_empty = tmp_path / "valid-empty.sarif"
+    valid_empty.write_text('{"runs": [{"results": []}]}', encoding="utf-8")
+    assert summarize_trivy_sarif.main([str(valid_empty)]) == 0
+    assert "No findings" in capsys.readouterr().out
+
+    if REAL_SARIF_SAMPLE.is_file():
+        assert summarize_trivy_sarif.main([str(REAL_SARIF_SAMPLE)]) == 1
+        assert "Total findings: 52" in capsys.readouterr().out
+
+
 # --------------------------------------------------------------------------- T3
 
 
@@ -711,9 +773,9 @@ def test_t3_direct_requirements_are_satisfied_by_the_locks() -> None:
             pinned = packages.get(requirement.name.lower().replace("_", "-"))
             assert pinned is not None, f"{requirement.name} is missing from {lock_path}"
             if requirement.specifier:
-                assert (
-                    Version(str(pinned["version"])) in requirement.specifier
-                ), f"{requirement.name}=={pinned['version']} violates {requirement.specifier}"
+                assert Version(str(pinned["version"])) in requirement.specifier, (
+                    f"{requirement.name}=={pinned['version']} violates {requirement.specifier}"
+                )
 
 
 def test_t3_aiohttp_dependency_closure_is_locked() -> None:
@@ -726,9 +788,9 @@ def test_t3_aiohttp_dependency_closure_is_locked() -> None:
         requirement = Requirement(spec)
         pinned = packages.get(requirement.name.lower().replace("_", "-"))
         assert pinned is not None, f"{requirement.name} is missing from the runtime lock"
-        assert (
-            Version(str(pinned["version"])) in requirement.specifier
-        ), f"{requirement.name}=={pinned['version']} violates {requirement.specifier}"
+        assert Version(str(pinned["version"])) in requirement.specifier, (
+            f"{requirement.name}=={pinned['version']} violates {requirement.specifier}"
+        )
 
 
 # --------------------------------------------------------------------------- T4
@@ -864,9 +926,9 @@ def test_t5_summary_script_cannot_write_or_reach_the_network() -> None:
         "eval",
         "exec",
     }
-    assert not (
-        called & forbidden
-    ), f"the summary script performs side effects: {called & forbidden}"
+    assert not (called & forbidden), (
+        f"the summary script performs side effects: {called & forbidden}"
+    )
     assert "read_text" in called, "the summary script does not read the SARIF report"
 
 
@@ -894,12 +956,12 @@ def test_t5_summary_step_cannot_change_the_gate_outcome() -> None:
     # once the job status is ``failure``.
     gate_failed = ActionsContext("failure", {"scan-gate": "failure"})
     gate_passed = ActionsContext("success", {"scan-gate": "success"})
-    assert (
-        step_condition_holds(condition, gate_failed) is True
-    ), "the diagnosis step is skipped exactly when the finding list is needed"
-    assert (
-        step_condition_holds(condition, gate_passed) is False
-    ), "a passing gate must not print a finding list"
+    assert step_condition_holds(condition, gate_failed) is True, (
+        "the diagnosis step is skipped exactly when the finding list is needed"
+    )
+    assert step_condition_holds(condition, gate_passed) is False, (
+        "a passing gate must not print a finding list"
+    )
 
     # Control: the form that only inspects the step outcome is skipped by the
     # implicit success() as soon as the gate failed.

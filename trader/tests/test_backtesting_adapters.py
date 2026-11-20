@@ -720,9 +720,9 @@ class TestStopLossTriggerCritical:
         results = executor.execute_pending(bar_n1, bar_index=1)
 
         assert len(results) == 1
-        assert (
-            results[0].exit_reason == ExitReason.STOP_LOSS
-        ), f"Expected STOP_LOSS, got {results[0].exit_reason}"
+        assert results[0].exit_reason == ExitReason.STOP_LOSS, (
+            f"Expected STOP_LOSS, got {results[0].exit_reason}"
+        )
 
     def test_take_profit_triggers_when_price_rises(self, execution_config, ohlcv_factory):
         """CRITICAL: TP must trigger when price rises to TP level"""
@@ -749,9 +749,9 @@ class TestStopLossTriggerCritical:
         results = executor.execute_pending(bar_n1, bar_index=1)
 
         assert len(results) == 1
-        assert (
-            results[0].exit_reason == ExitReason.TAKE_PROFIT
-        ), f"Expected TAKE_PROFIT, got {results[0].exit_reason}"
+        assert results[0].exit_reason == ExitReason.TAKE_PROFIT, (
+            f"Expected TAKE_PROFIT, got {results[0].exit_reason}"
+        )
 
     def test_within_bar_high_low_used_for_trigger(self, execution_config, ohlcv_factory):
         """CRITICAL: Within-bar high/low must be checked for SL/TP"""

@@ -12,6 +12,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from insight.committee.portfolio_constructor import PortfolioConstructor
 from insight.committee.schemas import (
     CommitteeRun,
@@ -21,7 +22,6 @@ from insight.committee.schemas import (
     SpecialistType,
 )
 from insight.committee.specialists import TrendAgent
-
 from trader.services.portfolio_research_workflow import (
     PortfolioResearchWorkflow,
     WorkflowConfig,

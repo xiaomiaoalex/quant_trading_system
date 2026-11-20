@@ -18,6 +18,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
+
 from insight.chat_interface import (
     Attachment,
     ChatMessage,
@@ -28,8 +30,6 @@ from insight.chat_interface import (
     StrategyChatInterface,
     StrategyContext,
 )
-from pydantic import BaseModel, Field
-
 from trader.core.application.strategy_protocol import RiskLevel
 
 # ==================== 请求模型 ====================

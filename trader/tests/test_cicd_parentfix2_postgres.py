@@ -39,7 +39,6 @@ sys.path.insert(0, str(ROOT))
 
 from scripts import deploy_gate  # noqa: E402
 from scripts.collect_runtime_release_binding import EXPECTED_SERVICES  # noqa: E402
-
 from trader.trading import migrations as migrations_module  # noqa: E402
 
 COMMIT = "c6fe450260eeb59d46c9caee591fb1625510b443"

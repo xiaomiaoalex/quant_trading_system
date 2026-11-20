@@ -72,7 +72,7 @@ CRYPTO_RISK_PRE_TRADE_REJECTED_EVENT = "crypto_risk.pre_trade_rejected"
 
 @router.get("/v1/risk/limits", response_model=Optional[VersionedConfig])
 async def get_risk_limits(
-    scope: str = Query("GLOBAL", description="Risk scope: GLOBAL or per account/strategy")
+    scope: str = Query("GLOBAL", description="Risk scope: GLOBAL or per account/strategy"),
 ):
     """
     Get latest risk limits.

@@ -22,9 +22,9 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
-from insight.committee.schemas import CommitteeRun, ProposalStatus
 from pydantic import BaseModel
 
+from insight.committee.schemas import CommitteeRun, ProposalStatus
 from trader.core.application.hitl_governance import HITLGovernance
 from trader.services.committee_to_lifecycle_adapter import (
     CommitteeToLifecycleAdapter,

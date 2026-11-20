@@ -7,7 +7,6 @@ Demo host, not to a hand-written JSON that merely repeats operator inputs.
 from __future__ import annotations
 
 from scripts.collect_runtime_release_binding import build_binding, runtime_identity_from_health
-
 from trader.api.routes.health import _release_identity
 
 DIGEST = "sha256:" + "a" * 64

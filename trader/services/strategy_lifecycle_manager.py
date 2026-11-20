@@ -61,7 +61,6 @@ from insight.chat_interface import (
     SessionStatus,
     StrategyChatInterface,
 )
-
 from trader.core.application.risk_engine import KillSwitchLevel, RiskLevel
 from trader.core.application.strategy_protocol import (
     MarketData,

@@ -541,8 +541,7 @@ class HistoryDatasetStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         query = (
-            "SELECT * FROM history_datasets "
-            f"{where} ORDER BY created_at DESC LIMIT ${len(params)}"
+            f"SELECT * FROM history_datasets {where} ORDER BY created_at DESC LIMIT ${len(params)}"
         )
         async with storage.acquire() as conn:
             rows = await conn.fetch(query, *params)

@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from insight.ai_audit_log import AuditEntry as DomainAuditEntry
 
+from insight.ai_audit_log import AuditEntry as DomainAuditEntry
 from trader.api.models.schemas import AuditEntry
 from trader.api.routes.chat import get_chat_interface
 
@@ -165,8 +165,9 @@ async def list_audit_entries(
         ]
 
     entries.sort(
-        key=lambda item: _parse_entry_time(item.created_at)
-        or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda item: (
+            _parse_entry_time(item.created_at) or datetime.min.replace(tzinfo=timezone.utc)
+        ),
         reverse=True,
     )
     return entries[offset : offset + limit]

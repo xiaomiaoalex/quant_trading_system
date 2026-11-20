@@ -22,14 +22,6 @@ markers = [
 #   .venv\Scripts\python.exe -m pytest trader/tests/ -v
 # The .venv path contains spaces, so always quote paths when running manually.
 
-[tool.black]
-line-length = 100
-target-version = ["py311"]
-
-[tool.isort]
-profile = "black"
-line_length = 100
-
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

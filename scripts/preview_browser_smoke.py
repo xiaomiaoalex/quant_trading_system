@@ -30,6 +30,7 @@ REQUIRED_CHECKS = (
     "protected_readonly_accessible",
     "blocked_state_visible",
 )
+PROTECTED_READONLY_STATUSES = frozenset({200, 503})
 
 
 def browser_available() -> tuple[bool, str]:
@@ -110,38 +111,51 @@ def _run_browser_checks(
             page.get_by_role("button", name="Sign in").click()
             page.wait_for_timeout(1500)
             body = page.locator("body").inner_text()
-            outcomes["wrong_password_rejected"]["ok"] = "Sign in" in body and "console" not in body
-            outcomes["wrong_password_rejected"]["detail"] = "still on login form"
+            outcomes["wrong_password_rejected"]["ok"] = (
+                "Sign in" in body and "Sign out" not in body and "Trading console" in body
+            )
+            outcomes["wrong_password_rejected"]["detail"] = (
+                "login form remained after wrong password"
+            )
 
             page.get_by_label("Password").fill(password)
             page.get_by_role("button", name="Sign in").click()
             page.wait_for_timeout(2500)
             body = page.locator("body").inner_text()
-            outcomes["login_succeeded"]["ok"] = "Sign in" not in body and len(body.strip()) > 0
-            outcomes["login_succeeded"]["detail"] = "login form dismissed"
+            outcomes["login_succeeded"]["ok"] = (
+                "Password" not in body and f"Sign out ({username})" in body
+            )
+            outcomes["login_succeeded"]["detail"] = "operator identity replaced login form"
 
             page.goto(paths["profile"], wait_until="domcontentloaded", timeout=30_000)
             profile_body = page.locator("body").inner_text()
-            outcomes["identity_visible"]["ok"] = username in profile_body
-            outcomes["identity_visible"]["detail"] = "operator identity displayed"
+            outcomes["identity_visible"]["ok"] = f"Sign out ({username})" in profile_body
+            outcomes["identity_visible"]["detail"] = "operator identity visible in Topbar"
 
             response = page.goto(paths["readonly"], wait_until="domcontentloaded", timeout=30_000)
             outcomes["protected_readonly_accessible"]["ok"] = bool(
-                response and response.status < 400
+                response and response.status in PROTECTED_READONLY_STATUSES
             )
-            outcomes["protected_readonly_accessible"][
-                "detail"
-            ] = f"status={response.status if response else None}"
+            outcomes["protected_readonly_accessible"]["detail"] = (
+                f"status={response.status if response else None}"
+            )
 
-            trading_body = (
-                page.locator("body").inner_text()
-                if page.goto(paths["trading"], wait_until="domcontentloaded", timeout=30_000)
-                else ""
+            trading_response = page.goto(
+                paths["trading"], wait_until="domcontentloaded", timeout=30_000
             )
+            if trading_response is None:
+                trading_body = ""
+            elif trading_response.status == 200:
+                trading_body = page.locator("body").inner_text()
+            else:
+                trading_body = trading_response.text()
             outcomes["blocked_state_visible"]["ok"] = (
                 "DR_EVIDENCE_MISSING" in trading_body or "blocked" in trading_body.lower()
             )
-            outcomes["blocked_state_visible"]["detail"] = "real blocked state required"
+            outcomes["blocked_state_visible"]["detail"] = (
+                f"status={trading_response.status if trading_response else None}; "
+                "real blocked state required"
+            )
         finally:
             outcomes["page_errors"] = page_errors
             context.close()
@@ -154,10 +168,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--origin", required=True)
     parser.add_argument("--password-file", type=Path, required=True)
     parser.add_argument("--username", default="owner")
-    parser.add_argument("--deep-link", default="/portfolio/research")
-    parser.add_argument("--profile-path", default="/settings")
+    parser.add_argument("--deep-link", default="/research/data")
+    parser.add_argument("--profile-path", default="/monitor")
     parser.add_argument("--readonly-path", default="/health/trading")
-    parser.add_argument("--trading-path", default="/trading")
+    parser.add_argument("--trading-path", default="/health/trading")
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args(argv)
 

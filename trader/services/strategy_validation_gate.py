@@ -17,10 +17,10 @@ StrategyValidationGate - 策略上线前 5 层验证门控
 
 使用方式：
     gate = StrategyValidationGate(backtest_engine, validator)
-    
+
     # 验证策略
     report = await gate.validate(strategy_id="strategy_A")
-    
+
     if not report.overall_passed:
         print(f"未通过验证的层级: {report.failed_layers}")
         print(f"建议: {report.recommendations}")
@@ -323,7 +323,7 @@ class StrategyValidationGate:
             if hasattr(walkforward_result, "sharpe_decay"):
                 decay = walkforward_result.sharpe_decay
                 if decay < 0.8:  # 衰减超过 20%
-                    return False, f"Walk-Forward Sharpe 衰减 {1-decay:.1%}，超过 20% 阈值"
+                    return False, f"Walk-Forward Sharpe 衰减 {1 - decay:.1%}，超过 20% 阈值"
 
             if hasattr(walkforward_result, "overfitting_status"):
                 if walkforward_result.overfitting_status == "FAILED":

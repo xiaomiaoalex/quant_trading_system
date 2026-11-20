@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from insight import code_sandbox as code_sandbox_module
 from insight.ai_audit_log import (
     AIAuditLog,

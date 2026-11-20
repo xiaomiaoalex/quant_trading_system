@@ -998,9 +998,9 @@ class TestFp5InputInjection:
             script = step.get("run")
             if script is None:
                 continue
-            assert (
-                "${{ inputs." not in script
-            ), f"{name}/{job_name}/{step.get('name')} expands inputs into a shell"
+            assert "${{ inputs." not in script, (
+                f"{name}/{job_name}/{step.get('name')} expands inputs into a shell"
+            )
 
     @pytest.mark.parametrize("job", ["preflight", "deploy"])
     def test_deploy_demo_validates_inputs_with_failure_codes(self, job):

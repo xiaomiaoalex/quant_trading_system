@@ -220,9 +220,9 @@ class TestPostgreSQLStorage:
 
         events = await storage.get_events(aggregate_id="order-bound", since=boundary_ts)
 
-        assert (
-            len(events) == 2
-        ), "get_events should include events at exactly the since timestamp (>= semantics)"
+        assert len(events) == 2, (
+            "get_events should include events at exactly the since timestamp (>= semantics)"
+        )
 
         await storage.disconnect()
 
@@ -566,9 +566,9 @@ class TestPostgreSQLStorage:
         result = await storage.reconstruct_state("order-bound", order_projection)
 
         assert result is not None
-        assert (
-            result["filled_quantity"] == 1.5
-        ), "Should only replay 1 event (later timestamp), not boundary event"
+        assert result["filled_quantity"] == 1.5, (
+            "Should only replay 1 event (later timestamp), not boundary event"
+        )
         assert result["fill_price"] == 52000
 
         await storage.disconnect()
@@ -774,12 +774,15 @@ class TestRiskEventsPersistence:
             "ts_ms": 1700000000000,
         }
 
-        event_id, created, is_first_upgrade, is_first_effect = (
-            await storage.ingest_event_with_upgrade(
-                event_data,
-                "upgrade:GLOBAL:1:dedup-key-ingest-full-001",
-                1,
-            )
+        (
+            event_id,
+            created,
+            is_first_upgrade,
+            is_first_effect,
+        ) = await storage.ingest_event_with_upgrade(
+            event_data,
+            "upgrade:GLOBAL:1:dedup-key-ingest-full-001",
+            1,
         )
 
         assert event_id is not None
@@ -890,9 +893,9 @@ class TestRiskEventsPersistence:
         second_upgrade, second_effect = await storage.try_record_upgrade_with_effect(
             upgrade_key, "ACCOUNT", 1, "test_reason", "dedup-key-reconnect-001"
         )
-        assert (
-            second_upgrade is False
-        ), "After reconnect, duplicate upgrade should return upgrade=False"
+        assert second_upgrade is False, (
+            "After reconnect, duplicate upgrade should return upgrade=False"
+        )
         assert second_effect is False, "After reconnect, duplicate should NOT trigger side effect"
 
         pending = await storage.get_pending_effects()

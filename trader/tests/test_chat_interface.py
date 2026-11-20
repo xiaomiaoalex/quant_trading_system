@@ -16,6 +16,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from insight.ai_strategy_generator import (
     AIStrategyGenerator,
     GeneratedStrategy,
@@ -36,7 +37,6 @@ from insight.chat_interface import (
     StrategyContext,
     create_chat_interface,
 )
-
 from trader.core.application.strategy_protocol import (
     RiskLevel,
     StrategyPlugin,

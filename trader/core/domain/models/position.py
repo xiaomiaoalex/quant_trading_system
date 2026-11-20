@@ -167,8 +167,7 @@ class PositionLedger:
 
         if not self.lots and quantity > 0:
             logger.warning(
-                f"Attempted to reduce {quantity} on empty ledger "
-                f"{self.strategy_id}:{self.symbol}"
+                f"Attempted to reduce {quantity} on empty ledger {self.strategy_id}:{self.symbol}"
             )
 
         remaining = quantity

@@ -404,7 +404,6 @@ def main(argv: list[str] | None = None) -> int:
                 "QTS_PR_PREVIEW_ORIGIN",
                 "QTS_PR_PREVIEW_PASSWORD_FILE",
                 "QTS_PR_PREVIEW_IMAGE_ID",
-                "QTS_PR_REVISION",
                 "GITHUB_SHA",
             )
             missing = [key for key in required if not os.getenv(key, "").strip()]

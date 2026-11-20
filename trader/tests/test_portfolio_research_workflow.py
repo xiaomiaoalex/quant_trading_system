@@ -13,6 +13,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from insight.committee.schemas import (
     CommitteeRun,
     CommitteeRunStatus,
@@ -24,7 +25,6 @@ from insight.committee.schemas import (
     SleeveProposal,
     SpecialistType,
 )
-
 from trader.services.committee_to_lifecycle_adapter import (
     CommitteeToLifecycleAdapter,
     LifecycleAdapterConfig,

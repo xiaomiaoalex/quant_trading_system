@@ -128,7 +128,7 @@ class OrderOwnershipRegistry:
         self._owned_prefixes_cache = None
 
         logger.debug(
-            f"[OrderOwnership] recorded: {cl_ord_id} -> " f"strategy={strategy_id}, source={source}"
+            f"[OrderOwnership] recorded: {cl_ord_id} -> strategy={strategy_id}, source={source}"
         )
 
     def get_order_origin(self, cl_ord_id: str) -> Optional[OrderOrigin]:

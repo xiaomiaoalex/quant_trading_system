@@ -4,6 +4,7 @@ import json
 import sys
 
 import pytest
+
 from scripts.summarize_observation import main
 
 

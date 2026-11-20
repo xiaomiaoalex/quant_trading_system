@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 import asyncpg
 import pytest
+
 import scripts.deploy_gate as deploy_gate
 from scripts.collect_runtime_release_binding import (
     APP_SERVICES,
@@ -35,7 +36,6 @@ from scripts.collect_runtime_release_binding import (
     LABEL_RELEASE_ID,
 )
 from scripts.deploy_gate import evaluate as evaluate_deploy_gate
-
 from trader.trading import migrations as migrations_module
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -111,7 +111,7 @@ async def _seed_dirty_state(connection) -> None:
         },
     }
     await connection.execute(
-        "INSERT INTO trading_accounts(account_id, version, state)" " VALUES($1, $2, $3::jsonb)",
+        "INSERT INTO trading_accounts(account_id, version, state) VALUES($1, $2, $3::jsonb)",
         ACCOUNT,
         3,
         json.dumps(state),
@@ -143,7 +143,7 @@ async def _seed_clean_state(connection) -> None:
         "orders": {"ord-clean": {"observed_qty": "1", "booked_qty": "1"}},
     }
     await connection.execute(
-        "INSERT INTO trading_accounts(account_id, version, state)" " VALUES($1, $2, $3::jsonb)",
+        "INSERT INTO trading_accounts(account_id, version, state) VALUES($1, $2, $3::jsonb)",
         ACCOUNT,
         3,
         json.dumps(state),
@@ -289,7 +289,7 @@ def _drop_schema(schema: str) -> None:
         connection = await asyncpg.connect(_connection_string(), timeout=10)
         try:
             return await connection.fetchval(
-                "SELECT count(*) FROM information_schema.schemata" " WHERE schema_name = $1",
+                "SELECT count(*) FROM information_schema.schemata WHERE schema_name = $1",
                 schema,
             )
         finally:

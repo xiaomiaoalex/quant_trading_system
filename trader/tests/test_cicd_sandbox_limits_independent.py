@@ -59,9 +59,9 @@ def run_probe(body: str) -> None:
         text=True,
         timeout=15,
     )
-    assert (
-        result.returncode == 0
-    ), f"Linux probe exit={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+    assert result.returncode == 0, (
+        f"Linux probe exit={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
 
 
 def test_sparse_mapping_uses_virtual_size_and_restores_kernel_limits():

@@ -348,7 +348,8 @@ class TestDepthSimulation:
         position = create_position(quantity=-1.0)  # 做空持仓
         # 买盘为空，卖盘价格高于中间价
         orderbook = create_orderbook(
-            bids=[], asks=[("BTCUSDT", 50100.0, 15.0), ("BTCUSDT", 50200.0, 25.0)]  # 买盘为空
+            bids=[],
+            asks=[("BTCUSDT", 50100.0, 15.0), ("BTCUSDT", 50200.0, 25.0)],  # 买盘为空
         )
 
         result = simulator.estimate_escape_time(

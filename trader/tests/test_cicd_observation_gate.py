@@ -21,6 +21,7 @@ from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import pytest
+
 from scripts import observe_trading_runtime
 from scripts.summarize_observation import main
 

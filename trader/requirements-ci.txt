@@ -1,7 +1,7 @@
 # Minimal dependencies for GitHub Actions CI runs.
 # Keep this lean to avoid OS-level build deps on ubuntu-latest.
-black==24.4.2
-isort==5.13.2
+ruff==0.16.2
+pre-commit>=4.0.0
 pytest==9.0.2
 pytest-asyncio==1.3.0
 pytest-timeout==2.4.0

@@ -10,12 +10,12 @@ CostStressTester - 成本压测标准化入口
 
 使用方式：
     tester = CostStressTester()
-    
+
     results = tester.stress_test(
         backtest_result=backtest_report,
         multipliers=[1.0, 1.5, 2.0],
     )
-    
+
     for result in results:
         print(f"{result.cost_multiplier}x: Expectancy={result.expectancy:.2f}")
 """

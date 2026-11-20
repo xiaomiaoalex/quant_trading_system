@@ -224,7 +224,7 @@ def configure_heartbeat(
 
 @router.get("/health/heartbeat", response_model=HeartbeatResponse)
 async def heartbeat_check(
-    client_id: Optional[str] = Query(default=None, description="前端客户端 ID")
+    client_id: Optional[str] = Query(default=None, description="前端客户端 ID"),
 ):
     """
     三层心跳检查

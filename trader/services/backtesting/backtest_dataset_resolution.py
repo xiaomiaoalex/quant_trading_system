@@ -73,8 +73,7 @@ def _check_symbols(explicit: Set[str], symbols: Any, dataset: ResolvedDataset) -
     provided = [str(item).upper() for item in (symbols or [])]
     if provided != [dataset.symbol]:
         raise BacktestRequestConflictError(
-            f"Dataset {dataset.dataset_id} only provides symbol {dataset.symbol}; "
-            f"got {provided}"
+            f"Dataset {dataset.dataset_id} only provides symbol {dataset.symbol}; got {provided}"
         )
 
 
@@ -93,8 +92,7 @@ def _check_data_mode(explicit: Set[str], data_mode: Optional[str]) -> None:
         return
     if data_mode != "real_feature_store":
         raise BacktestRequestConflictError(
-            "A published history dataset requires data_mode='real_feature_store'; "
-            f"got {data_mode}"
+            f"A published history dataset requires data_mode='real_feature_store'; got {data_mode}"
         )
 
 

@@ -10,36 +10,33 @@ Install via: python scripts/setup-git-hooks.py
 import re
 import sys
 
-
 TYPES = ["feat", "fix", "refactor", "test", "docs", "chore", "perf", "ci", "build", "revert"]
 
-PATTERN = re.compile(
-    r"^(" + "|".join(TYPES) + r")(?:\([^)]+\))?: .+"
-)
+PATTERN = re.compile(r"^(" + "|".join(TYPES) + r")(?:\([^)]+\))?: .+")
 
 
 def validate(message: str) -> tuple[bool, str]:
     message = message.strip()
-    
+
     if not message:
         return False, "Empty commit message"
-    
+
     lines = message.split("\n")
     first_line = lines[0]
-    
+
     if not any(first_line.startswith(t) for t in TYPES):
         return False, f"Message must start with one of: {', '.join(TYPES)}"
-    
+
     if not PATTERN.match(first_line):
         return False, f"Format must be: type(task-id): description"
-    
+
     type_match = re.match(r"^(" + "|".join(TYPES) + r")", first_line)
     if type_match:
         commit_type = type_match.group(1)
         if commit_type in ["feat", "fix", "refactor", "test", "docs"]:
             if "(task-" not in first_line:
                 return False, f"{commit_type} commits must include task ID: (task-X.Y)"
-    
+
     return True, "Valid"
 
 
@@ -47,12 +44,12 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: commit-msg <commit-message-file>")
         sys.exit(1)
-    
-    with open(sys.argv[1], 'r') as f:
+
+    with open(sys.argv[1], "r") as f:
         message = f.read()
-    
+
     valid, reason = validate(message)
-    
+
     if valid:
         print(f"✅ {reason}")
         sys.exit(0)

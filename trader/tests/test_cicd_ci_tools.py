@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from scripts import check_coverage, check_junit, release_manifest, verify_test_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,35 @@ def test_check_junit_rejects_zero_tests(tmp_path, monkeypatch):
     path = _junit(tmp_path, tests=0)
     monkeypatch.setattr(sys, "argv", ["check_junit", str(path)])
     assert check_junit.main() == 1
+
+
+def test_browser_smoke_required_inputs_are_supplied_by_the_workflow():
+    workflow = (ROOT / ".github" / "workflows" / "ci-gate.yml").read_text(encoding="utf-8")
+    script = (ROOT / "scripts" / "run_ci_checks.py").read_text(encoding="utf-8")
+    start = script.index('elif name == "browser-smoke":')
+    block = script[start : script.index('    for name in ("junit", "coverage"):', start)]
+
+    assert '"QTS_PR_REVISION"' not in block
+    for key in (
+        "QTS_PR_PREVIEW_ORIGIN",
+        "QTS_PR_PREVIEW_PASSWORD_FILE",
+        "QTS_PR_PREVIEW_IMAGE_ID",
+        "GITHUB_SHA",
+    ):
+        assert f'"{key}"' in block
+        assert key in workflow
+
+
+def test_preview_job_checks_out_every_event_and_only_browses_containers():
+    workflow = (ROOT / ".github" / "workflows" / "ci-gate.yml").read_text(encoding="utf-8")
+    start = workflow.index("  pr-preview-smoke-gate:")
+    block = workflow[start : workflow.index("  ci-required:", start)]
+
+    assert "if: github.event_name == 'pull_request'" in block
+    assert "if: github.event_name != 'pull_request'" in block
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in block
+    assert "ImageID" not in block
+    assert "row.get('ID')" in block
 
 
 def _coverage_xml(tmp_path, hits):

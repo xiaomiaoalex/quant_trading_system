@@ -106,6 +106,5 @@ async def test_trading_event_p99_under_large_replay_stays_within_tolerance():
     loaded_p99 = percentile(loaded, 0.99)
     tolerance_ms = max(idle_p99 * 0.20, 10.0)
     assert loaded_p99 - idle_p99 <= tolerance_ms, (
-        f"idle_p99={idle_p99:.2f}ms loaded_p99={loaded_p99:.2f}ms "
-        f"tolerance={tolerance_ms:.2f}ms"
+        f"idle_p99={idle_p99:.2f}ms loaded_p99={loaded_p99:.2f}ms tolerance={tolerance_ms:.2f}ms"
     )

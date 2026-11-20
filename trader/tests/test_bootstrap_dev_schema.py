@@ -1,6 +1,7 @@
 """Destructive schema bootstrap must not run underneath a live execution process."""
 
 import pytest
+
 from scripts.bootstrap_dev_schema import ensure_no_live_runtime
 
 

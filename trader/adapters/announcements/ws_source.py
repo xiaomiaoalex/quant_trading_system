@@ -434,7 +434,7 @@ class BinanceWsAnnouncementSource:
         import warnings
 
         warnings.warn(
-            "WS source does not support fetch_initial. " "Use HTML source for bootstrap/backfill.",
+            "WS source does not support fetch_initial. Use HTML source for bootstrap/backfill.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -77,3 +77,15 @@ def test_safe_origin_accepts_only_loopback_http():
     assert smoke._safe_origin("http://127.0.0.1:18080/path") is None
     assert smoke._safe_origin("http://0.0.0.0:18080") is None
     assert smoke._safe_origin("https://127.0.0.1:18080") is None
+
+
+def test_default_browser_paths_match_the_current_frontend_routes():
+    source = (ROOT / "Frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert 'path="/research/data"' in source
+    assert 'path="/monitor"' in source
+
+    smoke_source = (ROOT / "scripts" / "preview_browser_smoke.py").read_text(encoding="utf-8")
+    assert 'parser.add_argument("--deep-link", default="/research/data")' in smoke_source
+    assert 'parser.add_argument("--profile-path", default="/monitor")' in smoke_source
+    assert 'parser.add_argument("--trading-path", default="/health/trading")' in smoke_source
+    assert smoke.PROTECTED_READONLY_STATUSES == frozenset({200, 503})

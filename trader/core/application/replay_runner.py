@@ -20,7 +20,7 @@ Replay Runner - 事件重放执行器
             ...  # 从数据库或内存读取
         async def get_latest_seq(self, stream_key: str) -> int:
             ...  # 获取最新序列号
-    
+
     # 创建重放器并执行重放
     runner = ReplayRunner(event_store=my_adapter)
     result = await runner.replay_stream(ReplayOptions(stream_key="order-123"))

@@ -300,9 +300,9 @@ def test_5_2_compose_never_inlines_a_credential_value():
         for match in re.finditer(rf"^\s*-?\s*{key}\s*[:=]\s*(?P<value>\S.*)$", rendered, re.M):
             value = match.group("value").strip().strip("\"'")
             # A configuration reference is fine; a literal value is not.
-            assert value.startswith(
-                ("${", "/run/secrets", "/var")
-            ), f"possible literal credential for {key}: {value!r}"
+            assert value.startswith(("${", "/run/secrets", "/var")), (
+                f"possible literal credential for {key}: {value!r}"
+            )
 
 
 # --------------------------------------------------------------------------- #

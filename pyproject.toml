@@ -22,8 +22,8 @@ dependencies = [
  "fastapi>=0.115.12",
  "uvicorn>=0.34.0",
  # Testing
- "black==24.4.2",
- "isort==5.13.2",
+ "ruff==0.16.2",
+ "pre-commit>=4.0.0",
  "pytest>=8.3.4",
  "pytest-asyncio>=0.25.2",
  "openpyxl>=3.1.5",
@@ -87,6 +87,14 @@ markers = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["code"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", ".worktrees", ".kilo", ".workbuddy", "Frontend", "artifacts", "logs", "reports", "data", "secrets"]
+
+[tool.ruff.lint]
+select = ["I"]
 
 [tool.mypy]
 python_version = "3.12"

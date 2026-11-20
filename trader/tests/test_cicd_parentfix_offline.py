@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+
 from scripts.collect_runtime_release_binding import (
     APP_SERVICES,
     EXPECTED_SERVICES,
@@ -1221,9 +1222,9 @@ def test_preflight_rejects_in_cluster_or_insecure_heartbeat():
         env = _preflight_env()
         env["QTS_EXTERNAL_ALERT_HEARTBEAT_URL"] = bad_url
         report = evaluate_preflight(env, host_evidence=False)
-        assert any(
-            issue.code == "EXTERNAL_ALERT_HEARTBEAT_MISSING" for issue in report.errors
-        ), bad_url
+        assert any(issue.code == "EXTERNAL_ALERT_HEARTBEAT_MISSING" for issue in report.errors), (
+            bad_url
+        )
 
 
 # --------------------------------------------------------------------------- #

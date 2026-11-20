@@ -345,9 +345,9 @@ class TestReplayRiskEngineConsistency:
         for i, (decision, int_status) in enumerate(
             zip(replay_result.decisions, integration_statuses)
         ):
-            assert (
-                decision.decision == expected_map[int_status]
-            ), f"Signal {i}: replay={decision.decision} vs integration={int_status}"
+            assert decision.decision == expected_map[int_status], (
+                f"Signal {i}: replay={decision.decision} vs integration={int_status}"
+            )
 
     @pytest.mark.asyncio
     async def test_effective_quantity_matches_integration(self):
@@ -399,9 +399,9 @@ class TestReplayRiskEngineConsistency:
         for i, (decision, int_result) in enumerate(
             zip(replay_result.decisions, integration_results)
         ):
-            assert (
-                decision.effective_quantity == int_result.effective_quantity
-            ), f"Signal {i}: replay eq={decision.effective_quantity} vs integration eq={int_result.effective_quantity}"
+            assert decision.effective_quantity == int_result.effective_quantity, (
+                f"Signal {i}: replay eq={decision.effective_quantity} vs integration eq={int_result.effective_quantity}"
+            )
 
     @pytest.mark.asyncio
     async def test_rejection_reason_matches_integration(self):
@@ -453,9 +453,9 @@ class TestReplayRiskEngineConsistency:
         for i, (decision, int_result) in enumerate(
             zip(replay_result.decisions, integration_results)
         ):
-            assert (
-                decision.rejection_reason == int_result.rejection_reason
-            ), f"Signal {i}: replay reason={decision.rejection_reason} vs integration reason={int_result.rejection_reason}"
+            assert decision.rejection_reason == int_result.rejection_reason, (
+                f"Signal {i}: replay reason={decision.rejection_reason} vs integration reason={int_result.rejection_reason}"
+            )
 
 
 class TestVectorBTReplayConsistency:
@@ -546,30 +546,30 @@ class TestVectorBTReplayConsistency:
         replay_clipped = [d for d in replay_result.decisions if d.decision == "CLIPPED"]
         replay_rejected = [d for d in replay_result.decisions if d.decision == "REJECTED"]
 
-        assert len(replay_approved) == len(
-            plan.approved_orders
-        ), f"approved count: replay={len(replay_approved)} vs vbt={len(plan.approved_orders)}"
-        assert len(replay_clipped) == len(
-            plan.clipped_orders
-        ), f"clipped count: replay={len(replay_clipped)} vs vbt={len(plan.clipped_orders)}"
-        assert len(replay_rejected) == len(
-            plan.rejected_orders
-        ), f"rejected count: replay={len(replay_rejected)} vs vbt={len(plan.rejected_orders)}"
+        assert len(replay_approved) == len(plan.approved_orders), (
+            f"approved count: replay={len(replay_approved)} vs vbt={len(plan.approved_orders)}"
+        )
+        assert len(replay_clipped) == len(plan.clipped_orders), (
+            f"clipped count: replay={len(replay_clipped)} vs vbt={len(plan.clipped_orders)}"
+        )
+        assert len(replay_rejected) == len(plan.rejected_orders), (
+            f"rejected count: replay={len(replay_rejected)} vs vbt={len(plan.rejected_orders)}"
+        )
 
         for i, decision in enumerate(replay_result.decisions):
             sig = signals[i]
             if decision.decision == "APPROVED":
-                assert any(
-                    o["signal_id"] == sig.signal_id for o in plan.approved_orders
-                ), f"Signal {i}: replay APPROVED but not in vbt approved_orders"
+                assert any(o["signal_id"] == sig.signal_id for o in plan.approved_orders), (
+                    f"Signal {i}: replay APPROVED but not in vbt approved_orders"
+                )
             elif decision.decision == "CLIPPED":
-                assert any(
-                    o["signal_id"] == sig.signal_id for o in plan.clipped_orders
-                ), f"Signal {i}: replay CLIPPED but not in vbt clipped_orders"
+                assert any(o["signal_id"] == sig.signal_id for o in plan.clipped_orders), (
+                    f"Signal {i}: replay CLIPPED but not in vbt clipped_orders"
+                )
             elif decision.decision == "REJECTED":
-                assert any(
-                    o["signal_id"] == sig.signal_id for o in plan.rejected_orders
-                ), f"Signal {i}: replay REJECTED but not in vbt rejected_orders"
+                assert any(o["signal_id"] == sig.signal_id for o in plan.rejected_orders), (
+                    f"Signal {i}: replay REJECTED but not in vbt rejected_orders"
+                )
 
     @pytest.mark.asyncio
     async def test_effective_quantity_matches_vectorbt_plan(self):
@@ -1060,9 +1060,9 @@ class TestRiskAdjustedMetrics:
                 t.timestamp_ms for t in result.risk_timeline if t.risk_mode != "NORMAL"
             )
             wall_clock = last_ts - first_risk_ts
-            assert (
-                total_duration <= wall_clock
-            ), f"Durations overlap: total={total_duration} > wall_clock={wall_clock}"
+            assert total_duration <= wall_clock, (
+                f"Durations overlap: total={total_duration} > wall_clock={wall_clock}"
+            )
 
 
 class TestRiskSnapshotFields:
@@ -1349,9 +1349,9 @@ class TestRiskModeIntegration:
 
         assert len(result.risk_timeline) == 4
         non_normal_modes = [snap for snap in result.risk_timeline if snap.risk_mode != "NORMAL"]
-        assert (
-            len(non_normal_modes) >= 1
-        ), "timeline should contain at least one non-NORMAL risk mode after rejections"
+        assert len(non_normal_modes) >= 1, (
+            "timeline should contain at least one non-NORMAL risk mode after rejections"
+        )
 
     @pytest.mark.asyncio
     async def test_clipped_signal_blocked_by_risk_mode(self):

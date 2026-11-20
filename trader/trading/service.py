@@ -462,7 +462,9 @@ class TradingService:
             else (
                 "FAILED"
                 if "FAILED" in statuses
-                else "QUEUED" if statuses & {"QUEUED", "SENDING"} else "CONFIRMED"
+                else "QUEUED"
+                if statuses & {"QUEUED", "SENDING"}
+                else "CONFIRMED"
             )
         )
         async with self.store.transaction(account_id) as state:

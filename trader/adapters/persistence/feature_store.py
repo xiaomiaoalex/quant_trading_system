@@ -443,9 +443,7 @@ class FeatureStore:
                         VALUES {values}
                         ON CONFLICT (symbol, feature_name, version, ts_ms) DO NOTHING
                         RETURNING ts_ms
-                        """.format(
-                            values=", ".join(placeholders)
-                        ),
+                        """.format(values=", ".join(placeholders)),
                         *params,
                     )
                     created_timestamps.extend(int(row["ts_ms"]) for row in inserted)

@@ -25,7 +25,7 @@ CREATE TABLE portfolio_proposals (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
     content_hash VARCHAR(64) NOT NULL,
-    
+
     -- 索引
     CONSTRAINT uq_proposal_content_hash UNIQUE (content_hash)
 );
@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     import asyncpg
+
     from trader.adapters.persistence.postgres import PostgreSQLStorage
 
 from trader.adapters.persistence.portfolio_proposals.models import (

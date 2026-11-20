@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 from scripts.deploy_preflight import evaluate
 
 NOW_MS = 1_800_000_000_000

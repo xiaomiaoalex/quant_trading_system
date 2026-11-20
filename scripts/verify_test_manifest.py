@@ -204,7 +204,7 @@ def _check_workflows(
             observed_groups.update(groups_in_block)
             if group and group not in groups_in_block:
                 report.error(
-                    f"CI_JOB_GROUP_MISSING: {path.name}: {job}: " f"expected QTS_TEST_GROUP={group}"
+                    f"CI_JOB_GROUP_MISSING: {path.name}: {job}: expected QTS_TEST_GROUP={group}"
                 )
             if spec.get("required") and path.name != "ci-gate.yml":
                 report.error(f"CI_REQUIRED_JOB_OUTSIDE_GATE: {path.name}: {job}")

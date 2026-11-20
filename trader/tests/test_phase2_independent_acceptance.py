@@ -963,9 +963,9 @@ async def test_t5_control_only_queues_allocation_and_execution_applies_it():
     assert queued.status == "QUEUED"
 
     after_queue = await store.read(ACCOUNT)
-    assert after_queue.books[UNALLOCATED].balances[QUOTE] == Decimal(
-        "1000"
-    ), "control moves nothing"
+    assert after_queue.books[UNALLOCATED].balances[QUOTE] == Decimal("1000"), (
+        "control moves nothing"
+    )
     assert BOOK_A not in after_queue.books
     assert not any(entry["event_type"] == "book.allocated" for entry in after_queue.events)
     assert any(entry["event_type"] == "book.allocation_queued" for entry in after_queue.events)

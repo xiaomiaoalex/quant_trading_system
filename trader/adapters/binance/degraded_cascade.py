@@ -442,7 +442,7 @@ class DegradedCascadeController:
                 if resp.status in (200, 201, 409):
                     new_level = resp_body.get("level", 0) if resp_body else 0
                     logger.info(
-                        "[KillSwitch] [Cascade] <<< Auto-downgrade response: " "level=%s status=%s",
+                        "[KillSwitch] [Cascade] <<< Auto-downgrade response: level=%s status=%s",
                         new_level,
                         resp.status,
                     )

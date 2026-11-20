@@ -824,9 +824,9 @@ class ExecutionSimulator:
             )
 
             if exit_reason is not None:
-                assert (
-                    trigger_price is not None
-                ), "trigger_price must not be None when exit_reason is set"
+                assert trigger_price is not None, (
+                    "trigger_price must not be None when exit_reason is set"
+                )
                 commission = self._calculate_total_commission(position.quantity, trigger_price)
                 result = ExecutionResult(
                     execution_id=str(uuid4()),

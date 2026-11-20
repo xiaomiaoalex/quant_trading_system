@@ -28,6 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 from scripts import (
     check_junit,
     compose_smoke,
@@ -38,7 +39,6 @@ from scripts import (
     verify_release_provenance,
     verify_test_manifest,
 )
-
 from trader.ops.dr_evidence import evaluate_dr_evidence
 from trader.tests.test_trading_service import FakeExchange, bootstrap, command, make_service
 from trader.trading.models import Execution

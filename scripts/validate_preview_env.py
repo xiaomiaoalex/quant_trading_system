@@ -190,7 +190,7 @@ def check_images(values: dict[str, str]) -> list[str]:
             )
         elif actual != recorded:
             problems.append(
-                "QTS_PREVIEW_RUNTIME_IMAGE_ID: recorded " f"{recorded} but {image} is {actual}"
+                f"QTS_PREVIEW_RUNTIME_IMAGE_ID: recorded {recorded} but {image} is {actual}"
             )
     ui_image = values.get("QTS_PREVIEW_UI_IMAGE", "")
     if ui_image and actual_image_id(ui_image) is None:
@@ -301,7 +301,7 @@ def check_compose(
     summary["venue_secret_names"] = sorted(top_secrets) if isinstance(top_secrets, dict) else []
     if summary["venue_secret_names"]:
         problems.append(
-            "compose preview still declares venue secrets: " f"{summary['venue_secret_names']}"
+            f"compose preview still declares venue secrets: {summary['venue_secret_names']}"
         )
 
     expected = values.get("QTS_PREVIEW_RUNTIME_IMAGE", "")

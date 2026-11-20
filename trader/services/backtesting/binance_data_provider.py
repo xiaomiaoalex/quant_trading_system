@@ -65,8 +65,7 @@ class BinanceDataProvider:
     ) -> List[OHLCV]:
         if interval not in self._config.supported_intervals:
             raise ValueError(
-                f"Unsupported interval: {interval}. "
-                f"Supported: {self._config.supported_intervals}"
+                f"Unsupported interval: {interval}. Supported: {self._config.supported_intervals}"
             )
 
         cache_key = f"{symbol}:{interval}:{start_date.isoformat()}:{end_date.isoformat()}"

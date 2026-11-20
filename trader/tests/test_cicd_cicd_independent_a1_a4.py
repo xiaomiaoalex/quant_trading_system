@@ -166,9 +166,9 @@ def test_a2_browser_failure_writes_evidence_without_traceback(tmp_path, monkeypa
 
 def test_a2_prepare_script_does_not_expose_a_dirty_checkout_bypass():
     source = (ROOT / "scripts/prepare_pr_preview.py").read_text(encoding="utf-8")
-    assert (
-        "getenv" not in source and "environ" not in source
-    ), "a production preflight must not read environment-controlled test bypasses"
+    assert "getenv" not in source and "environ" not in source, (
+        "a production preflight must not read environment-controlled test bypasses"
+    )
     assert "DEVNULL" not in source
     assert '"git", "status", "--porcelain"' in source
 
